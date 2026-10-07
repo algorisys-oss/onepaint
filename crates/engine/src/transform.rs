@@ -381,3 +381,214 @@ impl Session {
         }
     }
 }
+
+/// Which part of the transform box a pointer grabbed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Handle {
+    /// 0 TL, 1 TR, 2 BR, 3 BL.
+    Corner(u8),
+    /// 0 top, 1 right, 2 bottom, 3 left.
+    Edge(u8),
+    Rotate,
+    Body,
+}
+
+/// Transformed handle positions (doc px).
+#[derive(Clone, Copy, Debug)]
+pub struct Handles {
+    pub corners: [[f64; 2]; 4],
+    pub edges: [[f64; 2]; 4],
+    pub centre: [f64; 2],
+}
+
+/// happypaint's transform parameters: pivot at the document centre (PE:464-476).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TransformParams {
+    pub dx: f64,
+    pub dy: f64,
+    pub sx: f64,
+    pub sy: f64,
+    pub rotation: f64,
+}
+
+impl Default for TransformParams {
+    fn default() -> Self {
+        Self {
+            dx: 0.0,
+            dy: 0.0,
+            sx: 1.0,
+            sy: 1.0,
+            rotation: 0.0,
+        }
+    }
+}
+
+fn box_points(b: Rect) -> ([[f64; 2]; 4], [[f64; 2]; 4], [f64; 2]) {
+    let (x0, y0, x1, y1) = (b.x as f64, b.y as f64, b.right() as f64, b.bottom() as f64);
+    let (mx, my) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+    (
+        [[x0, y0], [x1, y0], [x1, y1], [x0, y1]],
+        [[mx, y0], [x1, my], [mx, y1], [x0, my]],
+        [mx, my],
+    )
+}
+
+fn sub(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
+    [a[0] - b[0], a[1] - b[1]]
+}
+
+fn len(v: [f64; 2]) -> f64 {
+    v[0].hypot(v[1])
+}
+
+fn clamp_scale(s: f64) -> f64 {
+    if s.abs() < 0.02 {
+        0.02 * if s < 0.0 { -1.0 } else { 1.0 }
+    } else {
+        s
+    }
+}
+
+impl TransformParams {
+    pub fn is_identity(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub fn to_affine(&self, doc: [f64; 2]) -> Affine {
+        let (cx, cy) = (doc[0] / 2.0, doc[1] / 2.0);
+        let (s, c) = self.rotation.sin_cos();
+        let (a, b, cc, d) = (c * self.sx, s * self.sx, -s * self.sy, c * self.sy);
+        Affine {
+            a,
+            b,
+            c: cc,
+            d,
+            e: cx + self.dx - (a * cx + cc * cy),
+            f: cy + self.dy - (b * cx + d * cy),
+        }
+    }
+
+    pub fn handles(&self, doc: [f64; 2], b: Rect) -> Handles {
+        let m = self.to_affine(doc);
+        let (cs, es, c) = box_points(b);
+        Handles {
+            corners: cs.map(|p| m.apply(p)),
+            edges: es.map(|p| m.apply(p)),
+            centre: m.apply(c),
+        }
+    }
+
+    /// The rotate knob: `offset` doc px beyond the top edge, away from the centre.
+    pub fn rotate_knob(&self, doc: [f64; 2], b: Rect, offset: f64) -> [f64; 2] {
+        let h = self.handles(doc, b);
+        let v = sub(h.edges[0], h.centre);
+        let l = len(v).max(1e-9);
+        [
+            h.edges[0][0] + v[0] / l * offset,
+            h.edges[0][1] + v[1] / l * offset,
+        ]
+    }
+
+    /// Hit order: rotate, corners, edges, else body (`tol` and `rot_offset` in doc px).
+    pub fn hit(&self, doc: [f64; 2], b: Rect, p: [f64; 2], tol: f64, rot_offset: f64) -> Handle {
+        if len(sub(p, self.rotate_knob(doc, b, rot_offset))) <= tol {
+            return Handle::Rotate;
+        }
+        let h = self.handles(doc, b);
+        for (i, c) in h.corners.iter().enumerate() {
+            if len(sub(p, *c)) <= tol {
+                return Handle::Corner(i as u8);
+            }
+        }
+        for (i, e) in h.edges.iter().enumerate() {
+            if len(sub(p, *e)) <= tol {
+                return Handle::Edge(i as u8);
+            }
+        }
+        Handle::Body
+    }
+
+    /// Shift dx/dy so that original point `o` lands on `target`.
+    fn pin(mut self, doc: [f64; 2], o: [f64; 2], target: [f64; 2]) -> Self {
+        let now = self.to_affine(doc).apply(o);
+        self.dx += target[0] - now[0];
+        self.dy += target[1] - now[1];
+        self
+    }
+
+    /// Scale by dragging a corner or edge from `grab` to `p` (transform-drag.ts).
+    #[allow(clippy::too_many_arguments)]
+    pub fn scale_drag(
+        &self,
+        doc: [f64; 2],
+        b: Rect,
+        handle: Handle,
+        grab: [f64; 2],
+        p: [f64; 2],
+        shift: bool,
+        alt: bool,
+    ) -> Self {
+        let (cs, es, centre) = box_points(b);
+        let m = self.to_affine(doc);
+        let (orig_handle, orig_opposite, axis_x) = match handle {
+            Handle::Corner(i) => (cs[i as usize], cs[(i as usize + 2) % 4], None),
+            Handle::Edge(i) => (es[i as usize], es[(i as usize + 2) % 4], Some(i % 2 == 1)),
+            _ => return *self,
+        };
+        let pivot_o = if alt { centre } else { orig_opposite };
+        let pivot = m.apply(pivot_o);
+        let handle_t = m.apply(orig_handle);
+        let _ = grab;
+        let hv = sub(handle_t, pivot);
+        let hl = len(hv).max(1e-9);
+        let mut next = *self;
+        match axis_x {
+            None => {
+                let r = len(sub(p, pivot)) / hl;
+                next.sx = clamp_scale(self.sx * r);
+                next.sy = clamp_scale(self.sy * r);
+            }
+            Some(is_x) => {
+                let u = [hv[0] / hl, hv[1] / hl];
+                let d = sub(p, pivot);
+                let r = (d[0] * u[0] + d[1] * u[1]) / hl;
+                if shift {
+                    next.sx = clamp_scale(self.sx * r);
+                    next.sy = clamp_scale(self.sy * r);
+                } else if is_x {
+                    next.sx = clamp_scale(self.sx * r);
+                } else {
+                    next.sy = clamp_scale(self.sy * r);
+                }
+            }
+        }
+        next.pin(doc, pivot_o, pivot)
+    }
+
+    /// Rotate about the transformed box centre by the pointer's angle change.
+    pub fn rotate_drag(&self, doc: [f64; 2], b: Rect, grab: [f64; 2], p: [f64; 2]) -> Self {
+        let (_, _, centre_o) = box_points(b);
+        let c = self.to_affine(doc).apply(centre_o);
+        let a0 = (grab[1] - c[1]).atan2(grab[0] - c[0]);
+        let a1 = (p[1] - c[1]).atan2(p[0] - c[0]);
+        let next = Self {
+            rotation: self.rotation + (a1 - a0),
+            ..*self
+        };
+        next.pin(doc, centre_o, c)
+    }
+
+    /// Body move; Shift snaps to 45° rays from the press point.
+    pub fn move_drag(&self, grab: [f64; 2], p: [f64; 2], shift: bool) -> Self {
+        let p = if shift {
+            onepaint_selection::constrain_45(grab, p)
+        } else {
+            p
+        };
+        Self {
+            dx: self.dx + p[0] - grab[0],
+            dy: self.dy + p[1] - grab[1],
+            ..*self
+        }
+    }
+}
