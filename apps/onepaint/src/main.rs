@@ -6,6 +6,7 @@ mod canvas;
 mod chrome;
 mod clip;
 mod debug;
+mod progressive;
 mod thumbs;
 
 use canvas::Canvas;
@@ -518,7 +519,7 @@ mod tests {
     use egui_kittest::kittest::Queryable;
 
     fn harness() -> Harness<'static, App> {
-        Harness::builder().with_size(vec2(1200.0, 800.0)).build_eframe(|cc| App::new(cc, None))
+        Harness::builder().with_size(vec2(1200.0, 800.0)).with_max_steps(400).build_eframe(|cc| App::new(cc, None))
     }
 
     fn press(h: &mut Harness<'_, App>, p: egui::Pos2, pressed: bool) {

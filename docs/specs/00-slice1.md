@@ -56,3 +56,21 @@ Everything is still required for parity; it just comes in a later slice.
 - `./dev-start.sh` opens the app, and all the goals above work by hand.
 - `samples/examples/*.happypaint` from happypaint open, and their
   composite matches `*.preview.png` within a tolerance.
+
+## Performance notes (measured 2026-10-08, release, Iris Xe laptop, 12 threads)
+
+| Case | Full recomposite |
+|---|---|
+| 4096², 20 full-canvas layers (7 multiply), exact `powf` curves | 4.25 s |
+| Same, with table-driven sRGB curves (`fast_*`, error under 1e-4) | 1.48 s |
+| Same, all normal | 0.81 s |
+| 8192², 10 full layers | 2.67 s |
+
+- The CPU path is memory-bound: it reads each f16 layer tile per output tile
+  (about 2.3 ns per pixel per layer).
+- **Mitigation shipped:** progressive compositing. Each frame composites
+  dirty tiles within a 10 ms budget, visible tiles nearest the centre first,
+  so the UI never blocks.
+- **The real fix:** GPU-resident layer tiles with GPU compositing. That is
+  the next performance milestone, and it is required for the
+  8k × 100-layer target.

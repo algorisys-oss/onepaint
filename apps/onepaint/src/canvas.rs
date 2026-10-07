@@ -173,6 +173,8 @@ pub struct Canvas {
     /// Parameters of the transform in progress (the engine holds the matrix).
     pub xform: TransformParams,
     hold: HoldTracker,
+    /// Composite tiles still waiting for a frame's budget.
+    pending: std::collections::BTreeSet<(i32, i32)>,
 }
 
 impl Canvas {
@@ -191,6 +193,7 @@ impl Canvas {
             uploaded_selection: None,
             xform: TransformParams::default(),
             hold: HoldTracker::default(),
+            pending: Default::default(),
         }
     }
 
@@ -200,6 +203,7 @@ impl Canvas {
         self.view.fit();
         self.poly = None;
         self.uploaded_selection = None;
+        self.pending.clear();
     }
 
     fn doc_pt(&self, p: Pos2) -> Pt {
@@ -539,8 +543,8 @@ impl Canvas {
         self.hover_doc = hover.map(|p| self.doc_pt(local(p)));
 
         // ── Display ──
-        let dirty = session.take_dirty_tiles();
-        let uploads = if dirty.is_empty() { Vec::new() } else { session.composite(&dirty) };
+        self.pending.extend(session.take_dirty_tiles());
+        let uploads = self.composite_budgeted(session, ui.ctx());
         let key = (session.selection_version(), self.doc_size);
         let selection = if self.uploaded_selection != Some(key) {
             self.uploaded_selection = Some(key);
@@ -572,6 +576,39 @@ impl Canvas {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
         }
         self.draw_overlays(ui, rect, session, hover, space_held, r_held, &resp);
+    }
+
+    /// Composite pending tiles within the frame budget, visible ones first.
+    fn composite_budgeted(&mut self, session: &Session, ctx: &egui::Context) -> Vec<((i32, i32), Tile)> {
+        if self.pending.is_empty() {
+            return Vec::new();
+        }
+        let v = &self.view;
+        let corners =
+            [[0.0, 0.0], [v.view_size[0], 0.0], [0.0, v.view_size[1]], [v.view_size[0], v.view_size[1]]].map(|c| v.screen_to_doc(c));
+        let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+        for c in corners {
+            (x0, y0, x1, y1) = (x0.min(c[0]), y0.min(c[1]), x1.max(c[0]), y1.max(c[1]));
+        }
+        let visible = onepaint_raster::Rect::covering(x0 as f32, y0 as f32, x1 as f32, y1 as f32);
+        let centre = v.screen_to_doc([v.view_size[0] / 2.0, v.view_size[1] / 2.0]);
+        let order = crate::progressive::prioritize(&self.pending, visible, centre);
+        let batch = rayon::current_num_threads().max(1);
+        let start = std::time::Instant::now();
+        let mut out = Vec::new();
+        for chunk in order.chunks(batch) {
+            out.extend(session.composite(chunk));
+            for k in chunk {
+                self.pending.remove(k);
+            }
+            if start.elapsed().as_secs_f64() * 1000.0 >= crate::progressive::BUDGET_MS {
+                break;
+            }
+        }
+        if !self.pending.is_empty() {
+            ctx.request_repaint();
+        }
+        out
     }
 
     fn to_screen(&self, rect: Rect, d: Pt) -> Pos2 {

@@ -18,6 +18,55 @@ pub fn linear_to_srgb(c: f32) -> f32 {
     if c <= 0.003_130_8 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 }
 }
 
+const LUT_N: usize = 4096;
+
+fn to_lin_table() -> &'static [f32; LUT_N + 1] {
+    static T: std::sync::OnceLock<Box<[f32; LUT_N + 1]>> = std::sync::OnceLock::new();
+    T.get_or_init(|| {
+        let mut t = Box::new([0.0; LUT_N + 1]);
+        for (i, v) in t.iter_mut().enumerate() {
+            *v = srgb_to_linear(i as f32 / LUT_N as f32);
+        }
+        t
+    })
+}
+
+/// `linear_to_srgb` tabulated over √x, which keeps the steep start accurate.
+fn to_srgb_table() -> &'static [f32; LUT_N + 1] {
+    static T: std::sync::OnceLock<Box<[f32; LUT_N + 1]>> = std::sync::OnceLock::new();
+    T.get_or_init(|| {
+        let mut t = Box::new([0.0; LUT_N + 1]);
+        for (i, v) in t.iter_mut().enumerate() {
+            let s = i as f32 / LUT_N as f32;
+            *v = linear_to_srgb(s * s);
+        }
+        t
+    })
+}
+
+#[inline]
+fn lerp_table(t: &[f32; LUT_N + 1], u: f32) -> f32 {
+    let x = u * LUT_N as f32;
+    let i = (x as usize).min(LUT_N - 1);
+    let f = x - i as f32;
+    t[i] + (t[i + 1] - t[i]) * f
+}
+
+/// Table-driven `srgb_to_linear` for hot loops (|error| < 2e-5 on 0..1).
+#[inline]
+pub fn fast_srgb_to_linear(c: f32) -> f32 {
+    if (0.0..=1.0).contains(&c) { lerp_table(to_lin_table(), c) } else { srgb_to_linear(c) }
+}
+
+/// Table-driven `linear_to_srgb` for hot loops (|error| < 1e-4 on 0..1).
+#[inline]
+pub fn fast_linear_to_srgb(c: f32) -> f32 {
+    if c <= 0.003_130_8 {
+        return linear_to_srgb(c);
+    }
+    if c <= 1.0 { lerp_table(to_srgb_table(), c.sqrt()) } else { linear_to_srgb(c) }
+}
+
 #[inline]
 pub fn premultiply(c: Px) -> Px {
     [c[0] * c[3], c[1] * c[3], c[2] * c[3], c[3]]
@@ -34,7 +83,7 @@ pub fn unpremultiply(p: Px) -> Px {
 pub fn prem_lin_to_srgb(p: Px) -> Px {
     let a = p[3];
     let s = |c: f32| if a > 0.0 { c / a } else { c };
-    [linear_to_srgb(s(p[0])) * a, linear_to_srgb(s(p[1])) * a, linear_to_srgb(s(p[2])) * a, a]
+    [fast_linear_to_srgb(s(p[0])) * a, fast_linear_to_srgb(s(p[1])) * a, fast_linear_to_srgb(s(p[2])) * a, a]
 }
 
 /// Premultiplied sRGB → premultiplied linear (happypaint `premSrgb2Lin`).
@@ -42,7 +91,7 @@ pub fn prem_lin_to_srgb(p: Px) -> Px {
 pub fn prem_srgb_to_lin(p: Px) -> Px {
     let a = p[3];
     let s = |c: f32| if a > 0.0 { c / a } else { c };
-    [srgb_to_linear(s(p[0])) * a, srgb_to_linear(s(p[1])) * a, srgb_to_linear(s(p[2])) * a, a]
+    [fast_srgb_to_linear(s(p[0])) * a, fast_srgb_to_linear(s(p[1])) * a, fast_srgb_to_linear(s(p[2])) * a, a]
 }
 
 /// A straight-alpha sRGB color, the type the UI works in.

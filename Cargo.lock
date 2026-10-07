@@ -2554,6 +2554,7 @@ dependencies = [
  "onepaint-selection",
  "onepaint-stroke",
  "onepaint-ui-kit",
+ "rayon",
  "rfd",
 ]
 

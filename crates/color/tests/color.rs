@@ -64,3 +64,17 @@ fn hsv_round_trip() {
     let red = Rgba::from_hsv(0.0, 1.0, 1.0, 1.0);
     assert_eq!((red.r, red.g, red.b), (1.0, 0.0, 0.0));
 }
+
+#[test]
+fn fast_transfer_curves_match_exact() {
+    let mut worst = (0.0f32, 0.0f32);
+    for i in 0..=100_000 {
+        let x = i as f32 / 100_000.0;
+        worst.0 = worst.0.max((fast_srgb_to_linear(x) - srgb_to_linear(x)).abs());
+        worst.1 = worst.1.max((fast_linear_to_srgb(x) - linear_to_srgb(x)).abs());
+    }
+    assert!(worst.0 < 2e-5 && worst.1 < 1e-4, "{worst:?}");
+    // Out-of-range inputs fall back to the exact curves.
+    assert_eq!(fast_linear_to_srgb(-1.0), 0.0);
+    assert_eq!(fast_srgb_to_linear(1.5), srgb_to_linear(1.5));
+}

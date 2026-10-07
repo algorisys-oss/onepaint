@@ -7,7 +7,7 @@
 
 pub mod gradient;
 
-use onepaint_color::{linear_to_srgb, srgb_to_linear};
+use onepaint_color::{fast_linear_to_srgb as linear_to_srgb, fast_srgb_to_linear as srgb_to_linear};
 use onepaint_stroke::{CurvePoint, Interp, eval_curve};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
