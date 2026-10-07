@@ -170,6 +170,8 @@ pub struct Layer {
     pub mask_enabled: bool,
     pub pixels: Surface,
     pub extra: Extra,
+    /// Opaque file chunks onepaint doesn't interpret yet (`height`, `overflow`), re-emitted on save.
+    pub chunks: std::collections::BTreeMap<String, Vec<u8>>,
 }
 
 impl Layer {
@@ -188,6 +190,7 @@ impl Layer {
             mask_enabled: true,
             pixels: Surface::new(),
             extra: Extra::new(),
+            chunks: Default::default(),
         }
     }
 }

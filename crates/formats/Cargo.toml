@@ -12,6 +12,11 @@ workspace = true
 onepaint-raster = { workspace = true }
 onepaint-doc = { workspace = true }
 onepaint-color = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+flate2 = { workspace = true }
+png = { workspace = true }
+jpeg-encoder = { workspace = true }
+
+[dev-dependencies]
+onepaint-compose = { workspace = true }

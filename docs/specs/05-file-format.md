@@ -87,3 +87,15 @@ The top level is `{app, doc, thumbnail?, nodes}`.
   opens. Its composite matches `*.preview.png` with a mean absolute error
   of at most 2/255.
 - The output can be decompressed with any raw-deflate decoder.
+
+## Notes from implementation
+- The sample previews in `../happypaint/samples/examples/*.preview.png` come
+  from happypaint's headless generator, which blends in sRGB (gamma) space.
+  A document without a `depth` key opens as 16F, and happypaint composites
+  normal mode in linear light there. So the app's own composite differs from
+  these previews wherever layers are semi-transparent.
+- The sample test therefore rebuilds a gamma-space composite from the decoded
+  layers. The measured mean absolute error is 0.007–0.43/255.
+- Pixels outside the canvas are dropped on save. happypaint's `overflow`
+  support comes in a later slice; until then, existing `overflow` chunks are
+  preserved untouched.

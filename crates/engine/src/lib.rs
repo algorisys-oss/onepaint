@@ -142,7 +142,18 @@ pub enum EngineError {
     UnknownPreset(String),
     #[error("nothing below to merge into")]
     NothingBelow,
+    #[error("{0}")]
+    Format(String),
 }
+
+impl From<onepaint_formats::FormatError> for EngineError {
+    fn from(e: onepaint_formats::FormatError) -> Self {
+        EngineError::Format(e.to_string())
+    }
+}
+
+/// App version written into saved files.
+pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 type TileChange = ((i32, i32), Option<Arc<Tile>>, Option<Arc<Tile>>);
 
@@ -339,6 +350,38 @@ impl Session {
         let mut c = Rgba::from_linear_premul([b[i], b[i + 1], b[i + 2], b[i + 3]]);
         c.a = 1.0;
         c
+    }
+
+    // ── Files ──
+
+    /// Open a `.happypaint` file, replacing the current document.
+    pub fn open_happypaint(&mut self, bytes: &[u8]) -> Result<(), EngineError> {
+        let doc = onepaint_formats::read_happypaint(bytes)?;
+        self.replace_document(doc);
+        Ok(())
+    }
+
+    /// Serialise the document as `.happypaint` v9 with a JPEG thumbnail.
+    pub fn save_happypaint(&mut self) -> Result<Vec<u8>, EngineError> {
+        self.doc.touch();
+        let flat = self.flatten();
+        let thumb =
+            onepaint_formats::thumbnail_jpeg(&flat, self.doc.width, self.doc.height, 320, 240).ok();
+        Ok(onepaint_formats::write_happypaint(
+            &self.doc,
+            thumb.as_deref(),
+            APP_VERSION,
+        )?)
+    }
+
+    /// The flattened canvas as an 8-bit straight-alpha sRGB PNG.
+    pub fn export_png(&self) -> Result<Vec<u8>, EngineError> {
+        let rgba = onepaint_formats::flatten_to_srgb8(&self.flatten());
+        Ok(onepaint_formats::encode_png_rgba8(
+            self.doc.width,
+            self.doc.height,
+            &rgba,
+        )?)
     }
 
     // ── Strokes (happypaint PaintSink) ──

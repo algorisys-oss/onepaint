@@ -209,3 +209,30 @@ fn eyedropper_reads_composite() {
     let c = s.pick_color(10, 10);
     assert!((c.r - 1.0).abs() < 1e-3 && (c.a - 1.0).abs() < 1e-3);
 }
+
+#[test]
+fn save_open_round_trip_and_png_export() {
+    let mut s = new_session();
+    s.execute(Command::SetColor {
+        rgba: Rgba::new(0.0, 0.5, 1.0, 1.0),
+    })
+    .unwrap();
+    draw_line(&mut s, 120.0);
+    let bytes = s.save_happypaint().unwrap();
+    assert!(onepaint_formats::read_thumbnail(&bytes).unwrap().is_some());
+    let mut t = Session::new(10, 10, None);
+    t.open_happypaint(&bytes).unwrap();
+    assert_eq!((t.doc().width, t.doc().height), (512, 384));
+    assert!(t.drain_events().contains(&Event::DocumentReplaced));
+    let a = s.pick_color(100, 120);
+    let b = t.pick_color(100, 120);
+    assert!(
+        (a.g - b.g).abs() < 0.01 && (a.b - b.b).abs() < 0.01,
+        "{a:?} {b:?}"
+    );
+    let png = s.export_png().unwrap();
+    let (w, h, px) = onepaint_formats::decode_png_rgba8(&png).unwrap();
+    assert_eq!((w, h), (512, 384));
+    assert_eq!(&px[..4], &[255, 255, 255, 255]);
+    assert!(t.open_happypaint(b"garbage").is_err());
+}
