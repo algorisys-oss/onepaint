@@ -110,6 +110,7 @@ impl Session {
                 preview: Surface::new(),
                 preview_bounds: bounds,
                 saved_selection: None,
+                clamp_edges: false,
             };
             f.render(self.doc.bounds());
             f.preview

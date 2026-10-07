@@ -41,6 +41,8 @@ pub enum Popover {
     Confirm,
     Selection,
     Fill,
+    CanvasSize,
+    ImageSize,
 }
 
 /// An action that would discard unsaved work.
@@ -74,6 +76,8 @@ pub struct App {
     pub clipboard: clip::Clipboard,
     /// Layer being dragged in the layers panel.
     pub layer_drag: Option<String>,
+    /// Canvas/image size dialog state: size, anchor (col, row), keep aspect.
+    pub size_dialog: ([u32; 2], (u8, u8), bool),
     /// A file chosen by drag-and-drop, opened once unsaved work is dealt with.
     pub open_later: Option<PathBuf>,
     allow_close: bool,
@@ -117,6 +121,7 @@ impl App {
             xform_layer: None,
             clipboard: clip::Clipboard::default(),
             layer_drag: None,
+            size_dialog: ([0, 0], (1, 1), true),
             open_later: None,
             allow_close: false,
         };
@@ -517,6 +522,10 @@ impl eframe::App for App {
                 }
                 _ => {}
             }
+        }
+        let doc_size = [self.session.doc().width, self.session.doc().height];
+        if self.canvas.doc_size != doc_size {
+            self.canvas.reset_for(doc_size);
         }
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
         for f in dropped {

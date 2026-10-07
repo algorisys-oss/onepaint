@@ -99,3 +99,16 @@ fn bounds_of_content() {
     s.set(20, 600, [0.0, 0.0, 0.0, 1.0]);
     assert_eq!(s.content_bounds(), Some(Rect::new(20, 10, 281, 591)));
 }
+
+#[test]
+fn translated_moves_content_by_any_offset() {
+    let mut s = Surface::new();
+    s.set(5, 7, [1.0, 0.0, 0.0, 1.0]);
+    s.set(300, 2, [0.0, 1.0, 0.0, 1.0]);
+    for (dx, dy) in [(0, 0), (256, -256), (13, -9), (-300, 40)] {
+        let t = s.translated(dx, dy);
+        assert_eq!(t.get(5 + dx, 7 + dy), [1.0, 0.0, 0.0, 1.0], "({dx},{dy})");
+        assert_eq!(t.get(300 + dx, 2 + dy), [0.0, 1.0, 0.0, 1.0]);
+        assert_eq!(t.get(6 + dx, 7 + dy), [0.0; 4]);
+    }
+}

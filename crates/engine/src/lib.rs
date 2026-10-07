@@ -4,6 +4,7 @@
 //! drained [`Event`]s, mirroring happypaint's store handlers, `PaintSink`
 //! and engine callbacks. No UI or GPU code lives here.
 
+mod canvas_ops;
 mod clipboard;
 mod selection_ops;
 pub mod transform;
@@ -181,6 +182,18 @@ pub enum Command {
     LayerViaCopy {
         cut: bool,
     },
+    /// Crop/extend the canvas; content moves by (dx, dy).
+    ResizeCanvas {
+        width: u32,
+        height: u32,
+        dx: i32,
+        dy: i32,
+    },
+    /// Resample the whole image to a new size.
+    ScaleImage {
+        width: u32,
+        height: u32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -240,6 +253,10 @@ pub(crate) enum Change {
     Selection {
         before: Option<Arc<onepaint_selection::Mask>>,
         after: Option<Arc<onepaint_selection::Mask>>,
+    },
+    Document {
+        before: Box<canvas_ops::DocShape>,
+        after: Box<canvas_ops::DocShape>,
     },
 }
 
@@ -679,6 +696,13 @@ impl Session {
         match cmd {
             Command::BeginTransform => self.begin_transform(),
             Command::LayerViaCopy { cut } => self.layer_via_copy(cut),
+            Command::ResizeCanvas {
+                width,
+                height,
+                dx,
+                dy,
+            } => self.resize_canvas(width, height, dx, dy),
+            Command::ScaleImage { width, height } => self.scale_image(width, height),
             Command::SetTransform { matrix } => {
                 self.set_transform(matrix);
                 Ok(())
@@ -1133,6 +1157,7 @@ impl Session {
                     self.mark_all_dirty();
                 }
                 ChangeRef::Selection(m) => self.set_selection_raw(m),
+                ChangeRef::Document(d) => self.apply_shape(*d),
             }
         }
         self.history_changed();
@@ -1161,6 +1186,11 @@ impl Session {
             Change::Selection { before, after } => {
                 ChangeRef::Selection(if undo { before.clone() } else { after.clone() })
             }
+            Change::Document { before, after } => ChangeRef::Document(Box::new(if undo {
+                (**before).clone()
+            } else {
+                (**after).clone()
+            })),
         }
     }
 
@@ -1193,4 +1223,5 @@ enum ChangeRef {
         active: NodeId,
     },
     Selection(Option<Arc<onepaint_selection::Mask>>),
+    Document(Box<canvas_ops::DocShape>),
 }

@@ -38,6 +38,20 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             Popover::Selection => popover_at(ctx, "selection", anchor, Align2::RIGHT_TOP, |ui| {
                 selection(app, ui)
             }),
+            Popover::CanvasSize => popover_at(
+                ctx,
+                "canvas-size",
+                screen.center(),
+                Align2::CENTER_CENTER,
+                |ui| canvas_size(app, ui),
+            ),
+            Popover::ImageSize => popover_at(
+                ctx,
+                "image-size",
+                screen.center(),
+                Align2::CENTER_CENTER,
+                |ui| image_size(app, ui),
+            ),
             Popover::Fill => popover_at(ctx, "fill", anchor, Align2::RIGHT_TOP, |ui| {
                 fill_options(app, ui)
             }),
@@ -443,6 +457,25 @@ fn menu(app: &mut App, ui: &mut Ui) {
     if widgets::menu_item(ui, Some("image"), "Export PNG…", "Ctrl+Shift+E").clicked() {
         app.popover = None;
         app.export_png(now);
+    }
+    widgets::hairline(ui);
+    if widgets::menu_item(ui, Some("maximize-2"), "Canvas size…", "").clicked() {
+        app.size_dialog = (
+            [app.session.doc().width, app.session.doc().height],
+            (1, 1),
+            true,
+        );
+        app.popover = Some(Popover::CanvasSize);
+        return;
+    }
+    if widgets::menu_item(ui, Some("image"), "Image size…", "").clicked() {
+        app.size_dialog = (
+            [app.session.doc().width, app.session.doc().height],
+            (1, 1),
+            true,
+        );
+        app.popover = Some(Popover::ImageSize);
+        return;
     }
     widgets::hairline(ui);
     if widgets::menu_item(ui, Some("maximize-2"), "Fit to screen", "Ctrl+0").clicked() {
@@ -1273,4 +1306,124 @@ fn fill_options(app: &mut App, ui: &mut Ui) {
     if widgets::slider_row(ui, "Grow", &mut grow, 0.0..=8.0, |v| format!("{v:.0} px")).changed() {
         app.canvas.options.fill_grow = grow.round() as u32;
     }
+}
+
+fn size_fields(app: &mut App, ui: &mut Ui, keep_aspect: bool) {
+    let t = Tokens::get(ui.ctx());
+    let (old_w, old_h) = (
+        app.session.doc().width as f64,
+        app.session.doc().height as f64,
+    );
+    let [mut w, mut h] = app.size_dialog.0;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Size").color(t.fg_muted));
+        let rw = ui.add(egui::DragValue::new(&mut w).range(1..=16384).suffix(" px"));
+        ui.label("×");
+        let rh = ui.add(egui::DragValue::new(&mut h).range(1..=16384).suffix(" px"));
+        if keep_aspect && rw.changed() {
+            h = ((w as f64 * old_h / old_w).round() as u32).max(1);
+        } else if keep_aspect && rh.changed() {
+            w = ((h as f64 * old_w / old_h).round() as u32).max(1);
+        }
+    });
+    app.size_dialog.0 = [w, h];
+}
+
+fn dialog_buttons(app: &mut App, ui: &mut Ui, apply: Command) {
+    ui.add_space(12.0);
+    ui.horizontal(|ui| {
+        if widgets::primary_button(ui, "Apply", 110.0).clicked() {
+            let _ = app.session.execute(apply);
+            app.popover = None;
+        }
+        if widgets::secondary_button(ui, "Cancel", 90.0).clicked() {
+            app.popover = None;
+        }
+    });
+}
+
+fn canvas_size(app: &mut App, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    ui.set_width(320.0);
+    ui.label(
+        RichText::new("Canvas size")
+            .font(theme::semibold(16.0))
+            .color(t.fg),
+    );
+    ui.label(
+        RichText::new("Crops or extends the canvas without resampling.")
+            .font(theme::medium(11.0))
+            .color(t.fg_faint),
+    );
+    ui.add_space(8.0);
+    size_fields(app, ui, false);
+    ui.add_space(6.0);
+    ui.label(RichText::new("Anchor").color(t.fg_muted));
+    for row in 0..3u8 {
+        ui.horizontal(|ui| {
+            for col in 0..3u8 {
+                let sel = app.size_dialog.1 == (col, row);
+                let b = egui::Button::new("")
+                    .fill(if sel { t.accent } else { t.field })
+                    .corner_radius(t.radius_sm)
+                    .min_size(vec2(26.0, 22.0));
+                if ui.add(b).clicked() {
+                    app.size_dialog.1 = (col, row);
+                }
+            }
+        });
+    }
+    let [w, h] = app.size_dialog.0;
+    let (ow, oh) = (
+        app.session.doc().width as i64,
+        app.session.doc().height as i64,
+    );
+    let (col, row) = app.size_dialog.1;
+    // Centre offset = round((new - old) / 2), as in happypaint's anchor dialog.
+    let off = |new: i64, old: i64, k: u8| match k {
+        0 => 0,
+        1 => ((new - old) as f64 / 2.0).round() as i32,
+        _ => (new - old) as i32,
+    };
+    let (dx, dy) = (off(w as i64, ow, col), off(h as i64, oh, row));
+    dialog_buttons(
+        app,
+        ui,
+        Command::ResizeCanvas {
+            width: w,
+            height: h,
+            dx,
+            dy,
+        },
+    );
+}
+
+fn image_size(app: &mut App, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    ui.set_width(320.0);
+    ui.label(
+        RichText::new("Image size")
+            .font(theme::semibold(16.0))
+            .color(t.fg),
+    );
+    ui.label(
+        RichText::new("Resamples every layer.")
+            .font(theme::medium(11.0))
+            .color(t.fg_faint),
+    );
+    ui.add_space(8.0);
+    let keep = app.size_dialog.2;
+    size_fields(app, ui, keep);
+    let mut k = keep;
+    widgets::toggle(ui, &mut k, "Keep aspect ratio");
+    app.size_dialog.2 = k;
+    let [w, h] = app.size_dialog.0;
+    dialog_buttons(
+        app,
+        ui,
+        Command::ScaleImage {
+            width: w,
+            height: h,
+        },
+    );
 }

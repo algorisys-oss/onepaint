@@ -144,6 +144,8 @@ pub(crate) struct Floating {
     pub preview_bounds: Rect,
     /// The selection that was lifted (cleared while transforming, restored on cancel).
     pub saved_selection: Option<Arc<onepaint_selection::Mask>>,
+    /// Clamp samples to the source edge instead of fading to transparent (image resize).
+    pub clamp_edges: bool,
 }
 
 impl Floating {
@@ -156,7 +158,13 @@ impl Floating {
         let (x0, y0) = (fx.floor(), fy.floor());
         let (tx, ty) = ((fx - x0) as f32, (fy - y0) as f32);
         let (w, h) = (self.bounds.w as i64, self.bounds.h as i64);
+        let clamp = self.clamp_edges;
         let at = |xi: i64, yi: i64| -> [f32; 4] {
+            let (xi, yi) = if clamp {
+                (xi.clamp(0, w - 1), yi.clamp(0, h - 1))
+            } else {
+                (xi, yi)
+            };
             if xi < 0 || yi < 0 || xi >= w || yi >= h {
                 return [0.0; 4];
             }
@@ -295,6 +303,7 @@ impl Session {
             preview: Surface::new(),
             preview_bounds: bounds,
             saved_selection,
+            clamp_edges: false,
         };
         f.render(self.doc.bounds());
         let lifted_selection = f.saved_selection.is_some();

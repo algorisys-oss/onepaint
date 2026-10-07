@@ -31,6 +31,15 @@ built on **egui** for the UI and **wgpu** for the canvas.
 - Painting clipped to the selection.
 - The paint bucket, the eyedropper tool, clear and fill selection.
 
+**Slice 3 (move and arrange) is complete.** It includes:
+
+- Move and free transform: scale, rotate, flip and selection lift.
+- Copy, cut and paste, with the system clipboard and in-place paste.
+- Layer via copy and layer via cut.
+- Place image and file drop; PNG, JPEG and WebP open as documents.
+- Drag-and-drop layer reordering, including into and out of groups.
+- Canvas size (with an anchor) and image size.
+
 [`docs/feature-parity.md`](docs/feature-parity.md) tracks every happypaint
 feature, and [`docs/divergences.md`](docs/divergences.md) lists the known
 differences.
@@ -63,6 +72,8 @@ The app needs a GPU that wgpu supports (Vulkan, Metal, DX12 or GL).
 | Fit / 100% | Ctrl+0 / Ctrl+1 |
 | Undo / redo | Ctrl+Z / Ctrl+Shift+Z |
 | New / open / save / export PNG | Ctrl+N / Ctrl+O / Ctrl+S / Ctrl+Shift+E |
+| Move / transform | V or Ctrl+T; drag handles; Enter applies, Esc cancels |
+| Copy / cut / paste | Ctrl+C / Ctrl+X / Ctrl+V; Ctrl+J layer via copy, Ctrl+Shift+J via cut |
 | Hide the UI | Tab |
 
 ## Develop

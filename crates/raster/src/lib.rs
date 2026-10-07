@@ -301,6 +301,27 @@ impl Surface {
         }
     }
 
+    /// A copy shifted by whole pixels (fast path for tile-aligned offsets).
+    pub fn translated(&self, dx: i32, dy: i32) -> Surface {
+        if dx % TILE == 0 && dy % TILE == 0 {
+            let (tx, ty) = (dx / TILE, dy / TILE);
+            return Surface {
+                tiles: self
+                    .tiles
+                    .iter()
+                    .map(|(&(x, y), t)| ((x + tx, y + ty), t.clone()))
+                    .collect(),
+            };
+        }
+        let mut out = Surface::new();
+        for &(tx, ty) in self.tiles.keys() {
+            let r = Rect::from_tile(tx, ty);
+            let data = self.read_rect(r);
+            out.write_rect(Rect::new(r.x + dx, r.y + dy, TILE, TILE), &data);
+        }
+        out
+    }
+
     /// Tight bounds of pixels with non-zero alpha.
     pub fn content_bounds(&self) -> Option<Rect> {
         let mut acc: Option<Rect> = None;
