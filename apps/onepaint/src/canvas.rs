@@ -265,7 +265,7 @@ impl Canvas {
             return Drag::Rotate { last_angle: self.angle_to(p) };
         }
         let tool = session.tool();
-        let painting = matches!(tool, Tool::Brush | Tool::Eraser | Tool::Smudge | Tool::Mixer);
+        let painting = matches!(tool, Tool::Brush | Tool::Eraser | Tool::Smudge | Tool::Mixer | Tool::Liquify);
         if painting && (button == PointerButton::Secondary || (m.ctrl && m.alt)) {
             return Drag::Size { start_x: p.x, start_size: session.current_brush().size };
         }
@@ -288,13 +288,13 @@ impl Canvas {
             return Drag::Transform { handle, grab: d, start: self.xform };
         }
         match tool {
-            Tool::Brush | Tool::Eraser | Tool::Smudge | Tool::Mixer => {
+            Tool::Brush | Tool::Eraser | Tool::Smudge | Tool::Mixer | Tool::Liquify => {
                 let kind = if self.last_pen_force.is_some() { PointerKind::Pen } else { PointerKind::Mouse };
                 self.pressure = Some(PressureProvider::new(kind));
                 let sp = self.stroke_point(p, time_ms, self.last_pen_force);
                 session.stroke_begin(sp);
                 // Quick-shape straightens brush strokes only.
-                let fired = matches!(tool, Tool::Smudge | Tool::Mixer);
+                let fired = matches!(tool, Tool::Smudge | Tool::Mixer | Tool::Liquify);
                 self.hold = HoldTracker { points: vec![d], anchor: p, since: time_ms, fired };
                 Drag::Paint
             }
@@ -769,7 +769,7 @@ impl Canvas {
         }
         let _ = resp;
         ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
-        if matches!(session.tool(), Tool::Brush | Tool::Eraser | Tool::Smudge | Tool::Mixer) {
+        if matches!(session.tool(), Tool::Brush | Tool::Eraser | Tool::Smudge | Tool::Mixer | Tool::Liquify) {
             let rad = (session.current_brush().size / 2.0 * self.view.scale) as f32;
             if rad > 2.0 {
                 ui.painter().circle_stroke(hp, rad, Stroke::new(1.5, Color32::from_black_alpha(140)));

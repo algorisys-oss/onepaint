@@ -2711,6 +2711,7 @@ name = "onepaint-filters"
 version = "0.1.0"
 dependencies = [
  "onepaint-color",
+ "onepaint-raster",
  "onepaint-stroke",
  "rayon",
  "serde",

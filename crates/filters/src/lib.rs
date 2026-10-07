@@ -6,6 +6,7 @@
 //! on premultiplied storage values.
 
 pub mod gradient;
+pub mod liquify;
 
 use onepaint_color::{fast_linear_to_srgb as linear_to_srgb, fast_srgb_to_linear as srgb_to_linear};
 use onepaint_stroke::{CurvePoint, Interp, eval_curve};

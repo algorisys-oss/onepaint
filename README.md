@@ -67,7 +67,8 @@ Slices 6 and 7 add:
 - Progressive compositing for big documents.
 
 Slice 9 adds smudge (S), the mixer brush (Shift+B, with Kubelka–Munk
-pigment mixing) and symmetry (Y: mirror, quad and radial).
+pigment mixing), symmetry (Y: mirror, quad and radial) and liquify
+(push, twirl, pinch, expand, reconstruct).
 
 Slice 8 adds PSD: open `.psd`/`.psb` (layers, groups, masks, blend modes,
 clipping) and File ▸ Export PSD….

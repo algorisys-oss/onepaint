@@ -85,3 +85,21 @@ fn symmetric_brush_stroke_paints_the_mirror() {
     s.replace_document(onepaint_doc::Document::new(10, 10, None));
     assert_eq!(s.paint_settings().symmetry.mode, SymmetryMode::Vertical);
 }
+
+#[test]
+fn liquify_push_is_one_undo_step_and_cancel_restores() {
+    let mut s = session();
+    s.execute(Command::SetTool { tool: Tool::Liquify }).unwrap();
+    s.execute(Command::SetBrushSize { size: 40.0 }).unwrap();
+    s.execute(Command::SetLiquify { mode: onepaint_filters::liquify::LiquifyMode::Push, strength: 1.0 }).unwrap();
+    assert_eq!(active_px(&s, 56, 50)[3], 0.0);
+    drag(&mut s, 40.0, 65.0, 50.0);
+    assert!(active_px(&s, 56, 50)[3] > 0.5, "the red edge was pushed right");
+    s.execute(Command::Undo).unwrap();
+    assert_eq!(active_px(&s, 56, 50)[3], 0.0);
+    let before = s.doc().layer(s.active()).unwrap().pixels.read_rect(s.doc().bounds());
+    s.stroke_begin(pt(40.0, 50.0));
+    s.stroke_extend(&[pt(70.0, 50.0)]);
+    s.stroke_cancel();
+    assert_eq!(s.doc().layer(s.active()).unwrap().pixels.read_rect(s.doc().bounds()), before);
+}

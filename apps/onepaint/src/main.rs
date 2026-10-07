@@ -52,6 +52,7 @@ pub enum Popover {
     SmudgeOptions,
     MixerOptions,
     Guides,
+    LiquifyOptions,
 }
 
 /// What a file opens as.
@@ -158,7 +159,9 @@ impl App {
         };
         if let Some(p) = open {
             app.open_path(p);
-        } else if let Some(p) = app.autosave.leftover() {
+        } else if !app.debug.scripted()
+            && let Some(p) = app.autosave.leftover()
+        {
             app.recover = Some(p);
             app.popover = Some(Popover::Recover);
         }
@@ -543,7 +546,9 @@ impl eframe::App for App {
         let now = ctx.input(|i| i.time);
         let (dirty, busy) = (self.dirty(), self.session.is_stroking() || self.session.transform_active());
         let doc = &self.session;
-        self.autosave.tick(now, dirty, || (!busy).then(|| doc.doc().clone()));
+        if !self.debug.scripted() {
+            self.autosave.tick(now, dirty, || (!busy).then(|| doc.doc().clone()));
+        }
         if dirty {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(autosave::INTERVAL_S));
         }

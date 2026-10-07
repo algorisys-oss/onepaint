@@ -68,6 +68,7 @@ pub static ICONS: &[(&str, &[u8])] = icons![
     "fingerprint",
     "grid-3x3",
     "flip-horizontal-2",
+    "waves",
 ];
 
 fn white_icons() -> &'static HashMap<&'static str, Arc<[u8]>> {

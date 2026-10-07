@@ -34,6 +34,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             Popover::SmudgeOptions => popover_at(ctx, "smudge", anchor, Align2::RIGHT_TOP, |ui| smudge_options(app, ui)),
             Popover::MixerOptions => popover_at(ctx, "mixer", anchor, Align2::RIGHT_TOP, |ui| mixer_options(app, ui)),
             Popover::Guides => popover_at(ctx, "guides", anchor, Align2::RIGHT_TOP, |ui| guides(app, ui)),
+            Popover::LiquifyOptions => popover_at(ctx, "liquify", anchor, Align2::RIGHT_TOP, |ui| liquify_options(app, ui)),
             Popover::Recover => popover_at(ctx, "recover", screen.center(), Align2::CENTER_CENTER, |ui| recover(app, ui)),
             Popover::Fill => popover_at(ctx, "fill", anchor, Align2::RIGHT_TOP, |ui| fill_options(app, ui)),
             Popover::NewDoc => popover_at(ctx, "newdoc", screen.center(), Align2::CENTER_CENTER, |ui| new_doc(app, ui)),
@@ -215,6 +216,12 @@ fn top_bar(app: &mut App, ctx: &egui::Context) {
                             toggle_popover(app, Popover::MixerOptions);
                         }
                         app.set_tool(Tool::Mixer);
+                    }
+                    if icons::button(ui, "waves", 32.0, tool == Tool::Liquify, "Liquify").clicked() {
+                        if tool == Tool::Liquify {
+                            toggle_popover(app, Popover::LiquifyOptions);
+                        }
+                        app.set_tool(Tool::Liquify);
                     }
                     if icons::button(ui, "sliders-horizontal", 32.0, app.popover == Some(Popover::Brushes), "Brush library").clicked() {
                         toggle_popover(app, Popover::Brushes);
@@ -1226,6 +1233,33 @@ fn mixer_options(app: &mut App, ui: &mut Ui) {
         .font(theme::medium(10.5))
         .color(t.fg_faint),
     );
+}
+
+fn liquify_options(app: &mut App, ui: &mut Ui) {
+    use onepaint_filters::liquify::LIQUIFY_MODES;
+    let t = Tokens::get(ui.ctx());
+    ui.set_width(280.0);
+    widgets::section_label(ui, "Liquify");
+    let ps = app.session.paint_settings();
+    let (mut mode, strength) = (ps.liquify_mode, ps.liquify_strength);
+    let label = LIQUIFY_MODES.iter().find(|m| m.0 == mode).map_or("Push", |m| m.1);
+    let mut changed = false;
+    egui::ComboBox::from_id_salt("liquify-mode").selected_text(label).width(260.0).show_ui(ui, |ui| {
+        for (m, name) in LIQUIFY_MODES {
+            if ui.selectable_label(mode == m, name).clicked() {
+                mode = m;
+                changed = true;
+            }
+        }
+    });
+    let mut v = (strength * 100.0) as f32;
+    if widgets::slider_row(ui, "Strength", &mut v, 0.0..=100.0, |v| format!("{v:.0}%")).changed() {
+        changed = true;
+    }
+    if changed {
+        let _ = app.session.execute(Command::SetLiquify { mode, strength: v as f64 / 100.0 });
+    }
+    ui.label(RichText::new("Size follows the brush size ([ and ]).").font(theme::medium(10.5)).color(t.fg_faint));
 }
 
 fn guides(app: &mut App, ui: &mut Ui) {

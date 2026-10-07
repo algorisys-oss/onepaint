@@ -25,7 +25,7 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] smudge
 - [x] mixer (Wet/Load/Mix, the 12 Photoshop combinations, Keep colour, Clean; no Alt-click patch load yet)
 - [~] gradient, with output to pixels or a fill layer (5 shapes, colour→clear or →BG, reverse, selection-aware; fill-layer output not done)
-- [ ] liquify (all modes)
+- [x] liquify (push, twirl left/right, pinch, expand, reconstruct)
 - [x] text (create, edit, move, style, wrap, outline, background, rasterise)
 - [ ] pen, with output to a shape layer, a path or pixels
 - [x] shape (line, rect, ellipse and 3–12-sided polygon, stroked with the brush, optional fill)

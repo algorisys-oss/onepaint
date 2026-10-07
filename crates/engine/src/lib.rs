@@ -7,6 +7,7 @@
 mod canvas_ops;
 mod clipboard;
 mod filter_ops;
+mod liquify_ops;
 mod mask_ops;
 mod paint_ops;
 mod selection_ops;
@@ -49,6 +50,7 @@ pub enum Tool {
     Text,
     Smudge,
     Mixer,
+    Liquify,
 }
 
 /// Optional layer property edits; `None` leaves a property unchanged.
@@ -136,6 +138,10 @@ pub enum Command {
         mixer: MixerSettings,
     },
     CleanMixer,
+    SetLiquify {
+        mode: onepaint_filters::liquify::LiquifyMode,
+        strength: f64,
+    },
     SetBrush {
         preset_id: String,
     },
@@ -359,6 +365,7 @@ pub struct Session {
     mask_target_layer: Option<NodeId>,
     paint: PaintSettings,
     smudge: Option<smudge_ops::ActiveSmudge>,
+    liquify: Option<liquify_ops::ActiveLiquify>,
     /// The Mixer's kept reservoir, keyed by the colour it was loaded with.
     mixer_held: Option<(String, onepaint_brush::smudge::Reservoir)>,
 }
@@ -395,6 +402,7 @@ impl Session {
             mask_target_layer: None,
             paint: PaintSettings::default(),
             smudge: None,
+            liquify: None,
             mixer_held: None,
         };
         s.mark_all_dirty();
@@ -459,7 +467,7 @@ impl Session {
     }
 
     pub fn is_stroking(&self) -> bool {
-        self.stroke.is_some() || self.smudge.is_some()
+        self.stroke.is_some() || self.smudge.is_some() || self.liquify.is_some()
     }
 
     pub fn drain_events(&mut self) -> Vec<Event> {
@@ -600,6 +608,10 @@ impl Session {
             self.smudge_begin(p);
             return;
         }
+        if self.tool == Tool::Liquify {
+            self.liquify_begin(p);
+            return;
+        }
         let Some(layer) = self.doc.layer(&self.active) else {
             return;
         };
@@ -649,6 +661,10 @@ impl Session {
             self.smudge_extend(pts);
             return;
         }
+        if self.liquify.is_some() {
+            self.liquify_extend(pts);
+            return;
+        }
         let Some(st) = self.stroke.as_mut() else {
             return;
         };
@@ -687,6 +703,7 @@ impl Session {
 
     pub fn stroke_cancel(&mut self) {
         self.smudge_cancel();
+        self.liquify_cancel();
         if let Some(st) = self.stroke.take() {
             for (tx, ty) in st.buffer.tile_keys() {
                 self.mark_dirty(Rect::from_tile(tx, ty));
@@ -697,6 +714,7 @@ impl Session {
     /// Flatten the stroke into its layer as one undo step.
     pub fn stroke_end(&mut self) {
         self.smudge_end();
+        self.liquify_end();
         let Some(mut st) = self.stroke.take() else {
             return;
         };
@@ -782,7 +800,8 @@ impl Session {
                 | Command::SetSymmetry { .. }
                 | Command::SetSmudgeStrength { .. }
                 | Command::SetMixer { .. }
-                | Command::CleanMixer => {}
+                | Command::CleanMixer
+                | Command::SetLiquify { .. } => {}
                 // Undo while transforming just abandons the transform.
                 Command::Undo => {
                     self.cancel_transform();
@@ -873,6 +892,11 @@ impl Session {
             }
             Command::CleanMixer => {
                 self.clean_mixer();
+                Ok(())
+            }
+            Command::SetLiquify { mode, strength } => {
+                self.paint.liquify_mode = mode;
+                self.paint.liquify_strength = strength.clamp(0.0, 1.0);
                 Ok(())
             }
             Command::SetBrush { preset_id } => {

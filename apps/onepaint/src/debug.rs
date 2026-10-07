@@ -28,6 +28,12 @@ pub struct Debug {
 }
 
 impl Debug {
+    /// A scripted run (demo or screenshot): it never autosaves or offers recovery,
+    /// so visual checks leave nothing behind in the user's autosave folder.
+    pub fn scripted(&self) -> bool {
+        self.demo || self.shot.is_some() || self.popover.is_some() || self.transform || self.text || self.smudge
+    }
+
     pub fn from_env() -> Self {
         let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
         Self {
@@ -44,6 +50,7 @@ impl Debug {
                 "curves" => Some(Popover::Filter),
                 "guides" => Some(Popover::Guides),
                 "mixer" => Some(Popover::MixerOptions),
+                "liquify" => Some(Popover::LiquifyOptions),
                 _ => None,
             }),
             exit: var("ONEPAINT_EXIT").is_some(),
@@ -143,6 +150,10 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
         let _ = app.session.execute(Command::SetSymmetry {
             symmetry: Symmetry { mode: SymmetryMode::Radial, radial_count: 8, cx: 0.5, cy: 0.5, angle: 0.0 },
         });
+        app.set_tool(Tool::Liquify);
+        let _ = app.session.execute(Command::SetBrushSize { size: 160.0 });
+        let _ = app.session.execute(Command::SetLiquify { mode: onepaint_filters::liquify::LiquifyMode::TwirlLeft, strength: 0.3 });
+        drag(app, w * 0.3, h * 0.67, h * 0.69);
         app.set_tool(Tool::Brush);
         let _ = app.session.execute(Command::SetBrush { preset_id: "hard-round".into() });
         let _ = app.session.execute(Command::SetBrushSize { size: 10.0 });

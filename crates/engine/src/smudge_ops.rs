@@ -27,11 +27,19 @@ pub struct PaintSettings {
     pub symmetry: Symmetry,
     pub smudge_strength: f64,
     pub mixer: MixerSettings,
+    pub liquify_mode: onepaint_filters::liquify::LiquifyMode,
+    pub liquify_strength: f64,
 }
 
 impl Default for PaintSettings {
     fn default() -> Self {
-        Self { symmetry: Symmetry::default(), smudge_strength: SMUDGE_STRENGTH, mixer: MixerSettings::default() }
+        Self {
+            symmetry: Symmetry::default(),
+            smudge_strength: SMUDGE_STRENGTH,
+            mixer: MixerSettings::default(),
+            liquify_mode: Default::default(),
+            liquify_strength: 0.5,
+        }
     }
 }
 
