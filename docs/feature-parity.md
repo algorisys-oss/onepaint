@@ -107,10 +107,10 @@ Still to do:
 
 ## Canvas and guides
 - [~] Pan, zoom and rotate at 60fps or better on large documents (pan, zoom and rotate all work; not yet measured on 8k documents)
-- [ ] Grid
+- [x] Grid (size, subdivisions, snap to grid)
 - [x] Symmetry guides (axis/spoke overlay)
-- [ ] 1–5-point perspective with stroke snapping
-- [ ] Horizontal/vertical snap
+- [~] 1–5-point perspective with stroke snapping (soft and hard; vanishing-point editing; fish-eye curved mode still to do)
+- [x] Horizontal/vertical snap
 - [ ] Rulers
 - [x] Quick-shape: hold to straighten a stroke into a line, ellipse or polygon
 - [ ] Speed lines

@@ -344,7 +344,7 @@ impl App {
 
     /// Y: symmetry on/off, restoring the last mode used (vertical at first).
     pub fn toggle_symmetry(&mut self) {
-        let mut sym = self.session.paint_settings().symmetry;
+        let mut sym = self.session.guides().symmetry;
         if sym.is_on() {
             self.last_symmetry = sym.mode;
             sym.mode = onepaint_engine::SymmetryMode::Off;
@@ -469,6 +469,9 @@ impl App {
             if sc(Modifiers::NONE, Key::Y) {
                 self.toggle_symmetry();
             }
+            if sc(Modifiers::SHIFT, Key::P) && self.session.guides().perspective.enabled {
+                self.canvas.persp_editing = !self.canvas.persp_editing;
+            }
             if sc(Modifiers::NONE, Key::E) {
                 self.set_tool(Tool::Eraser);
             }
@@ -498,7 +501,10 @@ impl App {
                 self.hide_ui = !self.hide_ui;
             }
             if sc(Modifiers::NONE, Key::Escape) && !self.canvas.cancel_poly() {
-                if self.session.transform_active() {
+                if self.canvas.persp_editing || self.canvas.sym_editing {
+                    self.canvas.persp_editing = false;
+                    self.canvas.sym_editing = false;
+                } else if self.session.transform_active() {
                     self.cancel_transform();
                 } else {
                     self.popover = None;
@@ -910,7 +916,7 @@ mod tests {
         let mut h = harness();
         h.run();
         key(&mut h, egui::Key::Y, egui::Modifiers::NONE);
-        assert_eq!(h.state().session.paint_settings().symmetry.mode, onepaint_engine::SymmetryMode::Vertical);
+        assert_eq!(h.state().session.guides().symmetry.mode, onepaint_engine::SymmetryMode::Vertical);
         drag_stroke(&mut h, pos2(500.0, 420.0), pos2(560.0, 440.0));
         let app = h.state();
         let layer = app.session.doc().layer(app.session.active()).unwrap();
@@ -919,7 +925,7 @@ mod tests {
         assert!(layer.pixels.get(d[0] as i32, d[1] as i32)[3] > 0.5);
         assert!(layer.pixels.get((w - d[0]) as i32, d[1] as i32)[3] > 0.5, "mirrored copy");
         key(&mut h, egui::Key::Y, egui::Modifiers::NONE);
-        assert!(!h.state().session.paint_settings().symmetry.is_on());
+        assert!(!h.state().session.guides().symmetry.is_on());
         key(&mut h, egui::Key::S, egui::Modifiers::NONE);
         assert_eq!(h.state().session.tool(), Tool::Smudge);
         h.get_by_label("Smudge (S)").click();
@@ -949,5 +955,73 @@ mod tests {
             assert!(changed > 400, "{tool:?} changed only {changed} values");
             assert!(app.session.can_undo());
         }
+    }
+
+    fn set_guides(h: &mut Harness<'_, App>, f: impl FnOnce(&mut onepaint_engine::Guides)) {
+        let mut g = h.state().session.guides().clone();
+        f(&mut g);
+        let _ = h.state_mut().session.execute(Command::SetGuides { guides: Box::new(g) });
+        h.step();
+    }
+
+    fn alpha_at(h: &Harness<'_, App>, screen: [f64; 2]) -> f32 {
+        let app = h.state();
+        let d = app.canvas.view.screen_to_doc(screen);
+        app.session.doc().layer(app.session.active()).unwrap().pixels.get(d[0] as i32, d[1] as i32)[3]
+    }
+
+    #[test]
+    fn hv_snap_straightens_a_wobbly_stroke() {
+        let mut h = harness();
+        h.run();
+        set_guides(&mut h, |g| g.snap_hv = true);
+        drag_stroke(&mut h, pos2(500.0, 420.0), pos2(700.0, 445.0));
+        assert!(alpha_at(&h, [690.0, 420.0]) > 0.5, "the stroke stayed on the start row");
+        assert!(alpha_at(&h, [690.0, 445.0]) < 0.01, "not where the pointer drifted");
+    }
+
+    #[test]
+    fn hard_perspective_draws_one_straight_line() {
+        let mut h = harness();
+        h.run();
+        set_guides(&mut h, |g| {
+            g.perspective.enabled = true;
+            g.perspective.points = onepaint_engine::guides::perspective_preset(2);
+        });
+        let start = h.state().session.history_len();
+        drag_stroke(&mut h, pos2(520.0, 300.0), pos2(700.0, 320.0));
+        assert_eq!(h.state().session.history_len(), start + 1, "one undo step");
+        let app = h.state();
+        let (o, e) = (app.canvas.view.screen_to_doc([520.0, 300.0]), app.canvas.view.screen_to_doc([700.0, 320.0]));
+        let (w, hh) = (app.session.doc().width as f64, app.session.doc().height as f64);
+        // The line runs from the origin toward a vanishing point, not to the pointer.
+        let vp = [1.8 * w, 0.5 * hh];
+        let dir = [(vp[0] - o[0]), (vp[1] - o[1])];
+        let len = dir[0].hypot(dir[1]);
+        let t = (e[0] - o[0]) * dir[0] / len + (e[1] - o[1]) * dir[1] / len;
+        let on = [o[0] + dir[0] / len * t * 0.8, o[1] + dir[1] / len * t * 0.8];
+        let layer = app.session.doc().layer(app.session.active()).unwrap();
+        assert!(layer.pixels.get(on[0] as i32, on[1] as i32)[3] > 0.5, "paint along the VP line");
+    }
+
+    #[test]
+    fn editing_perspective_drags_a_vanishing_point() {
+        let mut h = harness();
+        h.run();
+        set_guides(&mut h, |g| {
+            g.perspective.enabled = true;
+            g.perspective.points = onepaint_engine::guides::perspective_preset(1);
+        });
+        key(&mut h, egui::Key::P, egui::Modifiers::SHIFT);
+        assert!(h.state().canvas.persp_editing);
+        let app = h.state();
+        let (w, hh) = (app.session.doc().width as f64, app.session.doc().height as f64);
+        let s = app.canvas.view.doc_to_screen([0.5 * w, 0.5 * hh]);
+        drag_stroke(&mut h, pos2(s[0] as f32, s[1] as f32), pos2(s[0] as f32 + 100.0, s[1] as f32));
+        let vp = h.state().session.guides().perspective.points[0];
+        assert!(vp.x > 0.55, "moved right: {vp:?}");
+        assert_eq!(h.state().session.doc().layer(h.state().session.active()).unwrap().pixels.tile_count(), 0, "no paint while editing");
+        key(&mut h, egui::Key::Escape, egui::Modifiers::NONE);
+        assert!(!h.state().canvas.persp_editing);
     }
 }

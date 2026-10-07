@@ -7,6 +7,7 @@
 //! - `ONEPAINT_TRANSFORM=1` starts a rotated move on the active layer.
 //! - `ONEPAINT_TEXT=1` adds a text object and opens its editor.
 //! - `ONEPAINT_SMUDGE=1` smudges and mixes across the demo, plus a radial-symmetry stroke.
+//! - `ONEPAINT_GUIDES=1` turns on the grid, 2-point perspective and H/V snap.
 //! - `ONEPAINT_EXIT=1` closes the app after the screenshot.
 
 use crate::{App, Popover};
@@ -25,13 +26,14 @@ pub struct Debug {
     transform: bool,
     text: bool,
     smudge: bool,
+    guides: bool,
 }
 
 impl Debug {
     /// A scripted run (demo or screenshot): it never autosaves or offers recovery,
     /// so visual checks leave nothing behind in the user's autosave folder.
     pub fn scripted(&self) -> bool {
-        self.demo || self.shot.is_some() || self.popover.is_some() || self.transform || self.text || self.smudge
+        self.demo || self.shot.is_some() || self.popover.is_some() || self.transform || self.text || self.smudge || self.guides
     }
 
     pub fn from_env() -> Self {
@@ -58,6 +60,7 @@ impl Debug {
             transform: var("ONEPAINT_TRANSFORM").is_some(),
             text: var("ONEPAINT_TEXT").is_some(),
             smudge: var("ONEPAINT_SMUDGE").is_some(),
+            guides: var("ONEPAINT_GUIDES").is_some(),
         }
     }
 }
@@ -168,6 +171,16 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
             }
         }
         app.session.stroke_end();
+    }
+    if frame == 3 && app.debug.guides {
+        let mut g = app.session.guides().clone();
+        g.grid.enabled = true;
+        g.grid.size = 128.0;
+        g.grid.subdivisions = 2;
+        g.perspective.enabled = true;
+        g.snap_hv = true;
+        let _ = app.session.execute(Command::SetGuides { guides: Box::new(g) });
+        app.canvas.persp_editing = true;
     }
     if frame == 3 && app.debug.transform {
         app.set_tool(onepaint_engine::Tool::Move);

@@ -7,6 +7,7 @@
 mod canvas_ops;
 mod clipboard;
 mod filter_ops;
+pub mod guides;
 mod liquify_ops;
 mod mask_ops;
 mod paint_ops;
@@ -14,6 +15,7 @@ mod selection_ops;
 mod smudge_ops;
 mod text_ops;
 pub mod transform;
+pub use guides::Guides;
 pub use onepaint_brush::symmetry::{Symmetry, SymmetryMode};
 pub use smudge_ops::{MixerSettings, PaintSettings};
 pub mod view;
@@ -130,6 +132,10 @@ pub enum Command {
     },
     SetSymmetry {
         symmetry: Symmetry,
+    },
+    /// Replace the drawing guides (grid, symmetry, perspective…).
+    SetGuides {
+        guides: Box<Guides>,
     },
     SetSmudgeStrength {
         strength: f64,
@@ -364,6 +370,7 @@ pub struct Session {
     /// The layer whose mask strokes paint into (only while it is active).
     mask_target_layer: Option<NodeId>,
     paint: PaintSettings,
+    guides: Guides,
     smudge: Option<smudge_ops::ActiveSmudge>,
     liquify: Option<liquify_ops::ActiveLiquify>,
     /// The Mixer's kept reservoir, keyed by the colour it was loaded with.
@@ -401,10 +408,12 @@ impl Session {
             filter: None,
             mask_target_layer: None,
             paint: PaintSettings::default(),
+            guides: Guides::default(),
             smudge: None,
             liquify: None,
             mixer_held: None,
         };
+        s.guides = s.doc.extra.get("guides").and_then(|v| serde_json::from_value::<Guides>(v.clone()).ok()).unwrap_or_default().sanitized();
         s.mark_all_dirty();
         s
     }
@@ -580,9 +589,19 @@ impl Session {
         Ok(onepaint_formats::psd::write_psd(&self.doc, &flat)?)
     }
 
+    /// The document's drawing guides.
+    pub fn guides(&self) -> &Guides {
+        &self.guides
+    }
+
     /// Serialise the document as `.happypaint` v9 with a JPEG thumbnail.
     pub fn save_happypaint(&mut self) -> Result<Vec<u8>, EngineError> {
         self.commit_transform();
+        if self.guides.configured() {
+            self.doc.extra.insert("guides".into(), serde_json::to_value(&self.guides).unwrap_or_default());
+        } else {
+            self.doc.extra.remove("guides");
+        }
         self.doc.touch();
         let flat = self.flatten();
         let thumb = onepaint_formats::thumbnail_jpeg(&flat, self.doc.width, self.doc.height, 320, 240).ok();
@@ -798,6 +817,7 @@ impl Session {
                 | Command::SetBrushOpacity { .. }
                 | Command::SetBrushFlow { .. }
                 | Command::SetSymmetry { .. }
+                | Command::SetGuides { .. }
                 | Command::SetSmudgeStrength { .. }
                 | Command::SetMixer { .. }
                 | Command::CleanMixer
@@ -875,7 +895,12 @@ impl Session {
                 Ok(())
             }
             Command::SetSymmetry { symmetry } => {
-                self.paint.symmetry = Symmetry { radial_count: symmetry.radial_count.clamp(2, 24), ..symmetry };
+                self.guides.symmetry = symmetry;
+                self.guides = std::mem::take(&mut self.guides).sanitized();
+                Ok(())
+            }
+            Command::SetGuides { guides } => {
+                self.guides = guides.sanitized();
                 Ok(())
             }
             Command::SetSmudgeStrength { strength } => {

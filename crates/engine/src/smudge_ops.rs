@@ -3,7 +3,6 @@
 
 use super::*;
 use onepaint_brush::smudge::{Reservoir, SMUDGE_STRENGTH, Smudge, SmudgeParams, WetParams};
-use onepaint_brush::symmetry::Symmetry;
 
 /// The Mixer tool's options (Photoshop's Mixer Brush), tool-store defaults.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -24,7 +23,6 @@ impl Default for MixerSettings {
 /// Session-wide painting options that outlive a document.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PaintSettings {
-    pub symmetry: Symmetry,
     pub smudge_strength: f64,
     pub mixer: MixerSettings,
     pub liquify_mode: onepaint_filters::liquify::LiquifyMode,
@@ -33,13 +31,7 @@ pub struct PaintSettings {
 
 impl Default for PaintSettings {
     fn default() -> Self {
-        Self {
-            symmetry: Symmetry::default(),
-            smudge_strength: SMUDGE_STRENGTH,
-            mixer: MixerSettings::default(),
-            liquify_mode: Default::default(),
-            liquify_strength: 0.5,
-        }
+        Self { smudge_strength: SMUDGE_STRENGTH, mixer: MixerSettings::default(), liquify_mode: Default::default(), liquify_strength: 0.5 }
     }
 }
 
@@ -58,7 +50,7 @@ impl Session {
     }
 
     pub(crate) fn symmetry_transforms(&self) -> Vec<onepaint_brush::symmetry::SymTransform> {
-        let s = self.paint.symmetry;
+        let s = self.guides.symmetry;
         if s.is_on() { s.transforms(self.doc.width, self.doc.height) } else { Vec::new() }
     }
 

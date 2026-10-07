@@ -172,7 +172,7 @@ fn top_bar(app: &mut App, ctx: &egui::Context) {
                     if icons::button(ui, "pipette", 32.0, tool == Tool::Eyedropper, "Eyedropper (I)").clicked() {
                         app.set_tool(Tool::Eyedropper);
                     }
-                    let sym_on = app.session.paint_settings().symmetry.is_on();
+                    let sym_on = app.session.guides().symmetry.is_on();
                     if icons::button(ui, "grid-3x3", 32.0, sym_on || app.popover == Some(Popover::Guides), "Guides: symmetry (Y)").clicked()
                     {
                         toggle_popover(app, Popover::Guides);
@@ -1264,55 +1264,92 @@ fn liquify_options(app: &mut App, ui: &mut Ui) {
 
 fn guides(app: &mut App, ui: &mut Ui) {
     use onepaint_engine::SymmetryMode as M;
+    use onepaint_engine::guides::{PerspectiveSnap as PS, perspective_preset};
     let t = Tokens::get(ui.ctx());
-    ui.set_width(300.0);
-    widgets::section_label(ui, "Symmetry");
-    let mut sym = app.session.paint_settings().symmetry;
-    let modes = [M::Off, M::Vertical, M::Horizontal, M::Both, M::Radial];
-    let cur = modes.iter().position(|m| *m == sym.mode).unwrap_or(0);
-    let mut changed = false;
-    if let Some(i) = segmented(ui, &["Off", "Vert", "Horiz", "Quad", "Radial"], cur) {
-        sym.mode = modes[i];
-        if sym.mode != M::Off {
-            app.last_symmetry = sym.mode;
+    ui.set_width(310.0);
+    let mut g = app.session.guides().clone();
+    let before = g.clone();
+    egui::ScrollArea::vertical().max_height(ui.ctx().content_rect().height() - 140.0).show(ui, |ui| {
+        widgets::section_label(ui, "Grid");
+        widgets::toggle(ui, &mut g.grid.enabled, "Show grid");
+        if g.grid.enabled {
+            let mut size = g.grid.size as f32;
+            if widgets::slider_row(ui, "Cell size", &mut size, 4.0..=512.0, |v| format!("{v:.0} px")).changed() {
+                g.grid.size = size.round() as f64;
+            }
+            let mut sub = g.grid.subdivisions as f32;
+            if widgets::slider_row(ui, "Subdivisions", &mut sub, 1.0..=8.0, |v| format!("{v:.0}")).changed() {
+                g.grid.subdivisions = sub.round() as u32;
+            }
+            widgets::toggle(ui, &mut g.grid.snap, "Snap to grid");
         }
-        changed = true;
-    }
-    if sym.mode == M::Radial {
-        let mut n = sym.radial_count as f32;
-        if widgets::slider_row(ui, "Spokes", &mut n, 2.0..=24.0, |v| format!("{v:.0}")).changed() {
-            sym.radial_count = n.round() as u32;
-            changed = true;
+        widgets::toggle(ui, &mut g.snap_hv, "Snap horizontal / vertical");
+        widgets::hairline(ui);
+
+        widgets::section_label(ui, "Symmetry");
+        let modes = [M::Off, M::Vertical, M::Horizontal, M::Both, M::Radial];
+        let cur = modes.iter().position(|m| *m == g.symmetry.mode).unwrap_or(0);
+        if let Some(i) = segmented(ui, &["Off", "Vert", "Horiz", "Quad", "Radial"], cur) {
+            g.symmetry.mode = modes[i];
+            if g.symmetry.mode != M::Off {
+                app.last_symmetry = g.symmetry.mode;
+            }
         }
-    }
-    if sym.is_on() {
-        let mut deg = sym.angle.to_degrees() as f32;
-        if widgets::slider_row(ui, "Angle", &mut deg, -90.0..=90.0, |v| format!("{v:.0}°")).changed() {
-            sym.angle = (deg.round() as f64).to_radians();
-            changed = true;
+        if g.symmetry.mode == M::Radial {
+            let mut n = g.symmetry.radial_count as f32;
+            if widgets::slider_row(ui, "Spokes", &mut n, 2.0..=24.0, |v| format!("{v:.0}")).changed() {
+                g.symmetry.radial_count = n.round() as u32;
+            }
         }
-        let (mut cx, mut cy) = ((sym.cx * 100.0) as f32, (sym.cy * 100.0) as f32);
-        if widgets::slider_row(ui, "Centre X", &mut cx, 0.0..=100.0, |v| format!("{v:.0}%")).changed() {
-            sym.cx = cx as f64 / 100.0;
-            changed = true;
+        if g.symmetry.is_on() {
+            let mut deg = g.symmetry.angle.to_degrees() as f32;
+            if widgets::slider_row(ui, "Angle", &mut deg, -90.0..=90.0, |v| format!("{v:.0}°")).changed() {
+                g.symmetry.angle = (deg.round() as f64).to_radians();
+            }
+            ui.horizontal(|ui| {
+                widgets::toggle(ui, &mut app.canvas.sym_editing, "Move axis");
+                if widgets::secondary_button(ui, "Centre", 80.0).clicked() {
+                    (g.symmetry.cx, g.symmetry.cy) = (0.5, 0.5);
+                }
+            });
+        } else {
+            app.canvas.sym_editing = false;
         }
-        if widgets::slider_row(ui, "Centre Y", &mut cy, 0.0..=100.0, |v| format!("{v:.0}%")).changed() {
-            sym.cy = cy as f64 / 100.0;
-            changed = true;
+        widgets::hairline(ui);
+
+        widgets::section_label(ui, "Perspective");
+        widgets::toggle(ui, &mut g.perspective.enabled, "Perspective guides");
+        if g.perspective.enabled {
+            let n = g.perspective.points.len().clamp(1, 5);
+            if let Some(i) = segmented(ui, &["1", "2", "3", "4", "5"], n - 1) {
+                g.perspective.points = perspective_preset(i + 1);
+            }
+            let snaps = [PS::Off, PS::Soft, PS::Hard];
+            let cur = snaps.iter().position(|m| *m == g.perspective.snap).unwrap_or(2);
+            if let Some(i) = segmented(ui, &["No snap", "Soft", "Hard line"], cur) {
+                g.perspective.snap = snaps[i];
+            }
+            let mut d = g.perspective.density as f32;
+            if widgets::slider_row(ui, "Density", &mut d, 2.0..=32.0, |v| format!("{v:.0}")).changed() {
+                g.perspective.density = d.round() as u32;
+            }
+            widgets::toggle(ui, &mut app.canvas.persp_editing, "Edit points (Shift+P)");
+        } else {
+            app.canvas.persp_editing = false;
         }
-        if widgets::secondary_button(ui, "Centre", 90.0).clicked() {
-            (sym.cx, sym.cy) = (0.5, 0.5);
-            changed = true;
-        }
-    }
-    if changed {
-        let _ = app.session.execute(Command::SetSymmetry { symmetry: sym });
-    }
-    ui.label(
-        RichText::new("Brush, eraser, smudge and mixer strokes are mirrored. Y toggles symmetry.")
+        widgets::hairline(ui);
+        widgets::toggle(ui, &mut g.visible, "Show guides (snapping stays on)");
+        ui.label(
+            RichText::new(
+                "Guides are saved with the document. Y toggles symmetry; hard perspective draws straight lines to the vanishing points.",
+            )
             .font(theme::medium(10.5))
             .color(t.fg_faint),
-    );
+        );
+    });
+    if g != before {
+        let _ = app.session.execute(Command::SetGuides { guides: Box::new(g) });
+    }
 }
 
 /// happypaint's layer label colours (global.css `--layer-label-*`).

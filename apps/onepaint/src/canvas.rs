@@ -149,6 +149,16 @@ enum Drag {
         grab: Pt,
         start: Box<onepaint_text::TextSpec>,
     },
+    /// Hard perspective: a straight line from `origin`, re-aimed every move.
+    PerspLine {
+        origin: Pt,
+    },
+    /// Dragging a vanishing point (perspective edit mode).
+    Vp {
+        index: usize,
+    },
+    /// Moving the symmetry centre (symmetry edit mode).
+    SymAxis,
 }
 
 /// The text object being created or edited with the text tool.
@@ -192,6 +202,11 @@ pub struct Canvas {
     pub text_edit: Option<TextEdit>,
     /// Style for new text objects (happypaint's text-store style).
     pub text_style: onepaint_text::TextSpec,
+    /// Freehand stroke snapping (H/V, grid, guides, soft perspective).
+    snapper: Option<onepaint_stroke::snap::Snapper>,
+    /// Transient guide edit modes: canvas drags move handles instead of painting.
+    pub persp_editing: bool,
+    pub sym_editing: bool,
 }
 
 impl Canvas {
@@ -213,6 +228,9 @@ impl Canvas {
             pending: Default::default(),
             text_edit: None,
             text_style: onepaint_text::TextSpec::default(),
+            snapper: None,
+            persp_editing: false,
+            sym_editing: false,
         }
     }
 
@@ -223,6 +241,21 @@ impl Canvas {
         self.poly = None;
         self.uploaded_selection = None;
         self.pending.clear();
+        self.persp_editing = false;
+        self.sym_editing = false;
+    }
+
+    /// The vanishing point under screen position `p` (16 px hit radius).
+    fn vp_hit(&self, session: &Session, p: Pos2) -> Option<usize> {
+        let (w, h) = (self.doc_size[0] as f64, self.doc_size[1] as f64);
+        session.guides().perspective.points.iter().position(|v| {
+            let s = self.view.doc_to_screen([v.x * w, v.y * h]);
+            pos2(s[0] as f32, s[1] as f32).distance(p) <= 16.0
+        })
+    }
+
+    fn snap_config(&self, session: &Session) -> onepaint_stroke::snap::SnapConfig {
+        session.guides().snap_config(self.doc_size[0], self.doc_size[1], self.persp_editing)
     }
 
     fn doc_pt(&self, p: Pos2) -> Pt {
@@ -274,6 +307,16 @@ impl Canvas {
         if button != PointerButton::Primary {
             return Drag::None;
         }
+        if self.persp_editing {
+            return match self.vp_hit(session, p) {
+                Some(index) => Drag::Vp { index },
+                None => Drag::None,
+            };
+        }
+        if self.sym_editing {
+            Self::move_symmetry_centre(session, self.doc_pt(p), self.doc_size);
+            return Drag::SymAxis;
+        }
         let selecting = matches!(tool, Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectPoly | Tool::SelectWand);
         if (m.alt && !selecting) || tool == Tool::Eyedropper {
             self.pick(session, p);
@@ -293,7 +336,16 @@ impl Canvas {
             Tool::Brush | Tool::Eraser | Tool::Smudge | Tool::Mixer | Tool::Liquify => {
                 let kind = if self.last_pen_force.is_some() { PointerKind::Pen } else { PointerKind::Mouse };
                 self.pressure = Some(PressureProvider::new(kind));
-                let sp = self.stroke_point(p, time_ms, self.last_pen_force);
+                if matches!(tool, Tool::Brush | Tool::Eraser) && session.guides().hard_perspective(self.persp_editing) {
+                    session.stroke_cancel();
+                    return Drag::PerspLine { origin: d };
+                }
+                let cfg = self.snap_config(session);
+                self.snapper = if tool == Tool::Liquify { None } else { onepaint_stroke::snap::Snapper::arm(cfg, d) };
+                let mut sp = self.stroke_point(p, time_ms, self.last_pen_force);
+                if let Some(o) = self.snapper.as_ref().map(|s| s.origin()) {
+                    (sp.x, sp.y) = (o[0], o[1]);
+                }
                 session.stroke_begin(sp);
                 let enabled = matches!(tool, Tool::Brush | Tool::Eraser);
                 self.hold = HoldTracker { points: vec![d], anchor: p, since: time_ms, fired: false, enabled };
@@ -455,7 +507,10 @@ impl Canvas {
                             if self.hold.fired {
                                 // A quick-shape replaced the stroke; further motion is ignored.
                             } else {
-                                let sp = self.stroke_point(p, time_ms, self.last_pen_force);
+                                let mut sp = self.stroke_point(p, time_ms, self.last_pen_force);
+                                if let Some(s) = self.snapper.as_mut() {
+                                    [sp.x, sp.y] = s.apply([sp.x, sp.y]);
+                                }
                                 session.stroke_extend(&[sp]);
                                 self.hold.points.push(d);
                                 if p.distance(self.hold.anchor) >= 3.0 {
@@ -464,6 +519,20 @@ impl Canvas {
                                 }
                             }
                         }
+                        Drag::PerspLine { origin } => {
+                            let origin = *origin;
+                            let end = onepaint_stroke::snap::hard_line_end(&self.snap_config(session), origin, d);
+                            Self::preview_shape(session, &Shape::Line { a: origin, b: end });
+                        }
+                        Drag::Vp { index } => {
+                            let index = *index;
+                            let mut g = session.guides().clone();
+                            if let Some(v) = g.perspective.points.get_mut(index) {
+                                (v.x, v.y) = (d[0] / self.doc_size[0] as f64, d[1] / self.doc_size[1] as f64);
+                                let _ = session.execute(Command::SetGuides { guides: Box::new(g) });
+                            }
+                        }
+                        Drag::SymAxis => Self::move_symmetry_centre(session, d, self.doc_size),
                         Drag::Gradient { start } => {
                             let start = *start;
                             let stops = self.gradient_stops(session);
@@ -527,7 +596,10 @@ impl Canvas {
                 }
                 Event::PointerButton { pressed: false, .. } | Event::PointerGone => {
                     match std::mem::take(&mut self.drag) {
-                        Drag::Paint => session.stroke_end(),
+                        Drag::Paint | Drag::PerspLine { .. } => {
+                            self.snapper = None;
+                            session.stroke_end();
+                        }
                         Drag::Gradient { .. } => session.gradient_end(),
                         Drag::ShapeTool { shape, .. } => {
                             session.stroke_cancel();
@@ -658,11 +730,104 @@ impl Canvas {
         out
     }
 
+    fn move_symmetry_centre(session: &mut Session, d: Pt, doc: [u32; 2]) {
+        let mut sym = session.guides().symmetry;
+        (sym.cx, sym.cy) = ((d[0] / doc[0] as f64).clamp(0.0, 1.0), (d[1] / doc[1] as f64).clamp(0.0, 1.0));
+        let _ = session.execute(Command::SetSymmetry { symmetry: sym });
+    }
+
+    /// Grid, perspective and H/V reference overlays (guides-overlay.ts).
+    fn guide_overlays(&self, ui: &egui::Ui, rect: Rect, session: &Session) {
+        let g = session.guides();
+        if !g.visible {
+            return;
+        }
+        let (w, h) = (self.doc_size[0] as f64, self.doc_size[1] as f64);
+        let painter = ui.painter().with_clip_rect(rect);
+        let hex = |s: &str| onepaint_color::Rgba::from_hex(s).map(onepaint_ui_kit::widgets::to_color32).unwrap_or(Color32::GRAY);
+        let line = |a: Pt, b: Pt, c: Color32, width: f32| {
+            painter.line_segment([self.to_screen(rect, a), self.to_screen(rect, b)], Stroke::new(width, c));
+        };
+        if g.grid.enabled {
+            let step = g.grid.size.max(4.0);
+            let sub = g.grid.subdivisions.max(1) as f64;
+            let col = hex(&g.grid.color);
+            // Skip lines closer than 3 screen px: they would only fill the canvas.
+            let minor = step / sub;
+            if sub > 1.0 && minor * self.view.scale >= 3.0 {
+                let c = col.gamma_multiply(0.22);
+                let mut x = minor;
+                while x < w {
+                    if (x % step).abs() > 1e-3 {
+                        line([x, 0.0], [x, h], c, 1.0);
+                    }
+                    x += minor;
+                }
+                let mut y = minor;
+                while y < h {
+                    if (y % step).abs() > 1e-3 {
+                        line([0.0, y], [w, y], c, 1.0);
+                    }
+                    y += minor;
+                }
+            }
+            if step * self.view.scale >= 3.0 {
+                let c = col.gamma_multiply(0.45);
+                let mut x = 0.0;
+                while x <= w + 0.5 {
+                    line([x, 0.0], [x, h], c, 1.0);
+                    x += step;
+                }
+                let mut y = 0.0;
+                while y <= h + 0.5 {
+                    line([0.0, y], [w, y], c, 1.0);
+                    y += step;
+                }
+            }
+        }
+        let p = &g.perspective;
+        if p.enabled && !p.points.is_empty() {
+            let col = hex(&p.color);
+            let fan = (p.density as usize * 3).max(6);
+            let mut border = Vec::with_capacity(fan * 4);
+            for k in 0..fan {
+                let f = k as f64 / fan as f64;
+                border.extend([[f * w, 0.0], [f * w, h], [0.0, f * h], [w, f * h]]);
+            }
+            let fan_col = col.gamma_multiply(0.3);
+            for v in &p.points {
+                for b in &border {
+                    line([v.x * w, v.y * h], *b, fan_col, 1.0);
+                }
+            }
+            if p.points.len() >= 2 {
+                let (a, b) = (p.points[0], p.points[1]);
+                line([a.x * w, a.y * h], [b.x * w, b.y * h], col.gamma_multiply(0.6), 1.5);
+            }
+            let handles = ui.painter();
+            for v in &p.points {
+                let c = self.to_screen(rect, [v.x * w, v.y * h]);
+                handles.circle_filled(c, 9.0, col.gamma_multiply(if self.persp_editing { 0.95 } else { 0.5 }));
+                if self.persp_editing {
+                    handles.circle_stroke(c, 9.0, Stroke::new(1.5, Color32::WHITE));
+                }
+            }
+        }
+        if g.snap_hv {
+            let c = Color32::from_rgba_unmultiplied(80, 150, 255, 140);
+            let (cx, cy) = (w / 2.0, h / 2.0);
+            for (a, b) in [([cx, 0.0], [cx, h]), ([0.0, cy], [w, cy])] {
+                let pts = [self.to_screen(rect, a), self.to_screen(rect, b)];
+                painter.extend(egui::Shape::dashed_line(&pts, Stroke::new(1.5, c), 6.0, 5.0));
+            }
+        }
+    }
+
     /// The symmetry mirror axes (or radial spokes) through the centre.
     fn symmetry_axes(&self, ui: &egui::Ui, rect: Rect, session: &Session) {
         use onepaint_engine::SymmetryMode as M;
-        let sym = session.paint_settings().symmetry;
-        if !sym.is_on() {
+        let sym = session.guides().symmetry;
+        if !sym.is_on() || !session.guides().visible {
             return;
         }
         let d = session.doc();
@@ -720,6 +885,7 @@ impl Canvas {
         r: bool,
         resp: &egui::Response,
     ) {
+        self.guide_overlays(ui, rect, session);
         self.symmetry_axes(ui, rect, session);
         if let Some(te) = &self.text_edit
             && session.tool() == Tool::Text

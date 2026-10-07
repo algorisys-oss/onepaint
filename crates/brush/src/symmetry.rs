@@ -40,7 +40,7 @@ pub enum SymmetryMode {
 
 /// The guides-store symmetry settings: centre as document fractions.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct Symmetry {
     pub mode: SymmetryMode,
     pub cx: f64,

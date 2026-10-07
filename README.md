@@ -70,6 +70,10 @@ Slice 9 adds smudge (S), the mixer brush (Shift+B, with Kubelka–Munk
 pigment mixing), symmetry (Y: mirror, quad and radial) and liquify
 (push, twirl, pinch, expand, reconstruct).
 
+Slice 11 adds drawing guides, saved with the document: a grid with snapping,
+H/V snap, and 1–5-point perspective with soft or hard-line snapping and
+draggable vanishing points (Shift+P).
+
 Slice 8 adds PSD: open `.psd`/`.psb` (layers, groups, masks, blend modes,
 clipping) and File ▸ Export PSD….
 

@@ -81,9 +81,9 @@ fn symmetric_brush_stroke_paints_the_mirror() {
     drag(&mut s, 20.0, 60.0, 50.0);
     assert!(active_px(&s, 40, 50)[3] > 0.5);
     assert!(active_px(&s, 159, 50)[3] > 0.5, "mirrored across x = 100");
-    // Settings survive opening another document.
+    // Symmetry is a document guide: another document starts without it.
     s.replace_document(onepaint_doc::Document::new(10, 10, None));
-    assert_eq!(s.paint_settings().symmetry.mode, SymmetryMode::Vertical);
+    assert_eq!(s.guides().symmetry.mode, SymmetryMode::Off);
 }
 
 #[test]
