@@ -1,0 +1,64 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+publish = false
+rust-version = "1.95"
+
+[workspace.dependencies]
+onepaint-raster = { path = "crates/raster" }
+onepaint-color = { path = "crates/color" }
+onepaint-doc = { path = "crates/doc" }
+onepaint-compose = { path = "crates/compose" }
+onepaint-history = { path = "crates/history" }
+onepaint-stroke = { path = "crates/stroke" }
+onepaint-brush = { path = "crates/brush" }
+onepaint-input = { path = "crates/input" }
+onepaint-formats = { path = "crates/formats" }
+onepaint-gpu = { path = "crates/gpu" }
+onepaint-engine = { path = "crates/engine" }
+onepaint-ui-kit = { path = "crates/ui_kit" }
+
+thiserror = "2"
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+bytemuck = { version = "1", features = ["derive"] }
+rayon = "1"
+log = "0.4"
+half = "2"
+eframe = { version = "0.36", default-features = false }
+egui = "0.36"
+egui_extras = { version = "0.36", default-features = false }
+egui_kittest = "0.36"
+wgpu = { version = "30", default-features = false }
+pollster = "0.4"
+proptest = "1"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unwrap_used = "warn"
+
+# Lean debug builds: the disk is tight, and painting must stay usable in debug.
+[profile.dev]
+opt-level = 1
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2
+debug = false
+
+[profile.test]
+opt-level = 1
+debug = "line-tables-only"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

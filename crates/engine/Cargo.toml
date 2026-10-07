@@ -1,0 +1,23 @@
+[package]
+name = "onepaint-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+onepaint-raster = { workspace = true }
+onepaint-color = { workspace = true }
+onepaint-doc = { workspace = true }
+onepaint-compose = { workspace = true }
+onepaint-history = { workspace = true }
+onepaint-stroke = { workspace = true }
+onepaint-brush = { workspace = true }
+onepaint-input = { workspace = true }
+onepaint-formats = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }

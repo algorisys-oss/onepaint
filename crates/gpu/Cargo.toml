@@ -1,0 +1,17 @@
+[package]
+name = "onepaint-gpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+onepaint-raster = { workspace = true }
+onepaint-doc = { workspace = true }
+onepaint-compose = { workspace = true }
+wgpu = { workspace = true, features = ["std", "wgsl"] }
+bytemuck = { workspace = true }
+log = { workspace = true }

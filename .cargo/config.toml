@@ -1,0 +1,3 @@
+[build]
+# RAM is limited on the dev machine; wgpu/naga builds spike memory.
+jobs = 4

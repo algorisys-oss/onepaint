@@ -1,0 +1,15 @@
+[package]
+name = "onepaint-brush"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+onepaint-raster = { workspace = true }
+onepaint-color = { workspace = true }
+onepaint-stroke = { workspace = true }
+serde = { workspace = true }

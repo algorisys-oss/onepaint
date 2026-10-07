@@ -1,0 +1,19 @@
+[package]
+name = "onepaint"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "onepaint: a native raster painting app"
+
+[lints]
+workspace = true
+
+[dependencies]
+onepaint-engine = { workspace = true }
+onepaint-gpu = { workspace = true }
+onepaint-ui-kit = { workspace = true }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
+egui = { workspace = true }
+log = { workspace = true }
+env_logger = "0.11"
