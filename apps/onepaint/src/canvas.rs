@@ -6,6 +6,7 @@ use eframe::wgpu;
 use egui::{
     Color32, CursorIcon, Event, Key, PointerButton, Pos2, Rect, Sense, Stroke, TouchPhase, pos2,
 };
+use onepaint_engine::transform::{Handle, TransformParams};
 use onepaint_engine::view::View;
 use onepaint_engine::{Command, SelectMode, Session, Tool};
 use onepaint_gpu::{CanvasGpu, ViewParams};
@@ -131,6 +132,11 @@ enum Drag {
         points: Vec<Pt>,
         mode: SelectMode,
     },
+    Transform {
+        handle: Handle,
+        grab: Pt,
+        start: TransformParams,
+    },
 }
 
 pub struct Canvas {
@@ -147,6 +153,8 @@ pub struct Canvas {
     /// The size slider/keys changed the brush recently: show a preview ring.
     pub size_flash: f64,
     uploaded_selection: Option<(u64, [u32; 2])>,
+    /// Parameters of the transform in progress (the engine holds the matrix).
+    pub xform: TransformParams,
 }
 
 impl Canvas {
@@ -163,6 +171,7 @@ impl Canvas {
             last_pos: None,
             size_flash: 0.0,
             uploaded_selection: None,
+            xform: TransformParams::default(),
         }
     }
 
@@ -253,6 +262,18 @@ impl Canvas {
         }
         let d = self.doc_pt(p);
         let mode = SelectMode::from_modifiers(m.shift, m.alt, self.options.select_mode);
+        if tool == Tool::Move {
+            let Some((_, b)) = session.transform_state() else {
+                return Drag::None;
+            };
+            let s = self.view.scale;
+            let handle = self.xform.hit(self.doc_f(), b, d, 12.0 / s, 28.0 / s);
+            return Drag::Transform {
+                handle,
+                grab: d,
+                start: self.xform,
+            };
+        }
         match tool {
             Tool::Brush | Tool::Eraser => {
                 let kind = if self.last_pen_force.is_some() {
@@ -312,8 +333,42 @@ impl Canvas {
                 }
                 Drag::None
             }
-            Tool::Eyedropper => Drag::Pick,
+            Tool::Eyedropper | Tool::Move => Drag::Pick,
         }
+    }
+
+    fn doc_f(&self) -> [f64; 2] {
+        [self.doc_size[0] as f64, self.doc_size[1] as f64]
+    }
+
+    /// Push new transform parameters to the engine.
+    pub fn set_xform(&mut self, session: &mut Session, mut p: TransformParams) {
+        if p.sx == 1.0 && p.sy == 1.0 && p.rotation == 0.0 {
+            // A pure translate snaps to whole pixels (PE:2203-2205).
+            p.dx = p.dx.round();
+            p.dy = p.dy.round();
+        }
+        self.xform = p;
+        let _ = session.execute(Command::SetTransform {
+            matrix: p.to_affine(self.doc_f()),
+        });
+    }
+
+    /// Apply `f` to the parameters, keeping the transformed box centre in place.
+    pub fn xform_about_centre(
+        &mut self,
+        session: &mut Session,
+        f: impl FnOnce(TransformParams) -> TransformParams,
+    ) {
+        let Some((_, b)) = session.transform_state() else {
+            return;
+        };
+        let doc = self.doc_f();
+        let c0 = self.xform.handles(doc, b).centre;
+        let next = f(self.xform);
+        let c1 = next.handles(doc, b).centre;
+        let moved = next.move_drag(c1, c0, false);
+        self.set_xform(session, moved);
     }
 
     fn shape_contour(tool: Tool, start: Pt, end: Pt) -> Vec<Pt> {
@@ -406,6 +461,23 @@ impl Canvas {
                             }
                         }
                         Drag::Lasso { points, .. } => points.push(d),
+                        Drag::Transform {
+                            handle,
+                            grab,
+                            start,
+                        } => {
+                            let (handle, grab, start) = (*handle, *grab, *start);
+                            if let Some((_, b)) = session.transform_state() {
+                                let alt = ui.input(|i| i.modifiers.alt);
+                                let doc = self.doc_f();
+                                let next = match handle {
+                                    Handle::Body => start.move_drag(grab, d, shift),
+                                    Handle::Rotate => start.rotate_drag(doc, b, grab, d),
+                                    h => start.scale_drag(doc, b, h, grab, d, shift, alt),
+                                };
+                                self.set_xform(session, next);
+                            }
+                        }
                         Drag::None => {}
                     }
                     self.last_pos = Some(p);
@@ -546,6 +618,33 @@ impl Canvas {
         r: bool,
         resp: &egui::Response,
     ) {
+        if let Some((_, b)) = session.transform_state() {
+            let h = self.xform.handles(self.doc_f(), b);
+            self.outline(ui, rect, &h.corners, true);
+            let knob = self
+                .xform
+                .rotate_knob(self.doc_f(), b, 28.0 / self.view.scale);
+            let (top, k) = (self.to_screen(rect, h.edges[0]), self.to_screen(rect, knob));
+            ui.painter()
+                .line_segment([top, k], Stroke::new(1.0, Color32::WHITE));
+            ui.painter().circle(
+                k,
+                5.0,
+                Color32::WHITE,
+                Stroke::new(1.0, Color32::from_black_alpha(160)),
+            );
+            for c in h.corners.iter().chain(h.edges.iter()) {
+                let s = self.to_screen(rect, *c);
+                let r = Rect::from_center_size(s, egui::vec2(9.0, 9.0));
+                ui.painter().rect(
+                    r,
+                    2.0,
+                    Color32::WHITE,
+                    Stroke::new(1.0, Color32::from_black_alpha(160)),
+                    egui::StrokeKind::Middle,
+                );
+            }
+        }
         match &self.drag {
             Drag::Shape { start, end, .. } => self.outline(
                 ui,

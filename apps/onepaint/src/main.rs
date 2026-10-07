@@ -69,6 +69,7 @@ pub struct App {
     title: String,
     pub pending: Option<Pending>,
     pub last_select_tool: Tool,
+    xform_layer: Option<String>,
     allow_close: bool,
 }
 
@@ -107,6 +108,7 @@ impl App {
             title: String::new(),
             pending: None,
             last_select_tool: Tool::SelectRect,
+            xform_layer: None,
             allow_close: false,
         };
         if let Some(p) = open {
@@ -270,7 +272,32 @@ impl App {
         }
     }
 
+    /// Start (or restart) a transform session on the active layer.
+    pub fn begin_transform(&mut self) {
+        self.xform_layer = Some(self.session.active().to_string());
+        self.canvas.xform = onepaint_engine::transform::TransformParams::default();
+        let _ = self.session.execute(Command::BeginTransform);
+    }
+
+    pub fn commit_transform(&mut self) {
+        let _ = self.session.execute(Command::CommitTransform);
+        if self.session.tool() == Tool::Move {
+            self.begin_transform();
+        }
+    }
+
+    pub fn cancel_transform(&mut self) {
+        let _ = self.session.execute(Command::CancelTransform);
+        if self.session.tool() == Tool::Move {
+            self.begin_transform();
+        }
+    }
+
     pub fn set_tool(&mut self, tool: Tool) {
+        let was = self.session.tool();
+        if was == Tool::Move && tool != Tool::Move {
+            let _ = self.session.execute(Command::CommitTransform);
+        }
         if matches!(
             tool,
             Tool::SelectRect
@@ -282,6 +309,9 @@ impl App {
             self.last_select_tool = tool;
         }
         let _ = self.session.execute(Command::SetTool { tool });
+        if tool == Tool::Move && was != Tool::Move {
+            self.begin_transform();
+        }
     }
 
     pub fn toggle_theme(&mut self, ctx: &egui::Context) {
@@ -366,12 +396,16 @@ impl App {
                 }
             }
             if sc(Modifiers::NONE, Key::B) {
-                let _ = self.session.execute(Command::SetTool { tool: Tool::Brush });
+                self.set_tool(Tool::Brush);
             }
             if sc(Modifiers::NONE, Key::E) {
-                let _ = self
-                    .session
-                    .execute(Command::SetTool { tool: Tool::Eraser });
+                self.set_tool(Tool::Eraser);
+            }
+            if sc(Modifiers::NONE, Key::V) || sc(cmd, Key::T) {
+                self.set_tool(Tool::Move);
+            }
+            if self.session.transform_active() && sc(Modifiers::NONE, Key::Enter) {
+                self.commit_transform();
             }
             if sc(Modifiers::NONE, Key::OpenBracket) {
                 let s = self.session.current_brush().size;
@@ -391,7 +425,11 @@ impl App {
                 self.hide_ui = !self.hide_ui;
             }
             if sc(Modifiers::NONE, Key::Escape) && !self.canvas.cancel_poly() {
-                self.popover = None;
+                if self.session.transform_active() {
+                    self.cancel_transform();
+                } else {
+                    self.popover = None;
+                }
             }
         }
         let held = |k| !typing && ctx.input(|i| i.key_down(k));
@@ -434,6 +472,13 @@ impl eframe::App for App {
                 }
                 _ => {}
             }
+        }
+        // Switching layers while moving restarts the transform on the new layer.
+        if self.session.tool() == Tool::Move
+            && !self.session.transform_active()
+            && self.xform_layer.as_deref() != Some(self.session.active())
+        {
+            self.begin_transform();
         }
         if !self.hide_ui {
             chrome::show(self, &ctx);
@@ -699,5 +744,49 @@ mod tests {
         key(&mut h, egui::Key::I, egui::Modifiers::NONE);
         click(&mut h, pos2(600.0, 400.0));
         assert_eq!(h.state().session.color().to_hex(), "#ff0000");
+    }
+
+    /// Whether the composite (including any floating transform) shows the red-ish paint
+    /// rather than the white background at a screen point.
+    fn active_alpha(h: &Harness<'_, App>, screen: [f32; 2]) -> f32 {
+        let app = h.state();
+        let d = app
+            .canvas
+            .view
+            .screen_to_doc([screen[0] as f64, screen[1] as f64]);
+        let c = app.session.sample_color(d[0] as i32, d[1] as i32).unwrap();
+        1.0 - c.g
+    }
+
+    #[test]
+    fn move_tool_drags_commits_and_cancels() {
+        let mut h = harness();
+        h.run();
+        drag_stroke(&mut h, pos2(560.0, 400.0), pos2(640.0, 400.0));
+        assert!(active_alpha(&h, [600.0, 400.0]) > 0.5);
+        key(&mut h, egui::Key::V, egui::Modifiers::NONE);
+        assert!(h.state().session.transform_active());
+        // Drag the body (clear of the edge/corner handles) down by 100 screen px.
+        drag_stroke(&mut h, pos2(578.0, 400.0), pos2(578.0, 500.0));
+        assert!(h.state().canvas.xform.dy > 0.0);
+        key(&mut h, egui::Key::Enter, egui::Modifiers::NONE);
+        assert!(active_alpha(&h, [600.0, 500.0]) > 0.5, "moved");
+        assert!(
+            active_alpha(&h, [600.0, 400.0]) < 1e-3,
+            "left its old place"
+        );
+        assert!(
+            h.state().session.transform_active(),
+            "a new session starts after Apply"
+        );
+        // Esc abandons a pending move.
+        drag_stroke(&mut h, pos2(578.0, 500.0), pos2(578.0, 300.0));
+        key(&mut h, egui::Key::Escape, egui::Modifiers::NONE);
+        assert!(active_alpha(&h, [600.0, 500.0]) > 0.5);
+        // Switching tools commits.
+        drag_stroke(&mut h, pos2(578.0, 500.0), pos2(678.0, 500.0));
+        key(&mut h, egui::Key::B, egui::Modifiers::NONE);
+        assert!(!h.state().session.transform_active());
+        assert!(active_alpha(&h, [700.0, 500.0]) > 0.5);
     }
 }

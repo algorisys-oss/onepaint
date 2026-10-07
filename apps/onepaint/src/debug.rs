@@ -4,6 +4,7 @@
 //! - `ONEPAINT_DEMO=1` paints a small demo scene first.
 //! - `ONEPAINT_POPOVER=layers|brushes|color|menu|new` opens a popover.
 //! - `ONEPAINT_THEME=light` starts in the light theme.
+//! - `ONEPAINT_TRANSFORM=1` starts a rotated move on the active layer.
 //! - `ONEPAINT_EXIT=1` closes the app after the screenshot.
 
 use crate::{App, Popover};
@@ -19,6 +20,7 @@ pub struct Debug {
     popover: Option<Popover>,
     exit: bool,
     pub light: bool,
+    transform: bool,
 }
 
 impl Debug {
@@ -39,6 +41,7 @@ impl Debug {
             }),
             exit: var("ONEPAINT_EXIT").is_some(),
             light: var("ONEPAINT_THEME").is_some_and(|t| t == "light"),
+            transform: var("ONEPAINT_TRANSFORM").is_some(),
         }
     }
 }
@@ -105,6 +108,17 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
             });
             app.set_tool(onepaint_engine::Tool::SelectEllipse);
         }
+    }
+    if frame == 3 && app.debug.transform {
+        app.set_tool(onepaint_engine::Tool::Move);
+        let p = onepaint_engine::transform::TransformParams {
+            rotation: 0.25,
+            sx: 0.8,
+            sy: 0.8,
+            dx: 60.0,
+            dy: -40.0,
+        };
+        app.canvas.xform_about_centre(&mut app.session, |_| p);
     }
     if frame == 3 && app.debug.popover.is_some() {
         app.popover = app.debug.popover;

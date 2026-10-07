@@ -33,6 +33,7 @@ pub enum Tool {
     SelectLasso,
     SelectPoly,
     SelectWand,
+    Move,
 }
 
 /// Optional layer property edits; `None` leaves a property unchanged.
@@ -419,7 +420,7 @@ impl Session {
 
     /// Flattened canvas as premultiplied linear f32.
     pub fn flatten(&self) -> Vec<f32> {
-        onepaint_compose::flatten(&self.doc, None)
+        onepaint_compose::flatten(&self.doc, self.overlay().as_ref())
     }
 
     /// Eyedropper: the composite colour at a canvas pixel, or `None` outside the
@@ -429,7 +430,7 @@ impl Session {
             return None;
         }
         let (tx, ty) = onepaint_raster::tile_of(x, y);
-        let b = composite_tile(&self.doc, tx, ty, None);
+        let b = composite_tile(&self.doc, tx, ty, self.overlay().as_ref());
         let i = (((y - ty * TILE) * TILE + (x - tx * TILE)) * 4) as usize;
         if b[i + 3] <= 0.0 {
             return None;
@@ -442,7 +443,7 @@ impl Session {
     /// Eyedropper on the composite.
     pub fn pick_color(&self, x: i32, y: i32) -> Rgba {
         let (tx, ty) = onepaint_raster::tile_of(x, y);
-        let b = composite_tile(&self.doc, tx, ty, None);
+        let b = composite_tile(&self.doc, tx, ty, self.overlay().as_ref());
         let i = (((y - ty * TILE) * TILE + (x - tx * TILE)) * 4) as usize;
         let mut c = Rgba::from_linear_premul([b[i], b[i + 1], b[i + 2], b[i + 3]]);
         c.a = 1.0;
@@ -473,6 +474,7 @@ impl Session {
 
     /// Serialise the document as `.happypaint` v9 with a JPEG thumbnail.
     pub fn save_happypaint(&mut self) -> Result<Vec<u8>, EngineError> {
+        self.commit_transform();
         self.doc.touch();
         let flat = self.flatten();
         let thumb =

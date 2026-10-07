@@ -71,7 +71,59 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             app.popover = None;
         }
     }
+    if app.session.transform_active() {
+        transform_bar(app, ctx, screen);
+    }
     toast(app, ctx, screen);
+}
+
+fn transform_bar(app: &mut App, ctx: &egui::Context, screen: egui::Rect) {
+    Area::new(Id::new("transform-bar"))
+        .order(Order::Middle)
+        .pivot(Align2::CENTER_TOP)
+        .fixed_pos(pos2(screen.center().x, M))
+        .show(ctx, |ui| {
+            glass_frame(ui).show(ui, |ui| {
+                ui.set_height(BAR_H - 12.0);
+                ui.horizontal_centered(|ui| {
+                    let s = &mut app.session;
+                    let c = &mut app.canvas;
+                    if icons::button(ui, "arrow-left-right", 32.0, false, "Flip horizontal")
+                        .clicked()
+                    {
+                        c.xform_about_centre(s, |p| onepaint_engine::transform::TransformParams {
+                            sx: -p.sx,
+                            ..p
+                        });
+                    }
+                    if icons::button(ui, "arrow-up-down", 32.0, false, "Flip vertical").clicked() {
+                        c.xform_about_centre(s, |p| onepaint_engine::transform::TransformParams {
+                            sy: -p.sy,
+                            ..p
+                        });
+                    }
+                    if icons::button(ui, "rotate-ccw", 32.0, false, "Rotate −15°").clicked() {
+                        c.xform_about_centre(s, |p| onepaint_engine::transform::TransformParams {
+                            rotation: p.rotation - 15f64.to_radians(),
+                            ..p
+                        });
+                    }
+                    if icons::button(ui, "rotate-cw", 32.0, false, "Rotate +15°").clicked() {
+                        c.xform_about_centre(s, |p| onepaint_engine::transform::TransformParams {
+                            rotation: p.rotation + 15f64.to_radians(),
+                            ..p
+                        });
+                    }
+                    widgets::vline(ui, 24.0);
+                    if widgets::secondary_button(ui, "Cancel", 80.0).clicked() {
+                        app.cancel_transform();
+                    }
+                    if widgets::primary_button(ui, "Apply", 80.0).clicked() {
+                        app.commit_transform();
+                    }
+                });
+            });
+        });
 }
 
 fn popover_at(
@@ -142,6 +194,11 @@ fn top_bar(app: &mut App, ctx: &egui::Context) {
                 ui.set_height(BAR_H - 12.0);
                 ui.horizontal_centered(|ui| {
                     let tool = app.session.tool();
+                    if icons::button(ui, "move", 32.0, tool == Tool::Move, "Move / transform (V)")
+                        .clicked()
+                    {
+                        app.set_tool(Tool::Move);
+                    }
                     let selecting = is_select_tool(tool);
                     let sel_icon = select_icon(app.last_select_tool);
                     if icons::button(ui, sel_icon, 32.0, selecting, "Select (M, L, W)").clicked() {
@@ -177,7 +234,7 @@ fn top_bar(app: &mut App, ctx: &egui::Context) {
                         if tool == Tool::Brush {
                             toggle_popover(app, Popover::Brushes);
                         }
-                        let _ = app.session.execute(Command::SetTool { tool: Tool::Brush });
+                        app.set_tool(Tool::Brush);
                     }
                     if icons::button(ui, "eraser", 32.0, tool == Tool::Eraser, "Eraser (E)")
                         .clicked()
@@ -185,7 +242,7 @@ fn top_bar(app: &mut App, ctx: &egui::Context) {
                         if tool == Tool::Eraser {
                             toggle_popover(app, Popover::Brushes);
                         }
-                        let _ = app.session.execute(Command::SetTool { tool: Tool::Eraser });
+                        app.set_tool(Tool::Eraser);
                     }
                     if icons::button(
                         ui,
