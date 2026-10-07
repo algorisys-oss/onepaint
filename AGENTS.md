@@ -109,7 +109,7 @@ crates/
   selection/   rasterize, feather, grow, magic wand, flood fill
   compose/     CPU reference compositor: blend modes, clipping, groups (the oracle)
   gpu/         wgpu compositor, stamp/smudge/wet/liquify/filter passes, WGSL
-  filters/     adjustment and filter params plus CPU reference impls (47 kinds)
+  filters/     adjustment and filter params plus CPU reference impls (48 kinds)
   text/        rich text layout and raster
   formats/     .happypaint v9 (read and write), PSD, PNG/JPEG/TIFF, ABR, Procreate brushes, recording
   input/       PenEvent, pointer router, gestures, palm rejection, pressure synthesis

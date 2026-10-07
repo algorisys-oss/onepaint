@@ -889,6 +889,36 @@ mod tests {
     }
 
     #[test]
+    fn generators_and_fill_layers_from_the_menu() {
+        let mut h = harness();
+        h.run();
+        let layers = h.state().session.doc().layer_ids().len();
+        h.get_by_label("Adjustments").click();
+        h.run();
+        h.get_by_label("Clouds").scroll_to_me();
+        h.run();
+        h.get_by_label("Clouds").click();
+        h.run();
+        assert_eq!(h.state().popover, Some(Popover::Filter));
+        h.get_by_label("Re-roll").click();
+        h.run();
+        assert_eq!(h.state().session.filter_state().unwrap().1.gen_seed, Some(2.0));
+        h.get_by_label("Apply").click();
+        h.run();
+        assert_eq!(h.state().session.doc().layer_ids().len(), layers + 1, "clouds land on a new layer");
+        h.get_by_label("Adjustments").click();
+        h.run();
+        h.get_by_label("Solid Color Fill").scroll_to_me();
+        h.run();
+        h.get_by_label("Solid Color Fill").click();
+        h.run();
+        let app = h.state();
+        assert_eq!(app.popover, Some(Popover::AdjustLayer));
+        let adj = app.session.doc().layer(app.session.active()).unwrap().adjustment.clone().unwrap();
+        assert_eq!(adj.kind, "solid-fill");
+    }
+
+    #[test]
     fn gradient_and_shape_tools() {
         let mut h = harness();
         h.run();

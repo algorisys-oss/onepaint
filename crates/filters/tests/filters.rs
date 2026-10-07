@@ -27,7 +27,8 @@ fn kinds_parse_and_classify() {
     for k in Kind::ALL {
         assert_eq!(Kind::parse(k.as_str()), Some(k));
     }
-    assert_eq!(Kind::parse("clouds"), None);
+    assert_eq!(Kind::parse("clouds"), Some(Kind::Clouds));
+    assert_eq!(Kind::parse("pattern-fill-from-the-future"), None);
     assert!(Kind::Curves.is_color() && !Kind::GaussianBlur.is_color());
 }
 

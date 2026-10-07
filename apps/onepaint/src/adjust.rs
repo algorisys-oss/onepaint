@@ -4,38 +4,57 @@
 use crate::{App, Popover};
 use egui::{RichText, Ui};
 use onepaint_engine::Command;
-use onepaint_filters::{Kind, Params, Stop};
+use onepaint_filters::ui::Control;
+use onepaint_filters::{BlurPin, ColorSample, Kind, MAX_BLUR_PINS, Params, SECTIONS, Stop, default_params};
 use onepaint_stroke::{CurvePoint, Interp, eval_curve};
 use onepaint_ui_kit::{Tokens, theme, widgets};
+use serde_json::Value;
 
-const TONE: [Kind; 10] = [
-    Kind::BrightnessContrast,
-    Kind::Levels,
-    Kind::Curves,
-    Kind::HueSaturation,
-    Kind::ColorBalance,
-    Kind::BlackWhite,
-    Kind::GradientMap,
-    Kind::Invert,
-    Kind::Threshold,
-    Kind::Posterize,
-];
-const EFFECTS: [Kind; 4] = [Kind::GaussianBlur, Kind::MotionBlur, Kind::Sharpen, Kind::Noise];
-
-/// The adjustments menu: pick a kind to start a live filter on the active layer.
+/// The adjustments menu, sectioned like happypaint's (`ADJUSTMENT_SECTIONS`):
+/// pick a kind to start a live filter on the active layer, or (fills and
+/// screentone) to add it as a layer.
 pub fn list(app: &mut App, ui: &mut Ui) {
     ui.set_width(240.0);
-    for (title, kinds) in [("Adjust", &TONE[..]), ("Effects", &EFFECTS[..])] {
-        widgets::section_label(ui, title);
-        for k in kinds {
-            if widgets::menu_item(ui, None, k.label(), "").clicked() {
-                let _ = app.session.execute(Command::BeginFilter { kind: k.as_str().into() });
-                app.popover = app.session.filter_active().then_some(Popover::Filter);
-                app.curve_tab = 0;
+    egui::ScrollArea::vertical().max_height(520.0).show(ui, |ui| {
+        for section in SECTIONS {
+            widgets::section_label(ui, section);
+            for k in Kind::ALL.into_iter().filter(|k| k.section() == section) {
+                if widgets::menu_item(ui, None, k.label(), "").clicked() {
+                    pick(app, k);
+                }
+            }
+            ui.add_space(4.0);
+        }
+    });
+}
+
+fn pick(app: &mut App, k: Kind) {
+    app.curve_tab = 0;
+    if k.is_layer_only() {
+        let params = seeded(k, app.session.color());
+        let _ = app.session.execute(Command::AddAdjustmentLayer { kind: k.as_str().into(), params });
+        app.popover = Some(Popover::AdjustLayer);
+    } else {
+        let _ = app.session.execute(Command::BeginFilter { kind: k.as_str().into() });
+        app.popover = app.session.filter_active().then_some(Popover::Filter);
+    }
+}
+
+/// Defaults for a new fill layer, seeded from the current colour as happypaint's UI does.
+fn seeded(k: Kind, c: onepaint_color::Rgba) -> Params {
+    let mut p = default_params(k);
+    let fg = [c.r, c.g, c.b];
+    match k {
+        Kind::SolidFill => p.fill_color = Some(fg),
+        Kind::PatternFill => p.pattern_color_a = Some(fg),
+        Kind::GradientFill => {
+            if let Some(s) = p.fill_stops.as_mut().and_then(|s| s.first_mut()) {
+                s.color = fg;
             }
         }
-        ui.add_space(4.0);
+        _ => {}
     }
+    p
 }
 
 /// Slider in display units mapped onto a stored value (`stored = shown * scale`).
@@ -168,6 +187,145 @@ pub fn params_ui(ui: &mut Ui, kind: Kind, p: &mut Params, curve_tab: &mut usize,
             ch |= slider(ui, "Distance", &mut p.distance, 0.0, 0.0..=50.0, 1.0, " px");
         }
         Kind::Sharpen => ch |= slider(ui, "Amount", &mut p.amount, 0.0, 0.0..=100.0, 0.01, "%"),
+        Kind::SelectiveColor => ch |= selective_ui(ui, p, colour),
+        Kind::FieldBlur => {
+            ch |= pins_ui(ui, p);
+            ch |= generic(ui, kind, p, colour);
+        }
+        _ => ch |= generic(ui, kind, p, colour),
+    }
+    ch
+}
+
+/// Controls built from `onepaint_filters::ui::controls`, edited through the params' JSON form.
+fn generic(ui: &mut Ui, kind: Kind, p: &mut Params, colour: onepaint_color::Rgba) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let mut m = p.to_json();
+    let mut ch = false;
+    for c in onepaint_filters::ui::controls(kind) {
+        match *c {
+            Control::Slider { key, label, min, max, scale, unit, default } => {
+                let mut v = m.get(key).and_then(Value::as_f64).map(|v| v as f32);
+                if slider(ui, label, &mut v, default, min..=max, scale, unit) {
+                    m.insert(key.into(), serde_json::json!(v));
+                    ch = true;
+                }
+            }
+            Control::Toggle { key, label, default } => {
+                let mut on = m.get(key).and_then(Value::as_bool).unwrap_or(default);
+                if widgets::toggle(ui, &mut on, label).changed() {
+                    m.insert(key.into(), Value::Bool(on));
+                    ch = true;
+                }
+            }
+            Control::Choice { key, label, options, default } => {
+                let cur = m.get(key).and_then(Value::as_str).unwrap_or(default).to_string();
+                ui.label(RichText::new(label).color(t.fg_muted));
+                ui.horizontal_wrapped(|ui| {
+                    for (id, name) in options {
+                        if ui.selectable_label(cur == *id, *name).clicked() && cur != *id {
+                            m.insert(key.into(), Value::String((*id).into()));
+                            ch = true;
+                        }
+                    }
+                });
+            }
+            Control::Color { key, label, default } => {
+                let rgb = m.get(key).and_then(|v| serde_json::from_value::<[f32; 3]>(v.clone()).ok()).unwrap_or(default);
+                if colour_row(ui, label, rgb) {
+                    m.insert(key.into(), serde_json::json!([colour.r, colour.g, colour.b]));
+                    ch = true;
+                }
+            }
+            Control::Seed { key, label } => {
+                if widgets::secondary_button(ui, label, 90.0).clicked() {
+                    let s = m.get(key).and_then(Value::as_f64).unwrap_or(1.0);
+                    m.insert(key.into(), serde_json::json!(s.floor() + 1.0));
+                    ch = true;
+                }
+            }
+        }
+    }
+    if ch {
+        *p = Params::from_json(m);
+    }
+    ch
+}
+
+/// A labelled swatch; clicking it asks for the current colour.
+fn colour_row(ui: &mut Ui, label: &str, rgb: [f32; 3]) -> bool {
+    let t = Tokens::get(ui.ctx());
+    ui.horizontal(|ui| {
+        let c = onepaint_color::Rgba::new(rgb[0], rgb[1], rgb[2], 1.0);
+        let hit = widgets::swatch(ui, c, 22.0, false).on_hover_text("Click to use the current colour").clicked();
+        ui.label(RichText::new(label).color(t.fg_muted));
+        hit
+    })
+    .inner
+}
+
+/// One slider over a plain `f32` field (display = stored / scale).
+fn field_slider(ui: &mut Ui, label: &str, v: &mut f32, range: std::ops::RangeInclusive<f32>, scale: f32, unit: &str) -> bool {
+    let mut o = Some(*v);
+    let changed = slider(ui, label, &mut o, *v, range, scale, unit);
+    if changed {
+        *v = o.unwrap_or(*v);
+    }
+    changed
+}
+
+/// Selective Colour+: the first sampled range (target, reach, softness and the H/S/V shift).
+fn selective_ui(ui: &mut Ui, p: &mut Params, colour: onepaint_color::Rgba) -> bool {
+    let mut samples = p.color_samples.clone().unwrap_or_default();
+    if samples.is_empty() {
+        samples = default_params(Kind::SelectiveColor).color_samples.unwrap_or_default();
+    }
+    let mut ch = false;
+    let s: &mut ColorSample = &mut samples[0];
+    if colour_row(ui, "Sampled colour", s.target) {
+        s.target = [colour.r, colour.g, colour.b];
+        ch = true;
+    }
+    ch |= field_slider(ui, "Range", &mut s.reach, 0.0..=100.0, 0.01, "%");
+    ch |= field_slider(ui, "Softness", &mut s.falloff, 0.0..=100.0, 0.01, "%");
+    ch |= field_slider(ui, "Hue", &mut s.dh, -180.0..=180.0, 1.0, "°");
+    ch |= field_slider(ui, "Saturation", &mut s.ds, -100.0..=100.0, 0.01, "");
+    ch |= field_slider(ui, "Value", &mut s.dv, -100.0..=100.0, 0.01, "");
+    let mut show = p.show_range.unwrap_or(false);
+    if widgets::toggle(ui, &mut show, "Show range").changed() {
+        p.show_range = Some(show);
+        ch = true;
+    }
+    if ch {
+        p.color_samples = Some(samples);
+    }
+    ch
+}
+
+/// Field Blur pins: position and blur per pin, plus add and delete.
+fn pins_ui(ui: &mut Ui, p: &mut Params) -> bool {
+    let mut pins = p.pins.clone().unwrap_or_default();
+    let mut ch = false;
+    let mut drop = None;
+    for (i, pin) in pins.iter_mut().enumerate() {
+        widgets::section_label(ui, &format!("Pin {}", i + 1));
+        ch |= field_slider(ui, "Blur", &mut pin.blur, 0.0..=100.0, 1.0, " px");
+        ch |= field_slider(ui, "X", &mut pin.x, 0.0..=100.0, 0.01, "%");
+        ch |= field_slider(ui, "Y", &mut pin.y, 0.0..=100.0, 0.01, "%");
+        if widgets::secondary_button(ui, &format!("Delete pin {}", i + 1), 90.0).clicked() {
+            drop = Some(i);
+        }
+    }
+    if let Some(i) = drop {
+        pins.remove(i);
+        ch = true;
+    }
+    if pins.len() < MAX_BLUR_PINS && widgets::secondary_button(ui, "Add pin", 90.0).clicked() {
+        pins.push(BlurPin { x: 0.5, y: 0.5, blur: 20.0 });
+        ch = true;
+    }
+    if ch {
+        p.pins = Some(pins);
     }
     ch
 }
@@ -227,8 +385,6 @@ pub fn layer_panel(app: &mut App, ui: &mut Ui) {
         let _ = app.session.execute(Command::SetAdjustment { id, params: p });
     }
     if !kind.is_color() {
-        ui.label(
-            RichText::new("Blur and sharpen layers are kept in the file but not shown yet.").font(theme::medium(11.0)).color(t.warning),
-        );
+        ui.label(RichText::new("Spatial filter layers are kept in the file but not shown yet.").font(theme::medium(11.0)).color(t.warning));
     }
 }

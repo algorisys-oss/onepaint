@@ -1,223 +1,39 @@
 //! Adjustments and filters: CPU reference implementations of happypaint's
-//! `engine/adjustments/adjustment-renderer.ts` shaders (spec 10).
+//! `engine/adjustments/adjustment-renderer.ts` shaders (specs 10 and 18).
 //!
 //! Pixels are premultiplied linear RGBA (f32). Colour kinds work on
 //! unpremultiplied sRGB, like happypaint's float documents; spatial kinds work
 //! on premultiplied storage values.
 
+mod blur;
+mod colour;
+mod distort;
 pub mod gradient;
+mod kind;
+pub mod lightning;
 pub mod liquify;
+mod params;
+pub mod pattern;
+mod render;
+mod stylize;
+mod tex;
+pub mod ui;
 
+pub use colour::{MAX_COLOR_SAMPLES, fill_stops, rgb01_to_hsv, selective_color_rgb};
+pub use kind::{Kind, SECTIONS, default_params, field_blur_max, is_identity};
+pub use params::{BlurPin, ColorSample, FillStop, Params, Stop};
+pub use tex::Frame;
+
+use colour::{hsv2rgb, rgb2hsv};
 use onepaint_color::{fast_linear_to_srgb as linear_to_srgb, fast_srgb_to_linear as srgb_to_linear};
 use onepaint_stroke::{CurvePoint, Interp, eval_curve};
 use rayon::prelude::*;
-use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Kind {
-    BrightnessContrast,
-    HueSaturation,
-    BlackWhite,
-    Invert,
-    Threshold,
-    Posterize,
-    Levels,
-    Curves,
-    ColorBalance,
-    GradientMap,
-    Noise,
-    GaussianBlur,
-    MotionBlur,
-    Sharpen,
-}
+/// Field Blur takes at most this many pins (AR `MAX_BLUR_PINS`).
+pub const MAX_BLUR_PINS: usize = 8;
 
-impl Kind {
-    pub const ALL: [Kind; 14] = [
-        Kind::BrightnessContrast,
-        Kind::HueSaturation,
-        Kind::BlackWhite,
-        Kind::Invert,
-        Kind::Threshold,
-        Kind::Posterize,
-        Kind::Levels,
-        Kind::Curves,
-        Kind::ColorBalance,
-        Kind::GradientMap,
-        Kind::Noise,
-        Kind::GaussianBlur,
-        Kind::MotionBlur,
-        Kind::Sharpen,
-    ];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Kind::BrightnessContrast => "brightness-contrast",
-            Kind::HueSaturation => "hue-saturation",
-            Kind::BlackWhite => "black-white",
-            Kind::Invert => "invert",
-            Kind::Threshold => "threshold",
-            Kind::Posterize => "posterize",
-            Kind::Levels => "levels",
-            Kind::Curves => "curves",
-            Kind::ColorBalance => "color-balance",
-            Kind::GradientMap => "gradient-map",
-            Kind::Noise => "noise",
-            Kind::GaussianBlur => "gaussian-blur",
-            Kind::MotionBlur => "motion-blur",
-            Kind::Sharpen => "sharpen",
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Kind::BrightnessContrast => "Brightness / Contrast",
-            Kind::HueSaturation => "Hue / Saturation",
-            Kind::BlackWhite => "Black & White",
-            Kind::Invert => "Invert",
-            Kind::Threshold => "Threshold",
-            Kind::Posterize => "Posterize",
-            Kind::Levels => "Levels",
-            Kind::Curves => "Curves",
-            Kind::ColorBalance => "Color Balance",
-            Kind::GradientMap => "Gradient Map",
-            Kind::Noise => "Noise",
-            Kind::GaussianBlur => "Gaussian Blur",
-            Kind::MotionBlur => "Motion Blur",
-            Kind::Sharpen => "Sharpen",
-        }
-    }
-
-    pub fn parse(s: &str) -> Option<Kind> {
-        Self::ALL.into_iter().find(|k| k.as_str() == s)
-    }
-
-    /// Per-pixel colour kinds (usable as live adjustment layers per tile).
-    pub fn is_color(self) -> bool {
-        !matches!(self, Kind::GaussianBlur | Kind::MotionBlur | Kind::Sharpen)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Stop {
-    pub pos: f32,
-    pub color: [f32; 3],
-}
-
-/// happypaint's flat `AdjustmentParams` bag (camelCase JSON); unknown fields are kept.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Params {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub brightness: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub contrast: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hue: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub saturation: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub amount: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub threshold: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub levels: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub in_black: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub in_white: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub gamma: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub out_black: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub out_white: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub curve: Option<Vec<CurvePoint>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "curveR")]
-    pub curve_r: Option<Vec<CurvePoint>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "curveG")]
-    pub curve_g: Option<Vec<CurvePoint>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "curveB")]
-    pub curve_b: Option<Vec<CurvePoint>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub curve_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cyan_red: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub magenta_green: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub yellow_blue: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub gradient_stops: Option<Vec<Stop>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shadow: Option<[f32; 3]>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub highlight: Option<[f32; 3]>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub radius: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub angle: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub distance: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mono: Option<bool>,
-    #[serde(flatten)]
-    pub extra: serde_json::Map<String, serde_json::Value>,
-}
-
-/// happypaint `defaultParams` (AR:151-301).
-pub fn default_params(k: Kind) -> Params {
-    let mut p = Params::default();
-    match k {
-        Kind::BrightnessContrast => (p.brightness, p.contrast) = (Some(0.0), Some(0.0)),
-        Kind::HueSaturation => (p.hue, p.saturation, p.brightness) = (Some(0.0), Some(0.0), Some(0.0)),
-        Kind::BlackWhite => p.amount = Some(1.0),
-        Kind::Invert => {}
-        Kind::Threshold => p.threshold = Some(0.5),
-        Kind::Posterize => p.levels = Some(4.0),
-        Kind::Levels => {
-            (p.in_black, p.in_white, p.gamma, p.out_black, p.out_white) = (Some(0.0), Some(1.0), Some(1.0), Some(0.0), Some(1.0))
-        }
-        Kind::Curves => {
-            p.curve = Some(vec![CurvePoint::new(0.0, 0.0), CurvePoint::new(1.0, 1.0)]);
-            p.curve_mode = Some("smooth".into());
-        }
-        Kind::ColorBalance => (p.cyan_red, p.magenta_green, p.yellow_blue) = (Some(0.0), Some(0.0), Some(0.0)),
-        Kind::GradientMap => p.gradient_stops = Some(vec![Stop { pos: 0.0, color: [0.0; 3] }, Stop { pos: 1.0, color: [1.0; 3] }]),
-        Kind::Noise => (p.amount, p.mono) = (Some(0.0), Some(true)),
-        Kind::GaussianBlur => p.radius = Some(0.0),
-        Kind::MotionBlur => (p.angle, p.distance) = (Some(0.0), Some(0.0)),
-        Kind::Sharpen => p.amount = Some(0.0),
-    }
-    p
-}
-
-fn curve_is_identity(c: &Option<Vec<CurvePoint>>) -> bool {
-    c.as_ref().is_none_or(|c| c.len() < 2 || c.iter().all(|p| (p.y - p.x).abs() < 1e-3))
-}
-
-/// The destructive preview skips identity params (AR `isIdentity`).
-pub fn is_identity(k: Kind, p: &Params) -> bool {
-    let z = |v: Option<f32>| v.unwrap_or(0.0) == 0.0;
-    match k {
-        Kind::BrightnessContrast => z(p.brightness) && z(p.contrast),
-        Kind::HueSaturation => z(p.hue) && z(p.saturation) && z(p.brightness),
-        Kind::BlackWhite => p.amount.unwrap_or(1.0) <= 0.0,
-        Kind::Invert | Kind::Threshold | Kind::Posterize | Kind::GradientMap => false,
-        Kind::Levels => {
-            z(p.in_black)
-                && p.in_white.unwrap_or(1.0) == 1.0
-                && p.gamma.unwrap_or(1.0) == 1.0
-                && z(p.out_black)
-                && p.out_white.unwrap_or(1.0) == 1.0
-        }
-        Kind::Curves => [&p.curve, &p.curve_r, &p.curve_g, &p.curve_b].into_iter().all(curve_is_identity),
-        Kind::ColorBalance => z(p.cyan_red) && z(p.magenta_green) && z(p.yellow_blue),
-        Kind::GaussianBlur => p.radius.unwrap_or(0.0) <= 0.0,
-        Kind::MotionBlur => p.distance.unwrap_or(0.0) <= 0.0,
-        Kind::Sharpen | Kind::Noise => p.amount.unwrap_or(0.0) <= 0.0,
-    }
-}
+/// `reach` for kinds whose result depends on the whole canvas.
+pub const GLOBAL_REACH: i32 = 1 << 24;
 
 pub type Lut = [[u8; 4]; 256];
 
@@ -295,25 +111,6 @@ pub fn lut_sample(lut: &Lut, v: f32, ch: usize) -> f32 {
     (lut[i0][ch] as f32 * (1.0 - f) + lut[i1][ch] as f32 * f) / 255.0
 }
 
-fn rgb2hsv(c: [f32; 3]) -> [f32; 3] {
-    // GLSL rgb2hsv as in AR (branchless form expanded).
-    let k = [0.0f32, -1.0 / 3.0, 2.0 / 3.0, -1.0];
-    let step = |edge: f32, x: f32| if x < edge { 0.0 } else { 1.0 };
-    let mixv = |a: [f32; 4], b: [f32; 4], t: f32| [0, 1, 2, 3].map(|i| a[i] + (b[i] - a[i]) * t);
-    let p = mixv([c[2], c[1], k[3], k[2]], [c[1], c[2], k[0], k[1]], step(c[2], c[1]));
-    let q = mixv([p[0], p[1], p[3], c[0]], [c[0], p[1], p[2], p[0]], step(p[0], c[0]));
-    let d = q[0] - q[3].min(q[1]);
-    [(q[2] + (q[3] - q[1]) / (6.0 * d + 1e-10)).abs(), d / (q[0] + 1e-10), q[0]]
-}
-
-fn hsv2rgb(c: [f32; 3]) -> [f32; 3] {
-    let k = [1.0f32, 2.0 / 3.0, 1.0 / 3.0, 3.0];
-    [0, 1, 2].map(|i| {
-        let p = ((c[0] + k[i]).fract() * 6.0 - k[3]).abs();
-        c[2] * (k[0] + ((p - k[0]).clamp(0.0, 1.0) - k[0]) * c[1])
-    })
-}
-
 fn pcg(v: u32) -> u32 {
     let s = v.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
     let w = ((s >> ((s >> 28) + 4)) ^ s).wrapping_mul(277_803_737);
@@ -330,6 +127,7 @@ pub struct Prepared {
     pub kind: Kind,
     p: Params,
     lut: Option<Box<Lut>>,
+    ex: colour::Extra,
 }
 
 const LUMA: [f32; 3] = [0.299, 0.587, 0.114];
@@ -338,20 +136,31 @@ fn luma(c: [f32; 3]) -> f32 {
     c[0].clamp(0.0, 1.0) * LUMA[0] + c[1].clamp(0.0, 1.0) * LUMA[1] + c[2].clamp(0.0, 1.0) * LUMA[2]
 }
 
+/// Prepare a per-pixel kind for a default (1×1, 300 dpi) document; kinds that
+/// need the document's size (tone, fills, generators) should use `prepare_in`.
 pub fn prepare(kind: Kind, p: &Params) -> Prepared {
+    prepare_in(kind, p, Frame::default())
+}
+
+/// Prepare a per-pixel kind for the document described by `frame`.
+pub fn prepare_in(kind: Kind, p: &Params, frame: Frame) -> Prepared {
     let lut = match kind {
         Kind::Curves => Some(Box::new(build_curves_lut(p))),
         Kind::GradientMap => Some(Box::new(build_gradient_lut(p))),
         _ => None,
     };
-    Prepared { kind, p: p.clone(), lut }
+    Prepared { kind, p: p.clone(), lut, ex: colour::extra_for(kind, p, frame) }
 }
 
 impl Prepared {
-    /// Adjust one premultiplied linear pixel at doc (x, y). Spatial kinds pass through.
+    /// Adjust one premultiplied linear pixel at doc (x, y). Kinds that are not
+    /// pixelwise pass through.
     pub fn color_px(&self, s: [f32; 4], x: i32, y: i32) -> [f32; 4] {
-        if !self.kind.is_color() {
+        if !self.kind.is_pixelwise() {
             return s;
+        }
+        if let Some(o) = colour::px(self.kind, &self.p, &self.ex, s, x, y) {
+            return o;
         }
         let a = s[3];
         let un = if a > 0.0 { [s[0] / a, s[1] / a, s[2] / a] } else { [s[0], s[1], s[2]] };
@@ -471,11 +280,34 @@ fn blur_pass(buf: &[f32], w: usize, h: usize, dir: (f32, f32), r: f32) -> Vec<f3
     out
 }
 
-/// Spatial kinds on a dense premultiplied buffer (`w × h × 4`); colour kinds return a copy.
+/// Spatial kinds on a dense premultiplied buffer (`w × h × 4`) that is the
+/// whole document; colour kinds return a copy.
 pub fn apply_spatial(kind: Kind, p: &Params, buf: &[f32], w: usize, h: usize) -> Vec<f32> {
-    if is_identity(kind, p) || w == 0 || h == 0 {
+    apply_spatial_in(kind, p, buf, w, h, Frame::whole(w, h))
+}
+
+/// Spatial kinds on a `w × h` buffer placed in the document by `frame`. Kinds
+/// with `GLOBAL_REACH` expect the buffer to be the whole document. Generators
+/// return their own layer content (line art reads the buffer; lightning does
+/// not); pixelwise kinds are run through `Prepared::color_px`.
+pub fn apply_spatial_in(kind: Kind, p: &Params, buf: &[f32], w: usize, h: usize, frame: Frame) -> Vec<f32> {
+    if w == 0 || h == 0 {
         return buf.to_vec();
     }
+    if kind.is_pixelwise() {
+        let pr = prepare_in(kind, p, frame);
+        return tex::render(w, h, |i, j| {
+            let k = (j * w + i) * 4;
+            pr.color_px([buf[k], buf[k + 1], buf[k + 2], buf[k + 3]], frame.x + i as i32, frame.y + j as i32)
+        });
+    }
+    if kind == Kind::Lightning {
+        return lightning::render_lightning(w, h, p);
+    }
+    if is_identity(kind, p) {
+        return buf.to_vec();
+    }
+    let s = tex::Src { t: tex::Tex::new(buf, w, h), f: frame };
     match kind {
         Kind::GaussianBlur => {
             let r = p.radius.unwrap_or(0.0);
@@ -492,16 +324,63 @@ pub fn apply_spatial(kind: Kind, p: &Params, buf: &[f32], w: usize, h: usize) ->
             let k = p.amount.unwrap_or(0.0) * 3.0;
             buf.iter().zip(&b).map(|(s, bl)| (s + (s - bl) * k).clamp(0.0, 1.0)).collect()
         }
+        Kind::RadialBlur => blur::radial(p, s),
+        Kind::TiltShift | Kind::IrisBlur | Kind::FieldBlur => blur::gallery(kind, p, s),
+        Kind::SpinBlur => blur::spin(p, s),
+        Kind::Twirl => distort::twirl(p, s),
+        Kind::Pinch => distort::pinch(p, s),
+        Kind::Ripple => distort::ripple(p, s),
+        Kind::PolarCoordinates => distort::polar(p, s),
+        Kind::Bloom => stylize::bloom(p, s),
+        Kind::ChromaticAberration => stylize::chromatic(p, s),
+        Kind::Halftone => stylize::halftone(p, s),
+        Kind::Glitch => stylize::glitch(p, s),
+        Kind::Mosaic => stylize::mosaic(p, s),
+        Kind::Crystallize => stylize::crystallize(p, s),
+        Kind::Emboss => stylize::emboss(p, s),
+        Kind::OilPaint => stylize::oil_paint(p, s),
+        Kind::Wind => stylize::wind(p, s),
+        Kind::LineArt => stylize::line_art(p, s),
+        Kind::LightRays => render::light_rays(p, s),
         _ => buf.to_vec(),
     }
 }
 
 /// How far a spatial kind reads beyond a pixel (px), for tiling margins.
+/// `GLOBAL_REACH` means the whole canvas; per-pixel kinds read nothing else.
 pub fn reach(kind: Kind, p: &Params) -> i32 {
+    let ceil = |v: f32| v.max(0.0).ceil() as i32;
     match kind {
         Kind::GaussianBlur => p.radius.unwrap_or(0.0).max(1.0).ceil() as i32 + 2,
         Kind::MotionBlur => p.distance.unwrap_or(0.0).max(1.0).ceil() as i32 + 2,
         Kind::Sharpen => 4,
+        Kind::Bloom => p.radius.unwrap_or(15.0).max(1.0).ceil() as i32 + 2,
+        Kind::Ripple => ceil(p.amplitude.unwrap_or(0.0) * 1.35) + 2,
+        Kind::Halftone => ceil(p.cell_size.unwrap_or(6.0).max(2.0)) + 2,
+        Kind::Mosaic => ceil(p.cell_size.unwrap_or(16.0).max(2.0)) + 2,
+        Kind::Crystallize => ceil(p.cell_size.unwrap_or(16.0).max(2.0) * 3.0) + 2,
+        Kind::Emboss => ceil(p.distance.unwrap_or(3.0).max(0.5)) + 2,
+        Kind::OilPaint => {
+            let r = p.radius.unwrap_or(8.0).max(1.0);
+            ceil(r + (r / 6.0).max(1.0)) + 2
+        }
+        Kind::Wind => ceil(p.distance.unwrap_or(40.0)) + 2,
+        Kind::LineArt => {
+            let r = p.radius.unwrap_or(2.0).max(1.0);
+            ceil(r * 1.6 * 2.0) + 4
+        }
+        Kind::RadialBlur
+        | Kind::TiltShift
+        | Kind::IrisBlur
+        | Kind::FieldBlur
+        | Kind::SpinBlur
+        | Kind::Twirl
+        | Kind::Pinch
+        | Kind::PolarCoordinates
+        | Kind::ChromaticAberration
+        | Kind::Glitch
+        | Kind::LightRays
+        | Kind::Lightning => GLOBAL_REACH,
         _ => 0,
     }
 }
