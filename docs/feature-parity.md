@@ -61,7 +61,7 @@ Sources, all under `../happypaint/frontend/src/`:
 - [ ] Off-canvas pixel overflow
 - [~] Text layers: multiple rich-text objects and balloons, vector until baked (rich runs render; balloons are kept in files but not drawn; no rich-text editing UI yet)
 - [ ] Vector path layers, plus path ops
-- [ ] Adjustment layers and fill layers
+- [~] Adjustment layers and fill layers (colour and fill kinds composite live; spatial kinds are kept but not rendered)
 - [ ] Per-layer smart-filter stacks
 
 ## Blend modes (20)
@@ -76,25 +76,25 @@ The modes are:
 
 - [~] All of them on the GPU, matching the CPU oracle (all 19 layer modes are done on the CPU and the composite is shown on the GPU; GPU compositing is not done yet; `pigment` falls back to normal)
 
-## Adjustments and filters (47 kinds)
+## Adjustments and filters (48 kinds)
 Each kind works destructively, as an adjustment layer, and as a smart filter.
 The exception is fill layers, which only work as layers.
 
-These 14 are done: destructive with live preview, selection-aware, and as
-adjustment layers. The blur/sharpen ones work as destructive filters only; as
-layers they are preserved but not rendered yet.
+All 48 kinds have CPU references (specs 10 and 18) and are in the sectioned
+adjustments menu. The colour kinds work destructively with a live preview,
+are selection-aware, and work as live adjustment layers. The spatial kinds
+work as destructive filters only; as layers they are kept but not rendered
+yet. The generators render into a new layer as one undo step. Fill layers and
+screentone are added as live layers.
 
 - [x] brightness-contrast, hue-saturation, black-white, invert, threshold, posterize, levels, curves, color-balance, gradient-map
 - [x] gaussian-blur, motion-blur, sharpen, noise
-
-Still to do:
-
-- [ ] color-to-alpha, replace-color, selective-color
-- [ ] radial-blur, tilt-shift, iris-blur, field-blur, spin-blur
-- [ ] **Distort:** twirl, pinch, ripple, polar-coordinates
-- [ ] **Stylize:** bloom, chromatic-aberration, halftone, tone, glitch, mosaic, crystallize, emboss, oil-paint, wind, line-art (Sobel/XDoG)
-- [ ] **Render:** light-rays, lens-flare, clouds, fog, smoke, nebula, starfield, lightning
-- [ ] **Fill:** gradient-fill, solid-fill, pattern-fill
+- [~] color-to-alpha, replace-color, selective-color (no canvas eyedropper for the target yet; the panel edits the first selective-colour sample only)
+- [~] radial-blur, tilt-shift, iris-blur, field-blur, spin-blur (no on-canvas handles; centres and pins are sliders)
+- [~] **Distort:** twirl, pinch, ripple, polar-coordinates (no on-canvas handles)
+- [x] **Stylize:** bloom, chromatic-aberration, halftone, tone, glitch, mosaic, crystallize, emboss, oil-paint, wind, line-art (Sobel/XDoG)
+- [~] **Render:** light-rays, lens-flare, clouds, fog, smoke, nebula, starfield, lightning (no on-canvas handles; the lightning raster replaces Canvas2D)
+- [~] **Fill:** gradient-fill, solid-fill, pattern-fill (imported pattern images are not decoded; the built-ins are)
 - [ ] Smart-filter stacks (`layer.filters`; preserved in files, not applied yet)
 
 ## Selection
