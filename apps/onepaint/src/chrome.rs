@@ -37,6 +37,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             Popover::Guides => popover_at(ctx, "guides", anchor, Align2::RIGHT_TOP, |ui| guides(app, ui)),
             Popover::LiquifyOptions => popover_at(ctx, "liquify", anchor, Align2::RIGHT_TOP, |ui| liquify_options(app, ui)),
             Popover::PenOptions => popover_at(ctx, "pen", anchor, Align2::RIGHT_TOP, |ui| pen_options(app, ui)),
+            Popover::Export => popover_at(ctx, "export", screen.center(), Align2::CENTER_CENTER, |ui| export_dialog(app, ui)),
             Popover::Recover => popover_at(ctx, "recover", screen.center(), Align2::CENTER_CENTER, |ui| recover(app, ui)),
             Popover::Fill => popover_at(ctx, "fill", anchor, Align2::RIGHT_TOP, |ui| fill_options(app, ui)),
             Popover::NewDoc => popover_at(ctx, "newdoc", screen.center(), Align2::CENTER_CENTER, |ui| new_doc(app, ui)),
@@ -374,13 +375,9 @@ fn menu(app: &mut App, ui: &mut Ui) {
         app.popover = None;
         app.save(true, now);
     }
-    if widgets::menu_item(ui, Some("image"), "Export PNG…", "Ctrl+Shift+E").clicked() {
-        app.popover = None;
-        app.export_png(now);
-    }
-    if widgets::menu_item(ui, Some("layers"), "Export PSD…", "").clicked() {
-        app.popover = None;
-        app.export_psd(now);
+    if widgets::menu_item(ui, Some("image"), "Export…", "Ctrl+Shift+E").clicked() {
+        app.popover = Some(Popover::Export);
+        return;
     }
     if app.session.anim_settings().enabled {
         if widgets::menu_item(ui, Some("film"), "Export animated GIF…", "").clicked() {
@@ -1456,6 +1453,59 @@ fn mixer_options(app: &mut App, ui: &mut Ui) {
         .font(theme::medium(10.5))
         .color(t.fg_faint),
     );
+}
+
+/// File ▸ Export… (spec 25).
+fn export_dialog(app: &mut App, ui: &mut Ui) {
+    use onepaint_formats::export::{ExportFormat as F, output_size};
+    let t = Tokens::get(ui.ctx());
+    ui.set_width(340.0);
+    widgets::section_label(ui, "Export");
+    let formats = [F::Png, F::Jpeg, F::Tiff, F::Ppm];
+    let (opts, psd) = (&mut app.export_opts, &mut app.export_psd);
+    let cur = if *psd { 4 } else { formats.iter().position(|f| *f == opts.format).unwrap_or(0) };
+    if let Some(i) = segmented(ui, &["PNG", "JPEG", "TIFF", "PPM", "PSD"], cur) {
+        *psd = i == 4;
+        if i < 4 {
+            opts.format = formats[i];
+        }
+    }
+    if *psd {
+        ui.label(RichText::new("Layers, groups, masks and blend modes, at document size.").font(theme::medium(10.5)).color(t.fg_faint));
+    } else {
+        let mut pct = (opts.scale * 100.0) as f32;
+        if widgets::slider_row(ui, "Scale", &mut pct, 10.0..=400.0, |v| format!("{v:.0}%")).changed() {
+            opts.scale = (pct.round() / 100.0) as f64;
+        }
+        if opts.format == F::Jpeg {
+            let mut q = opts.quality as f32;
+            if widgets::slider_row(ui, "Quality", &mut q, 1.0..=100.0, |v| format!("{v:.0}")).changed() {
+                opts.quality = q.round() as u8;
+            }
+        }
+        if opts.format == F::Ppm {
+            widgets::toggle(ui, &mut opts.ascii, "ASCII (P3)");
+        }
+        let d = app.session.doc();
+        let (w, h) = output_size(d.width, d.height, opts.scale);
+        let note = match opts.format {
+            F::Jpeg | F::Ppm => " · flattened on white",
+            _ => "",
+        };
+        ui.label(RichText::new(format!("{w} × {h} px at {} dpi{note}", d.dpi)).font(theme::mono(11.0)).color(t.fg_muted));
+    }
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        if widgets::primary_button(ui, "Export…", 110.0).clicked() {
+            let now = ui.input(|i| i.time);
+            let (o, psd) = (app.export_opts, app.export_psd);
+            app.popover = None;
+            app.export_with(o, psd, now);
+        }
+        if widgets::secondary_button(ui, "Cancel", 90.0).clicked() {
+            app.popover = None;
+        }
+    });
 }
 
 fn pen_options(app: &mut App, ui: &mut Ui) {

@@ -36,3 +36,4 @@ The happypaint references are relative to `../happypaint/frontend/src/`.
 | 21 | [Palettes](21-palettes.md) | color, formats, app |
 | 22 | [Pen tool and vector paths](22-pen-paths.md) | stroke, engine, app |
 | 24 | [Animation Assist](24-animation.md) | compose, engine, formats, app |
+| 25 | [Export dialog](25-export.md) | formats, engine, app |

@@ -57,6 +57,7 @@ pub enum Popover {
     Guides,
     LiquifyOptions,
     PenOptions,
+    Export,
 }
 
 /// What a file opens as.
@@ -97,6 +98,8 @@ pub struct App {
     pub recent: Vec<Rgba>,
     pub palettes: palettes::Palettes,
     pub playback: timeline::Playback,
+    pub export_opts: onepaint_formats::export::ExportOptions,
+    pub export_psd: bool,
     /// Inline rename of the active palette in progress.
     pub palette_rename: Option<String>,
     pub thumbs: thumbs::Thumbs,
@@ -149,6 +152,8 @@ impl App {
             recent: Vec::new(),
             palettes,
             playback: Default::default(),
+            export_opts: Default::default(),
+            export_psd: false,
             palette_rename: None,
             thumbs: thumbs::Thumbs::default(),
             toast: None,
@@ -271,7 +276,10 @@ impl App {
 
     pub fn open_dialog(&mut self) {
         if let Some(p) = rfd::FileDialog::new()
-            .add_filter("Images and documents", &["happypaint", "psd", "psb", "png", "jpg", "jpeg", "webp", "bmp", "gif", "tif", "tiff"])
+            .add_filter(
+                "Images and documents",
+                &["happypaint", "psd", "psb", "pbm", "pgm", "ppm", "pam", "pnm", "png", "jpg", "jpeg", "webp", "bmp", "gif", "tif", "tiff"],
+            )
             .pick_file()
         {
             self.open_path(p);
@@ -331,6 +339,26 @@ impl App {
             return;
         };
         match self.session.export_psd().map_err(|e| e.to_string()).and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string())) {
+            Ok(()) => self.notify(format!("Exported {}", path.display()), now),
+            Err(e) => self.notify(format!("Export failed: {e}"), now),
+        }
+    }
+
+    /// Export in the dialog's format (PSD keeps layers; the rest are flat).
+    pub fn export_with(&mut self, opts: onepaint_formats::export::ExportOptions, psd: bool, now: f64) {
+        if psd {
+            return self.export_psd(now);
+        }
+        let ext = opts.format.extension();
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter(ext.to_uppercase(), &[ext])
+            .set_file_name(format!("{}.{ext}", self.session.doc().name))
+            .save_file()
+        else {
+            return;
+        };
+        match self.session.export_image(&opts).map_err(|e| e.to_string()).and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string()))
+        {
             Ok(()) => self.notify(format!("Exported {}", path.display()), now),
             Err(e) => self.notify(format!("Export failed: {e}"), now),
         }
@@ -427,7 +455,7 @@ impl App {
             self.popover = Some(Popover::NewDoc);
         }
         if sc(cmd | Modifiers::SHIFT, Key::E) {
-            self.export_png(now);
+            self.popover = Some(Popover::Export);
         }
         if sc(cmd, Key::Num0) {
             self.canvas.view.fit();
@@ -1287,5 +1315,24 @@ mod tests {
         h.get_by_label("Pause").click();
         h.run_steps(2);
         assert!(!h.state().playback.playing);
+    }
+
+    #[test]
+    fn export_dialog_switches_formats() {
+        let mut h = harness();
+        h.run();
+        key(&mut h, egui::Key::E, egui::Modifiers::COMMAND | egui::Modifiers::SHIFT);
+        h.run();
+        assert_eq!(h.state().popover, Some(Popover::Export));
+        h.get_by_label("JPEG").click();
+        h.run();
+        assert_eq!(h.state().export_opts.format, onepaint_formats::export::ExportFormat::Jpeg);
+        assert!(h.query_by_label("Quality").is_some());
+        h.get_by_label("PSD").click();
+        h.run();
+        assert!(h.state().export_psd);
+        h.get_by_label("Cancel").click();
+        h.run();
+        assert_eq!(h.state().popover, None);
     }
 }

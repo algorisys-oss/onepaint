@@ -702,6 +702,17 @@ impl Session {
         Ok(onepaint_formats::write_happypaint(&self.doc, thumb.as_deref(), APP_VERSION)?)
     }
 
+    /// What you see (the current animation frame, without onion ghosts), encoded.
+    pub fn export_image(&self, o: &onepaint_formats::export::ExportOptions) -> Result<Vec<u8>, EngineError> {
+        let flat = if self.anim.enabled && anim::total_slots(&self.doc.root) > 0 {
+            onepaint_compose::flatten(&anim::view_document(&self.doc, &self.anim, self.anim_slot, false, &self.active), None)
+        } else {
+            onepaint_compose::flatten(&self.doc, None)
+        };
+        let o = onepaint_formats::export::ExportOptions { dpi: self.doc.dpi, ..*o };
+        Ok(onepaint_formats::export::export_flat(&flat, self.doc.width, self.doc.height, &o)?.0)
+    }
+
     /// The flattened canvas as an 8-bit straight-alpha sRGB PNG.
     pub fn export_png(&self) -> Result<Vec<u8>, EngineError> {
         let rgba = onepaint_formats::flatten_to_srgb8(&self.flatten());
