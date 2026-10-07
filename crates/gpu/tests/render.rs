@@ -42,6 +42,14 @@ fn present_pass_draws_document_checker_and_stage() {
         }
     }
     gpu.upload(&queue, &[((0, 0), t)]);
+    // Select the doc rect 4..28 (doc px) so its edge gets marching ants.
+    let mut sel = vec![0u8; 32 * 32];
+    for y in 4..28 {
+        for x in 4..28 {
+            sel[y * 32 + x] = 255;
+        }
+    }
+    gpu.set_selection(&queue, Some(&sel));
     gpu.set_view(
         &queue,
         &ViewParams {
@@ -54,6 +62,7 @@ fn present_pass_draws_document_checker_and_stage() {
             stage: [0.0, 0.0, 1.0, 1.0],
             checker_a: [0.85, 0.85, 0.85, 1.0],
             checker_b: [0.64, 0.64, 0.64, 1.0],
+            time: 0.0,
         },
     );
     let view = target.create_view(&Default::default());
@@ -113,8 +122,16 @@ fn present_pass_draws_document_checker_and_stage() {
         [data[i], data[i + 1], data[i + 2], data[i + 3]]
     };
     // Doc (32×32) is centred: it covers 16..48 on both axes.
-    assert_eq!(px(20, 32), [255, 0, 0, 255], "red document pixel");
+    assert_eq!(px(18, 32), [255, 0, 0, 255], "red document pixel");
     let chk = px(40, 32);
     assert!(chk[0] == chk[1] && chk[0] > 150, "checker {chk:?}");
     assert_eq!(px(2, 2), [0, 0, 255, 255], "stage");
+    // Ants on the selection's inner edge (doc x=4 → screen x=20), black or white.
+    let edge = px(20, 32);
+    assert!(
+        edge == [0, 0, 0, 255] || edge == [255, 255, 255, 255],
+        "ants {edge:?}"
+    );
+    // Away from the edge the content shows through.
+    assert_eq!(px(22, 32), [255, 0, 0, 255]);
 }

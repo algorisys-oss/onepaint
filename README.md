@@ -22,6 +22,15 @@ built on **egui** for the UI and **wgpu** for the canvas.
 - `.happypaint` open and save (v1–v9 read, v9 write), and PNG export.
 - A canvas-first, Procreate-like UI with dark and light themes.
 
+**Slice 2 (selection and fill) is complete.** It includes:
+
+- Rect, ellipse, lasso, polygon and magic-wand selection.
+- New, add, subtract and intersect modes.
+- Feather, grow, shrink and smooth.
+- Marching ants.
+- Painting clipped to the selection.
+- The paint bucket, the eyedropper tool, clear and fill selection.
+
 [`docs/feature-parity.md`](docs/feature-parity.md) tracks every happypaint
 feature, and [`docs/divergences.md`](docs/divergences.md) lists the known
 differences.
@@ -43,7 +52,11 @@ The app needs a GPU that wgpu supports (Vulkan, Metal, DX12 or GL).
 | Paint | Drag with the left mouse button or the pen |
 | Brush / eraser | B / E |
 | Brush size | `[` `]`, or right-drag on the canvas |
-| Pick colour | Alt-click |
+| Pick colour | Alt-click, or the eyedropper (I) |
+| Select | M rect, L lasso, W wand (more in the select popover); Shift add, Alt subtract |
+| Select all / deselect / invert | Ctrl+A / Ctrl+D / Ctrl+Shift+I |
+| Fill | G (bucket); Alt+Backspace fills the selection |
+| Clear | Delete / Backspace (inside the selection) |
 | Pan | Space-drag, middle-drag, or two-finger scroll |
 | Zoom | Ctrl+wheel or pinch |
 | Rotate | R-drag (snaps near 0°, 90°, 180° and 270°) |

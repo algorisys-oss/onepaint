@@ -18,8 +18,8 @@ Sources, all under `../happypaint/frontend/src/`:
 ## Tools (19)
 - [x] brush
 - [x] eraser
-- [ ] fill (flood fill)
-- [~] eyedropper (Alt-click and Alt-drag sample the composite; no dedicated tool button yet)
+- [x] fill (flood fill) (tolerance, grow, confined to the selection, alpha lock)
+- [x] eyedropper (the tool, Alt-click and Alt-drag sample the composite; touch-and-hold comes with gestures)
 - [ ] move/transform (scale, rotate, warp, quad homography)
 - [x] pan (space-drag, middle-drag, two-finger scroll)
 - [ ] smudge
@@ -30,11 +30,11 @@ Sources, all under `../happypaint/frontend/src/`:
 - [ ] pen, with output to a shape layer, a path or pixels
 - [ ] shape
 - [ ] panel (comic panels)
-- [ ] select-rect
-- [ ] select-ellipse
-- [ ] select-lasso
-- [ ] select-poly
-- [ ] select-wand
+- [x] select-rect
+- [x] select-ellipse
+- [x] select-lasso
+- [x] select-poly
+- [x] select-wand
 
 ## Brushes
 - [ ] All 118 presets, including Manga and the baked Procreate brushes, with identical parameters
@@ -97,12 +97,12 @@ The exception is fill layers, which only work as layers.
 - [ ] **Fill:** gradient-fill, solid-fill, pattern-fill (pattern-fill must also load patterns from a URL)
 
 ## Selection
-- [ ] Rect, ellipse, lasso, polygon and magic wand
-- [ ] Add, subtract and intersect
-- [ ] Feather, grow and smooth
+- [x] Rect, ellipse, lasso, polygon and magic wand
+- [x] Add, subtract and intersect
+- [x] Feather, grow and smooth
 - [ ] Saved selections
-- [ ] Marching-ants overlay
-- [ ] Fill, stroke and adjust within a selection, auto-rasterizing vector layers first
+- [x] Marching-ants overlay
+- [~] Fill, stroke and adjust within a selection, auto-rasterizing vector layers first (fill, clear and painting are clipped; adjustments and vector layers come later)
 
 ## Canvas and guides
 - [~] Pan, zoom and rotate at 60fps or better on large documents (pan, zoom and rotate all work; not yet measured on 8k documents)

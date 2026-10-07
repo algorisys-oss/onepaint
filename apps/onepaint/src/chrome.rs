@@ -35,6 +35,12 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             Popover::Color => {
                 popover_at(ctx, "color", anchor, Align2::RIGHT_TOP, |ui| color(app, ui))
             }
+            Popover::Selection => popover_at(ctx, "selection", anchor, Align2::RIGHT_TOP, |ui| {
+                selection(app, ui)
+            }),
+            Popover::Fill => popover_at(ctx, "fill", anchor, Align2::RIGHT_TOP, |ui| {
+                fill_options(app, ui)
+            }),
             Popover::NewDoc => popover_at(
                 ctx,
                 "newdoc",
@@ -136,6 +142,36 @@ fn top_bar(app: &mut App, ctx: &egui::Context) {
                 ui.set_height(BAR_H - 12.0);
                 ui.horizontal_centered(|ui| {
                     let tool = app.session.tool();
+                    let selecting = is_select_tool(tool);
+                    let sel_icon = select_icon(app.last_select_tool);
+                    if icons::button(ui, sel_icon, 32.0, selecting, "Select (M, L, W)").clicked() {
+                        if selecting {
+                            toggle_popover(app, Popover::Selection);
+                        } else {
+                            let t = app.last_select_tool;
+                            app.set_tool(t);
+                        }
+                    }
+                    if icons::button(ui, "paint-bucket", 32.0, tool == Tool::Fill, "Fill (G)")
+                        .clicked()
+                    {
+                        if tool == Tool::Fill {
+                            toggle_popover(app, Popover::Fill);
+                        }
+                        app.set_tool(Tool::Fill);
+                    }
+                    if icons::button(
+                        ui,
+                        "pipette",
+                        32.0,
+                        tool == Tool::Eyedropper,
+                        "Eyedropper (I)",
+                    )
+                    .clicked()
+                    {
+                        app.set_tool(Tool::Eyedropper);
+                    }
+                    widgets::vline(ui, 24.0);
                     if icons::button(ui, "brush", 32.0, tool == Tool::Brush, "Brush (B)").clicked()
                     {
                         if tool == Tool::Brush {
@@ -895,4 +931,213 @@ fn confirm(app: &mut App, ui: &mut Ui) {
             app.popover = None;
         }
     });
+}
+
+pub fn is_select_tool(t: Tool) -> bool {
+    matches!(
+        t,
+        Tool::SelectRect
+            | Tool::SelectEllipse
+            | Tool::SelectLasso
+            | Tool::SelectPoly
+            | Tool::SelectWand
+    )
+}
+
+fn select_icon(t: Tool) -> &'static str {
+    match t {
+        Tool::SelectEllipse => "circle-dashed",
+        Tool::SelectLasso => "lasso",
+        Tool::SelectPoly => "pentagon",
+        Tool::SelectWand => "wand",
+        _ => "square-dashed",
+    }
+}
+
+/// A row of pill-shaped segmented buttons; returns the clicked index.
+fn segmented(ui: &mut Ui, labels: &[&str], selected: usize) -> Option<usize> {
+    let t = Tokens::get(ui.ctx());
+    let mut clicked = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        for (i, l) in labels.iter().enumerate() {
+            let sel = i == selected;
+            let text = RichText::new(*l).font(theme::medium(12.0)).color(if sel {
+                t.on_accent
+            } else {
+                t.fg_muted
+            });
+            let b = egui::Button::new(text)
+                .fill(if sel { t.accent } else { t.field })
+                .corner_radius(t.radius_sm)
+                .min_size(vec2(62.0, 26.0));
+            if ui.add(b).clicked() {
+                clicked = Some(i);
+            }
+        }
+    });
+    clicked
+}
+
+fn selection(app: &mut App, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    ui.set_width(300.0);
+    widgets::section_label(ui, "Select");
+    ui.horizontal(|ui| {
+        for (tool, name) in [
+            (Tool::SelectRect, "Rectangle (M)"),
+            (Tool::SelectEllipse, "Ellipse"),
+            (Tool::SelectLasso, "Lasso (L)"),
+            (Tool::SelectPoly, "Polygon"),
+            (Tool::SelectWand, "Magic wand (W)"),
+        ] {
+            if icons::button(
+                ui,
+                select_icon(tool),
+                36.0,
+                app.session.tool() == tool,
+                name,
+            )
+            .clicked()
+            {
+                app.set_tool(tool);
+            }
+        }
+    });
+    ui.add_space(4.0);
+    let modes = [
+        onepaint_engine::SelectMode::Replace,
+        onepaint_engine::SelectMode::Add,
+        onepaint_engine::SelectMode::Subtract,
+        onepaint_engine::SelectMode::Intersect,
+    ];
+    let cur = modes
+        .iter()
+        .position(|m| *m == app.canvas.options.select_mode)
+        .unwrap_or(0);
+    if let Some(i) = segmented(ui, &["New", "Add", "Subtract", "Intersect"], cur) {
+        app.canvas.options.select_mode = modes[i];
+    }
+    ui.label(
+        RichText::new("Shift adds · Alt subtracts · Shift+Alt intersects")
+            .font(theme::medium(10.5))
+            .color(t.fg_faint),
+    );
+    if app.session.tool() == Tool::SelectWand {
+        ui.add_space(4.0);
+        let mut tol = app.canvas.options.wand_tolerance * 100.0;
+        if widgets::slider_row(ui, "Tolerance", &mut tol, 0.0..=100.0, |v| {
+            format!("{v:.0}")
+        })
+        .changed()
+        {
+            app.canvas.options.wand_tolerance = tol / 100.0;
+        }
+        ui.horizontal(|ui| {
+            widgets::toggle(ui, &mut app.canvas.options.wand_contiguous, "Contiguous");
+            widgets::toggle(ui, &mut app.canvas.options.wand_sample_all, "All layers");
+        });
+    }
+    if app.session.tool() == Tool::SelectPoly {
+        ui.label(
+            RichText::new(
+                "Click to add points · click the first point or Enter to close · Esc cancels",
+            )
+            .font(theme::medium(10.5))
+            .color(t.fg_faint),
+        );
+    }
+    widgets::hairline(ui);
+    let mut feather = app.session.feather();
+    if widgets::slider_row(ui, "Feather", &mut feather, 0.0..=50.0, |v| {
+        format!("{v:.0} px")
+    })
+    .changed()
+    {
+        let _ = app.session.execute(Command::SetFeather {
+            radius: feather.round(),
+        });
+    }
+    let has = app.session.selection().is_some();
+    let mut act = |ui: &mut Ui, icon: &str, label: &str, key: &str, cmd: Command, enabled: bool| {
+        ui.add_enabled_ui(enabled, |ui| {
+            if widgets::menu_item(ui, Some(icon), label, key).clicked() {
+                let _ = app.session.execute(cmd);
+            }
+        });
+    };
+    act(
+        ui,
+        "maximize-2",
+        "Select all",
+        "Ctrl+A",
+        Command::SelectAll,
+        true,
+    );
+    act(ui, "x", "Deselect", "Ctrl+D", Command::Deselect, has);
+    act(
+        ui,
+        "blend",
+        "Invert",
+        "Ctrl+Shift+I",
+        Command::InvertSelection,
+        has,
+    );
+    act(
+        ui,
+        "plus",
+        "Grow 2 px",
+        "",
+        Command::GrowSelection { delta: 2 },
+        has,
+    );
+    act(
+        ui,
+        "minus",
+        "Shrink 2 px",
+        "",
+        Command::GrowSelection { delta: -2 },
+        has,
+    );
+    act(
+        ui,
+        "circle-dashed",
+        "Smooth",
+        "",
+        Command::SmoothSelection { px: 4.0 },
+        has,
+    );
+    act(
+        ui,
+        "paint-bucket",
+        "Fill with colour",
+        "Alt+Backspace",
+        Command::FillSelection,
+        has,
+    );
+    act(
+        ui,
+        "brush-cleaning",
+        "Clear",
+        "Delete",
+        Command::ClearSelected,
+        true,
+    );
+}
+
+fn fill_options(app: &mut App, ui: &mut Ui) {
+    ui.set_width(260.0);
+    widgets::section_label(ui, "Fill");
+    let mut tol = app.canvas.options.fill_tolerance * 100.0;
+    if widgets::slider_row(ui, "Tolerance", &mut tol, 0.0..=100.0, |v| {
+        format!("{v:.0}")
+    })
+    .changed()
+    {
+        app.canvas.options.fill_tolerance = tol / 100.0;
+    }
+    let mut grow = app.canvas.options.fill_grow as f32;
+    if widgets::slider_row(ui, "Grow", &mut grow, 0.0..=8.0, |v| format!("{v:.0} px")).changed() {
+        app.canvas.options.fill_grow = grow.round() as u32;
+    }
 }

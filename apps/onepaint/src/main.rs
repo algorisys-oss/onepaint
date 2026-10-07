@@ -38,6 +38,8 @@ pub enum Popover {
     Color,
     NewDoc,
     Confirm,
+    Selection,
+    Fill,
 }
 
 /// An action that would discard unsaved work.
@@ -66,6 +68,7 @@ pub struct App {
     pub debug: debug::Debug,
     title: String,
     pub pending: Option<Pending>,
+    pub last_select_tool: Tool,
     allow_close: bool,
 }
 
@@ -103,6 +106,7 @@ impl App {
             debug,
             title: String::new(),
             pending: None,
+            last_select_tool: Tool::SelectRect,
             allow_close: false,
         };
         if let Some(p) = open {
@@ -239,6 +243,20 @@ impl App {
         }
     }
 
+    pub fn set_tool(&mut self, tool: Tool) {
+        if matches!(
+            tool,
+            Tool::SelectRect
+                | Tool::SelectEllipse
+                | Tool::SelectLasso
+                | Tool::SelectPoly
+                | Tool::SelectWand
+        ) {
+            self.last_select_tool = tool;
+        }
+        let _ = self.session.execute(Command::SetTool { tool });
+    }
+
     pub fn toggle_theme(&mut self, ctx: &egui::Context) {
         self.theme = self.theme.toggled();
         onepaint_ui_kit::theme::apply(ctx, self.theme);
@@ -293,6 +311,33 @@ impl App {
             self.canvas.view.zoom_at(c, 0.8);
         }
         if !typing {
+            if sc(cmd | Modifiers::SHIFT, Key::I) {
+                let _ = self.session.execute(Command::InvertSelection);
+            }
+            if sc(cmd, Key::A) {
+                let _ = self.session.execute(Command::SelectAll);
+            }
+            if sc(cmd, Key::D) {
+                self.canvas.cancel_poly();
+                let _ = self.session.execute(Command::Deselect);
+            }
+            if sc(Modifiers::ALT, Key::Backspace) {
+                let _ = self.session.execute(Command::FillSelection);
+            }
+            if sc(Modifiers::NONE, Key::Delete) || sc(Modifiers::NONE, Key::Backspace) {
+                let _ = self.session.execute(Command::ClearSelected);
+            }
+            for (key, tool) in [
+                (Key::M, Tool::SelectRect),
+                (Key::L, Tool::SelectLasso),
+                (Key::W, Tool::SelectWand),
+                (Key::G, Tool::Fill),
+                (Key::I, Tool::Eyedropper),
+            ] {
+                if sc(Modifiers::NONE, key) {
+                    self.set_tool(tool);
+                }
+            }
             if sc(Modifiers::NONE, Key::B) {
                 let _ = self.session.execute(Command::SetTool { tool: Tool::Brush });
             }
@@ -318,7 +363,7 @@ impl App {
             if sc(Modifiers::NONE, Key::Tab) {
                 self.hide_ui = !self.hide_ui;
             }
-            if sc(Modifiers::NONE, Key::Escape) {
+            if sc(Modifiers::NONE, Key::Escape) && !self.canvas.cancel_poly() {
                 self.popover = None;
             }
         }
@@ -524,5 +569,108 @@ mod tests {
         h.run();
         assert_eq!(h.state().session.doc().width, 640);
         assert_eq!(h.state().popover, None);
+    }
+
+    fn key(h: &mut Harness<'_, App>, key: egui::Key, modifiers: egui::Modifiers) {
+        h.event(Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        });
+        h.step();
+    }
+
+    fn click(h: &mut Harness<'_, App>, p: egui::Pos2) {
+        h.event(Event::PointerMoved(p));
+        h.step();
+        press(h, p, true);
+        press(h, p, false);
+    }
+
+    #[test]
+    fn rect_select_then_paint_is_clipped_and_delete_clears() {
+        let mut h = harness();
+        h.run();
+        key(&mut h, egui::Key::M, egui::Modifiers::NONE);
+        assert_eq!(h.state().session.tool(), Tool::SelectRect);
+        drag_stroke(&mut h, pos2(600.0, 300.0), pos2(700.0, 500.0));
+        let sel = h.state().session.selection().cloned().expect("a selection");
+        let inside = h.state().canvas.view.screen_to_doc([650.0, 400.0]);
+        let outside = h.state().canvas.view.screen_to_doc([500.0, 400.0]);
+        assert_eq!(sel.get(inside[0] as u32, inside[1] as u32), 255);
+        assert_eq!(sel.get(outside[0] as u32, outside[1] as u32), 0);
+        key(&mut h, egui::Key::B, egui::Modifiers::NONE);
+        drag_stroke(&mut h, pos2(450.0, 400.0), pos2(800.0, 400.0));
+        let app = h.state();
+        let layer = app.session.doc().layer(app.session.active()).unwrap();
+        assert!(layer.pixels.get(inside[0] as i32, inside[1] as i32)[3] > 0.5);
+        assert_eq!(
+            layer.pixels.get(outside[0] as i32, outside[1] as i32)[3],
+            0.0
+        );
+        key(&mut h, egui::Key::Delete, egui::Modifiers::NONE);
+        let app = h.state();
+        assert_eq!(
+            app.session
+                .doc()
+                .layer(app.session.active())
+                .unwrap()
+                .pixels
+                .get(inside[0] as i32, inside[1] as i32)[3],
+            0.0
+        );
+        key(&mut h, egui::Key::D, egui::Modifiers::COMMAND);
+        assert!(h.state().session.selection().is_none());
+    }
+
+    #[test]
+    fn polygon_select_closes_with_enter() {
+        let mut h = harness();
+        h.run();
+        h.state_mut().set_tool(Tool::SelectPoly);
+        for p in [pos2(500.0, 300.0), pos2(700.0, 300.0), pos2(700.0, 500.0)] {
+            click(&mut h, p);
+        }
+        assert!(h.state().session.selection().is_none(), "not committed yet");
+        key(&mut h, egui::Key::Enter, egui::Modifiers::NONE);
+        let d = h.state().canvas.view.screen_to_doc([660.0, 350.0]);
+        assert_eq!(
+            h.state()
+                .session
+                .selection()
+                .expect("polygon")
+                .get(d[0] as u32, d[1] as u32),
+            255
+        );
+    }
+
+    #[test]
+    fn fill_tool_and_eyedropper() {
+        let mut h = harness();
+        h.run();
+        let bg = h.state().session.doc().root[0].id().to_string();
+        let _ = h
+            .state_mut()
+            .session
+            .execute(Command::SetActiveLayer { id: bg });
+        h.state_mut().set_color(Rgba::new(1.0, 0.0, 0.0, 1.0));
+        key(&mut h, egui::Key::G, egui::Modifiers::NONE);
+        click(&mut h, pos2(600.0, 400.0));
+        let d = h.state().canvas.view.screen_to_doc([600.0, 400.0]);
+        let px = h
+            .state()
+            .session
+            .doc()
+            .layer(h.state().session.active())
+            .unwrap()
+            .pixels
+            .get(d[0] as i32, d[1] as i32);
+        assert!(px[0] > 0.99 && px[1] < 0.01, "filled red {px:?}");
+        h.state_mut().set_color(Rgba::BLACK);
+        key(&mut h, egui::Key::I, egui::Modifiers::NONE);
+        click(&mut h, pos2(600.0, 400.0));
+        assert_eq!(h.state().session.color().to_hex(), "#ff0000");
     }
 }

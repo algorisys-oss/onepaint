@@ -34,6 +34,7 @@ impl Debug {
                 "color" => Some(Popover::Color),
                 "menu" => Some(Popover::Menu),
                 "new" => Some(Popover::NewDoc),
+                "selection" => Some(Popover::Selection),
                 _ => None,
             }),
             exit: var("ONEPAINT_EXIT").is_some(),
@@ -91,6 +92,19 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
         let _ = app.session.execute(Command::SetBrush {
             preset_id: "hard-round".into(),
         });
+        if app.debug.popover == Some(Popover::Selection) {
+            let (w, h) = (
+                app.session.doc().width as f64,
+                app.session.doc().height as f64,
+            );
+            let contour =
+                onepaint_selection::ellipse_polygon([w * 0.3, h * 0.2], [w * 0.7, h * 0.75]);
+            let _ = app.session.execute(Command::SelectShape {
+                contours: vec![contour],
+                mode: onepaint_selection::Mode::Replace,
+            });
+            app.set_tool(onepaint_engine::Tool::SelectEllipse);
+        }
     }
     if frame == 3 && app.debug.popover.is_some() {
         app.popover = app.debug.popover;

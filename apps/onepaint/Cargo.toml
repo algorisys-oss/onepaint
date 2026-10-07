@@ -25,6 +25,7 @@ log = { workspace = true }
 env_logger = "0.11"
 rfd = "0.17"
 onepaint-formats = { workspace = true }
+onepaint-selection = { workspace = true }
 
 [dev-dependencies]
 egui_kittest = { workspace = true, features = ["eframe"] }

@@ -408,6 +408,23 @@ impl Session {
         onepaint_compose::flatten(&self.doc, None)
     }
 
+    /// Eyedropper: the composite colour at a canvas pixel, or `None` outside the
+    /// canvas or where it is fully transparent (happypaint `pickColor`).
+    pub fn sample_color(&self, x: i32, y: i32) -> Option<Rgba> {
+        if x < 0 || y < 0 || x as u32 >= self.doc.width || y as u32 >= self.doc.height {
+            return None;
+        }
+        let (tx, ty) = onepaint_raster::tile_of(x, y);
+        let b = composite_tile(&self.doc, tx, ty, None);
+        let i = (((y - ty * TILE) * TILE + (x - tx * TILE)) * 4) as usize;
+        if b[i + 3] <= 0.0 {
+            return None;
+        }
+        let mut c = Rgba::from_linear_premul([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+        c.a = 1.0;
+        Some(c)
+    }
+
     /// Eyedropper on the composite.
     pub fn pick_color(&self, x: i32, y: i32) -> Rgba {
         let (tx, ty) = onepaint_raster::tile_of(x, y);

@@ -18,11 +18,14 @@ struct Uniforms {
     stage: vec4<f32>,
     checker_a: vec4<f32>,
     checker_b: vec4<f32>,
+    // x: has selection, y: time (s).
+    sel: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var tex: texture_2d<f32>;
 @group(0) @binding(2) var samp: sampler;
+@group(0) @binding(3) var sel_tex: texture_2d<f32>;
 
 @vertex
 fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
@@ -68,6 +71,25 @@ fn sample_doc(d: vec2<f32>) -> vec4<f32> {
     return acc / f32(n * n);
 }
 
+fn sel_at(p: vec2<i32>) -> f32 {
+    let c = clamp(p, vec2<i32>(0), vec2<i32>(u.doc_size) - vec2<i32>(1));
+    return textureLoad(sel_tex, c, 0).r;
+}
+
+// Marching ants on the selection's inner edge (happypaint compositor.ts:290-308):
+// a band of max(1, 2 / screen-scale) doc px, diagonal 6px black/white dashes moving at 24px/s.
+fn ants(d: vec2<f32>, pos: vec2<f32>) -> vec4<f32> {
+    let p = vec2<i32>(floor(d));
+    let b = i32(max(1.0, 2.0 / u.scale));
+    let m = sel_at(p);
+    let n = min(min(sel_at(p + vec2<i32>(b, 0)), sel_at(p - vec2<i32>(b, 0))), min(sel_at(p + vec2<i32>(0, b)), sel_at(p - vec2<i32>(0, b))));
+    if (m >= 0.5 && n <= 0.5) {
+        let k = (pos.x + pos.y + u.sel.y * 24.0) % 12.0;
+        return vec4<f32>(select(vec3<f32>(1.0), vec3<f32>(0.0), k < 6.0), 1.0);
+    }
+    return vec4<f32>(0.0);
+}
+
 @fragment
 fn fs_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let d = to_doc(pos.xy);
@@ -85,6 +107,10 @@ fn fs_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
         }
         // Over the checker in display (gamma) space, like happypaint's present.
         display = s * p.a + chk * (1.0 - p.a);
+        if (u.sel.x > 0.5) {
+            let a = ants(d, pos.xy);
+            display = mix(display, a.rgb, a.a);
+        }
     }
     if (u.srgb_target > 0.5) {
         return vec4<f32>(srgb2lin(display), 1.0);
