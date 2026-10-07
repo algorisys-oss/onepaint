@@ -2316,7 +2316,9 @@ dependencies = [
  "onepaint-color",
  "onepaint-raster",
  "onepaint-stroke",
+ "rayon",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

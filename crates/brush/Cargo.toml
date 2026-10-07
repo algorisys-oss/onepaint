@@ -13,3 +13,5 @@ onepaint-raster = { workspace = true }
 onepaint-color = { workspace = true }
 onepaint-stroke = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
+rayon = { workspace = true }
