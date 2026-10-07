@@ -7,6 +7,7 @@ pub mod blend;
 
 use blend::{blend_px, blend_px_alpha_lock, clip_over};
 use onepaint_doc::{BlendMode, Document, Layer, Node};
+use onepaint_filters::Frame;
 use onepaint_raster::{Px, Rect, Surface, TILE, TILE_PX, Tile};
 use rayon::prelude::*;
 
@@ -147,14 +148,14 @@ fn draw_clipped(fam: &mut [f32], riders: &[Node], tx: i32, ty: i32, ov: Option<&
     }
 }
 
-fn composite_nodes(nodes: &[Node], tx: i32, ty: i32, target: &mut Buf, ov: Option<&StrokeOverlay>) {
+fn composite_nodes(nodes: &[Node], tx: i32, ty: i32, target: &mut Buf, ov: Option<&StrokeOverlay>, frame: Frame) {
     let mut i = 0;
     while i < nodes.len() {
         // An adjustment layer is never a clip base: following clipped layers render plainly.
         if let Node::Layer(l) = &nodes[i]
             && let Some(adj) = &l.adjustment
         {
-            draw_adjustment(target, l, adj, tx, ty);
+            draw_adjustment(target, l, adj, tx, ty, frame);
             i += 1;
             continue;
         }
@@ -163,7 +164,7 @@ fn composite_nodes(nodes: &[Node], tx: i32, ty: i32, target: &mut Buf, ov: Optio
             Node::Group(g) => {
                 if g.visible && g.opacity > 0.0 && !g.children.is_empty() {
                     let mut buf = zeros();
-                    composite_nodes(&g.children, tx, ty, &mut buf, ov);
+                    composite_nodes(&g.children, tx, ty, &mut buf, ov, frame);
                     draw_clipped(&mut buf, &nodes[i + 1..j], tx, ty, ov);
                     blend_into(target, &buf, g.blend_mode, g.opacity);
                 }
@@ -192,12 +193,13 @@ fn composite_nodes(nodes: &[Node], tx: i32, ty: i32, target: &mut Buf, ov: Optio
 /// Adjustment layer (happypaint `applyAdjustmentLayer`, C:1604-1638): adjust the
 /// backdrop, apply the layer mask, then composite with the layer's mode and opacity.
 /// Only per-pixel kinds can run per tile; spatial kinds are skipped for now.
-fn draw_adjustment(target: &mut Buf, l: &Layer, adj: &onepaint_doc::Adjustment, tx: i32, ty: i32) {
+/// Fill kinds ignore the backdrop and cover it (happypaint fill layers).
+fn draw_adjustment(target: &mut Buf, l: &Layer, adj: &onepaint_doc::Adjustment, tx: i32, ty: i32, frame: Frame) {
     if !l.visible || l.opacity <= 0.0 {
         return;
     }
     let Some(kind) = onepaint_filters::Kind::parse(&adj.kind).filter(|k| k.is_color()) else { return };
-    let prepared = onepaint_filters::prepare(kind, &adj.params);
+    let prepared = onepaint_filters::prepare_in(kind, &adj.params, frame);
     let mask = if l.mask_enabled { l.mask.as_ref().map(|m| m.tile(tx, ty).map(|t| t.to_f32())) } else { None };
     if let Some(None) = mask {
         return; // fully masked out on this tile
@@ -231,10 +233,15 @@ fn draw_layer(target: &mut Buf, l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeO
     blend_into(target, &c, l.blend_mode, l.opacity);
 }
 
+/// The document as a filter frame (size and DPI for tone and fill layers).
+fn doc_frame(doc: &Document) -> Frame {
+    Frame::region(0, 0, doc.width, doc.height, doc.dpi as f32)
+}
+
 /// Composite one tile as premultiplied linear f32.
 pub fn composite_tile(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverlay>) -> Buf {
     let mut buf = zeros();
-    composite_nodes(&doc.root, tx, ty, &mut buf, ov);
+    composite_nodes(&doc.root, tx, ty, &mut buf, ov, doc_frame(doc));
     buf
 }
 
