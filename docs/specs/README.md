@@ -20,3 +20,9 @@ The happypaint references are relative to `../happypaint/frontend/src/`.
 | 05 | [.happypaint v9 and PNG](05-file-format.md) | formats |
 | 06 | [Engine API](06-engine.md) | engine |
 | 07 | [Canvas, view and UI](07-canvas-ui.md) | gpu, ui_kit, apps/onepaint |
+| 08 | [Selection, fill, eyedropper](08-selection-fill.md) | selection, engine, app |
+| 09 | [Transform, import, clipboard, layer DnD](09-transform-import.md) | engine, formats, app |
+| 10 | [Adjustments and filters](10-adjustments.md) | filters, compose, engine |
+| 11 | [Layer masks](11-masks.md) | compose, engine |
+| 12 | [Gradient, shape, quick-shape](12-gradient-shape.md) | filters, stroke, engine |
+| 13 | [GPU compositor (design)](13-gpu-compositor.md) | gpu |
