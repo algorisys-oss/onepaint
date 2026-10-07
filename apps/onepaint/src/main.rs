@@ -1,5 +1,6 @@
 //! onepaint desktop app: a thin egui shell over `onepaint_engine::Session`.
 
+mod autosave;
 mod canvas;
 mod chrome;
 mod clip;
@@ -43,6 +44,7 @@ pub enum Popover {
     Fill,
     CanvasSize,
     ImageSize,
+    Recover,
 }
 
 /// An action that would discard unsaved work.
@@ -78,6 +80,9 @@ pub struct App {
     pub layer_drag: Option<String>,
     /// Canvas/image size dialog state: size, anchor (col, row), keep aspect.
     pub size_dialog: ([u32; 2], (u8, u8), bool),
+    pub autosave: autosave::Autosave,
+    /// A leftover autosave offered for recovery at launch.
+    pub recover: Option<PathBuf>,
     /// A file chosen by drag-and-drop, opened once unsaved work is dealt with.
     pub open_later: Option<PathBuf>,
     allow_close: bool,
@@ -122,11 +127,16 @@ impl App {
             clipboard: clip::Clipboard::default(),
             layer_drag: None,
             size_dialog: ([0, 0], (1, 1), true),
+            autosave: autosave::Autosave::new(if cfg!(test) { None } else { autosave::dir() }),
+            recover: None,
             open_later: None,
             allow_close: false,
         };
         if let Some(p) = open {
             app.open_path(p);
+        } else if let Some(p) = app.autosave.leftover() {
+            app.recover = Some(p);
+            app.popover = Some(Popover::Recover);
         }
         app
     }
@@ -156,6 +166,8 @@ impl App {
     }
 
     pub fn new_document(&mut self, w: u32, h: u32) {
+        let id = self.session.doc().id.clone();
+        self.autosave.clear(&id);
         self.session
             .replace_document(onepaint_doc::Document::new(w, h, Some(Rgba::WHITE)));
         self.canvas.reset_for([w, h]);
@@ -207,6 +219,9 @@ impl App {
 
     pub fn perform(&mut self, action: Pending, ctx: &egui::Context) {
         self.pending = None;
+        // The user saved or chose to discard: the current autosave is obsolete.
+        let id = self.session.doc().id.clone();
+        self.autosave.clear(&id);
         self.popover = None;
         match action {
             Pending::New(w, h) => self.new_document(w, h),
@@ -275,6 +290,8 @@ impl App {
         {
             Ok(()) => {
                 self.saved_history_len = Some(self.session.history_len());
+                let id = self.session.doc().id.clone();
+                self.autosave.clear(&id);
                 self.notify(format!("Saved {}", path.display()), now);
                 self.path = Some(path);
             }
@@ -522,6 +539,17 @@ impl eframe::App for App {
                 }
                 _ => {}
             }
+        }
+        let now = ctx.input(|i| i.time);
+        let (dirty, busy) = (
+            self.dirty(),
+            self.session.is_stroking() || self.session.transform_active(),
+        );
+        let doc = &self.session;
+        self.autosave
+            .tick(now, dirty, || (!busy).then(|| doc.doc().clone()));
+        if dirty {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(autosave::INTERVAL_S));
         }
         let doc_size = [self.session.doc().width, self.session.doc().height];
         if self.canvas.doc_size != doc_size {

@@ -24,6 +24,7 @@ egui = { workspace = true }
 log = { workspace = true }
 env_logger = "0.11"
 rfd = "0.17"
+directories = "6"
 arboard = { version = "3.6", default-features = false, features = ["wayland-data-control"] }
 onepaint-formats = { workspace = true }
 onepaint-selection = { workspace = true }

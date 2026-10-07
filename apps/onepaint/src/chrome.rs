@@ -52,6 +52,13 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 Align2::CENTER_CENTER,
                 |ui| image_size(app, ui),
             ),
+            Popover::Recover => popover_at(
+                ctx,
+                "recover",
+                screen.center(),
+                Align2::CENTER_CENTER,
+                |ui| recover(app, ui),
+            ),
             Popover::Fill => popover_at(ctx, "fill", anchor, Align2::RIGHT_TOP, |ui| {
                 fill_options(app, ui)
             }),
@@ -1426,4 +1433,36 @@ fn image_size(app: &mut App, ui: &mut Ui) {
             height: h,
         },
     );
+}
+
+fn recover(app: &mut App, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    ui.set_width(340.0);
+    ui.label(
+        RichText::new("Recover unsaved work?")
+            .font(theme::semibold(16.0))
+            .color(t.fg),
+    );
+    ui.label(
+        RichText::new("onepaint found an autosave from a session that didn't close cleanly.")
+            .color(t.fg_muted),
+    );
+    ui.add_space(12.0);
+    ui.horizontal(|ui| {
+        if widgets::primary_button(ui, "Recover", 110.0).clicked()
+            && let Some(p) = app.recover.take()
+        {
+            app.open_path(p);
+            // Recovered work is unsaved: Save asks for a location.
+            app.path = None;
+            app.saved_history_len = None;
+            app.popover = None;
+        }
+        if widgets::secondary_button(ui, "Discard", 90.0).clicked() {
+            if let Some(p) = app.recover.take() {
+                let _ = std::fs::remove_file(p);
+            }
+            app.popover = None;
+        }
+    });
 }
