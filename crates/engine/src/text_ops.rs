@@ -106,5 +106,8 @@ impl Session {
         if self.is_text_layer(&id) {
             let _ = self.rasterize_text(&id);
         }
+        if self.is_path_layer(&id) {
+            let _ = self.rasterize_path(&id);
+        }
     }
 }

@@ -11,6 +11,7 @@ pub mod guides;
 mod liquify_ops;
 mod mask_ops;
 mod paint_ops;
+pub mod path_ops;
 mod saved_selection_ops;
 mod selection_ops;
 mod smudge_ops;
@@ -155,6 +156,32 @@ pub enum Command {
         #[serde(default)]
         mode: onepaint_selection::Mode,
     },
+    CreatePathLayer {
+        spec: Box<onepaint_stroke::bezier::PathSpec>,
+    },
+    AddPathObject {
+        id: NodeId,
+        spec: Box<onepaint_stroke::bezier::PathSpec>,
+    },
+    /// Replace one path object (`None` removes it); live edits coalesce.
+    UpdatePathObject {
+        id: NodeId,
+        index: usize,
+        spec: Option<Box<onepaint_stroke::bezier::PathSpec>>,
+    },
+    RasterizePath {
+        id: NodeId,
+    },
+    SelectFromPath {
+        #[serde(default)]
+        mode: onepaint_selection::Mode,
+    },
+    FillPath,
+    StrokePath {
+        tool: path_ops::StrokePathTool,
+        simulate_pressure: bool,
+    },
+    MaskFromPath,
     SetSmudgeStrength {
         strength: f64,
     },
@@ -944,6 +971,14 @@ impl Session {
                 Ok(())
             }
             Command::SaveSelection { name } => self.save_selection(name),
+            Command::CreatePathLayer { spec } => self.create_path_layer(*spec),
+            Command::AddPathObject { id, spec } => self.add_path_object(&id, *spec),
+            Command::UpdatePathObject { id, index, spec } => self.update_path_object(&id, index, spec.map(|s| *s)),
+            Command::RasterizePath { id } => self.rasterize_path(&id),
+            Command::SelectFromPath { mode } => self.select_from_path(mode),
+            Command::FillPath => self.fill_path(),
+            Command::StrokePath { tool, simulate_pressure } => self.stroke_path(tool, simulate_pressure),
+            Command::MaskFromPath => self.mask_from_path(),
             Command::DeleteSavedSelection { id } => {
                 self.delete_saved_selection(&id);
                 Ok(())
