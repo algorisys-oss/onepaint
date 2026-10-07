@@ -103,7 +103,7 @@ crates/
   raster/      tiled Surface, Tile, pixel formats, premultiply. No GPU.
   color/       color spaces, Kubelka–Munk pigment, CMYK, ICC, median-cut
   doc/         pure-data Document, layer tree, masks, clipping, object specs
-  history/     undo/redo: tile snapshots plus pixel deltas
+  history/     undo/redo stacks (entry cap, byte budget, transactions)
   stroke/      smoothing, stabilizer, bezier, quick-shape, symmetry
   brush/       presets, dynamics, tips, grain, stamp planning (CPU side)
   selection/   rasterize, feather, grow, magic wand, flood fill
@@ -116,7 +116,6 @@ crates/
   engine/      Session facade: command API, tools, events. No UI imports.
   cloud/       provider trait; Google Drive via a loopback OAuth/PKCE flow
   ui_kit/      design system: theme tokens, fonts, icons, motion, all widgets
-  history/     generic undo stacks (entry cap, byte budget, transactions)
 apps/
   onepaint/        eframe app (UI only)
   onepaint-cli/    headless: render, convert and replay recordings
