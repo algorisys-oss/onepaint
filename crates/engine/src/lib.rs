@@ -4,6 +4,8 @@
 //! drained [`Event`]s, mirroring happypaint's store handlers, `PaintSink`
 //! and engine callbacks. No UI or GPU code lives here.
 
+pub mod view;
+
 use onepaint_brush::{BrushPreset, StrokeEngine, rasterize_dab};
 use onepaint_color::Rgba;
 use onepaint_compose::{StrokeMode, StrokeOverlay, apply_stroke_px, composite_tile};

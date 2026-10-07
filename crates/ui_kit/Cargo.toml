@@ -11,4 +11,4 @@ workspace = true
 [dependencies]
 egui = { workspace = true }
 egui_extras = { workspace = true, features = ["svg"] }
-serde = { workspace = true }
+onepaint-color = { workspace = true }

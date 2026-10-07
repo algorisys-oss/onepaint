@@ -1,0 +1,482 @@
+// Adapted from photocraft (MIT/Apache-2.0): crates/ui-egui/src/widgets.rs
+//! onepaint widgets: glass panels, thin sliders with round knobs, value fields,
+//! toggles, buttons, swatches and an HSV colour picker.
+
+use crate::theme::{self, Tokens};
+use egui::{
+    Align2, Color32, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2, pos2, vec2,
+};
+use onepaint_color::Rgba;
+
+/// A floating, translucent, rounded panel with a soft shadow.
+pub fn glass_frame(ui: &Ui) -> egui::Frame {
+    let t = Tokens::get(ui.ctx());
+    egui::Frame::new()
+        .fill(t.glass)
+        .stroke(Stroke::new(1.0, t.border.gamma_multiply(0.8)))
+        .corner_radius(t.radius_lg)
+        .inner_margin(egui::Margin::same(6))
+        .shadow(egui::Shadow {
+            offset: [0, 8],
+            blur: 28,
+            spread: 0,
+            color: t.shadow,
+        })
+}
+
+/// An opaque popover panel.
+pub fn popover_frame(ui: &Ui) -> egui::Frame {
+    let t = Tokens::get(ui.ctx());
+    egui::Frame::new()
+        .fill(t.panel)
+        .stroke(Stroke::new(1.0, t.border))
+        .corner_radius(t.radius_lg)
+        .inner_margin(egui::Margin::same(12))
+        .shadow(egui::Shadow {
+            offset: [0, 12],
+            blur: 36,
+            spread: 0,
+            color: t.shadow,
+        })
+}
+
+pub fn section_label(ui: &mut Ui, text: &str) {
+    let t = Tokens::get(ui.ctx());
+    ui.label(
+        egui::RichText::new(text.to_uppercase())
+            .font(theme::medium(10.5))
+            .color(t.fg_faint),
+    );
+}
+
+pub fn hairline(ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
+    ui.painter()
+        .hline(rect.x_range(), rect.center().y, Stroke::new(1.0, t.border));
+}
+
+pub fn vline(ui: &mut Ui, height: f32) {
+    let t = Tokens::get(ui.ctx());
+    let (rect, _) = ui.allocate_exact_size(vec2(9.0, height), Sense::hover());
+    ui.painter().vline(
+        rect.center().x,
+        rect.y_range().shrink(4.0),
+        Stroke::new(1.0, t.border),
+    );
+}
+
+/// Transparency checkerboard.
+pub fn checker(painter: &egui::Painter, rect: Rect, cell: f32) {
+    let t = Tokens::get(painter.ctx());
+    painter.rect_filled(rect, 0.0, t.checker_b);
+    let (nx, ny) = (
+        (rect.width() / cell).ceil() as i32,
+        (rect.height() / cell).ceil() as i32,
+    );
+    for y in 0..ny {
+        for x in 0..nx {
+            if (x + y) % 2 == 0 {
+                let r = Rect::from_min_size(
+                    rect.min + vec2(x as f32 * cell, y as f32 * cell),
+                    Vec2::splat(cell),
+                )
+                .intersect(rect);
+                painter.rect_filled(r, 0.0, t.checker_a);
+            }
+        }
+    }
+}
+
+fn knob(painter: &egui::Painter, center: Pos2, hovered: bool, t: &Tokens) {
+    painter.circle_filled(center + vec2(0.0, 1.0), 7.5, Color32::from_black_alpha(90));
+    painter.circle_filled(center, 7.0, Color32::WHITE);
+    if hovered {
+        painter.circle_stroke(center, 10.0, Stroke::new(3.0, t.accent_soft));
+    }
+}
+
+/// Thin-track horizontal slider with a round knob. `gradient` paints the track.
+pub fn slider(
+    ui: &mut Ui,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    gradient: Option<&[Color32]>,
+) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let width = ui.available_width().max(60.0);
+    let (rect, mut resp) = ui.allocate_exact_size(vec2(width, 20.0), Sense::click_and_drag());
+    let (lo, hi) = (*range.start(), *range.end());
+    let track = Rect::from_center_size(
+        rect.center(),
+        vec2(
+            rect.width() - 16.0,
+            if gradient.is_some() { 8.0 } else { 4.0 },
+        ),
+    );
+    if let Some(p) = resp.interact_pointer_pos()
+        && (resp.dragged() || resp.clicked())
+    {
+        let f = ((p.x - track.left()) / track.width()).clamp(0.0, 1.0);
+        let nv = lo + f * (hi - lo);
+        if (nv - *value).abs() > f32::EPSILON {
+            *value = nv;
+            resp.mark_changed();
+        }
+    }
+    let f = ((*value - lo) / (hi - lo)).clamp(0.0, 1.0);
+    let kx = track.left() + f * track.width();
+    let painter = ui.painter();
+    match gradient {
+        Some(colors) if colors.len() >= 2 => gradient_rect(painter, track, colors, false, 4.0),
+        _ => {
+            painter.rect_filled(track, 2.0, t.border);
+            painter.rect_filled(
+                Rect::from_min_max(track.min, pos2(kx, track.max.y)),
+                2.0,
+                t.accent,
+            );
+        }
+    }
+    knob(
+        painter,
+        pos2(kx, rect.center().y),
+        resp.hovered() || resp.dragged(),
+        &t,
+    );
+    resp
+}
+
+/// Vertical slider for the side rail (top = max), Procreate style.
+pub fn vslider(
+    ui: &mut Ui,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    height: f32,
+    tooltip: &str,
+) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let (rect, mut resp) = ui.allocate_exact_size(vec2(28.0, height), Sense::click_and_drag());
+    let (lo, hi) = (*range.start(), *range.end());
+    let track = Rect::from_center_size(rect.center(), vec2(6.0, rect.height() - 16.0));
+    if let Some(p) = resp.interact_pointer_pos()
+        && (resp.dragged() || resp.clicked())
+    {
+        let f = ((track.bottom() - p.y) / track.height()).clamp(0.0, 1.0);
+        let nv = lo + f * (hi - lo);
+        if (nv - *value).abs() > f32::EPSILON {
+            *value = nv;
+            resp.mark_changed();
+        }
+    }
+    let f = ((*value - lo) / (hi - lo)).clamp(0.0, 1.0);
+    let ky = track.bottom() - f * track.height();
+    let painter = ui.painter();
+    painter.rect_filled(track, 3.0, t.border);
+    painter.rect_filled(
+        Rect::from_min_max(pos2(track.left(), ky), track.max),
+        3.0,
+        t.fg_muted,
+    );
+    knob(
+        painter,
+        pos2(rect.center().x, ky),
+        resp.hovered() || resp.dragged(),
+        &t,
+    );
+    if tooltip.is_empty() {
+        resp
+    } else {
+        resp.on_hover_text(tooltip)
+    }
+}
+
+/// `Label ........ value` above a full-width slider.
+pub fn slider_row(
+    ui: &mut Ui,
+    label: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    fmt: impl Fn(f32) -> String,
+) -> Response {
+    let t = Tokens::get(ui.ctx());
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(label).color(t.fg_muted));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(
+                egui::RichText::new(fmt(*value))
+                    .font(theme::mono(12.0))
+                    .color(t.fg),
+            );
+        });
+    });
+    slider(ui, value, range, None)
+}
+
+/// iOS-style toggle switch with a label.
+pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let mut resp = ui
+        .horizontal(|ui| {
+            let (rect, resp) = ui.allocate_exact_size(vec2(32.0, 18.0), Sense::click());
+            let how_on = ui.ctx().animate_bool(resp.id, *on);
+            let bg = if *on { t.accent } else { t.border };
+            ui.painter().rect_filled(rect, 9.0, bg);
+            let x = egui::lerp((rect.left() + 9.0)..=(rect.right() - 9.0), how_on);
+            ui.painter()
+                .circle_filled(pos2(x, rect.center().y), 7.0, Color32::WHITE);
+            ui.label(egui::RichText::new(label).color(if *on { t.fg } else { t.fg_muted }));
+            resp
+        })
+        .inner;
+    if resp.clicked() {
+        *on = !*on;
+        resp.mark_changed();
+    }
+    resp
+}
+
+/// Accent-filled primary button.
+pub fn primary_button(ui: &mut Ui, label: &str, min_width: f32) -> Response {
+    let t = Tokens::get(ui.ctx());
+    button_impl(ui, label, min_width, t.accent, t.on_accent, true)
+}
+
+pub fn secondary_button(ui: &mut Ui, label: &str, min_width: f32) -> Response {
+    let t = Tokens::get(ui.ctx());
+    button_impl(ui, label, min_width, t.field, t.fg, false)
+}
+
+fn button_impl(
+    ui: &mut Ui,
+    label: &str,
+    min_width: f32,
+    bg: Color32,
+    fg: Color32,
+    primary: bool,
+) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), theme::medium(13.0), fg);
+    let size = vec2((galley.size().x + 28.0).max(min_width), 32.0);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+    });
+    let fill = if resp.is_pointer_button_down_on() {
+        bg.gamma_multiply(0.85)
+    } else if resp.hovered() {
+        if primary {
+            bg.gamma_multiply(0.92)
+        } else {
+            t.bg_elevated
+        }
+    } else {
+        bg
+    };
+    ui.painter().rect_filled(rect, t.radius, fill);
+    if !primary {
+        ui.painter().rect_stroke(
+            rect,
+            t.radius,
+            Stroke::new(1.0, t.border),
+            StrokeKind::Inside,
+        );
+    }
+    if resp.has_focus() {
+        ui.painter().rect_stroke(
+            rect.expand(2.0),
+            t.radius + 2.0,
+            Stroke::new(2.0, t.accent),
+            StrokeKind::Outside,
+        );
+    }
+    ui.painter()
+        .galley(rect.center() - galley.size() / 2.0, galley, fg);
+    resp
+}
+
+/// A list/menu row: full width, hover highlight, optional leading icon.
+pub fn menu_item(ui: &mut Ui, icon: Option<&str>, label: &str, shortcut: &str) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let width = ui.available_width().max(200.0);
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, 30.0), Sense::click());
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+    });
+    if resp.hovered() {
+        ui.painter().rect_filled(rect, t.radius_sm, t.hover);
+    }
+    let mut x = rect.left() + 10.0;
+    if let Some(i) = icon {
+        crate::icons::paint(
+            ui,
+            Rect::from_center_size(pos2(x + 8.0, rect.center().y), Vec2::splat(16.0)),
+            i,
+            16.0,
+            t.fg_muted,
+        );
+        x += 26.0;
+    }
+    ui.painter().text(
+        pos2(x, rect.center().y),
+        Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(13.0),
+        t.fg,
+    );
+    if !shortcut.is_empty() {
+        ui.painter().text(
+            pos2(rect.right() - 10.0, rect.center().y),
+            Align2::RIGHT_CENTER,
+            shortcut,
+            theme::mono(11.0),
+            t.fg_faint,
+        );
+    }
+    resp
+}
+
+pub fn to_color32(c: Rgba) -> Color32 {
+    let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    Color32::from_rgba_unmultiplied(b(c.r), b(c.g), b(c.b), b(c.a))
+}
+
+/// A round colour swatch; clickable.
+pub fn swatch(ui: &mut Ui, color: Rgba, size: f32, selected: bool) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+    let c = rect.center();
+    let r = size / 2.0 - 2.0;
+    ui.painter().circle_filled(c, r, to_color32(color));
+    ui.painter()
+        .circle_stroke(c, r, Stroke::new(1.0, Color32::from_white_alpha(40)));
+    if selected || resp.hovered() {
+        ui.painter().circle_stroke(
+            c,
+            r + 2.0,
+            Stroke::new(2.0, if selected { t.fg } else { t.fg_muted }),
+        );
+    }
+    resp
+}
+
+fn gradient_rect(
+    painter: &egui::Painter,
+    r: Rect,
+    colors: &[Color32],
+    vertical: bool,
+    radius: f32,
+) {
+    let n = colors.len() - 1;
+    let mut mesh = egui::Mesh::default();
+    for (i, c) in colors.iter().enumerate() {
+        let f = i as f32 / n as f32;
+        let (a, b) = if vertical {
+            (
+                pos2(r.left(), r.top() + f * r.height()),
+                pos2(r.right(), r.top() + f * r.height()),
+            )
+        } else {
+            (
+                pos2(r.left() + f * r.width(), r.top()),
+                pos2(r.left() + f * r.width(), r.bottom()),
+            )
+        };
+        mesh.colored_vertex(a, *c);
+        mesh.colored_vertex(b, *c);
+        if i > 0 {
+            let k = (i * 2) as u32;
+            mesh.add_triangle(k - 2, k - 1, k);
+            mesh.add_triangle(k - 1, k + 1, k);
+        }
+    }
+    painter.add(mesh);
+    let _ = radius;
+}
+
+pub fn hue_stops() -> Vec<Color32> {
+    (0..=12)
+        .map(|i| to_color32(Rgba::from_hsv(i as f32 * 30.0, 1.0, 1.0, 1.0)))
+        .collect()
+}
+
+/// HSV state kept across frames so hue survives greys.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Hsv {
+    pub h: f32,
+    pub s: f32,
+    pub v: f32,
+}
+
+impl Hsv {
+    pub fn from_rgba(c: Rgba) -> Self {
+        let (h, s, v) = c.to_hsv();
+        Self { h, s, v }
+    }
+
+    pub fn to_rgba(self) -> Rgba {
+        Rgba::from_hsv(self.h, self.s, self.v, 1.0)
+    }
+}
+
+/// Saturation/value square plus a hue strip. Returns true when the colour changed.
+pub fn color_picker(ui: &mut Ui, hsv: &mut Hsv, size: f32) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let mut changed = false;
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click_and_drag());
+    // SV square: white→hue horizontally, multiplied by a black gradient vertically.
+    let steps = 24;
+    let mut mesh = egui::Mesh::default();
+    for yi in 0..=steps {
+        for xi in 0..=steps {
+            let (s, v) = (xi as f32 / steps as f32, 1.0 - yi as f32 / steps as f32);
+            let c = to_color32(Rgba::from_hsv(hsv.h, s, v, 1.0));
+            mesh.colored_vertex(
+                pos2(
+                    rect.left() + s * rect.width(),
+                    rect.top() + (1.0 - v) * rect.height(),
+                ),
+                c,
+            );
+        }
+    }
+    let row = (steps + 1) as u32;
+    for yi in 0..steps as u32 {
+        for xi in 0..steps as u32 {
+            let i = yi * row + xi;
+            mesh.add_triangle(i, i + 1, i + row);
+            mesh.add_triangle(i + 1, i + row + 1, i + row);
+        }
+    }
+    ui.painter().add(mesh);
+    ui.painter().rect_stroke(
+        rect,
+        t.radius_sm,
+        Stroke::new(1.0, t.border),
+        StrokeKind::Outside,
+    );
+    if let Some(p) = resp.interact_pointer_pos()
+        && (resp.dragged() || resp.clicked())
+    {
+        hsv.s = ((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+        hsv.v = 1.0 - ((p.y - rect.top()) / rect.height()).clamp(0.0, 1.0);
+        changed = true;
+    }
+    let m = pos2(
+        rect.left() + hsv.s * rect.width(),
+        rect.top() + (1.0 - hsv.v) * rect.height(),
+    );
+    ui.painter()
+        .circle_stroke(m, 7.0, Stroke::new(2.5, Color32::WHITE));
+    ui.painter()
+        .circle_stroke(m, 8.5, Stroke::new(1.0, Color32::from_black_alpha(120)));
+    ui.add_space(8.0);
+    let mut h = hsv.h;
+    if slider(ui, &mut h, 0.0..=360.0, Some(&hue_stops())).changed() {
+        hsv.h = h.min(359.99);
+        changed = true;
+    }
+    changed
+}

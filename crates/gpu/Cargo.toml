@@ -10,8 +10,11 @@ workspace = true
 
 [dependencies]
 onepaint-raster = { workspace = true }
-onepaint-doc = { workspace = true }
-onepaint-compose = { workspace = true }
 wgpu = { workspace = true, features = ["std", "wgsl"] }
 bytemuck = { workspace = true }
+half = { workspace = true }
 log = { workspace = true }
+
+[dev-dependencies]
+pollster = { workspace = true }
+wgpu = { workspace = true, default-features = true }

@@ -33,7 +33,7 @@ png = "0.18"
 jpeg-encoder = "0.6"
 uuid = { version = "1", features = ["v4"] }
 log = "0.4"
-half = "2"
+half = { version = "2", features = ["bytemuck"] }
 eframe = { version = "0.36", default-features = false }
 egui = "0.36"
 egui_extras = { version = "0.36", default-features = false }
