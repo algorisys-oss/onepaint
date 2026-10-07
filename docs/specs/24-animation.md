@@ -1,0 +1,100 @@
+# 24: Animation Assist (slice 16)
+
+The sources, relative to `../happypaint/`:
+
+- `docs/animation-spec.md`
+- `docs/animation-tracks-spec.md`
+- `frontend/src/state/animation-store.ts` (AS)
+- `frontend/src/state/animation-tracks.ts` (AT)
+- `frontend/src/engine/compositor.ts:1415-1525` (ghosts)
+
+## Model (engine `anim`)
+**Per-node fields** (in the node's `extra`, verbatim):
+- `holdFrames` (≥1, default 1);
+- `animRole` (background or foreground);
+- `animTrack` (groups);
+- `animStart`.
+
+**Document settings:** `doc.animation` = `StoredAnimation`, which is
+`{enabled, fps 12, loop loop|pingpong|once, onionEnabled true, onionBefore 1, onionAfter 1, onionOpacity .35, onionTint true, onionColorBefore #ff2626, onionColorAfter #1ad940, onionFront false, onionMuted []}`.
+Unknown keys (markers, pegs, marks) are preserved. The settings are written
+once animation has been enabled.
+
+**Flipbook** (no track groups):
+- The frames are the top-level non-role nodes, bottom-first, each covering
+  `hold` slots.
+- `frame_at_slot` clamps to the last frame.
+
+**Tracks:**
+- A top-level group with `animTrack` is a track. Its children are sheets
+  with `start` (an explicit `animStart`, or packed after the previous sheet)
+  and `hold`.
+- Any other top-level node is static.
+- The column count is the latest sheet end.
+- At column t, a track shows the sheet with `start ≤ t < start+hold`, or
+  nothing.
+
+**Playback step** (`step_slot`, AS:292):
+- loop: wraps.
+- ping-pong: bounces (`hi−1` and `lo+1`).
+- once: stops at `hi` with done.
+
+## Present-only view
+While animation is enabled, display compositing and the eyedropper use a
+view of the document. Pixels, history and visibility flags never change.
+
+| What | Shown how |
+|---|---|
+| Flipbook | The frame under the playhead and the role nodes. Other frames are hidden. |
+| Tracks | Each track shows its sheet at the column; static tracks always. |
+| Onion skins (not playing, `onionEnabled`) | Up to N previous and M next frames (flipbook) or sheets of the active track (tracks), skipping muted distances. Each is drawn as a ghost: opacity `node.opacity · onionOpacity / distance`, normal blend, tinted `rgb = mix(rgb, tint·a, .65)` in its colour (previous/next) when `onionTint`. Ghosts go under the current frame, or over it with `onionFront`. Roles are never ghosted. |
+
+## Session API
+| Command | Behaviour |
+|---|---|
+| `SetAnimation {settings}` | Enable/disable and settings. |
+| `SetAnimSlot {slot}` | Clamped. The active layer follows the frame under the playhead, unless it already sits inside that frame or in a role node. |
+| `SetAnimPlaying {playing}` | Hides the ghosts. |
+| `AddFrame` | An empty layer after the current frame; selected, playhead moved to it. |
+| `DuplicateFrame` | |
+| `SetFrameHold {id, hold}` | 1..99, one undo step. |
+| `SetFrameRole {id, role}` | One undo step. |
+
+Selecting a layer moves the playhead to its frame (`syncPlayheadToActive`).
+
+## Export
+Each frame is composited without ghosts and repeated `hold` times at `fps`.
+- **GIF:** palette-quantised, delay `round(100/fps)` cs, infinite loop.
+- **PNG sequence:** `frame_0001.png…` in a stored zip.
+
+The background is transparent, white or a hex colour. MP4/WebM are not
+built yet (see divergences).
+
+## Timeline (app)
+- The film button toggles animation mode. A bottom bar appears with:
+  - transport: first, previous, play/pause, next, last;
+  - fps and loop controls;
+  - onion settings (before/after count, opacity, tint, front);
+  - frame cells: thumbnail and hold. Click selects, and a cell menu offers
+    duplicate, delete, hold ±, background/foreground/frame.
+  - Add frame.
+- Shortcuts: `,` and `.` step frames; Shift+Space plays.
+- Playback is an app clock at `fps` using `step_slot` and the loop mode.
+
+## Acceptance
+- **Pure maths:**
+  - frames and holds;
+  - tracks with explicit starts and gaps;
+  - `step_slot` in every mode (AS tests);
+  - the preview sets.
+- **View:**
+  - in a flipbook, the playhead shows only that frame, plus roles;
+  - onion shows red-tinted previous and green-tinted next ghosts at the
+    configured opacity;
+  - playing hides the ghosts;
+  - disabled means the normal composite is unchanged.
+- The active layer follows the playhead, and selecting a layer moves the
+  playhead.
+- The settings and node fields round-trip through `.happypaint`.
+- GIF export decodes with the right frame count (holds expanded) and delay.
+  PNG-zip has one PNG per slot.

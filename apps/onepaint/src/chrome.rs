@@ -16,6 +16,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     top_bar(app, ctx);
     side_rail(app, ctx, screen);
     status(app, ctx, screen);
+    crate::timeline::show(app, ctx, screen);
     if let Some(p) = app.popover {
         let anchor = pos2(screen.right() - M, M + BAR_H + 8.0);
         let rect = match p {
@@ -183,6 +184,10 @@ fn top_bar(app: &mut App, ctx: &egui::Context) {
                     if icons::button(ui, "grid-3x3", 32.0, sym_on || app.popover == Some(Popover::Guides), "Guides: symmetry (Y)").clicked()
                     {
                         toggle_popover(app, Popover::Guides);
+                    }
+                    let anim_on = app.session.anim_settings().enabled;
+                    if icons::button(ui, "film", 32.0, anim_on, "Animation").clicked() {
+                        crate::timeline::toggle(app);
                     }
                     if icons::button(
                         ui,
@@ -376,6 +381,16 @@ fn menu(app: &mut App, ui: &mut Ui) {
     if widgets::menu_item(ui, Some("layers"), "Export PSD…", "").clicked() {
         app.popover = None;
         app.export_psd(now);
+    }
+    if app.session.anim_settings().enabled {
+        if widgets::menu_item(ui, Some("film"), "Export animated GIF…", "").clicked() {
+            app.popover = None;
+            app.export_animation(true, now);
+        }
+        if widgets::menu_item(ui, Some("film"), "Export PNG sequence (.zip)…", "").clicked() {
+            app.popover = None;
+            app.export_animation(false, now);
+        }
     }
     widgets::hairline(ui);
     if widgets::menu_item(ui, Some("maximize-2"), "Canvas size…", "").clicked() {

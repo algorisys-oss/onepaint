@@ -70,6 +70,10 @@ Slice 9 adds smudge (S), the mixer brush (Shift+B, with Kubelka–Munk
 pigment mixing), symmetry (Y: mirror, quad and radial) and liquify
 (push, twirl, pinch, expand, reconstruct).
 
+Slice 16 adds Animation Assist (the film button): frames with holds,
+background/foreground roles, onion skins, playback and GIF / PNG-sequence
+export.
+
 Slice 15 adds the pen tool (P) and vector path layers with Photoshop's path
 menu: make selection, fill, stroke (with simulated pressure) and mask from path.
 Slice 10b merges the remaining 34 happypaint filters, generators and fill
@@ -125,6 +129,7 @@ The app needs a GPU that wgpu supports (Vulkan, Metal, DX12 or GL).
 | Symmetry on/off | Y (guides button for the mode, spokes, angle and centre) |
 | Rulers / edit guides / edit perspective | Shift+R / Shift+G / Shift+P |
 | Pen | P: click corners, drag curves, Enter finishes, Esc cancels |
+| Animation frames | , and . step frames (film button toggles animation) |
 | Hide the UI | Tab |
 
 ## Develop

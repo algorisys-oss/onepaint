@@ -9,6 +9,7 @@
 //! - `ONEPAINT_SMUDGE=1` smudges and mixes across the demo, plus a radial-symmetry stroke.
 //! - `ONEPAINT_GUIDES=1` turns on the grid, 2-point perspective and H/V snap.
 //! - `ONEPAINT_PEN=1` adds a curved, filled path layer and selects the pen.
+//! - `ONEPAINT_ANIM=1` turns the demo layers into frames (background role) with onion skins.
 //! - `ONEPAINT_EXIT=1` closes the app after the screenshot.
 
 use crate::{App, Popover};
@@ -29,13 +30,22 @@ pub struct Debug {
     smudge: bool,
     guides: bool,
     pen: bool,
+    anim: bool,
 }
 
 impl Debug {
     /// A scripted run (demo or screenshot): it never autosaves or offers recovery,
     /// so visual checks leave nothing behind in the user's autosave folder.
     pub fn scripted(&self) -> bool {
-        self.demo || self.shot.is_some() || self.popover.is_some() || self.transform || self.text || self.smudge || self.guides || self.pen
+        self.demo
+            || self.shot.is_some()
+            || self.popover.is_some()
+            || self.transform
+            || self.text
+            || self.smudge
+            || self.guides
+            || self.pen
+            || self.anim
     }
 
     pub fn from_env() -> Self {
@@ -66,6 +76,7 @@ impl Debug {
             smudge: var("ONEPAINT_SMUDGE").is_some(),
             guides: var("ONEPAINT_GUIDES").is_some(),
             pen: var("ONEPAINT_PEN").is_some(),
+            anim: var("ONEPAINT_ANIM").is_some(),
         }
     }
 }
@@ -205,6 +216,12 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
         };
         let _ = app.session.execute(Command::CreatePathLayer { spec: Box::new(spec) });
         app.set_tool(onepaint_engine::Tool::Pen);
+    }
+    if frame == 3 && app.debug.anim {
+        let bg = app.session.doc().root[0].id().to_string();
+        let _ = app.session.execute(Command::SetFrameRole { id: bg, role: Some("background".into()) });
+        crate::timeline::toggle(app);
+        let _ = app.session.execute(Command::SetAnimSlot { slot: 1 });
     }
     if frame == 3 && app.debug.transform {
         app.set_tool(onepaint_engine::Tool::Move);

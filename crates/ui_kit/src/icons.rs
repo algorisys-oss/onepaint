@@ -70,6 +70,12 @@ pub static ICONS: &[(&str, &[u8])] = icons![
     "flip-horizontal-2",
     "waves",
     "pen-tool",
+    "chevron-left",
+    "skip-forward",
+    "skip-back",
+    "pause",
+    "play",
+    "film",
 ];
 
 fn white_icons() -> &'static HashMap<&'static str, Arc<[u8]>> {

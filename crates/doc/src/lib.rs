@@ -352,6 +352,23 @@ impl Document {
         }
     }
 
+    /// A copy of everything but the layer tree (which is left empty).
+    pub fn clone_shallow(&self) -> Self {
+        Self {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            width: self.width,
+            height: self.height,
+            dpi: self.dpi,
+            color_space: self.color_space.clone(),
+            depth: self.depth,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            root: Vec::new(),
+            extra: Extra::new(),
+        }
+    }
+
     pub fn bounds(&self) -> Rect {
         Rect::new(0, 0, self.width as i32, self.height as i32)
     }

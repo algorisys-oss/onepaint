@@ -11,6 +11,7 @@ mod pen;
 mod progressive;
 mod text_ui;
 mod thumbs;
+mod timeline;
 
 use canvas::Canvas;
 use egui::{Key, KeyboardShortcut, Modifiers};
@@ -95,6 +96,7 @@ pub struct App {
     pub hex: String,
     pub recent: Vec<Rgba>,
     pub palettes: palettes::Palettes,
+    pub playback: timeline::Playback,
     /// Inline rename of the active palette in progress.
     pub palette_rename: Option<String>,
     pub thumbs: thumbs::Thumbs,
@@ -146,6 +148,7 @@ impl App {
             hex: "#000000".into(),
             recent: Vec::new(),
             palettes,
+            playback: Default::default(),
             palette_rename: None,
             thumbs: thumbs::Thumbs::default(),
             toast: None,
@@ -304,6 +307,20 @@ impl App {
                 self.path = Some(path);
             }
             Err(e) => self.notify(format!("Save failed: {e}"), now),
+        }
+    }
+
+    /// Animated GIF or a zip of PNG frames (white behind GIF frames).
+    pub fn export_animation(&mut self, gif: bool, now: f64) {
+        let name = self.session.doc().name.clone();
+        let (filter, ext) = if gif { ("Animated GIF", "gif") } else { ("PNG sequence", "zip") };
+        let Some(path) = rfd::FileDialog::new().add_filter(filter, &[ext]).set_file_name(format!("{name}.{ext}")).save_file() else {
+            return;
+        };
+        let bytes = if gif { self.session.export_gif(Some(Rgba::WHITE)) } else { self.session.export_png_sequence(None) };
+        match bytes.map_err(|e| e.to_string()).and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string())) {
+            Ok(()) => self.notify(format!("Exported {}", path.display()), now),
+            Err(e) => self.notify(format!("Export failed: {e}"), now),
         }
     }
 
@@ -535,6 +552,14 @@ impl App {
             if sc(Modifiers::NONE, Key::P) {
                 self.set_tool(Tool::Pen);
             }
+            if self.session.anim_settings().enabled {
+                if sc(Modifiers::NONE, Key::Comma) {
+                    timeline::step(self, -1);
+                }
+                if sc(Modifiers::NONE, Key::Period) {
+                    timeline::step(self, 1);
+                }
+            }
             if sc(Modifiers::NONE, Key::V) || sc(cmd, Key::T) {
                 self.set_tool(Tool::Move);
             }
@@ -577,6 +602,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         debug::tick(self, &ctx);
+        timeline::tick(self, &ctx);
         if ctx.input(|i| i.viewport().close_requested()) && self.dirty() && !self.allow_close {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.request(Pending::Close, &ctx);
@@ -1235,5 +1261,31 @@ mod tests {
         assert!((a.y - want[1]).abs() < 1.0, "anchor moved: {a:?}");
         assert_eq!(app.session.history_len(), h0 + 1, "one step per drag");
         assert!(app.session.paths(&id)[0].subpaths[0].anchors.len() == 3);
+    }
+
+    #[test]
+    fn animation_timeline_adds_frames_and_steps() {
+        let mut h = harness();
+        h.run();
+        h.get_by_label("Animation").click();
+        h.run();
+        assert!(h.state().session.anim_settings().enabled);
+        let frames = h.state().session.anim_frames().len();
+        h.get_by_label("Add frame").click();
+        h.run();
+        assert_eq!(h.state().session.anim_frames().len(), frames + 1);
+        let at = h.state().session.anim_slot();
+        key(&mut h, egui::Key::Comma, egui::Modifiers::NONE);
+        h.run();
+        assert_eq!(h.state().session.anim_slot(), at - 1);
+        key(&mut h, egui::Key::Period, egui::Modifiers::NONE);
+        h.run();
+        assert_eq!(h.state().session.anim_slot(), at);
+        h.get_by_label("Play").click();
+        h.run_steps(3);
+        assert!(h.state().playback.playing);
+        h.get_by_label("Pause").click();
+        h.run_steps(2);
+        assert!(!h.state().playback.playing);
     }
 }

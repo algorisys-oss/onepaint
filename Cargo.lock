@@ -2670,6 +2670,7 @@ dependencies = [
  "onepaint-filters",
  "onepaint-raster",
  "rayon",
+ "serde_json",
 ]
 
 [[package]]
@@ -2689,6 +2690,7 @@ name = "onepaint-engine"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "image",
  "log",
  "onepaint-brush",
  "onepaint-color",

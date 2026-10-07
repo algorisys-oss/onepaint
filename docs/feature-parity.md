@@ -139,8 +139,8 @@ screentone are added as live layers.
 - [ ] Export a timelapse as video
 
 ## Animation
-- [ ] Animation Assist: onion skin and exposure-sheet tracks
-- [ ] Frame export
+- [~] Animation Assist: flipbook frames, holds, background/foreground, onion skins (tint, front, muted), playback (loop/ping-pong/once), timeline strip; exposure-sheet tracks composite and onion per track, but the track grid UI, markers and out-of-pegs are not built
+- [x] Frame export (animated GIF, PNG sequence zip)
 
 ## Color
 - [x] Color picker
@@ -157,7 +157,7 @@ screentone are added as live layers.
 - [ ] `.happypaint-rec`
 - [~] PSD: read and write layers, groups, masks, blend modes, clipping, DPI and simple adjustments (8/16-bit RGB/grey read, PSB read; text exported as pixels)
 - [~] PNG, JPEG, WebP, TIFF and Netpbm, keeping ICC profiles and DPI (PNG export only)
-- [ ] GIF, MP4, WebM and PNG-zip export
+- [~] GIF, MP4, WebM and PNG-zip export (GIF and PNG-zip; no MP4/WebM)
 - [x] Clipboard: copy and paste images (in-place paste, the system clipboard, layer via copy/cut)
 - [ ] Camera and screen capture as a reference or import
 

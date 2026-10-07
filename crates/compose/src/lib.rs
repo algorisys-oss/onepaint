@@ -166,6 +166,7 @@ fn composite_nodes(nodes: &[Node], tx: i32, ty: i32, target: &mut Buf, ov: Optio
                     let mut buf = zeros();
                     composite_nodes(&g.children, tx, ty, &mut buf, ov, frame);
                     draw_clipped(&mut buf, &nodes[i + 1..j], tx, ty, ov);
+                    ghost_tint(&mut buf, g);
                     blend_into(target, &buf, g.blend_mode, g.opacity);
                 }
             }
@@ -187,6 +188,19 @@ fn composite_nodes(nodes: &[Node], tx: i32, ty: i32, target: &mut Buf, ov: Optio
             }
         }
         i = j;
+    }
+}
+
+/// Key on a view-only group that tints its result like an onion-skin ghost.
+pub const GHOST_TINT_KEY: &str = "onepaint:ghostTint";
+
+/// Onion ghost tint (compositor.ts:200): `rgb = mix(rgb, tint·a, .65)`, premultiplied.
+fn ghost_tint(buf: &mut [f32], g: &onepaint_doc::Group) {
+    let Some(t) = g.extra.get(GHOST_TINT_KEY).and_then(|v| serde_json::from_value::<[f32; 3]>(v.clone()).ok()) else { return };
+    for p in buf.chunks_exact_mut(4) {
+        for c in 0..3 {
+            p[c] += (t[c] * p[3] - p[c]) * 0.65;
+        }
     }
 }
 

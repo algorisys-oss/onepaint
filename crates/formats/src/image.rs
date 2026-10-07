@@ -133,3 +133,20 @@ pub fn image_to_surface(img: &DecodedImage, x: i32, y: i32) -> onepaint_raster::
     s.write_rect(onepaint_raster::Rect::new(x, y, img.width as i32, img.height as i32), &data);
     s
 }
+
+/// Animated GIF from RGBA8 frames: infinite loop, `round(100/fps)` cs per frame.
+pub fn encode_gif(width: u32, height: u32, frames: &[Vec<u8>], fps: f64) -> Result<Vec<u8>, FormatError> {
+    use image::codecs::gif::{GifEncoder, Repeat};
+    let cs = (100.0 / fps.max(1.0)).round().max(1.0) as u32;
+    let mut out = Vec::new();
+    {
+        let mut enc = GifEncoder::new_with_speed(&mut out, 10);
+        enc.set_repeat(Repeat::Infinite).map_err(|e| FormatError::Image(e.to_string()))?;
+        for f in frames {
+            let buf = image::RgbaImage::from_raw(width, height, f.clone()).ok_or_else(|| FormatError::Image("frame size".into()))?;
+            let frame = image::Frame::from_parts(buf, 0, 0, image::Delay::from_numer_denom_ms(cs * 10, 1));
+            enc.encode_frame(frame).map_err(|e| FormatError::Image(e.to_string()))?;
+        }
+    }
+    Ok(out)
+}

@@ -28,6 +28,7 @@ log = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+image = { workspace = true }
 criterion = { workspace = true }
 onepaint-brush = { workspace = true }
 onepaint-stroke = { workspace = true }

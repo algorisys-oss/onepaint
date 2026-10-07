@@ -4,6 +4,7 @@
 //! drained [`Event`]s, mirroring happypaint's store handlers, `PaintSink`
 //! and engine callbacks. No UI or GPU code lives here.
 
+pub mod anim;
 mod canvas_ops;
 mod clipboard;
 mod filter_ops;
@@ -180,6 +181,25 @@ pub enum Command {
     FillPath,
     /// End live-edit coalescing: the next edit is a new undo step.
     SealHistory,
+    SetAnimation {
+        settings: Box<anim::AnimSettings>,
+    },
+    SetAnimSlot {
+        slot: usize,
+    },
+    SetAnimPlaying {
+        playing: bool,
+    },
+    AddFrame,
+    SetFrameHold {
+        id: NodeId,
+        hold: u32,
+    },
+    /// `background`, `foreground`, or `None` for a normal frame.
+    SetFrameRole {
+        id: NodeId,
+        role: Option<String>,
+    },
     StrokePath {
         tool: path_ops::StrokePathTool,
         simulate_pressure: bool,
@@ -429,6 +449,11 @@ pub struct Session {
     saved: Vec<SavedSelection>,
     /// The next coalescing edit starts a new undo step (end of a drag).
     history_sealed: bool,
+    anim: anim::AnimSettings,
+    /// Animation was enabled at some point (settings are saved from then on).
+    anim_ever: bool,
+    anim_slot: usize,
+    anim_playing: bool,
     smudge: Option<smudge_ops::ActiveSmudge>,
     liquify: Option<liquify_ops::ActiveLiquify>,
     /// The Mixer's kept reservoir, keyed by the colour it was loaded with.
@@ -470,11 +495,16 @@ impl Session {
             guide_edit_before: None,
             saved: Vec::new(),
             history_sealed: false,
+            anim: Default::default(),
+            anim_ever: false,
+            anim_slot: 0,
+            anim_playing: false,
             smudge: None,
             liquify: None,
             mixer_held: None,
         };
         s.load_saved_selections();
+        s.load_anim();
         s.guides = s.doc.extra.get("guides").and_then(|v| serde_json::from_value::<Guides>(v.clone()).ok()).unwrap_or_default().sanitized();
         s.mark_all_dirty();
         s
@@ -579,7 +609,7 @@ impl Session {
 
     /// Composite the given tiles, including any stroke in progress.
     pub fn composite(&self, keys: &[(i32, i32)]) -> Vec<((i32, i32), Tile)> {
-        onepaint_compose::composite_tiles(&self.doc, keys, self.overlay().as_ref())
+        onepaint_compose::composite_tiles(&self.display_doc(), keys, self.overlay().as_ref())
     }
 
     /// Flattened canvas as premultiplied linear f32.
@@ -594,7 +624,7 @@ impl Session {
             return None;
         }
         let (tx, ty) = onepaint_raster::tile_of(x, y);
-        let b = composite_tile(&self.doc, tx, ty, self.overlay().as_ref());
+        let b = composite_tile(&self.display_doc(), tx, ty, self.overlay().as_ref());
         let i = (((y - ty * TILE) * TILE + (x - tx * TILE)) * 4) as usize;
         if b[i + 3] <= 0.0 {
             return None;
@@ -665,6 +695,7 @@ impl Session {
             self.doc.extra.remove("guides");
         }
         self.store_saved_selections();
+        self.store_anim();
         self.doc.touch();
         let flat = self.flatten();
         let thumb = onepaint_formats::thumbnail_jpeg(&flat, self.doc.width, self.doc.height, 320, 240).ok();
@@ -950,8 +981,27 @@ impl Session {
                 self.doc.find(&id).ok_or_else(|| EngineError::NoSuchLayer(id.clone()))?;
                 self.active = id;
                 self.events.push(Event::ActiveLayerChanged);
+                self.sync_playhead_to_active();
                 Ok(())
             }
+            Command::SetAnimation { settings } => {
+                self.set_anim(*settings);
+                Ok(())
+            }
+            Command::SetAnimSlot { slot } => {
+                self.set_anim_slot(slot);
+                Ok(())
+            }
+            Command::SetAnimPlaying { playing } => {
+                self.anim_playing = playing;
+                self.mark_all_dirty();
+                Ok(())
+            }
+            Command::AddFrame => self.add_frame(),
+            Command::SetFrameHold { id, hold } => {
+                self.set_frame_meta(&id, "holdFrames", (hold != 1).then(|| serde_json::json!(hold.clamp(1, 99))))
+            }
+            Command::SetFrameRole { id, role } => self.set_frame_meta(&id, "animRole", role.map(serde_json::Value::String)),
             Command::SetLayerProps { id, props } => self.set_props(&id, props),
             Command::MergeDown { id } => self.merge_down(&id),
             Command::ClearLayer { id } => self.clear_layer(&id),
