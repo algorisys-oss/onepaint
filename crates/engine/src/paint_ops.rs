@@ -21,7 +21,6 @@ impl Session {
             buffer: Surface::new(),
             mode,
             opacity,
-            wash: false,
             noop: false,
             clip: None,
             mask: false,

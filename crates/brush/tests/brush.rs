@@ -124,3 +124,86 @@ fn taper_thins_the_ends() {
     // Dabs come out in stroke order.
     assert!(dabs.windows(2).all(|w| w[0].x <= w[1].x + 1e-9));
 }
+
+#[test]
+fn the_whole_happypaint_library_loads() {
+    let ps = presets();
+    assert_eq!(ps.len(), 124);
+    assert!(categories().len() >= 14);
+    for p in &ps {
+        assert!(p.size > 0.0, "{}", p.id);
+        // Every referenced tip resolves (unknown ids fall back to round, like happypaint).
+        let _ = tip_for(&p.tip_id);
+        if let Some(g) = p.grain.as_ref() {
+            assert!(grain_for(&g.id).is_some(), "grain {}", g.id);
+        }
+    }
+    assert!(matches!(tip_for("chalk"), Tip::Image(_)));
+    assert!(matches!(tip_for("pctip-nato-01"), Tip::Image(_)));
+    assert!(matches!(tip_for("soft"), Tip::Gauss));
+    assert!(matches!(tip_for("nonsense"), Tip::Circle));
+}
+
+fn coverage(tip: &str, hardness: f64) -> (f32, f32, f32) {
+    let mut s = Surface::new();
+    let d = Dab { x: 50.0, y: 50.0, radius: 20.0, alpha: 1.0, rotation: 0.0, aspect: 1.0, hardness, color: [1.0; 3] };
+    rasterize_dab_tip(&mut s, &d, &tip_for(tip), None, false, None);
+    (s.get(50, 50)[3], s.get(65, 50)[3], s.get(67, 67)[3])
+}
+
+#[test]
+fn tip_shapes() {
+    let (c, mid, corner) = coverage("square", 0.95);
+    assert!(c > 0.99 && mid > 0.99 && corner > 0.9, "square fills its corners");
+    let (c, _, corner) = coverage("round", 0.95);
+    assert!(c > 0.99 && corner == 0.0);
+    let (c, mid, _) = coverage("soft", 0.5);
+    assert!(c > 0.99 && mid < 0.5 && mid > 0.0, "gaussian falloff {mid}");
+    // Image tips follow their mask: chalk is broken, not solid.
+    let mut s = Surface::new();
+    let d = Dab { x: 64.0, y: 64.0, radius: 40.0, alpha: 1.0, rotation: 0.0, aspect: 1.0, hardness: 0.9, color: [1.0; 3] };
+    rasterize_dab_tip(&mut s, &d, &tip_for("chalk"), None, false, None);
+    let vals: Vec<f32> = (40..88).map(|x| s.get(x, 64)[3]).collect();
+    assert!(vals.iter().any(|v| *v > 0.3) && vals.iter().any(|v| *v < 0.95));
+}
+
+#[test]
+fn grain_breaks_up_coverage() {
+    let g = Grain { id: "paper".into(), scale: 60.0, strength: 0.6, ..Default::default() };
+    let mut s = Surface::new();
+    let d = Dab { x: 100.0, y: 100.0, radius: 60.0, alpha: 1.0, rotation: 0.0, aspect: 1.0, hardness: 0.98, color: [1.0; 3] };
+    rasterize_dab_tip(&mut s, &d, &Tip::Circle, None, false, Some(&GrainSampler::new(&g, [0.0, 0.0], 0.0).unwrap()));
+    let vals: Vec<f32> = (60..140).map(|x| s.get(x, 100)[3]).collect();
+    let min = vals.iter().cloned().fold(1.0, f32::min);
+    assert!((0.11..0.9).contains(&min), "grain lowers coverage but keeps the 0.12 floor ({min})");
+}
+
+#[test]
+fn dynamics_scatter_rotation_and_colour() {
+    let mut b = preset("hard-round").unwrap();
+    b.dynamics = Some(Dynamics { scatter: Some(1.0), ..Default::default() });
+    let mut e = StrokeEngine::new(b.clone(), [0.5; 3], 3);
+    let mut dabs = e.begin(StrokePoint::at(0.0, 0.0, 1.0, 0.0));
+    dabs.extend(e.add(StrokePoint::at(200.0, 0.0, 1.0, 100.0)));
+    assert!(dabs.iter().any(|d| d.y.abs() > 2.0), "scatter moves dabs off the path");
+    let mut again = StrokeEngine::new(b, [0.5; 3], 3);
+    let mut d2 = again.begin(StrokePoint::at(0.0, 0.0, 1.0, 0.0));
+    d2.extend(again.add(StrokePoint::at(200.0, 0.0, 1.0, 100.0)));
+    assert_eq!(dabs, d2, "same seed, same dabs");
+    let mut c = preset("hard-round").unwrap();
+    c.dynamics = Some(Dynamics { color: Some(ColorDynamics { hue: Some(0.5), ..Default::default() }), ..Default::default() });
+    let mut e = StrokeEngine::new(c, [0.8, 0.1, 0.1], 9);
+    let mut dabs = e.begin(StrokePoint::at(0.0, 0.0, 1.0, 0.0));
+    dabs.extend(e.add(StrokePoint::at(100.0, 0.0, 1.0, 100.0)));
+    assert!(dabs.windows(2).any(|w| w[0].color != w[1].color), "hue jitter varies the colour");
+}
+
+#[test]
+fn airbrush_sprays_while_held() {
+    let b = preset("soft-airbrush").unwrap();
+    let mut e = StrokeEngine::new(b, [0.0; 3], 1);
+    let _ = e.begin(StrokePoint::at(10.0, 10.0, 1.0, 0.0));
+    assert!(e.airbrush_tick(0.0).is_empty(), "first tick primes the clock");
+    let n = e.airbrush_tick(1000.0).len();
+    assert_eq!(n, 25, "rate 25 dabs/s");
+}

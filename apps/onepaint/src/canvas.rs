@@ -516,6 +516,10 @@ impl Canvas {
         if session.tool() != Tool::SelectPoly {
             self.poly = None;
         }
+        if matches!(self.drag, Drag::Paint) && session.stroke_wants_ticks() {
+            session.stroke_tick(time_ms);
+            ui.ctx().request_repaint();
+        }
         // Quick-shape: hold still for 600 ms while painting to straighten the stroke.
         if matches!(self.drag, Drag::Paint) && !self.hold.fired {
             if time_ms - self.hold.since >= 600.0 {

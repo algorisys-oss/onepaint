@@ -3,7 +3,11 @@
 //! Ported from happypaint `engine/brush/brush-engine.ts` and
 //! `stamp-renderer.ts`; see `docs/specs/03-brush-stroke.md`.
 
+mod assets;
 mod preset;
+mod tips;
+
+pub use tips::{GrainSampler, Mask as TipMask, Tip, grain_for, grain_names, tip_for};
 
 pub use preset::*;
 
@@ -95,6 +99,11 @@ pub struct StrokeEngine {
     last_t: Option<f64>,
     index: u32,
     pending: Vec<(f64, Dab)>,
+    tip: Tip,
+    grain: Option<GrainSampler>,
+    /// Last raw input point and airbrush clock (ms, carried fraction).
+    last_input: Option<StrokePoint>,
+    air: Option<(f64, f64)>,
 }
 
 impl StrokeEngine {
@@ -114,7 +123,56 @@ impl StrokeEngine {
             last_t: None,
             index: 0,
             pending: Vec::new(),
+            tip: Tip::Circle,
+            grain: None,
+            last_input: None,
+            air: None,
         }
+        .with_tip_and_grain()
+    }
+
+    /// Resolve the tip and grain; grain-random draws come first, like happypaint.
+    fn with_tip_and_grain(mut self) -> Self {
+        self.tip = tip_for(&self.brush.tip_id);
+        if let Some(g) = self.brush.grain.clone() {
+            let rnd = g.random.unwrap_or(0.0);
+            let (off, rot) = if rnd > 0.0 {
+                let (x, y, r) = (self.rng.next_f64(), self.rng.next_f64(), self.rng.next_f64());
+                ([x * g.scale * rnd, y * g.scale * rnd], r * std::f64::consts::TAU * rnd)
+            } else {
+                ([0.0, 0.0], 0.0)
+            };
+            self.grain = GrainSampler::new(&g, off, rot);
+        }
+        self
+    }
+
+    pub fn tip(&self) -> &Tip {
+        &self.tip
+    }
+
+    pub fn grain(&self) -> Option<&GrainSampler> {
+        self.grain.as_ref()
+    }
+
+    /// Rasterise one of this stroke's dabs with its tip and grain.
+    pub fn rasterize(&self, s: &mut Surface, d: &Dab, clip: Option<&onepaint_selection::Mask>) -> Rect {
+        rasterize_dab_tip(s, d, &self.tip, clip, self.brush.wash, self.grain.as_ref())
+    }
+
+    /// Airbrush: spray `rate` dabs per second at the last input point while held.
+    pub fn airbrush_tick(&mut self, now_ms: f64) -> Vec<Dab> {
+        let Some(rate) = self.brush.airbrush.as_ref().map(|a| a.rate).filter(|r| *r > 0.0) else { return Vec::new() };
+        let Some(p) = self.last_input else { return Vec::new() };
+        let Some((last, acc)) = self.air else {
+            self.air = Some((now_ms, 0.0));
+            return Vec::new();
+        };
+        let acc = acc + (now_ms - last).max(0.0) / 1000.0 * rate;
+        let n = acc.floor().min(64.0);
+        self.air = Some((now_ms, acc - n));
+        let pts = vec![StrokePoint { t: Some(now_ms), ..p }; n as usize];
+        self.emit(&pts)
     }
 
     pub fn brush(&self) -> &BrushPreset {
@@ -126,6 +184,7 @@ impl StrokeEngine {
     }
 
     pub fn add(&mut self, p: StrokePoint) -> Vec<Dab> {
+        self.last_input = Some(p);
         let pts = match &mut self.stabilizer {
             Some(s) => s.next(p),
             None => Some(p),
@@ -227,11 +286,47 @@ impl StrokeEngine {
             } else {
                 (s.tilt_y.atan2(s.tilt_x), 1.0 - mag.min(1.0) * b.tilt_strength * (1.0 - 0.3))
             };
+            let dynamics = b.dynamics.as_ref();
+            if let Some(d) = dynamics {
+                if !d.ratio.is_empty() {
+                    aspect = (aspect * eval_bindings(&d.ratio, &state, d.ratio_combine)).clamp(0.15, 1.0);
+                }
+                if let Some(r) = &d.rotation {
+                    rotation = match r.source.as_str() {
+                        "angle" => self.dir.1.atan2(self.dir.0),
+                        "twist" => state.twist * std::f64::consts::TAU,
+                        "none" => 0.0,
+                        _ => rotation,
+                    } + r.offset.unwrap_or(0.0).to_radians()
+                        + (state.random * 2.0 - 1.0) * r.jitter.unwrap_or(0.0) * std::f64::consts::PI;
+                }
+                if !d.spin.is_empty() {
+                    rotation += eval_bindings(&d.spin, &state, d.spin_combine) * std::f64::consts::TAU;
+                }
+            }
             let k = tip_roundness(b);
             let radius = radius * k.sqrt();
             aspect *= k;
             rotation += -b.tip_angle_deg.unwrap_or(0.0).to_radians();
-            made.push((self.cum_dist, Dab { x: s.x, y: s.y, radius, alpha, rotation, aspect, hardness, color: self.color }));
+            // Scatter (2 draws per axis), then colour jitter, in happypaint's draw order.
+            let (mut x, mut y) = (s.x, s.y);
+            if let Some(sc) = dynamics.and_then(|d| d.scatter).filter(|v| *v > 0.0) {
+                let (sigma, lim) = (sc * b.size * 0.41, sc * b.size * 2.0);
+                x += (onepaint_stroke::gaussian(&mut self.rng) * sigma).clamp(-lim, lim);
+                y += (onepaint_stroke::gaussian(&mut self.rng) * sigma).clamp(-lim, lim);
+            }
+            let mut color = self.color;
+            if let Some(cd) = dynamics.and_then(|d| d.color.as_ref()) {
+                let srgb = color.map(onepaint_color::linear_to_srgb);
+                let (mut h, mut sat, mut val) = onepaint_color::Rgba::new(srgb[0], srgb[1], srgb[2], 1.0).to_hsv();
+                h += ((self.rng.next_f64() * 2.0 - 1.0) * cd.hue.unwrap_or(0.0) * 360.0) as f32;
+                sat = (sat + ((self.rng.next_f64() * 2.0 - 1.0) * cd.sat.unwrap_or(0.0)) as f32).clamp(0.0, 1.0);
+                val = (val + ((self.rng.next_f64() * 2.0 - 1.0) * cd.val.unwrap_or(0.0)) as f32).clamp(0.0, 1.0);
+                val *= (1.0 - cd.pressure_darken.unwrap_or(0.0) * state.pressure) as f32;
+                let c = onepaint_color::Rgba::from_hsv(h, sat, val, 1.0);
+                color = [c.r, c.g, c.b].map(onepaint_color::srgb_to_linear);
+            }
+            made.push((self.cum_dist, Dab { x, y, radius, alpha, rotation, aspect, hardness, color }));
         }
         let (entry, exit) = self.taper();
         if exit > 0.0 {
@@ -264,9 +359,9 @@ fn smoothstep(e0: f64, e1: f64, x: f64) -> f64 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// Bounding box of a dab in document px.
+/// Bounding box of a dab in document px (square/image tips reach √2 further).
 pub fn dab_bounds(d: &Dab) -> Rect {
-    let r = d.radius / d.aspect.max(1e-3).sqrt() + 1.0;
+    let r = d.radius / d.aspect.max(1e-3).sqrt() * std::f64::consts::SQRT_2 + 1.0;
     Rect::covering((d.x - r) as f32, (d.y - r) as f32, (d.x + r) as f32, (d.y + r) as f32)
 }
 
@@ -274,6 +369,18 @@ pub fn dab_bounds(d: &Dab) -> Rect {
 /// or per-channel max when `wash`. Coverage is multiplied by `clip` (the
 /// selection) when given. Returns the touched rect.
 pub fn rasterize_dab(s: &mut Surface, d: &Dab, wash: bool, clip: Option<&onepaint_selection::Mask>) -> Rect {
+    rasterize_dab_tip(s, d, &Tip::Circle, clip, wash, None)
+}
+
+/// Rasterise a dab with any tip (stamp-renderer.ts:130-165) and optional grain.
+pub fn rasterize_dab_tip(
+    s: &mut Surface,
+    d: &Dab,
+    tip: &Tip,
+    clip: Option<&onepaint_selection::Mask>,
+    wash: bool,
+    grain: Option<&GrainSampler>,
+) -> Rect {
     let bounds = dab_bounds(d);
     if d.alpha <= 0.0 || d.radius <= 0.0 {
         return bounds;
@@ -296,11 +403,34 @@ pub fn rasterize_dab(s: &mut Surface, d: &Dab, wash: bool, clip: Option<&onepain
                 // Undo the rotation, then normalise by the ellipse axes.
                 let lx = (px * c + py * sn) / ax;
                 let ly = (-px * sn + py * c) / ay;
-                let dist = (lx * lx + ly * ly).sqrt();
-                if dist >= 1.0 {
+                let m = match tip {
+                    Tip::Circle => {
+                        let dist = (lx * lx + ly * ly).sqrt();
+                        if dist >= 1.0 { 0.0 } else { 1.0 - smoothstep(inner, 1.0, dist) }
+                    }
+                    Tip::Gauss => {
+                        let d2 = lx * lx + ly * ly;
+                        if d2 >= 1.0 { 0.0 } else { (-d2 * (2.0 + (10.0 - 2.0) * d.hardness)).exp() }
+                    }
+                    Tip::Square => {
+                        let e = lx.abs().max(ly.abs());
+                        if e >= 1.0 { 0.0 } else { 1.0 - smoothstep(inner, 1.0, e) }
+                    }
+                    Tip::Image(mask) => {
+                        if lx.abs() >= 1.0 || ly.abs() >= 1.0 {
+                            0.0
+                        } else {
+                            mask.sample(lx * 0.5 + 0.5, ly * 0.5 + 0.5) as f64
+                        }
+                    }
+                };
+                if m <= 0.0 {
                     continue;
                 }
-                let mut a = ((1.0 - smoothstep(inner, 1.0, dist)) * d.alpha) as f32;
+                let mut a = (m * d.alpha) as f32;
+                if let Some(g) = grain {
+                    a *= g.factor(x as f64 + 0.5, y as f64 + 0.5);
+                }
                 if let Some(m) = clip {
                     a *= m.coverage(x, y);
                 }

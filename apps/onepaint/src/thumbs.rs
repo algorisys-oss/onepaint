@@ -1,7 +1,7 @@
 //! Cached UI images: layer thumbnails and brush stroke previews.
 
 use egui::{ColorImage, TextureHandle, TextureOptions};
-use onepaint_brush::{BrushPreset, StrokeEngine, rasterize_dab};
+use onepaint_brush::{BrushPreset, StrokeEngine};
 use onepaint_doc::Layer;
 use onepaint_raster::{Rect, Surface};
 use onepaint_stroke::StrokePoint;
@@ -110,7 +110,7 @@ impl Thumbs {
         }
         dabs.extend(eng.end());
         for d in &dabs {
-            rasterize_dab(&mut s, d, preset.wash, None);
+            eng.rasterize(&mut s, d, None);
         }
         let mut px = Vec::with_capacity(w * h);
         for y in 0..h {

@@ -397,13 +397,37 @@ fn new_doc(app: &mut App, ui: &mut Ui) {
 
 fn brushes(app: &mut App, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    ui.set_width(300.0);
+    ui.set_width(340.0);
     widgets::section_label(ui, if app.session.tool() == Tool::Eraser { "Eraser" } else { "Brushes" });
     ui.add_space(4.0);
     let current = app.session.current_brush().id.clone();
     let eraser = app.session.tool() == Tool::Eraser;
-    egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-        for p in onepaint_brush::presets().into_iter().filter(|p| p.is_eraser() == eraser) {
+    if !eraser {
+        // Category chips; the list shows one category at a time (124 presets).
+        let cats: Vec<String> = onepaint_brush::categories().into_iter().filter(|c| c != "Eraser").collect();
+        if app.brush_category.is_empty() || !cats.contains(&app.brush_category) {
+            app.brush_category = app.session.current_brush().category.clone();
+            if !cats.contains(&app.brush_category) {
+                app.brush_category = cats.first().cloned().unwrap_or_default();
+            }
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+            for c in &cats {
+                let sel = *c == app.brush_category;
+                let text = RichText::new(c).font(theme::medium(11.0)).color(if sel { t.on_accent } else { t.fg_muted });
+                if ui.add(egui::Button::new(text).fill(if sel { t.accent } else { t.field }).corner_radius(10.0)).clicked() {
+                    app.brush_category = c.clone();
+                }
+            }
+        });
+        ui.add_space(4.0);
+    }
+    let category = app.brush_category.clone();
+    // Fit the list below the top bar so the popover never overlaps it.
+    let room = (ui.ctx().content_rect().height() - ui.cursor().top() - 230.0).clamp(120.0, 360.0);
+    egui::ScrollArea::vertical().max_height(room).show(ui, |ui| {
+        for p in onepaint_brush::presets().into_iter().filter(|p| if eraser { p.is_eraser() } else { p.category == category }) {
             let sel = p.id == current;
             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 62.0), Sense::click());
             if sel {

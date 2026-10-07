@@ -16,7 +16,7 @@ pub mod view;
 pub use clipboard::Region;
 pub use onepaint_selection::{Mask, Mode as SelectMode};
 
-use onepaint_brush::{BrushPreset, StrokeEngine, rasterize_dab};
+use onepaint_brush::{BrushPreset, StrokeEngine};
 use onepaint_color::Rgba;
 use onepaint_compose::{StrokeMode, StrokeOverlay, apply_stroke_px, composite_tile};
 use onepaint_doc::{BlendMode, Document, Group, Layer, Node, NodeId};
@@ -290,7 +290,6 @@ struct ActiveStroke {
     buffer: Surface,
     mode: StrokeMode,
     opacity: f32,
-    wash: bool,
     /// Alpha-locked erase: draw nothing, record nothing.
     noop: bool,
     /// The selection (feathered) that clips this stroke.
@@ -559,14 +558,13 @@ impl Session {
             self.color.to_linear_premul()
         };
         self.seed = self.seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-        let (opacity, wash) = (brush.opacity as f32, brush.wash);
+        let opacity = brush.opacity as f32;
         let mut st = ActiveStroke {
             layer: self.active.clone(),
             engine: StrokeEngine::new(brush, [lin[0], lin[1], lin[2]], self.seed),
             buffer: Surface::new(),
             mode,
             opacity,
-            wash,
             noop,
             clip: self.clip.clone(),
             mask: to_mask,
@@ -596,9 +594,21 @@ impl Session {
         }
         let mut r = Rect::default();
         for d in &dabs {
-            r = r.union(&rasterize_dab(&mut st.buffer, d, st.wash, st.clip.as_deref()));
+            r = r.union(&st.engine.rasterize(&mut st.buffer, d, st.clip.as_deref()));
         }
         self.mark_dirty(r);
+    }
+
+    /// Advance time-based brush effects (airbrush) while a stroke is held.
+    pub fn stroke_tick(&mut self, now_ms: f64) {
+        let Some(st) = self.stroke.as_mut() else { return };
+        let dabs = st.engine.airbrush_tick(now_ms);
+        self.draw_dabs(dabs);
+    }
+
+    /// Whether the current stroke wants frames while the pointer is still (airbrush).
+    pub fn stroke_wants_ticks(&self) -> bool {
+        self.stroke.as_ref().is_some_and(|s| s.engine.brush().airbrush.as_ref().is_some_and(|a| a.rate > 0.0))
     }
 
     pub fn stroke_cancel(&mut self) {
@@ -618,7 +628,7 @@ impl Session {
         if !st.noop {
             let mut r = Rect::default();
             for d in &tail {
-                r = r.union(&rasterize_dab(&mut st.buffer, d, st.wash, st.clip.as_deref()));
+                r = r.union(&st.engine.rasterize(&mut st.buffer, d, st.clip.as_deref()));
             }
             self.mark_dirty(r);
         }

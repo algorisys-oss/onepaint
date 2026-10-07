@@ -37,12 +37,12 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] select-wand
 
 ## Brushes
-- [ ] All 118 presets, including Manga and the baked Procreate brushes, with identical parameters
+- [~] All 118 presets, including Manga and the baked Procreate brushes, with identical parameters (all 124 load with verbatim parameters, tips and grains; the 14 wet/oil presets paint without wet media)
 - [~] Dynamics: pressure, tilt, twist and velocity mapped to size, opacity and flow (all implemented; hardware tilt and pressure need a tablet backend, see Input)
 - [x] Velocity-synthesized pressure for devices without hardware pressure
-- [ ] Computed and sampled tips
-- [ ] Grain texture
-- [ ] Airbrush (time-based ticks)
+- [x] Computed and sampled tips (happypaint's generators baked to PNG)
+- [x] Grain texture
+- [x] Airbrush (time-based ticks)
 - [x] Smoothing and the stabilizer
 - [ ] Symmetry: mirror and radial
 - [ ] Wet/oil media: wet, height (impasto), settle and bevel

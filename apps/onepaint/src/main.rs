@@ -88,6 +88,8 @@ pub struct App {
     pub recover: Option<PathBuf>,
     /// Selected tab in the curves editor.
     pub curve_tab: usize,
+    /// Category shown in the brush library.
+    pub brush_category: String,
     /// A file chosen by drag-and-drop, opened once unsaved work is dealt with.
     pub open_later: Option<PathBuf>,
     allow_close: bool,
@@ -127,6 +129,7 @@ impl App {
             autosave: autosave::Autosave::new(if cfg!(test) { None } else { autosave::dir() }),
             recover: None,
             curve_tab: 0,
+            brush_category: String::new(),
             open_later: None,
             allow_close: false,
         };
