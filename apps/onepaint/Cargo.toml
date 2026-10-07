@@ -27,4 +27,4 @@ rfd = "0.17"
 onepaint-formats = { workspace = true }
 
 [dev-dependencies]
-egui_kittest = { workspace = true }
+egui_kittest = { workspace = true, features = ["eframe"] }

@@ -55,6 +55,7 @@ pub struct App {
     pub new_doc: [u32; 2],
     pub gpu_ok: bool,
     pub debug: debug::Debug,
+    title: String,
 }
 
 impl App {
@@ -89,6 +90,7 @@ impl App {
             new_doc: [2048, 1536],
             gpu_ok,
             debug,
+            title: String::new(),
         };
         if let Some(p) = open {
             app.open_path(p);
@@ -298,10 +300,16 @@ impl eframe::App for App {
         let was_stroking = self.session.is_stroking();
         let t = onepaint_ui_kit::Tokens::get(&ctx);
         ui.painter().rect_filled(rect, 0.0, t.stage);
-        if self.gpu_ok {
-            self.canvas.show(ui, rect, &mut self.session, space, r);
-        } else {
-            ui.centered_and_justified(|ui| ui.label("onepaint needs a GPU (wgpu) renderer."));
+        self.canvas
+            .show(ui, rect, &mut self.session, space, r, self.gpu_ok);
+        if !self.gpu_ok {
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "onepaint needs a GPU (wgpu) renderer.",
+                egui::FontId::proportional(14.0),
+                t.fg_muted,
+            );
         }
         if was_stroking && !self.session.is_stroking() {
             self.push_recent();
@@ -323,7 +331,10 @@ impl eframe::App for App {
             if self.dirty() { "• " } else { "" },
             self.session.doc().name
         );
-        ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
+        if title != self.title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.title = title;
+        }
         if self.session.is_stroking() {
             ctx.request_repaint();
         }
@@ -331,5 +342,114 @@ impl eframe::App for App {
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         [0.0, 0.0, 0.0, 1.0]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{Event, PointerButton, pos2, vec2};
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    fn harness() -> Harness<'static, App> {
+        Harness::builder()
+            .with_size(vec2(1200.0, 800.0))
+            .build_eframe(|cc| App::new(cc, None))
+    }
+
+    fn press(h: &mut Harness<'_, App>, p: egui::Pos2, pressed: bool) {
+        h.event(Event::PointerButton {
+            pos: p,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        });
+        h.step();
+    }
+
+    fn drag_stroke(h: &mut Harness<'_, App>, from: egui::Pos2, to: egui::Pos2) {
+        h.event(Event::PointerMoved(from));
+        h.step();
+        press(h, from, true);
+        for i in 1..=10 {
+            let f = i as f32 / 10.0;
+            h.event(Event::PointerMoved(from + (to - from) * f));
+            h.step();
+        }
+        press(h, to, false);
+    }
+
+    #[test]
+    fn dragging_on_the_canvas_paints_and_undo_removes_it() {
+        let mut h = harness();
+        h.run();
+        drag_stroke(&mut h, pos2(560.0, 420.0), pos2(720.0, 440.0));
+        let app = h.state();
+        let layer = app.session.doc().layer(app.session.active()).unwrap();
+        assert!(
+            layer.pixels.tile_count() > 0,
+            "the stroke reached the active layer"
+        );
+        let d = app.canvas.view.screen_to_doc([640.0, 430.0]);
+        assert!(
+            layer.pixels.get(d[0] as i32, d[1] as i32)[3] > 0.5,
+            "paint under the stroke"
+        );
+        assert!(app.dirty());
+        h.event(Event::Key {
+            key: egui::Key::Z,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        });
+        h.step();
+        let app = h.state();
+        assert_eq!(
+            app.session
+                .doc()
+                .layer(app.session.active())
+                .unwrap()
+                .pixels
+                .tile_count(),
+            0
+        );
+    }
+
+    #[test]
+    fn strokes_on_the_chrome_do_not_paint() {
+        let mut h = harness();
+        h.run();
+        // The side rail sits at the left edge.
+        drag_stroke(&mut h, pos2(30.0, 400.0), pos2(34.0, 330.0));
+        let app = h.state();
+        assert_eq!(
+            app.session
+                .doc()
+                .layer(app.session.active())
+                .unwrap()
+                .pixels
+                .tile_count(),
+            0
+        );
+    }
+
+    #[test]
+    fn top_bar_buttons_open_popovers_and_add_layers() {
+        let mut h = harness();
+        h.run();
+        h.get_by_label("Layers").click();
+        h.run();
+        assert_eq!(h.state().popover, Some(Popover::Layers));
+        h.get_by_label("New layer").click();
+        h.run();
+        assert_eq!(h.state().session.doc().root.len(), 3);
+        h.get_by_label("Brush library").click();
+        h.run();
+        assert_eq!(h.state().popover, Some(Popover::Brushes));
+        h.get_by_label("Eraser (E)").click();
+        h.run();
+        assert_eq!(h.state().session.tool(), Tool::Eraser);
     }
 }

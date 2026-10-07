@@ -144,6 +144,7 @@ impl Canvas {
         session: &mut Session,
         space_held: bool,
         r_held: bool,
+        gpu: bool,
     ) {
         let t = Tokens::get(ui.ctx());
         let ppp = ui.ctx().pixels_per_point();
@@ -301,14 +302,16 @@ impl Canvas {
             checker_a: [0.85, 0.85, 0.85, 1.0],
             checker_b: [0.64, 0.64, 0.64, 1.0],
         };
-        ui.painter().add(egui_wgpu::Callback::new_paint_callback(
-            rect,
-            CanvasCallback {
-                doc_size: self.doc_size,
-                uploads: Arc::new(uploads),
-                params,
-            },
-        ));
+        if gpu {
+            ui.painter().add(egui_wgpu::Callback::new_paint_callback(
+                rect,
+                CanvasCallback {
+                    doc_size: self.doc_size,
+                    uploads: Arc::new(uploads),
+                    params,
+                },
+            ));
+        }
 
         // Brush cursor ring.
         if let Some(hp) = ui

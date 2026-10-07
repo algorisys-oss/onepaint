@@ -98,7 +98,8 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
     if frame == 12 && app.debug.shot.is_some() {
         ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
     }
-    if frame < 40 {
+    let active = app.debug.demo || app.debug.popover.is_some() || app.debug.shot.is_some();
+    if active && frame < 40 {
         ctx.request_repaint();
     }
     let shots: Vec<_> = ctx.input(|i| {
