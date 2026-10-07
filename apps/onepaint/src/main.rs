@@ -37,6 +37,15 @@ pub enum Popover {
     Layers,
     Color,
     NewDoc,
+    Confirm,
+}
+
+/// An action that would discard unsaved work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pending {
+    New(u32, u32),
+    Open,
+    Close,
 }
 
 pub struct App {
@@ -56,6 +65,8 @@ pub struct App {
     pub gpu_ok: bool,
     pub debug: debug::Debug,
     title: String,
+    pub pending: Option<Pending>,
+    allow_close: bool,
 }
 
 impl App {
@@ -91,6 +102,8 @@ impl App {
             gpu_ok,
             debug,
             title: String::new(),
+            pending: None,
+            allow_close: false,
         };
         if let Some(p) = open {
             app.open_path(p);
@@ -145,6 +158,29 @@ impl App {
                 self.thumbs.clear();
             }
             Err(e) => self.notify(format!("Couldn't open {}: {e}", p.display()), now),
+        }
+    }
+
+    /// Run `action`, or ask first when there are unsaved changes.
+    pub fn request(&mut self, action: Pending, ctx: &egui::Context) {
+        if self.dirty() {
+            self.pending = Some(action);
+            self.popover = Some(Popover::Confirm);
+        } else {
+            self.perform(action, ctx);
+        }
+    }
+
+    pub fn perform(&mut self, action: Pending, ctx: &egui::Context) {
+        self.pending = None;
+        self.popover = None;
+        match action {
+            Pending::New(w, h) => self.new_document(w, h),
+            Pending::Open => self.open_dialog(),
+            Pending::Close => {
+                self.allow_close = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
         }
     }
 
@@ -228,7 +264,7 @@ impl App {
             self.save(false, now);
         }
         if sc(cmd, Key::O) {
-            self.open_dialog();
+            self.request(Pending::Open, ctx);
         }
         if sc(cmd, Key::N) {
             self.popover = Some(Popover::NewDoc);
@@ -295,6 +331,10 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         debug::tick(self, &ctx);
+        if ctx.input(|i| i.viewport().close_requested()) && self.dirty() && !self.allow_close {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.request(Pending::Close, &ctx);
+        }
         let (space, r) = self.shortcuts(&ctx);
         let rect = ui.max_rect();
         let was_stroking = self.session.is_stroking();
@@ -451,5 +491,38 @@ mod tests {
         h.get_by_label("Eraser (E)").click();
         h.run();
         assert_eq!(h.state().session.tool(), Tool::Eraser);
+    }
+
+    #[test]
+    fn unsaved_work_asks_before_new_canvas() {
+        let mut h = harness();
+        h.run();
+        drag_stroke(&mut h, pos2(560.0, 420.0), pos2(720.0, 440.0));
+        let ctx = h.ctx.clone();
+        h.state_mut().request(Pending::New(800, 600), &ctx);
+        h.run();
+        assert_eq!(h.state().popover, Some(Popover::Confirm));
+        assert_eq!(h.state().session.doc().width, 2048, "nothing discarded yet");
+        h.get_by_label("Cancel").click();
+        h.run();
+        assert_eq!(h.state().pending, None);
+        assert!(h.state().dirty());
+        h.state_mut().request(Pending::New(800, 600), &ctx);
+        h.run();
+        h.get_by_label("Discard").click();
+        h.run();
+        assert_eq!(h.state().session.doc().width, 800);
+        assert!(!h.state().dirty());
+    }
+
+    #[test]
+    fn clean_document_skips_the_prompt() {
+        let mut h = harness();
+        h.run();
+        let ctx = h.ctx.clone();
+        h.state_mut().request(Pending::New(640, 480), &ctx);
+        h.run();
+        assert_eq!(h.state().session.doc().width, 640);
+        assert_eq!(h.state().popover, None);
     }
 }

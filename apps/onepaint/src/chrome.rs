@@ -42,6 +42,13 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 Align2::CENTER_CENTER,
                 |ui| new_doc(app, ui),
             ),
+            Popover::Confirm => popover_at(
+                ctx,
+                "confirm",
+                screen.center(),
+                Align2::CENTER_CENTER,
+                |ui| confirm(app, ui),
+            ),
         };
         // Click outside closes the popover (the top bar handles its own toggles).
         let pressed = ctx.input(|i| {
@@ -53,6 +60,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         if let Some(p) = pressed
             && !rect.contains(p)
             && p.y > M + BAR_H + 4.0
+            && app.popover != Some(Popover::Confirm)
         {
             app.popover = None;
         }
@@ -325,8 +333,7 @@ fn menu(app: &mut App, ui: &mut Ui) {
         return;
     }
     if widgets::menu_item(ui, Some("folder-open"), "Open…", "Ctrl+O").clicked() {
-        app.popover = None;
-        app.open_dialog();
+        app.request(crate::Pending::Open, ui.ctx());
     }
     if widgets::menu_item(ui, Some("check"), "Save", "Ctrl+S").clicked() {
         app.popover = None;
@@ -413,8 +420,7 @@ fn new_doc(app: &mut App, ui: &mut Ui) {
     ui.horizontal(|ui| {
         if widgets::primary_button(ui, "Create", 120.0).clicked() {
             let [w, h] = app.new_doc;
-            app.new_document(w, h);
-            app.popover = None;
+            app.request(crate::Pending::New(w, h), ui.ctx());
         }
         if widgets::secondary_button(ui, "Cancel", 90.0).clicked() {
             app.popover = None;
@@ -848,6 +854,45 @@ fn layers(app: &mut App, ui: &mut Ui) {
             let _ = app
                 .session
                 .execute(Command::DeleteLayer { id: active.clone() });
+        }
+    });
+}
+
+fn confirm(app: &mut App, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    let now = ui.input(|i| i.time);
+    let Some(action) = app.pending else {
+        app.popover = None;
+        return;
+    };
+    ui.set_width(340.0);
+    ui.label(
+        RichText::new("Unsaved changes")
+            .font(theme::semibold(16.0))
+            .color(t.fg),
+    );
+    ui.add_space(4.0);
+    ui.label(
+        RichText::new(format!(
+            "Save “{}” before continuing?",
+            app.session.doc().name
+        ))
+        .color(t.fg_muted),
+    );
+    ui.add_space(12.0);
+    ui.horizontal(|ui| {
+        if widgets::primary_button(ui, "Save", 90.0).clicked() {
+            app.save(false, now);
+            if !app.dirty() {
+                app.perform(action, ui.ctx());
+            }
+        }
+        if widgets::secondary_button(ui, "Discard", 90.0).clicked() {
+            app.perform(action, ui.ctx());
+        }
+        if widgets::secondary_button(ui, "Cancel", 90.0).clicked() {
+            app.pending = None;
+            app.popover = None;
         }
     });
 }
