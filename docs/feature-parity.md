@@ -155,7 +155,7 @@ Still to do:
 - [ ] Autosave and the gallery
 - [ ] `.happypaint-book`
 - [ ] `.happypaint-rec`
-- [ ] PSD: read and write layers, groups, masks, blend modes and text
+- [~] PSD: read and write layers, groups, masks, blend modes, clipping, DPI and simple adjustments (8/16-bit RGB/grey read, PSB read; text exported as pixels)
 - [~] PNG, JPEG, WebP, TIFF and Netpbm, keeping ICC profiles and DPI (PNG export only)
 - [ ] GIF, MP4, WebM and PNG-zip export
 - [x] Clipboard: copy and paste images (in-place paste, the system clipboard, layer via copy/cut)

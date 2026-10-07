@@ -335,6 +335,10 @@ fn menu(app: &mut App, ui: &mut Ui) {
         app.popover = None;
         app.export_png(now);
     }
+    if widgets::menu_item(ui, Some("layers"), "Export PSD…", "").clicked() {
+        app.popover = None;
+        app.export_psd(now);
+    }
     widgets::hairline(ui);
     if widgets::menu_item(ui, Some("maximize-2"), "Canvas size…", "").clicked() {
         app.size_dialog = ([app.session.doc().width, app.session.doc().height], (1, 1), true);

@@ -2726,6 +2726,7 @@ dependencies = [
  "onepaint-color",
  "onepaint-compose",
  "onepaint-doc",
+ "onepaint-filters",
  "onepaint-raster",
  "png 0.18.1",
  "serde_json",

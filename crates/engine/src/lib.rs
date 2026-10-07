@@ -535,6 +535,21 @@ impl Session {
         Ok(())
     }
 
+    /// Open a PSD/PSB (8/16-bit RGB or grey) as layers, replacing the current document.
+    pub fn open_psd(&mut self, bytes: &[u8], name: &str) -> Result<(), EngineError> {
+        let mut doc = onepaint_formats::psd::read_psd(bytes)?;
+        doc.name = name.to_string();
+        self.replace_document(doc);
+        Ok(())
+    }
+
+    /// The document as an 8-bit RGB PSD with layers, groups, masks and a merged composite.
+    pub fn export_psd(&mut self) -> Result<Vec<u8>, EngineError> {
+        self.commit_transform();
+        let flat = self.flatten();
+        Ok(onepaint_formats::psd::write_psd(&self.doc, &flat)?)
+    }
+
     /// Serialise the document as `.happypaint` v9 with a JPEG thumbnail.
     pub fn save_happypaint(&mut self) -> Result<Vec<u8>, EngineError> {
         self.commit_transform();

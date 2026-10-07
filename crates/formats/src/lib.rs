@@ -2,6 +2,7 @@
 //! PNG/JPEG helpers. See `docs/specs/05-file-format.md`.
 
 mod image;
+pub mod psd;
 
 pub use image::*;
 

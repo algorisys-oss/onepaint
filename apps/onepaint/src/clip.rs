@@ -78,9 +78,9 @@ pub fn paste(app: &mut App) {
     }
 }
 
-/// Place an image file as a layer, or open a `.happypaint` (asking about unsaved work).
+/// Place an image file as a layer, or open a `.happypaint`/PSD (asking about unsaved work).
 pub fn drop_file(app: &mut App, ctx: &egui::Context, path: Option<std::path::PathBuf>, bytes: Option<&[u8]>) {
-    let native = path.as_ref().and_then(|p| p.extension()).and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("happypaint"));
+    let native = path.as_ref().is_some_and(|p| crate::kind_of(p) != crate::FileKind::Image);
     if native {
         if let Some(p) = path {
             app.open_later = Some(p);

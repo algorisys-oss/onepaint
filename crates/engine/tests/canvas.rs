@@ -47,3 +47,19 @@ fn image_size_resamples_every_layer() {
     s.execute(Command::Undo).unwrap();
     assert_eq!(s.doc().width, 100);
 }
+
+#[test]
+fn psd_export_then_open_keeps_layers_and_pixels() {
+    let mut s = session();
+    s.execute(Command::AddLayer).unwrap();
+    let bytes = s.export_psd().unwrap();
+    assert_eq!(&bytes[..4], b"8BPS");
+    let mut t = Session::new(10, 10, None);
+    t.open_psd(&bytes, "copy").unwrap();
+    assert_eq!((t.doc().width, t.doc().height), (100, 80));
+    assert_eq!(t.doc().root.len(), s.doc().root.len());
+    assert_eq!(t.doc().name, "copy");
+    let c = t.pick_color(15, 15);
+    assert!(c.r > 0.99 && c.g < 0.01);
+    assert!(t.pick_color(50, 50).g > 0.99, "white background survives");
+}

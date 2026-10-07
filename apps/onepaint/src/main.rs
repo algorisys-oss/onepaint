@@ -51,6 +51,23 @@ pub enum Popover {
     ShapeOptions,
 }
 
+/// What a file opens as.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FileKind {
+    Native,
+    Psd,
+    Image,
+}
+
+/// How a file opens, by extension: `.happypaint`, PSD/PSB, or any other image.
+pub fn kind_of(p: &std::path::Path) -> FileKind {
+    match p.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
+        Some("happypaint") => FileKind::Native,
+        Some("psd" | "psb") => FileKind::Psd,
+        _ => FileKind::Image,
+    }
+}
+
 /// An action that would discard unsaved work.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Pending {
@@ -179,10 +196,16 @@ impl App {
 
     pub fn open_path(&mut self, p: PathBuf) {
         let now = 0.0;
-        let native = p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("happypaint"));
+        let kind = kind_of(&p);
+        let native = kind == FileKind::Native;
         let name = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Image").to_string();
         match std::fs::read(&p).map_err(|e| e.to_string()).and_then(|b| {
-            if native { self.session.open_happypaint(&b) } else { self.session.open_image(&b, &name) }.map_err(|e| e.to_string())
+            match kind {
+                FileKind::Native => self.session.open_happypaint(&b),
+                FileKind::Psd => self.session.open_psd(&b, &name),
+                FileKind::Image => self.session.open_image(&b, &name),
+            }
+            .map_err(|e| e.to_string())
         }) {
             Ok(()) => {
                 let d = self.session.doc();
@@ -227,7 +250,7 @@ impl App {
 
     pub fn open_dialog(&mut self) {
         if let Some(p) = rfd::FileDialog::new()
-            .add_filter("Images and documents", &["happypaint", "png", "jpg", "jpeg", "webp", "bmp", "gif", "tif", "tiff"])
+            .add_filter("Images and documents", &["happypaint", "psd", "psb", "png", "jpg", "jpeg", "webp", "bmp", "gif", "tif", "tiff"])
             .pick_file()
         {
             self.open_path(p);
@@ -263,6 +286,18 @@ impl App {
                 self.path = Some(path);
             }
             Err(e) => self.notify(format!("Save failed: {e}"), now),
+        }
+    }
+
+    pub fn export_psd(&mut self, now: f64) {
+        let Some(path) =
+            rfd::FileDialog::new().add_filter("Photoshop", &["psd"]).set_file_name(format!("{}.psd", self.session.doc().name)).save_file()
+        else {
+            return;
+        };
+        match self.session.export_psd().map_err(|e| e.to_string()).and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string())) {
+            Ok(()) => self.notify(format!("Exported {}", path.display()), now),
+            Err(e) => self.notify(format!("Export failed: {e}"), now),
         }
     }
 

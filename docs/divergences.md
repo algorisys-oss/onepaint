@@ -16,3 +16,4 @@ short by fixing entries, not by growing it.
 | 9 | Spatial adjustment layers (blur, motion blur, sharpen) | Preserved in files and editable, but not rendered | Rendered over the backdrop | The tile compositor needs a neighbourhood-aware pass; this comes with GPU compositing. |
 | 10 | Adjustment maths precision | f32 CPU reference (spec 10) | GPU with 16F storage and an 8-bit LUT texture | Within 16F rounding; the LUT lookup replicates the texel-centre bilinear sampling. |
 | 11 | Text rendering | cosmic-text/swash with system fonts; the outline is a dilated glyph mask; balloons are not drawn | Canvas2D `fillText`/`strokeText`, balloons drawn | Metrics differ slightly by font engine; balloons come next. |
+| 12 | PSD text layers | Exported as raster layers (their rendering); no `TySh` editable text | Editable text through ag-psd | Port the `TySh` engine data writer. |

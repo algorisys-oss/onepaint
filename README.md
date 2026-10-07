@@ -66,6 +66,9 @@ Slices 6 and 7 add:
 - Layer colour labels.
 - Progressive compositing for big documents.
 
+Slice 8 adds PSD: open `.psd`/`.psb` (layers, groups, masks, blend modes,
+clipping) and File ▸ Export PSD….
+
 [`docs/feature-parity.md`](docs/feature-parity.md) tracks every happypaint
 feature, and [`docs/divergences.md`](docs/divergences.md) lists the known
 differences.
