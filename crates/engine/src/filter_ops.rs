@@ -24,6 +24,7 @@ impl Session {
     pub(crate) fn begin_filter(&mut self, kind: &str) -> Result<(), EngineError> {
         self.commit_filter();
         self.commit_transform();
+        self.ensure_raster();
         let kind = Kind::parse(kind).ok_or_else(|| EngineError::UnknownPreset(kind.to_string()))?;
         let Some(l) = self.doc.layer(&self.active).filter(|l| l.visible && !l.locked && l.adjustment.is_none()) else { return Ok(()) };
         self.filter =

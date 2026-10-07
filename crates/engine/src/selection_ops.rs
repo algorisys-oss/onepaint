@@ -112,6 +112,7 @@ impl Session {
             Command::Fill { x, y, tolerance, grow } => self.fill(x, y, tolerance, grow.min(8)),
             Command::FillSelection => self.fill_selection(),
             Command::ClearSelected => {
+                self.ensure_raster();
                 if self.clip.is_none() {
                     let id = self.active.clone();
                     if self.doc.layer(&id).is_some() {
@@ -141,6 +142,7 @@ impl Session {
 
     /// Paint bucket (happypaint `computeFill`, PE:1559-1691).
     fn fill(&mut self, x: i32, y: i32, tol: f32, grow: u32) {
+        self.ensure_raster();
         let (w, h) = (self.doc.width, self.doc.height);
         let Some(l) = self.editable_active() else {
             return;
@@ -169,6 +171,7 @@ impl Session {
 
     /// Source-over the current colour at the selection's coverage.
     fn fill_selection(&mut self) {
+        self.ensure_raster();
         let Some(clip) = self.clip.clone() else {
             return;
         };

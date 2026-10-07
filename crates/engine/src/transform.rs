@@ -187,6 +187,7 @@ impl Session {
 
     pub(crate) fn begin_transform(&mut self) -> Result<(), EngineError> {
         self.commit_transform();
+        self.ensure_raster();
         self.stroke_cancel();
         let id = self.active.clone();
         let clip = self.clip.clone();

@@ -10,6 +10,7 @@ mod filter_ops;
 mod mask_ops;
 mod paint_ops;
 mod selection_ops;
+mod text_ops;
 pub mod transform;
 pub mod view;
 
@@ -237,6 +238,23 @@ pub enum Command {
     SetColorLabel {
         id: NodeId,
         label: Option<String>,
+    },
+    /// Add a text object to the active text layer (or a new "Text" layer).
+    AddText {
+        spec: onepaint_text::TextSpec,
+    },
+    UpdateText {
+        id: NodeId,
+        index: usize,
+        spec: onepaint_text::TextSpec,
+    },
+    DeleteText {
+        id: NodeId,
+        index: usize,
+    },
+    /// Turn a text layer into plain pixels.
+    RasterizeText {
+        id: NodeId,
     },
 }
 
@@ -536,6 +554,9 @@ impl Session {
     pub fn stroke_begin(&mut self, p: StrokePoint) {
         self.commit_filter();
         self.commit_transform();
+        if !self.mask_target() {
+            self.ensure_raster();
+        }
         self.stroke_cancel();
         let Some(layer) = self.doc.layer(&self.active) else {
             return;
@@ -736,6 +757,10 @@ impl Session {
             }
             Command::AddAdjustmentLayer { kind, params } => self.add_adjustment_layer(&kind, params),
             Command::SetColorLabel { id, label } => self.set_color_label(&id, label),
+            Command::AddText { spec } => self.add_text(spec),
+            Command::UpdateText { id, index, spec } => self.update_text(&id, index, Some(spec)),
+            Command::DeleteText { id, index } => self.update_text(&id, index, None),
+            Command::RasterizeText { id } => self.rasterize_text(&id),
             Command::AddMask => self.add_mask(),
             Command::DeleteMask { id } => self.delete_mask(&id),
             Command::ApplyMask { id } => self.apply_mask(&id),
