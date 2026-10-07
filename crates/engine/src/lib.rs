@@ -43,6 +43,7 @@ pub enum Tool {
     Move,
     Gradient,
     Shape,
+    Text,
 }
 
 /// Optional layer property edits; `None` leaves a property unchanged.

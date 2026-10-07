@@ -7,6 +7,7 @@ mod chrome;
 mod clip;
 mod debug;
 mod progressive;
+mod text_ui;
 mod thumbs;
 
 use canvas::Canvas;
@@ -406,6 +407,9 @@ impl App {
             if sc(Modifiers::NONE, Key::E) {
                 self.set_tool(Tool::Eraser);
             }
+            if sc(Modifiers::NONE, Key::T) {
+                self.set_tool(Tool::Text);
+            }
             if sc(Modifiers::NONE, Key::U) {
                 self.set_tool(Tool::Shape);
             }
@@ -499,6 +503,7 @@ impl eframe::App for App {
         if !self.hide_ui {
             chrome::show(self, &ctx);
         }
+        text_ui::show(self, &ctx);
         let title = format!("{}{} — onepaint", if self.dirty() { "• " } else { "" }, self.session.doc().name);
         if title != self.title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
@@ -810,5 +815,26 @@ mod tests {
         let app = h.state();
         let d = app.canvas.view.screen_to_doc([600.0, 250.0]);
         assert!(app.session.doc().layer(app.session.active()).unwrap().pixels.get(d[0] as i32, d[1] as i32)[3] > 0.99);
+    }
+
+    #[test]
+    fn text_tool_creates_edits_and_moves_text() {
+        let mut h = harness();
+        h.run();
+        key(&mut h, egui::Key::T, egui::Modifiers::NONE);
+        click(&mut h, pos2(500.0, 300.0));
+        h.run();
+        assert!(h.state().canvas.text_edit.is_some(), "editor opened");
+        h.event(Event::Text("Hello".into()));
+        h.run();
+        let id = h.state().session.active().to_string();
+        assert_eq!(h.state().session.texts(&id).first().map(|t| t.text.clone()), Some("Hello".into()));
+        h.get_by_label("Done").click();
+        h.run();
+        assert!(h.state().canvas.text_edit.is_none());
+        // Drag the text by its body to move it.
+        let x0 = h.state().session.texts(&id)[0].x;
+        drag_stroke(&mut h, pos2(505.0, 310.0), pos2(605.0, 310.0));
+        assert!(h.state().session.texts(&id)[0].x > x0 + 100.0);
     }
 }

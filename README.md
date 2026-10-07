@@ -58,6 +58,14 @@ also work as adjustment layers.
 - The shape tool: line, rect, ellipse and polygon, with optional fill.
 - Quick-shape: hold at the end of a stroke to straighten it.
 
+Slices 6 and 7 add:
+
+- The full happypaint brush library: 124 presets with tips, paper grain
+  and airbrush.
+- Text layers (T).
+- Layer colour labels.
+- Progressive compositing for big documents.
+
 [`docs/feature-parity.md`](docs/feature-parity.md) tracks every happypaint
 feature, and [`docs/divergences.md`](docs/divergences.md) lists the known
 differences.

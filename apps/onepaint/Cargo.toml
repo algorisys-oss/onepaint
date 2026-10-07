@@ -30,6 +30,7 @@ arboard = { version = "3.6", default-features = false, features = ["wayland-data
 onepaint-formats = { workspace = true }
 onepaint-selection = { workspace = true }
 onepaint-filters = { workspace = true }
+onepaint-text = { workspace = true }
 
 [dev-dependencies]
 egui_kittest = { workspace = true, features = ["eframe"] }

@@ -5,6 +5,7 @@
 //! - `ONEPAINT_POPOVER=layers|brushes|color|menu|new` opens a popover.
 //! - `ONEPAINT_THEME=light` starts in the light theme.
 //! - `ONEPAINT_TRANSFORM=1` starts a rotated move on the active layer.
+//! - `ONEPAINT_TEXT=1` adds a text object and opens its editor.
 //! - `ONEPAINT_EXIT=1` closes the app after the screenshot.
 
 use crate::{App, Popover};
@@ -21,6 +22,7 @@ pub struct Debug {
     exit: bool,
     pub light: bool,
     transform: bool,
+    text: bool,
 }
 
 impl Debug {
@@ -43,6 +45,7 @@ impl Debug {
             exit: var("ONEPAINT_EXIT").is_some(),
             light: var("ONEPAINT_THEME").is_some_and(|t| t == "light"),
             transform: var("ONEPAINT_TRANSFORM").is_some(),
+            text: var("ONEPAINT_TEXT").is_some(),
         }
     }
 }
@@ -87,6 +90,24 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
             let _ = app.session.execute(Command::SelectShape { contours: vec![contour], mode: onepaint_selection::Mode::Replace });
             app.set_tool(onepaint_engine::Tool::SelectEllipse);
         }
+    }
+    if frame == 3 && app.debug.text {
+        let spec = onepaint_text::TextSpec {
+            text: "onepaint\ntext layers".into(),
+            x: 700.0,
+            y: 520.0,
+            font_size_px: 120.0,
+            bold: true,
+            color: "#4c8dff".into(),
+            outline_width: Some(6.0),
+            outline_color: Some("#1d1d1f".into()),
+            rotation: -0.12,
+            ..Default::default()
+        };
+        let _ = app.session.execute(Command::AddText { spec: spec.clone() });
+        app.set_tool(onepaint_engine::Tool::Text);
+        let id = app.session.active().to_string();
+        app.canvas.text_edit = Some(crate::canvas::TextEdit { target: Some((id, 0)), spec });
     }
     if frame == 3 && app.debug.transform {
         app.set_tool(onepaint_engine::Tool::Move);

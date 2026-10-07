@@ -145,6 +145,18 @@ enum Drag {
         start: Pt,
         shape: Option<Shape>,
     },
+    TextMove {
+        grab: Pt,
+        start: Box<onepaint_text::TextSpec>,
+    },
+}
+
+/// The text object being created or edited with the text tool.
+#[derive(Clone, Debug)]
+pub struct TextEdit {
+    /// `(layer id, index)` once the object exists in the document.
+    pub target: Option<(String, usize)>,
+    pub spec: onepaint_text::TextSpec,
 }
 
 /// Raw points of the brush stroke in progress, for quick-shape.
@@ -175,6 +187,9 @@ pub struct Canvas {
     hold: HoldTracker,
     /// Composite tiles still waiting for a frame's budget.
     pending: std::collections::BTreeSet<(i32, i32)>,
+    pub text_edit: Option<TextEdit>,
+    /// Style for new text objects (happypaint's text-store style).
+    pub text_style: onepaint_text::TextSpec,
 }
 
 impl Canvas {
@@ -194,6 +209,8 @@ impl Canvas {
             xform: TransformParams::default(),
             hold: HoldTracker::default(),
             pending: Default::default(),
+            text_edit: None,
+            text_style: onepaint_text::TextSpec::default(),
         }
     }
 
@@ -286,6 +303,20 @@ impl Canvas {
                 Drag::Gradient { start: d }
             }
             Tool::Shape => Drag::ShapeTool { start: d, shape: None },
+            Tool::Text => match session.text_at(d[0], d[1]) {
+                Some((id, i)) => {
+                    let spec = session.texts(&id)[i].clone();
+                    self.text_edit = Some(TextEdit { target: Some((id, i)), spec: spec.clone() });
+                    Drag::TextMove { grab: d, start: Box::new(spec) }
+                }
+                None => {
+                    let c = session.color();
+                    let spec =
+                        onepaint_text::TextSpec { text: String::new(), x: d[0], y: d[1], color: c.to_hex(), ..self.text_style.clone() };
+                    self.text_edit = Some(TextEdit { target: None, spec });
+                    Drag::None
+                }
+            },
             Tool::Fill => {
                 let o = self.options;
                 let _ = session.execute(Command::Fill {
@@ -434,6 +465,15 @@ impl Canvas {
                             let start = *start;
                             let stops = self.gradient_stops(session);
                             session.gradient_update(start, d, self.options.gradient_shape, &stops);
+                        }
+                        Drag::TextMove { grab, start } => {
+                            let (grab, start) = (*grab, start.clone());
+                            if let Some(te) = self.text_edit.as_mut()
+                                && let Some((id, i)) = te.target.clone()
+                            {
+                                te.spec = onepaint_text::TextSpec { x: start.x + d[0] - grab[0], y: start.y + d[1] - grab[1], ..*start };
+                                let _ = session.execute(Command::UpdateText { id, index: i, spec: te.spec.clone() });
+                            }
                         }
                         Drag::ShapeTool { start, shape } => {
                             let alt = ui.input(|i| i.modifiers.alt);
@@ -640,6 +680,15 @@ impl Canvas {
         r: bool,
         resp: &egui::Response,
     ) {
+        if let Some(te) = &self.text_edit
+            && session.tool() == Tool::Text
+        {
+            let spec =
+                if te.spec.text.is_empty() { onepaint_text::TextSpec { text: " ".into(), ..te.spec.clone() } } else { te.spec.clone() };
+            if let Some(q) = onepaint_text::Renderer::new().quad(&spec) {
+                self.outline(ui, rect, &q, true);
+            }
+        }
         if let Some((_, b)) = session.transform_state() {
             let h = self.xform.handles(self.doc_f(), b);
             self.outline(ui, rect, &h.corners, true);

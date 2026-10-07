@@ -2631,6 +2631,7 @@ dependencies = [
  "onepaint-raster",
  "onepaint-selection",
  "onepaint-stroke",
+ "onepaint-text",
  "onepaint-ui-kit",
  "rayon",
  "rfd",

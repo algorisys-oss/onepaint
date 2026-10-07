@@ -41,6 +41,7 @@ pub static ICONS: &[(&str, &[u8])] = icons![
     "wand",
     "paint-bucket",
     "move",
+    "type",
     "square",
     "contrast",
     "sparkles",

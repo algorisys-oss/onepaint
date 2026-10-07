@@ -26,7 +26,7 @@ Sources, all under `../happypaint/frontend/src/`:
 - [ ] mixer
 - [~] gradient, with output to pixels or a fill layer (5 shapes, colour→clear or →BG, reverse, selection-aware; fill-layer output not done)
 - [ ] liquify (all modes)
-- [ ] text
+- [x] text (create, edit, move, style, wrap, outline, background, rasterise)
 - [ ] pen, with output to a shape layer, a path or pixels
 - [x] shape (line, rect, ellipse and 3–12-sided polygon, stroked with the brush, optional fill)
 - [ ] panel (comic panels)
@@ -59,7 +59,7 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] Clipping masks (clip families)
 - [x] Alpha lock
 - [ ] Off-canvas pixel overflow
-- [ ] Text layers: multiple rich-text objects and balloons, vector until baked
+- [~] Text layers: multiple rich-text objects and balloons, vector until baked (rich runs render; balloons are kept in files but not drawn; no rich-text editing UI yet)
 - [ ] Vector path layers, plus path ops
 - [ ] Adjustment layers and fill layers
 - [ ] Per-layer smart-filter stacks

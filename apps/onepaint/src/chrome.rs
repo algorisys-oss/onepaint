@@ -162,6 +162,9 @@ fn top_bar(app: &mut App, ctx: &egui::Context) {
                         }
                         app.set_tool(Tool::Shape);
                     }
+                    if icons::button(ui, "type", 32.0, tool == Tool::Text, "Text (T)").clicked() {
+                        app.set_tool(Tool::Text);
+                    }
                     if icons::button(ui, "pipette", 32.0, tool == Tool::Eyedropper, "Eyedropper (I)").clicked() {
                         app.set_tool(Tool::Eyedropper);
                     }
