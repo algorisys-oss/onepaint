@@ -25,9 +25,10 @@ onepaint-ui-kit = { path = "crates/ui_kit" }
 
 thiserror = "2"
 serde = { version = "1", features = ["derive", "rc"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 bytemuck = { version = "1", features = ["derive"] }
 rayon = "1"
+uuid = { version = "1", features = ["v4"] }
 log = "0.4"
 half = "2"
 eframe = { version = "0.36", default-features = false }

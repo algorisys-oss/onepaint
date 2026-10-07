@@ -1,1 +1,238 @@
-//! onepaint-compose
+//! CPU reference compositor: walks the layer tree per 256² tile.
+//!
+//! Semantics follow happypaint `engine/compositor.ts:1462-2091` (isolated
+//! groups, clip families, masks, inherit alpha). See `docs/specs/02-compositor.md`.
+
+pub mod blend;
+
+use blend::{blend_px, blend_px_alpha_lock, clip_over};
+use onepaint_doc::{BlendMode, Document, Layer, Node};
+use onepaint_raster::{Px, Rect, Surface, TILE, TILE_PX, Tile};
+use rayon::prelude::*;
+
+type Buf = Vec<f32>;
+
+/// How a stroke buffer lands on its layer (live preview and flatten).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum StrokeMode {
+    Paint(BlendMode),
+    Erase,
+    AlphaLock(BlendMode),
+}
+
+/// Apply one stroke pixel to a layer pixel (happypaint `compositor.ts:2191-2264`).
+#[inline]
+pub fn apply_stroke_px(dst: Px, src: Px, opacity: f32, mode: StrokeMode) -> Px {
+    match mode {
+        StrokeMode::Paint(m) => blend_px(m, dst, src, opacity),
+        StrokeMode::Erase => {
+            let k = 1.0 - src[3] * opacity;
+            dst.map(|v| v * k)
+        }
+        StrokeMode::AlphaLock(m) => blend_px_alpha_lock(m, dst, src, opacity),
+    }
+}
+
+/// A stroke in progress, composited live onto its layer.
+#[derive(Clone, Copy)]
+pub struct StrokeOverlay<'a> {
+    pub layer_id: &'a str,
+    pub stroke: &'a Surface,
+    pub opacity: f32,
+    pub mode: StrokeMode,
+}
+
+#[inline]
+fn px(b: &[f32], i: usize) -> Px {
+    [b[i], b[i + 1], b[i + 2], b[i + 3]]
+}
+
+fn zeros() -> Buf {
+    vec![0.0; TILE_PX * 4]
+}
+
+/// A layer's pixels on one tile, with any live stroke applied and its mask multiplied in.
+fn layer_content(l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeOverlay>) -> Option<Buf> {
+    let base = l.pixels.tile(tx, ty);
+    let stroke = ov
+        .filter(|o| o.layer_id == l.id)
+        .and_then(|o| o.stroke.tile(tx, ty).map(|t| (o, t)));
+    if base.is_none() && stroke.is_none() {
+        return None;
+    }
+    let mut buf = base.map(|t| t.to_f32()).unwrap_or_else(zeros);
+    if let Some((o, st)) = stroke {
+        let s = st.to_f32();
+        for i in (0..buf.len()).step_by(4) {
+            let r = apply_stroke_px(px(&buf, i), px(&s, i), o.opacity, o.mode);
+            buf[i..i + 4].copy_from_slice(&r);
+        }
+    }
+    if l.mask_enabled
+        && let Some(mask) = &l.mask
+    {
+        let m = mask.tile(tx, ty)?.to_f32();
+        for i in (0..buf.len()).step_by(4) {
+            let k = m[i];
+            for c in 0..4 {
+                buf[i + c] *= k;
+            }
+        }
+    }
+    Some(buf)
+}
+
+fn blend_into(target: &mut [f32], src: &[f32], mode: BlendMode, opacity: f32) {
+    if opacity <= 0.0 {
+        return;
+    }
+    if mode == BlendMode::Normal {
+        for i in (0..target.len()).step_by(4) {
+            let sa = src[i + 3] * opacity;
+            if sa <= 0.0 && src[i] == 0.0 && src[i + 1] == 0.0 && src[i + 2] == 0.0 {
+                continue;
+            }
+            let k = 1.0 - sa;
+            for c in 0..4 {
+                target[i + c] = src[i + c] * opacity + target[i + c] * k;
+            }
+        }
+        return;
+    }
+    for i in (0..target.len()).step_by(4) {
+        let r = blend_px(mode, px(target, i), px(src, i), opacity);
+        target[i..i + 4].copy_from_slice(&r);
+    }
+}
+
+fn clip_into(target: &mut [f32], src: &[f32], opacity: f32) {
+    for i in (0..target.len()).step_by(4) {
+        let r = clip_over(px(target, i), px(src, i), opacity);
+        target[i..i + 4].copy_from_slice(&r);
+    }
+}
+
+/// The clipped layers that directly follow `nodes[i]`.
+fn riders(nodes: &[Node], i: usize) -> usize {
+    let mut j = i + 1;
+    while j < nodes.len() && matches!(&nodes[j], Node::Layer(l) if l.clipped) {
+        j += 1;
+    }
+    j
+}
+
+fn draw_clipped(fam: &mut [f32], riders: &[Node], tx: i32, ty: i32, ov: Option<&StrokeOverlay>) {
+    for r in riders {
+        let Node::Layer(c) = r else { continue };
+        if !c.visible || c.opacity <= 0.0 {
+            continue;
+        }
+        if let Some(cb) = layer_content(c, tx, ty, ov) {
+            // A clipped layer's own blend mode is ignored (happypaint behaviour).
+            clip_into(fam, &cb, c.opacity);
+        }
+    }
+}
+
+fn composite_nodes(nodes: &[Node], tx: i32, ty: i32, target: &mut Buf, ov: Option<&StrokeOverlay>) {
+    let mut i = 0;
+    while i < nodes.len() {
+        let j = riders(nodes, i);
+        match &nodes[i] {
+            Node::Group(g) => {
+                if g.visible && g.opacity > 0.0 && !g.children.is_empty() {
+                    let mut buf = zeros();
+                    composite_nodes(&g.children, tx, ty, &mut buf, ov);
+                    draw_clipped(&mut buf, &nodes[i + 1..j], tx, ty, ov);
+                    blend_into(target, &buf, g.blend_mode, g.opacity);
+                }
+            }
+            Node::Layer(l) => {
+                if l.visible && l.opacity > 0.0 {
+                    let family = &nodes[i + 1..j];
+                    if family.is_empty() {
+                        draw_layer(target, l, tx, ty, ov);
+                    } else {
+                        let mut fam = layer_content(l, tx, ty, ov).unwrap_or_else(zeros);
+                        draw_clipped(&mut fam, family, tx, ty, ov);
+                        if l.inherit_alpha {
+                            clip_into(target, &fam, l.opacity);
+                        } else {
+                            blend_into(target, &fam, l.blend_mode, l.opacity);
+                        }
+                    }
+                }
+            }
+        }
+        i = j;
+    }
+}
+
+fn draw_layer(target: &mut Buf, l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeOverlay>) {
+    let Some(mut c) = layer_content(l, tx, ty, ov) else {
+        return;
+    };
+    if l.inherit_alpha {
+        for i in (0..c.len()).step_by(4) {
+            let a = target[i + 3];
+            for k in 0..4 {
+                c[i + k] *= a;
+            }
+        }
+    }
+    blend_into(target, &c, l.blend_mode, l.opacity);
+}
+
+/// Composite one tile as premultiplied linear f32.
+pub fn composite_tile(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverlay>) -> Buf {
+    let mut buf = zeros();
+    composite_nodes(&doc.root, tx, ty, &mut buf, ov);
+    buf
+}
+
+/// Composite many tiles in parallel.
+pub fn composite_tiles(
+    doc: &Document,
+    keys: &[(i32, i32)],
+    ov: Option<&StrokeOverlay>,
+) -> Vec<((i32, i32), Tile)> {
+    keys.par_iter()
+        .map(|&(tx, ty)| ((tx, ty), Tile::from_f32(&composite_tile(doc, tx, ty, ov))))
+        .collect()
+}
+
+/// Tiles covering the canvas.
+pub fn doc_tiles(doc: &Document) -> Vec<(i32, i32)> {
+    doc.bounds().tiles().collect()
+}
+
+/// One composited pixel (for tests and the eyedropper).
+pub fn composite_px(doc: &Document, x: i32, y: i32) -> Px {
+    let (tx, ty) = onepaint_raster::tile_of(x, y);
+    let b = composite_tile(doc, tx, ty, None);
+    let i = (((y - ty * TILE) * TILE + (x - tx * TILE)) * 4) as usize;
+    px(&b, i)
+}
+
+/// The whole canvas as row-major premultiplied linear f32 RGBA.
+pub fn flatten(doc: &Document, ov: Option<&StrokeOverlay>) -> Vec<f32> {
+    let (w, h) = (doc.width as usize, doc.height as usize);
+    let tiles: Vec<_> = doc_tiles(doc)
+        .into_par_iter()
+        .map(|(tx, ty)| ((tx, ty), composite_tile(doc, tx, ty, ov)))
+        .collect();
+    let mut out = vec![0.0; w * h * 4];
+    let bounds = doc.bounds();
+    for ((tx, ty), b) in tiles {
+        let Some(ix) = bounds.intersect(&Rect::from_tile(tx, ty)) else {
+            continue;
+        };
+        for y in ix.y..ix.bottom() {
+            let src = (((y - ty * TILE) * TILE + (ix.x - tx * TILE)) * 4) as usize;
+            let dst = ((y as usize * w) + ix.x as usize) * 4;
+            let n = ix.w as usize * 4;
+            out[dst..dst + n].copy_from_slice(&b[src..src + n]);
+        }
+    }
+    out
+}
