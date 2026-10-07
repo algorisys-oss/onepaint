@@ -2578,6 +2578,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "onepaint-selection"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "onepaint-stroke"
 version = "0.1.0"
 dependencies = [
