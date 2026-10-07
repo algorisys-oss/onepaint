@@ -71,7 +71,7 @@ crate**.
 | Concern | Choice | Notes |
 |---|---|---|
 | Language | Rust stable, edition 2024, Cargo workspace | `unsafe` is forbidden by default. Allow it only per module, with a `// SAFETY:` comment. |
-| UI | **egui / eframe**, with the `wgpu` backend | Docked panels via `egui_dock`. The UI stays a thin layer over the engine. |
+| UI | **egui / eframe**, with the `wgpu` backend, plus our own `ui_kit` design system | The UI must be **modern and beautiful**; see `docs/design-system.md`. Never ship stock egui visuals. The UI stays a thin layer over the engine. |
 | GPU | **wgpu**, with **WGSL** shaders | GPU-first engine: layers live as GPU tiles. The canvas is an `egui_wgpu` paint callback, so it never round-trips through egui textures. Use compute passes for filters, flood fill, magic wand and selection feathering where they are faster. |
 | Shaders | `.wgsl` files under `crates/gpu/shaders/` | Port happypaint's ~62 GLSL ES 3.0 programs. naga can translate them as a first pass, but hand-review every result. |
 | Pixels | 256² copy-on-write `Arc` tiles, premultiplied alpha | Formats are RGBA8, RGBA16F and RGBA32F, matching happypaint. |
@@ -109,6 +109,7 @@ crates/
   input/       PenEvent, pointer router, gestures, palm rejection, pressure synthesis
   engine/      Session facade: command API, tools, events. No UI imports.
   cloud/       provider trait; Google Drive via a loopback OAuth/PKCE flow
+  ui_kit/      design system: theme tokens, fonts, icons, motion, all widgets
 apps/
   onepaint/        eframe app (UI only)
   onepaint-cli/    headless: render, convert and replay recordings
@@ -152,6 +153,10 @@ grep across both repos.
 - Errors: `thiserror` in libraries, `anyhow` only in `apps/*`. No `unwrap()`
   outside tests, except where an invariant is proven by a comment.
 - Shaders live in `.wgsl` files, not in Rust string literals.
+- **UI:** app code uses only `ui_kit` components and theme tokens. It never
+  uses raw egui widgets, hard-coded colors or magic spacing. Each new
+  component needs snapshot tests in both themes. The full rules are in
+  `docs/design-system.md`.
 
 ## Commands
 
