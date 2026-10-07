@@ -568,6 +568,10 @@ fn layers(app: &mut App, ui: &mut Ui) {
             if app.layer_drag.as_deref() == Some(r.id.as_str()) {
                 ui.painter().rect_filled(rect, t.radius, t.hover);
             }
+            if let Some(c) = app.session.color_label(&r.id).and_then(|l| label_color(&l, t.dark())) {
+                let bar = egui::Rect::from_min_size(rect.left_top() + vec2(1.0, 6.0), vec2(3.0, rect.height() - 12.0));
+                ui.painter().rect_filled(bar, 1.5, c);
+            }
             if sel {
                 ui.painter().rect_filled(rect, t.radius, t.accent_soft);
             } else if resp.hovered() {
@@ -748,6 +752,32 @@ fn layers(app: &mut App, ui: &mut Ui) {
             }
         });
     }
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Label").color(t.fg_muted));
+        let current = app.session.color_label(&active);
+        if ui
+            .add(egui::Button::new(RichText::new("∅").color(t.fg_muted)).min_size(vec2(20.0, 20.0)).fill(if current.is_none() {
+                t.hover
+            } else {
+                t.field
+            }))
+            .on_hover_text("No label")
+            .clicked()
+        {
+            let _ = app.session.execute(Command::SetColorLabel { id: active.clone(), label: None });
+        }
+        for name in onepaint_engine::Session::COLOR_LABELS {
+            let Some(c) = label_color(name, t.dark()) else { continue };
+            let (r, resp) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::click());
+            ui.painter().circle_filled(r.center(), 7.0, c);
+            if current.as_deref() == Some(name) {
+                ui.painter().circle_stroke(r.center(), 9.0, egui::Stroke::new(2.0, t.fg));
+            }
+            if resp.on_hover_text(name).clicked() {
+                let _ = app.session.execute(Command::SetColorLabel { id: active.clone(), label: Some(name.to_string()) });
+            }
+        }
+    });
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         let path = app.session.doc().path_of(&active).unwrap_or_default();
@@ -1087,4 +1117,26 @@ fn shape_options(app: &mut App, ui: &mut Ui) {
             .font(theme::medium(10.5))
             .color(t.fg_faint),
     );
+}
+
+/// happypaint's layer label colours (global.css `--layer-label-*`).
+fn label_color(name: &str, dark: bool) -> Option<egui::Color32> {
+    let hex: u32 = match (name, dark) {
+        ("red", true) => 0xe5484d,
+        ("orange", true) => 0xe8862f,
+        ("yellow", true) => 0xddb42c,
+        ("green", true) => 0x3ec46d,
+        ("blue", true) => 0x4c8dff,
+        ("violet", true) => 0xa06cf0,
+        ("gray", true) => 0x8a8a90,
+        ("red", false) => 0xcc3237,
+        ("orange", false) => 0xc46c15,
+        ("yellow", false) => 0xb08e10,
+        ("green", false) => 0x2a9c55,
+        ("blue", false) => 0x2f74e8,
+        ("violet", false) => 0x8348d6,
+        ("gray", false) => 0x75757c,
+        _ => return None,
+    };
+    Some(egui::Color32::from_rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8))
 }

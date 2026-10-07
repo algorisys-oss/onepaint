@@ -234,3 +234,16 @@ fn layer_drop_resolution() {
     s.execute(Command::MoveLayer { id: bg.clone(), parent: p, index: i }).unwrap();
     assert_eq!(s.doc().parent_of(&bg), Some(Some(g.clone())));
 }
+
+#[test]
+fn colour_labels_set_clear_and_undo() {
+    let mut s = new_session();
+    let id = s.active().to_string();
+    s.execute(Command::SetColorLabel { id: id.clone(), label: Some("blue".into()) }).unwrap();
+    assert_eq!(s.color_label(&id).as_deref(), Some("blue"));
+    s.execute(Command::SetColorLabel { id: id.clone(), label: None }).unwrap();
+    assert_eq!(s.color_label(&id), None);
+    s.execute(Command::Undo).unwrap();
+    assert_eq!(s.color_label(&id).as_deref(), Some("blue"));
+    assert!(s.execute(Command::SetColorLabel { id, label: Some("chartreuse".into()) }).is_err());
+}

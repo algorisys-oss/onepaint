@@ -233,6 +233,11 @@ pub enum Command {
     SetMaskTarget {
         on: bool,
     },
+    /// Organisational colour label (red, orange, yellow, green, blue, violet, gray) or none.
+    SetColorLabel {
+        id: NodeId,
+        label: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -730,6 +735,7 @@ impl Session {
                 Ok(())
             }
             Command::AddAdjustmentLayer { kind, params } => self.add_adjustment_layer(&kind, params),
+            Command::SetColorLabel { id, label } => self.set_color_label(&id, label),
             Command::AddMask => self.add_mask(),
             Command::DeleteMask { id } => self.delete_mask(&id),
             Command::ApplyMask { id } => self.apply_mask(&id),
@@ -837,6 +843,36 @@ impl Session {
             }
         }
         Some((parent, index))
+    }
+
+    /// The layer colour labels happypaint offers (`engine/layer.ts:43`).
+    pub const COLOR_LABELS: [&'static str; 7] = ["red", "orange", "yellow", "green", "blue", "violet", "gray"];
+
+    pub fn color_label(&self, id: &str) -> Option<String> {
+        let extra = match self.doc.find(id)? {
+            Node::Layer(l) => &l.extra,
+            Node::Group(g) => &g.extra,
+        };
+        extra.get("colorLabel")?.as_str().map(str::to_string)
+    }
+
+    fn set_color_label(&mut self, id: &str, label: Option<String>) -> Result<(), EngineError> {
+        self.doc.find(id).ok_or_else(|| EngineError::NoSuchLayer(id.into()))?;
+        if label.as_deref().is_some_and(|l| !Self::COLOR_LABELS.contains(&l)) {
+            return Err(EngineError::NoSuchLayer(format!("label {}", label.unwrap_or_default())));
+        }
+        self.tree_edit(None, |s| {
+            let extra = match s.doc.find_mut(id) {
+                Some(Node::Layer(l)) => &mut l.extra,
+                Some(Node::Group(g)) => &mut g.extra,
+                None => return Ok(()),
+            };
+            match label {
+                Some(l) => extra.insert("colorLabel".into(), serde_json::Value::String(l)),
+                None => extra.remove("colorLabel"),
+            };
+            Ok(())
+        })
     }
 
     fn next_layer_name(&self) -> String {

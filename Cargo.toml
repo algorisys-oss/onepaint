@@ -24,6 +24,7 @@ onepaint-engine = { path = "crates/engine" }
 onepaint-ui-kit = { path = "crates/ui_kit" }
 onepaint-selection = { path = "crates/selection" }
 onepaint-filters = { path = "crates/filters" }
+onepaint-text = { path = "crates/text" }
 
 thiserror = "2"
 serde = { version = "1", features = ["derive", "rc"] }

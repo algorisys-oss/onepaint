@@ -54,7 +54,7 @@ Sources, all under `../happypaint/frontend/src/`:
 ## Layers
 - [x] Add, delete, reorder, duplicate and merge
 - [x] Nested groups (with drag-and-drop into and out of groups)
-- [~] Opacity, visibility and color labels (color labels are preserved in files but not shown)
+- [x] Opacity, visibility and color labels
 - [x] Layer masks (add, which can come from the selection; paint, enable, apply, delete)
 - [x] Clipping masks (clip families)
 - [x] Alpha lock
