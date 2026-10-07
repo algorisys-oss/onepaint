@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Headless render of the present pass; skipped when no GPU adapter exists.
 use onepaint_gpu::{CanvasGpu, ViewParams};
 use onepaint_raster::Tile;

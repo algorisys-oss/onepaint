@@ -22,7 +22,7 @@ fn dabs(c: &mut Criterion) {
         };
         c.bench_function(&format!("rasterize_dab r{r}"), |b| {
             let mut s = Surface::new();
-            b.iter(|| rasterize_dab(&mut s, black_box(&d), false))
+            b.iter(|| rasterize_dab(&mut s, black_box(&d), false, None))
         });
     }
 }

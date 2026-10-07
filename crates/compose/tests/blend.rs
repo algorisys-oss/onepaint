@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use onepaint_color::{prem_lin_to_srgb, prem_srgb_to_lin};
 use onepaint_compose::blend::*;
 use onepaint_doc::BlendMode::{self, *};

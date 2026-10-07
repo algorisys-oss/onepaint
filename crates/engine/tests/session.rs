@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use onepaint_color::Rgba;
 use onepaint_doc::BlendMode;
 use onepaint_engine::*;

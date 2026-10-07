@@ -93,7 +93,7 @@ impl Thumbs {
         }
         dabs.extend(eng.end());
         for d in &dabs {
-            rasterize_dab(&mut s, d, preset.wash);
+            rasterize_dab(&mut s, d, preset.wash, None);
         }
         let mut px = Vec::with_capacity(w * h);
         for y in 0..h {

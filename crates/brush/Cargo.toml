@@ -9,6 +9,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+onepaint-selection = { workspace = true }
 onepaint-raster = { workspace = true }
 onepaint-color = { workspace = true }
 onepaint-stroke = { workspace = true }

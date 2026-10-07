@@ -4,7 +4,10 @@
 //! drained [`Event`]s, mirroring happypaint's store handlers, `PaintSink`
 //! and engine callbacks. No UI or GPU code lives here.
 
+mod selection_ops;
 pub mod view;
+
+pub use onepaint_selection::{Mask, Mode as SelectMode};
 
 use onepaint_brush::{BrushPreset, StrokeEngine, rasterize_dab};
 use onepaint_color::Rgba;
@@ -22,6 +25,13 @@ pub enum Tool {
     #[default]
     Brush,
     Eraser,
+    Fill,
+    Eyedropper,
+    SelectRect,
+    SelectEllipse,
+    SelectLasso,
+    SelectPoly,
+    SelectWand,
 }
 
 /// Optional layer property edits; `None` leaves a property unchanged.
@@ -116,6 +126,45 @@ pub enum Command {
     },
     Undo,
     Redo,
+    /// Select the union of closed contours (doc px), combined by `mode`.
+    SelectShape {
+        contours: Vec<Vec<[f64; 2]>>,
+        mode: onepaint_selection::Mode,
+    },
+    /// Magic wand.
+    SelectByColor {
+        x: i32,
+        y: i32,
+        tolerance: f32,
+        mode: onepaint_selection::Mode,
+        contiguous: bool,
+        sample_all: bool,
+    },
+    SelectAll,
+    Deselect,
+    InvertSelection,
+    /// Grow (positive) or shrink (negative) by whole pixels.
+    GrowSelection {
+        delta: i32,
+    },
+    SmoothSelection {
+        px: f32,
+    },
+    /// Live, non-destructive feather of the clip mask (not undoable).
+    SetFeather {
+        radius: f32,
+    },
+    /// Paint bucket on the active layer.
+    Fill {
+        x: i32,
+        y: i32,
+        tolerance: f32,
+        grow: u32,
+    },
+    /// Fill the selection with the current colour.
+    FillSelection,
+    /// Clear the active layer inside the selection (or entirely, with none).
+    ClearSelected,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -130,6 +179,7 @@ pub enum Event {
     },
     /// The whole document was replaced (new size, new layers).
     DocumentReplaced,
+    SelectionChanged,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -157,9 +207,9 @@ impl From<onepaint_formats::FormatError> for EngineError {
 /// App version written into saved files.
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-type TileChange = ((i32, i32), Option<Arc<Tile>>, Option<Arc<Tile>>);
+pub(crate) type TileChange = ((i32, i32), Option<Arc<Tile>>, Option<Arc<Tile>>);
 
-enum Change {
+pub(crate) enum Change {
     Tiles {
         layer: NodeId,
         tiles: Vec<TileChange>,
@@ -170,6 +220,10 @@ enum Change {
         active_before: NodeId,
         active_after: NodeId,
         key: Option<String>,
+    },
+    Selection {
+        before: Option<Arc<onepaint_selection::Mask>>,
+        after: Option<Arc<onepaint_selection::Mask>>,
     },
 }
 
@@ -182,6 +236,8 @@ struct ActiveStroke {
     wash: bool,
     /// Alpha-locked erase: draw nothing, record nothing.
     noop: bool,
+    /// The selection (feathered) that clips this stroke.
+    clip: Option<Arc<onepaint_selection::Mask>>,
 }
 
 pub struct Session {
@@ -196,6 +252,10 @@ pub struct Session {
     events: Vec<Event>,
     dirty: BTreeSet<(i32, i32)>,
     seed: u32,
+    selection: Option<Arc<onepaint_selection::Mask>>,
+    feather: f32,
+    clip: Option<Arc<onepaint_selection::Mask>>,
+    selection_version: u64,
 }
 
 fn tile_bytes(t: &Option<Arc<Tile>>) -> usize {
@@ -228,6 +288,10 @@ impl Session {
             events: Vec::new(),
             dirty: BTreeSet::new(),
             seed: 1,
+            selection: None,
+            feather: 0.0,
+            clip: None,
+            selection_version: 0,
         };
         s.mark_all_dirty();
         s
@@ -268,18 +332,18 @@ impl Session {
         self.color
     }
 
-    /// The preset of the current tool (brush or eraser).
+    /// The eraser preset for the eraser tool, otherwise the brush preset.
     pub fn current_brush(&self) -> &BrushPreset {
         match self.tool {
-            Tool::Brush => &self.brush,
             Tool::Eraser => &self.eraser,
+            _ => &self.brush,
         }
     }
 
     fn current_brush_mut(&mut self) -> &mut BrushPreset {
         match self.tool {
-            Tool::Brush => &mut self.brush,
             Tool::Eraser => &mut self.eraser,
+            _ => &mut self.brush,
         }
     }
 
@@ -418,6 +482,7 @@ impl Session {
             opacity,
             wash,
             noop,
+            clip: self.clip.clone(),
         };
         let dabs = st.engine.begin(p);
         self.stroke = Some(st);
@@ -444,7 +509,12 @@ impl Session {
         }
         let mut r = Rect::default();
         for d in &dabs {
-            r = r.union(&rasterize_dab(&mut st.buffer, d, st.wash));
+            r = r.union(&rasterize_dab(
+                &mut st.buffer,
+                d,
+                st.wash,
+                st.clip.as_deref(),
+            ));
         }
         self.mark_dirty(r);
     }
@@ -466,7 +536,12 @@ impl Session {
         if !st.noop {
             let mut r = Rect::default();
             for d in &tail {
-                r = r.union(&rasterize_dab(&mut st.buffer, d, st.wash));
+                r = r.union(&rasterize_dab(
+                    &mut st.buffer,
+                    d,
+                    st.wash,
+                    st.clip.as_deref(),
+                ));
             }
             self.mark_dirty(r);
         }
@@ -590,6 +665,7 @@ impl Session {
                 self.redo();
                 Ok(())
             }
+            other => self.execute_selection(other),
         }
     }
 
@@ -935,6 +1011,7 @@ impl Session {
                     self.events.push(Event::ActiveLayerChanged);
                     self.mark_all_dirty();
                 }
+                ChangeRef::Selection(m) => self.set_selection_raw(m),
             }
         }
         self.history_changed();
@@ -960,6 +1037,9 @@ impl Session {
                     active_after.clone()
                 },
             },
+            Change::Selection { before, after } => {
+                ChangeRef::Selection(if undo { before.clone() } else { after.clone() })
+            }
         }
     }
 
@@ -991,4 +1071,5 @@ enum ChangeRef {
         root: Vec<Node>,
         active: NodeId,
     },
+    Selection(Option<Arc<onepaint_selection::Mask>>),
 }

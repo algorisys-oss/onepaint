@@ -2476,6 +2476,7 @@ version = "0.1.0"
 dependencies = [
  "onepaint-color",
  "onepaint-raster",
+ "onepaint-selection",
  "onepaint-stroke",
  "rayon",
  "serde",
@@ -2524,6 +2525,7 @@ dependencies = [
  "onepaint-history",
  "onepaint-input",
  "onepaint-raster",
+ "onepaint-selection",
  "onepaint-stroke",
  "serde",
  "serde_json",

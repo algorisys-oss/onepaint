@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use onepaint_color::*;
 
 fn close(a: f32, b: f32, eps: f32) -> bool {

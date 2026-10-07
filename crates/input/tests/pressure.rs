@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use onepaint_input::*;
 
 fn near(a: f64, b: f64) -> bool {

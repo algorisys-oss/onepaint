@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use onepaint_engine::view::View;
 
 #[test]

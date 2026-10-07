@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Golden values produced by running happypaint's own TS modules.
 use onepaint_stroke::*;
 

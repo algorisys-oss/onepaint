@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use onepaint_brush::*;
 use onepaint_raster::Surface;
 use onepaint_stroke::{Sampler, StrokePoint};
@@ -97,7 +98,7 @@ fn hard_dab_covers_center_not_outside() {
         hardness: 0.95,
         color: [1.0, 0.0, 0.0],
     };
-    let r = rasterize_dab(&mut s, &d, false);
+    let r = rasterize_dab(&mut s, &d, false, None);
     assert!(r.x <= 40 && r.right() >= 60);
     assert!((s.get(50, 50)[3] - 1.0).abs() < 1e-3);
     assert!((s.get(50, 50)[0] - 1.0).abs() < 1e-3);
@@ -109,7 +110,7 @@ fn hard_dab_covers_center_not_outside() {
         hardness: 0.05,
         ..d
     };
-    rasterize_dab(&mut t, &soft, false);
+    rasterize_dab(&mut t, &soft, false, None);
     let mid = t.get(55, 50)[3];
     assert!(mid > 0.05 && mid < 0.95, "{mid}");
 }
@@ -127,12 +128,12 @@ fn dabs_accumulate_over_and_wash_caps() {
         color: [0.0, 0.0, 1.0],
     };
     let mut over = Surface::new();
-    rasterize_dab(&mut over, &d, false);
-    rasterize_dab(&mut over, &d, false);
+    rasterize_dab(&mut over, &d, false, None);
+    rasterize_dab(&mut over, &d, false, None);
     assert!((over.get(10, 10)[3] - 0.75).abs() < 1e-3);
     let mut wash = Surface::new();
-    rasterize_dab(&mut wash, &d, true);
-    rasterize_dab(&mut wash, &d, true);
+    rasterize_dab(&mut wash, &d, true, None);
+    rasterize_dab(&mut wash, &d, true, None);
     assert!((wash.get(10, 10)[3] - 0.5).abs() < 1e-3);
 }
 
@@ -152,7 +153,7 @@ fn stroke_engine_draws_a_line_and_tap_draws_a_dot() {
     }
     dabs.extend(e.end());
     for d in &dabs {
-        rasterize_dab(&mut s, d, b.wash);
+        rasterize_dab(&mut s, d, b.wash, None);
     }
     assert!(s.get(60, 10)[3] > 0.5, "line body");
     assert_eq!(s.get(60, 40)[3], 0.0);

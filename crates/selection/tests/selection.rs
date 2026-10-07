@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use onepaint_selection::*;
 
 fn m(w: u32, data: &[u8]) -> Mask {

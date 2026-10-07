@@ -340,8 +340,14 @@ pub fn dab_bounds(d: &Dab) -> Rect {
 }
 
 /// Rasterise a round dab into the stroke buffer: premultiplied source-over,
-/// or per-channel max when `wash`. Returns the touched rect.
-pub fn rasterize_dab(s: &mut Surface, d: &Dab, wash: bool) -> Rect {
+/// or per-channel max when `wash`. Coverage is multiplied by `clip` (the
+/// selection) when given. Returns the touched rect.
+pub fn rasterize_dab(
+    s: &mut Surface,
+    d: &Dab,
+    wash: bool,
+    clip: Option<&onepaint_selection::Mask>,
+) -> Rect {
     let bounds = dab_bounds(d);
     if d.alpha <= 0.0 || d.radius <= 0.0 {
         return bounds;
@@ -368,7 +374,10 @@ pub fn rasterize_dab(s: &mut Surface, d: &Dab, wash: bool) -> Rect {
                 if dist >= 1.0 {
                     continue;
                 }
-                let a = ((1.0 - smoothstep(inner, 1.0, dist)) * d.alpha) as f32;
+                let mut a = ((1.0 - smoothstep(inner, 1.0, dist)) * d.alpha) as f32;
+                if let Some(m) = clip {
+                    a *= m.coverage(x, y);
+                }
                 if a <= 0.0 {
                     continue;
                 }
