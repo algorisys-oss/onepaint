@@ -21,3 +21,4 @@ onepaint-formats = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
+serde_json = { workspace = true }

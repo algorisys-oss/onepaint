@@ -9,5 +9,3 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-onepaint-raster = { workspace = true }
-onepaint-doc = { workspace = true }

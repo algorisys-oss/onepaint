@@ -2364,6 +2364,7 @@ dependencies = [
  "onepaint-raster",
  "onepaint-stroke",
  "serde",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 
@@ -2394,10 +2395,6 @@ dependencies = [
 [[package]]
 name = "onepaint-history"
 version = "0.1.0"
-dependencies = [
- "onepaint-doc",
- "onepaint-raster",
-]
 
 [[package]]
 name = "onepaint-input"
