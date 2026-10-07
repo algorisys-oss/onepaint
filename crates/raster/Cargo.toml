@@ -11,3 +11,4 @@ workspace = true
 [dependencies]
 rayon = { workspace = true }
 bytemuck = { workspace = true }
+half = { workspace = true }
