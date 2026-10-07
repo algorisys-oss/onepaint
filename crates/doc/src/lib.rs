@@ -177,7 +177,7 @@ pub struct Layer {
     /// Opaque file chunks onepaint doesn't interpret yet (`height`, `overflow`), re-emitted on save.
     pub chunks: std::collections::BTreeMap<String, Vec<u8>>,
     /// Set for adjustment and fill layers (they have no pixels of their own).
-    pub adjustment: Option<Adjustment>,
+    pub adjustment: Option<Box<Adjustment>>,
 }
 
 impl Layer {

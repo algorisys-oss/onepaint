@@ -218,7 +218,7 @@ fn read_node(v: &Value, chunks: &[u8], doc: Rect) -> Result<Node, FormatError> {
     l.extra = extras(o, LEAF_KNOWN);
     if let Some(kind) = l.extra.remove("adjustmentKind").and_then(|v| v.as_str().map(str::to_string)) {
         let params = l.extra.remove("adjustmentParams").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
-        l.adjustment = Some(onepaint_doc::Adjustment { kind, params });
+        l.adjustment = Some(Box::new(onepaint_doc::Adjustment { kind, params }));
     }
     if let Some(tiles) = o.get("tiles").and_then(Value::as_array) {
         l.pixels = read_tiles(chunks, tiles, doc, false)?;

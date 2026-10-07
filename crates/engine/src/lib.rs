@@ -196,12 +196,22 @@ pub enum Command {
         height: u32,
     },
     /// Start a destructive filter on the active layer (live preview).
-    BeginFilter { kind: String },
-    UpdateFilter { params: onepaint_filters::Params },
+    BeginFilter {
+        kind: String,
+    },
+    UpdateFilter {
+        params: onepaint_filters::Params,
+    },
     CommitFilter,
     CancelFilter,
-    AddAdjustmentLayer { kind: String, params: onepaint_filters::Params },
-    SetAdjustment { id: NodeId, params: onepaint_filters::Params },
+    AddAdjustmentLayer {
+        kind: String,
+        params: onepaint_filters::Params,
+    },
+    SetAdjustment {
+        id: NodeId,
+        params: onepaint_filters::Params,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -26,7 +26,8 @@ impl Session {
         self.commit_transform();
         let kind = Kind::parse(kind).ok_or_else(|| EngineError::UnknownPreset(kind.to_string()))?;
         let Some(l) = self.doc.layer(&self.active).filter(|l| l.visible && !l.locked && l.adjustment.is_none()) else { return Ok(()) };
-        self.filter = Some(FilterSession { layer: l.id.clone(), kind, original: l.pixels.clone(), params: onepaint_filters::default_params(kind) });
+        self.filter =
+            Some(FilterSession { layer: l.id.clone(), kind, original: l.pixels.clone(), params: onepaint_filters::default_params(kind) });
         let p = onepaint_filters::default_params(kind);
         self.update_filter(p);
         Ok(())
@@ -47,7 +48,8 @@ impl Session {
             let keep = |x: i32, y: i32| clip.as_ref().map_or(1.0, |m| m.coverage(x, y));
             if kind.is_color() {
                 let prepared = prepare(kind, &params);
-                let keys: Vec<_> = f.original.tile_keys().into_iter().filter(|&(tx, ty)| Rect::from_tile(tx, ty).intersect(&doc).is_some()).collect();
+                let keys: Vec<_> =
+                    f.original.tile_keys().into_iter().filter(|&(tx, ty)| Rect::from_tile(tx, ty).intersect(&doc).is_some()).collect();
                 let tiles: Vec<_> = keys
                     .par_iter()
                     .filter_map(|&(tx, ty)| {
@@ -75,7 +77,8 @@ impl Session {
             } else {
                 // Spatial: run over the content plus the kernel's reach, clipped to the canvas.
                 let r = reach(kind, &params);
-                let region = Rect::new(content.x - r, content.y - r, content.w + 2 * r, content.h + 2 * r).intersect(&doc).unwrap_or(content);
+                let region =
+                    Rect::new(content.x - r, content.y - r, content.w + 2 * r, content.h + 2 * r).intersect(&doc).unwrap_or(content);
                 let src = f.original.read_rect(region);
                 let res = apply_spatial(kind, &params, &src, region.w as usize, region.h as usize);
                 let mixed: Vec<f32> = if clip.is_some() {
@@ -145,7 +148,7 @@ impl Session {
     pub(crate) fn add_adjustment_layer(&mut self, kind: &str, params: Params) -> Result<(), EngineError> {
         let k = Kind::parse(kind).ok_or_else(|| EngineError::UnknownPreset(kind.to_string()))?;
         let mut l = Layer::new(k.label());
-        l.adjustment = Some(onepaint_doc::Adjustment { kind: kind.to_string(), params });
+        l.adjustment = Some(Box::new(onepaint_doc::Adjustment { kind: kind.to_string(), params }));
         self.insert_above_active(Node::Layer(l))
     }
 
