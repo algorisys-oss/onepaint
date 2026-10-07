@@ -29,6 +29,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             Popover::Adjustments => popover_at(ctx, "adjustments", anchor, Align2::RIGHT_TOP, |ui| crate::adjust::list(app, ui)),
             Popover::Filter => popover_at(ctx, "filter", anchor, Align2::RIGHT_TOP, |ui| crate::adjust::filter_panel(app, ui)),
             Popover::AdjustLayer => popover_at(ctx, "adjust-layer", anchor, Align2::RIGHT_TOP, |ui| crate::adjust::layer_panel(app, ui)),
+            Popover::GradientOptions => popover_at(ctx, "gradient", anchor, Align2::RIGHT_TOP, |ui| gradient_options(app, ui)),
+            Popover::ShapeOptions => popover_at(ctx, "shape", anchor, Align2::RIGHT_TOP, |ui| shape_options(app, ui)),
             Popover::Recover => popover_at(ctx, "recover", screen.center(), Align2::CENTER_CENTER, |ui| recover(app, ui)),
             Popover::Fill => popover_at(ctx, "fill", anchor, Align2::RIGHT_TOP, |ui| fill_options(app, ui)),
             Popover::NewDoc => popover_at(ctx, "newdoc", screen.center(), Align2::CENTER_CENTER, |ui| new_doc(app, ui)),
@@ -147,6 +149,18 @@ fn top_bar(app: &mut App, ctx: &egui::Context) {
                             toggle_popover(app, Popover::Fill);
                         }
                         app.set_tool(Tool::Fill);
+                    }
+                    if icons::button(ui, "droplet", 32.0, tool == Tool::Gradient, "Gradient").clicked() {
+                        if tool == Tool::Gradient {
+                            toggle_popover(app, Popover::GradientOptions);
+                        }
+                        app.set_tool(Tool::Gradient);
+                    }
+                    if icons::button(ui, "square", 32.0, tool == Tool::Shape, "Shape (U)").clicked() {
+                        if tool == Tool::Shape {
+                            toggle_popover(app, Popover::ShapeOptions);
+                        }
+                        app.set_tool(Tool::Shape);
                     }
                     if icons::button(ui, "pipette", 32.0, tool == Tool::Eyedropper, "Eyedropper (I)").clicked() {
                         app.set_tool(Tool::Eyedropper);
@@ -992,4 +1006,61 @@ fn recover(app: &mut App, ui: &mut Ui) {
             app.popover = None;
         }
     });
+}
+
+fn gradient_options(app: &mut App, ui: &mut Ui) {
+    use onepaint_filters::gradient::Shape as G;
+    let t = Tokens::get(ui.ctx());
+    ui.set_width(330.0);
+    widgets::section_label(ui, "Gradient");
+    let shapes = G::ALL;
+    let cur = shapes.iter().position(|s| *s == app.canvas.options.gradient_shape).unwrap_or(0);
+    let labels: Vec<&str> = shapes.iter().map(|s| s.label()).collect();
+    if let Some(i) = segmented(ui, &labels, cur) {
+        app.canvas.options.gradient_shape = shapes[i];
+    }
+    ui.add_space(4.0);
+    if let Some(i) = segmented(ui, &["Colour → clear", "Colour → BG"], app.canvas.options.gradient_to_bg as usize) {
+        app.canvas.options.gradient_to_bg = i == 1;
+    }
+    ui.horizontal(|ui| {
+        widgets::toggle(ui, &mut app.canvas.options.gradient_reverse, "Reverse");
+        ui.label(RichText::new("BG").color(t.fg_muted));
+        let bg = app.canvas.options.background;
+        if widgets::swatch(ui, bg, 26.0, false).on_hover_text("Click to use the current colour as the background").clicked() {
+            app.canvas.options.background = app.session.color();
+        }
+    });
+    ui.label(RichText::new("Drag on the canvas; uses the brush opacity and the selection.").font(theme::medium(10.5)).color(t.fg_faint));
+}
+
+fn shape_options(app: &mut App, ui: &mut Ui) {
+    use onepaint_stroke::shape::ShapeKind as K;
+    let t = Tokens::get(ui.ctx());
+    ui.set_width(300.0);
+    widgets::section_label(ui, "Shape");
+    let kinds = [K::Line, K::Rect, K::Ellipse, K::Polygon];
+    let cur = kinds.iter().position(|k| *k == app.canvas.options.shape_kind).unwrap_or(0);
+    if let Some(i) = segmented(ui, &["Line", "Rect", "Ellipse", "Polygon"], cur) {
+        app.canvas.options.shape_kind = kinds[i];
+    }
+    if app.canvas.options.shape_kind == K::Polygon {
+        let mut n = app.canvas.options.shape_sides as f32;
+        if widgets::slider_row(ui, "Sides", &mut n, 3.0..=12.0, |v| format!("{v:.0}")).changed() {
+            app.canvas.options.shape_sides = onepaint_stroke::shape::clamp_sides(n as f64);
+        }
+    }
+    if app.canvas.options.shape_kind != K::Line {
+        widgets::toggle(ui, &mut app.canvas.options.shape_fill, "Fill");
+    }
+    ui.label(
+        RichText::new("Shift: square / circle / 45° · Alt: from centre. Strokes with the current brush.")
+            .font(theme::medium(10.5))
+            .color(t.fg_faint),
+    );
+    ui.label(
+        RichText::new("Tip: hold still at the end of any brush stroke to straighten it into a shape.")
+            .font(theme::medium(10.5))
+            .color(t.fg_faint),
+    );
 }

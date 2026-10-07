@@ -8,6 +8,7 @@ mod canvas_ops;
 mod clipboard;
 mod filter_ops;
 mod mask_ops;
+mod paint_ops;
 mod selection_ops;
 pub mod transform;
 pub mod view;
@@ -39,6 +40,8 @@ pub enum Tool {
     SelectPoly,
     SelectWand,
     Move,
+    Gradient,
+    Shape,
 }
 
 /// Optional layer property edits; `None` leaves a property unchanged.

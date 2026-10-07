@@ -7,11 +7,13 @@ use egui::{Color32, CursorIcon, Event, Key, PointerButton, Pos2, Rect, Sense, St
 use onepaint_engine::transform::{Handle, TransformParams};
 use onepaint_engine::view::View;
 use onepaint_engine::{Command, SelectMode, Session, Tool};
+use onepaint_filters::gradient::{GradStop, Shape as GShape, fg_bg, fg_transparent, reverse_stops};
 use onepaint_gpu::{CanvasGpu, ViewParams};
 use onepaint_input::{PointerKind, PressureProvider};
 use onepaint_raster::Tile;
 use onepaint_selection::{Pt, constrain_45, constrain_square, ellipse_polygon, rect_polygon};
 use onepaint_stroke::StrokePoint;
+use onepaint_stroke::shape::{DragOpts, Shape, ShapeKind, drag_shape, recognize, sample_path};
 use onepaint_ui_kit::Tokens;
 use std::sync::Arc;
 
@@ -77,6 +79,14 @@ pub struct ToolOptions {
     pub wand_sample_all: bool,
     pub fill_tolerance: f32,
     pub fill_grow: u32,
+    pub gradient_shape: GShape,
+    /// Foreground → transparent (false) or foreground → background (true).
+    pub gradient_to_bg: bool,
+    pub gradient_reverse: bool,
+    pub shape_kind: ShapeKind,
+    pub shape_sides: u32,
+    pub shape_fill: bool,
+    pub background: onepaint_color::Rgba,
 }
 
 impl Default for ToolOptions {
@@ -88,6 +98,13 @@ impl Default for ToolOptions {
             wand_sample_all: false,
             fill_tolerance: 0.15,
             fill_grow: 1,
+            gradient_shape: GShape::Linear,
+            gradient_to_bg: false,
+            gradient_reverse: false,
+            shape_kind: ShapeKind::Line,
+            shape_sides: 6,
+            shape_fill: false,
+            background: onepaint_color::Rgba::WHITE,
         }
     }
 }
@@ -121,6 +138,22 @@ enum Drag {
         grab: Pt,
         start: TransformParams,
     },
+    Gradient {
+        start: Pt,
+    },
+    ShapeTool {
+        start: Pt,
+        shape: Option<Shape>,
+    },
+}
+
+/// Raw points of the brush stroke in progress, for quick-shape.
+#[derive(Default)]
+struct HoldTracker {
+    points: Vec<Pt>,
+    anchor: Pos2,
+    since: f64,
+    fired: bool,
 }
 
 pub struct Canvas {
@@ -139,6 +172,7 @@ pub struct Canvas {
     uploaded_selection: Option<(u64, [u32; 2])>,
     /// Parameters of the transform in progress (the engine holds the matrix).
     pub xform: TransformParams,
+    hold: HoldTracker,
 }
 
 impl Canvas {
@@ -156,6 +190,7 @@ impl Canvas {
             size_flash: 0.0,
             uploaded_selection: None,
             xform: TransformParams::default(),
+            hold: HoldTracker::default(),
         }
     }
 
@@ -237,8 +272,16 @@ impl Canvas {
                 self.pressure = Some(PressureProvider::new(kind));
                 let sp = self.stroke_point(p, time_ms, self.last_pen_force);
                 session.stroke_begin(sp);
+                self.hold = HoldTracker { points: vec![d], anchor: p, since: time_ms, fired: false };
                 Drag::Paint
             }
+            Tool::Gradient => {
+                session.gradient_begin();
+                let stops = self.gradient_stops(session);
+                session.gradient_update(d, d, self.options.gradient_shape, &stops);
+                Drag::Gradient { start: d }
+            }
+            Tool::Shape => Drag::ShapeTool { start: d, shape: None },
             Tool::Fill => {
                 let o = self.options;
                 let _ = session.execute(Command::Fill {
@@ -281,6 +324,26 @@ impl Canvas {
             }
             Tool::Eyedropper | Tool::Move => Drag::Pick,
         }
+    }
+
+    fn gradient_stops(&self, session: &Session) -> Vec<GradStop> {
+        let c = session.color();
+        let fg = [c.r as f64, c.g as f64, c.b as f64];
+        let b = self.options.background;
+        let stops = if self.options.gradient_to_bg { fg_bg(fg, [b.r as f64, b.g as f64, b.b as f64]) } else { fg_transparent(fg) };
+        if self.options.gradient_reverse { reverse_stops(&stops) } else { stops }
+    }
+
+    /// Show `shape` as a live (uncommitted) brush stroke.
+    fn preview_shape(session: &mut Session, shape: &Shape) {
+        session.stroke_cancel();
+        let path = sample_path(shape, 2.0);
+        if path.len() < 2 {
+            return;
+        }
+        let pts: Vec<StrokePoint> = path.iter().enumerate().map(|(i, p)| StrokePoint::at(p[0], p[1], 1.0, i as f64 * 4.0)).collect();
+        session.stroke_begin(pts[0]);
+        session.stroke_extend(&pts[1..]);
     }
 
     fn doc_f(&self) -> [f64; 2] {
@@ -351,8 +414,32 @@ impl Canvas {
                     let d = self.doc_pt(p);
                     match &mut self.drag {
                         Drag::Paint => {
-                            let sp = self.stroke_point(p, time_ms, self.last_pen_force);
-                            session.stroke_extend(&[sp]);
+                            if self.hold.fired {
+                                // A quick-shape replaced the stroke; further motion is ignored.
+                            } else {
+                                let sp = self.stroke_point(p, time_ms, self.last_pen_force);
+                                session.stroke_extend(&[sp]);
+                                self.hold.points.push(d);
+                                if p.distance(self.hold.anchor) >= 3.0 {
+                                    self.hold.anchor = p;
+                                    self.hold.since = time_ms;
+                                }
+                            }
+                        }
+                        Drag::Gradient { start } => {
+                            let start = *start;
+                            let stops = self.gradient_stops(session);
+                            session.gradient_update(start, d, self.options.gradient_shape, &stops);
+                        }
+                        Drag::ShapeTool { start, shape } => {
+                            let alt = ui.input(|i| i.modifiers.alt);
+                            let o = DragOpts { constrain: shift, from_center: alt, sides: self.options.shape_sides };
+                            *shape = drag_shape(self.options.shape_kind, *start, d, o);
+                            if let Some(sh) = shape.clone() {
+                                Self::preview_shape(session, &sh);
+                            } else {
+                                session.stroke_cancel();
+                            }
                         }
                         Drag::Pan => {
                             if let Some(lp) = self.last_pos {
@@ -394,6 +481,13 @@ impl Canvas {
                 Event::PointerButton { pressed: false, .. } | Event::PointerGone => {
                     match std::mem::take(&mut self.drag) {
                         Drag::Paint => session.stroke_end(),
+                        Drag::Gradient { .. } => session.gradient_end(),
+                        Drag::ShapeTool { shape, .. } => {
+                            session.stroke_cancel();
+                            if let Some(sh) = shape {
+                                session.stroke_shape(&sh, self.options.shape_fill);
+                            }
+                        }
                         Drag::Rotate { .. } => {
                             let c = [self.view.view_size[0] / 2.0, self.view.view_size[1] / 2.0];
                             let snapped = View::snap_rotation(self.view.rotation);
@@ -417,6 +511,17 @@ impl Canvas {
         }
         if session.tool() != Tool::SelectPoly {
             self.poly = None;
+        }
+        // Quick-shape: hold still for 600 ms while painting to straighten the stroke.
+        if matches!(self.drag, Drag::Paint) && !self.hold.fired {
+            if time_ms - self.hold.since >= 600.0 {
+                self.hold.fired = true;
+                if let Some(sh) = recognize(&self.hold.points, shift) {
+                    Self::preview_shape(session, &sh);
+                }
+            } else {
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
+            }
         }
         if resp.hovered() {
             let (scroll, zoom, rot) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.rotation_delta()));

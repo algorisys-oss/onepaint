@@ -51,6 +51,13 @@ filters:
 Each one has a live preview and respects the selection, and the colour kinds
 also work as adjustment layers.
 
+**Slice 5 (masks and drawing tools) is complete.** It includes:
+
+- Layer masks: add, paint, enable, apply, delete.
+- The gradient tool, with five shapes.
+- The shape tool: line, rect, ellipse and polygon, with optional fill.
+- Quick-shape: hold at the end of a stroke to straighten it.
+
 [`docs/feature-parity.md`](docs/feature-parity.md) tracks every happypaint
 feature, and [`docs/divergences.md`](docs/divergences.md) lists the known
 differences.

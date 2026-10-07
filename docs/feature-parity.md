@@ -24,11 +24,11 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] pan (space-drag, middle-drag, two-finger scroll)
 - [ ] smudge
 - [ ] mixer
-- [ ] gradient, with output to pixels or a fill layer
+- [~] gradient, with output to pixels or a fill layer (5 shapes, colour→clear or →BG, reverse, selection-aware; fill-layer output not done)
 - [ ] liquify (all modes)
 - [ ] text
 - [ ] pen, with output to a shape layer, a path or pixels
-- [ ] shape
+- [x] shape (line, rect, ellipse and 3–12-sided polygon, stroked with the brush, optional fill)
 - [ ] panel (comic panels)
 - [x] select-rect
 - [x] select-ellipse
@@ -55,7 +55,7 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] Add, delete, reorder, duplicate and merge
 - [x] Nested groups (with drag-and-drop into and out of groups)
 - [~] Opacity, visibility and color labels (color labels are preserved in files but not shown)
-- [~] Layer masks (composited, loaded and saved; you can't paint into a mask yet)
+- [x] Layer masks (add, which can come from the selection; paint, enable, apply, delete)
 - [x] Clipping masks (clip families)
 - [x] Alpha lock
 - [ ] Off-canvas pixel overflow
@@ -112,7 +112,7 @@ Still to do:
 - [ ] 1–5-point perspective with stroke snapping
 - [ ] Horizontal/vertical snap
 - [ ] Rulers
-- [ ] Quick-shape: hold to straighten a stroke into a line, ellipse or polygon
+- [x] Quick-shape: hold to straighten a stroke into a line, ellipse or polygon
 - [ ] Speed lines
 - [ ] Reference window
 - [ ] Multi-document tabs

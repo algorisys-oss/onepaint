@@ -45,6 +45,8 @@ pub enum Popover {
     Adjustments,
     Filter,
     AdjustLayer,
+    GradientOptions,
+    ShapeOptions,
 }
 
 /// An action that would discard unsaved work.
@@ -399,6 +401,9 @@ impl App {
             }
             if sc(Modifiers::NONE, Key::E) {
                 self.set_tool(Tool::Eraser);
+            }
+            if sc(Modifiers::NONE, Key::U) {
+                self.set_tool(Tool::Shape);
             }
             if sc(Modifiers::NONE, Key::V) || sc(cmd, Key::T) {
                 self.set_tool(Tool::Move);
@@ -776,5 +781,30 @@ mod tests {
         let app = h.state();
         assert!(app.session.doc().layer(app.session.active()).unwrap().adjustment.is_some());
         assert!(app.session.pick_color(10, 10).r > 0.99, "the invert layer flips it back to white");
+    }
+
+    #[test]
+    fn gradient_and_shape_tools() {
+        let mut h = harness();
+        h.run();
+        h.state_mut().set_color(Rgba::new(0.0, 0.0, 1.0, 1.0));
+        h.get_by_label("Gradient").click();
+        h.run();
+        drag_stroke(&mut h, pos2(400.0, 400.0), pos2(800.0, 400.0));
+        let app = h.state();
+        let at = |x: f32| {
+            let d = app.canvas.view.screen_to_doc([x as f64, 400.0]);
+            app.session.doc().layer(app.session.active()).unwrap().pixels.get(d[0] as i32, d[1] as i32)[3]
+        };
+        assert!(at(300.0) > 0.98 && at(900.0) < 0.02 && at(600.0) > 0.3 && at(600.0) < 0.7, "{} {} {}", at(300.0), at(600.0), at(900.0));
+        let n = h.state().session.history_len();
+        h.state_mut().set_tool(Tool::Shape);
+        h.state_mut().canvas.options.shape_kind = onepaint_stroke::shape::ShapeKind::Rect;
+        h.state_mut().canvas.options.shape_fill = true;
+        drag_stroke(&mut h, pos2(500.0, 200.0), pos2(700.0, 300.0));
+        assert_eq!(h.state().session.history_len(), n + 1, "one step for fill + outline");
+        let app = h.state();
+        let d = app.canvas.view.screen_to_doc([600.0, 250.0]);
+        assert!(app.session.doc().layer(app.session.active()).unwrap().pixels.get(d[0] as i32, d[1] as i32)[3] > 0.99);
     }
 }
