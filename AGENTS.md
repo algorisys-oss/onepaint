@@ -10,6 +10,25 @@ behaviour, written the way idiomatic Rust would do it.
 Targets: Linux (X11 and Wayland), Windows and macOS. A WASM/WebGPU build
 is a later goal. iPad and Android are non-goals for now.
 
+**Scope: full feature parity with happypaint, built for maximum performance.**
+Every happypaint feature ships. The list is in `docs/feature-parity.md`.
+Parity covers features and output, not how happypaint implements them. Pick
+the fastest design Rust and wgpu allow, even when it differs from
+happypaint's:
+
+- Do the work on the GPU wherever it is pixel-parallel.
+- Use compute shaders where they beat fragment passes.
+- Keep pixels resident on the GPU. Avoid readbacks.
+- Use rayon for CPU work.
+- Use SIMD in hot loops.
+- Make stroke and composite paths allocation-free.
+
+The performance targets:
+
+- Pen-to-pixel latency under one frame.
+- 60fps or better pan, zoom and rotate on 8k×8k documents with 100+ layers.
+- Filter previews that stay interactive.
+
 > Status: greenfield. This file records the **intended** architecture. When
 > the code disagrees with this file, fix one of them in the same change.
 
@@ -32,8 +51,12 @@ happypaint is the **spec**. Before porting a subsystem, read:
 - The TS module itself under `../happypaint/frontend/src/`.
 - Its `*.test.ts` files. Port them as Rust tests first, then make them pass.
 
-When happypaint has a bug or quirk, keep it compatible unless the user
-says otherwise, and record each deliberate divergence in `docs/divergences.md`.
+happypaint defines **what** each feature does and what it outputs. It does
+not define how to implement it. Treat the TS code as a reference, not a
+template: do not mirror its WebGL state machine, its god-object facade or
+its CPU readbacks. When happypaint has a bug or quirk that users can see,
+keep it unless the user says otherwise. Record every deliberate divergence in
+`docs/divergences.md`.
 
 Prior art: `storytold/photocraft` (MIT/Apache-2.0, egui + wgpu) shows how
 the GUI and graphics can be done. You may study it, and copy from it only
@@ -49,7 +72,7 @@ crate**.
 |---|---|---|
 | Language | Rust stable, edition 2024, Cargo workspace | `unsafe` is forbidden by default. Allow it only per module, with a `// SAFETY:` comment. |
 | UI | **egui / eframe**, with the `wgpu` backend | Docked panels via `egui_dock`. The UI stays a thin layer over the engine. |
-| GPU | **wgpu**, with **WGSL** shaders | The canvas is an `egui_wgpu` paint callback, so it never round-trips through egui textures. |
+| GPU | **wgpu**, with **WGSL** shaders | GPU-first engine: layers live as GPU tiles. The canvas is an `egui_wgpu` paint callback, so it never round-trips through egui textures. Use compute passes for filters, flood fill, magic wand and selection feathering where they are faster. |
 | Shaders | `.wgsl` files under `crates/gpu/shaders/` | Port happypaint's ~62 GLSL ES 3.0 programs. naga can translate them as a first pass, but hand-review every result. |
 | Pixels | 256² copy-on-write `Arc` tiles, premultiplied alpha | Formats are RGBA8, RGBA16F and RGBA32F, matching happypaint. |
 | Parallel CPU | `rayon` | |
@@ -142,6 +165,14 @@ cargo run -p onepaint
 
 These must stay green before every commit.
 
+Write commit messages, PR descriptions and code comments as the human
+author would. **Never** add AI/LLM attribution or hints: no
+`Co-Authored-By` trailers for assistants, and no "Generated with …" lines.
+
+Hot paths (stroke, composite, canvas present, filter preview) get
+`criterion` benches in `benches/`. A change that slows a bench by more than 5%
+needs a justification.
+
 ## Porting workflow (per subsystem)
 
 1. Read the happypaint module, its tests, and the relevant `docs/graphics`
@@ -150,7 +181,8 @@ These must stay green before every commit.
 3. Implement the CPU version (pure crate), then make the tests pass.
 4. Add the GPU path where happypaint uses one, and test it against the CPU oracle.
 5. Wire it into `engine::Command` and the UI.
-6. Update this file and `docs/` if a seam or a decision changed.
+6. Tick the item in `docs/feature-parity.md`. Update this file and `docs/`
+   if a seam or a decision changed.
 
 Suggested order: raster → doc → compose → history → stroke/brush (CPU) →
 gpu canvas and stamp → input/tablet → minimal UI (brush, eraser,
