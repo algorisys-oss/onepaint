@@ -30,3 +30,4 @@ The happypaint references are relative to `../happypaint/frontend/src/`.
 | 15 | [PSD import and export](15-psd.md) | formats, engine, app |
 | 16 | [Smudge, mixer, pigment, symmetry](16-smudge-symmetry.md) | color, brush, engine, app |
 | 17 | [Liquify](17-liquify.md) | filters, engine, app |
+| 18 | [Remaining filters, generators, fill layers](18-filters.md) | filters, compose, engine, app |
