@@ -236,3 +236,12 @@ fn save_open_round_trip_and_png_export() {
     assert_eq!(&px[..4], &[255, 255, 255, 255]);
     assert!(t.open_happypaint(b"garbage").is_err());
 }
+
+#[test]
+fn new_layers_are_numbered_sequentially() {
+    let mut s = new_session();
+    s.execute(Command::AddLayer).unwrap();
+    assert_eq!(s.doc().find(s.active()).unwrap().name(), "Layer 2");
+    s.execute(Command::AddLayer).unwrap();
+    assert_eq!(s.doc().find(s.active()).unwrap().name(), "Layer 3");
+}

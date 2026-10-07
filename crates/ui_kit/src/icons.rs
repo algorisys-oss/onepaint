@@ -33,6 +33,8 @@ pub static ICONS: &[(&str, &[u8])] = icons![
     "file-plus",
     "image",
     "chevron-down",
+    "chevron-up",
+    "brush-cleaning",
     "chevron-right",
     "x",
     "sun",

@@ -13,7 +13,18 @@ workspace = true
 onepaint-engine = { workspace = true }
 onepaint-gpu = { workspace = true }
 onepaint-ui-kit = { workspace = true }
+onepaint-color = { workspace = true }
+onepaint-doc = { workspace = true }
+onepaint-brush = { workspace = true }
+onepaint-stroke = { workspace = true }
+onepaint-input = { workspace = true }
+onepaint-raster = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
 egui = { workspace = true }
 log = { workspace = true }
 env_logger = "0.11"
+rfd = "0.17"
+onepaint-formats = { workspace = true }
+
+[dev-dependencies]
+egui_kittest = { workspace = true }

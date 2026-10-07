@@ -594,7 +594,24 @@ impl Session {
     }
 
     fn next_layer_name(&self) -> String {
-        format!("Layer {}", self.doc.layer_ids().len() + 1)
+        let n = self
+            .doc
+            .layer_ids()
+            .iter()
+            .filter_map(|id| {
+                self.doc
+                    .find(id)?
+                    .name()
+                    .strip_prefix("Layer ")?
+                    .parse::<usize>()
+                    .ok()
+            })
+            .max()
+            .unwrap_or(0);
+        format!(
+            "Layer {}",
+            n.max(self.doc.layer_ids().len().saturating_sub(1)) + 1
+        )
     }
 
     fn next_group_name(&self) -> String {
