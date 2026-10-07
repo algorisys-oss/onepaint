@@ -53,11 +53,11 @@ impl Clipboard {
             if Some(fingerprint(img.width, img.height, &img.bytes)) == self.ours {
                 return None;
             }
-            return Some(DecodedImage {
+            Some(DecodedImage {
                 width: img.width as u32,
                 height: img.height as u32,
                 rgba: img.bytes.into_owned(),
-            });
+            })
         }
         #[cfg(test)]
         None
