@@ -5,3 +5,6 @@
 .idea/
 .vscode/
 .repograph/cache/
+
+# Local agent worktrees
+.claude/worktrees/
