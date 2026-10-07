@@ -247,3 +247,25 @@ fn colour_labels_set_clear_and_undo() {
     assert_eq!(s.color_label(&id).as_deref(), Some("blue"));
     assert!(s.execute(Command::SetColorLabel { id, label: Some("chartreuse".into()) }).is_err());
 }
+
+#[test]
+fn strokes_use_the_brush_blend_mode() {
+    use onepaint_color::Rgba;
+    // A multiply preset darkens instead of covering.
+    let id = onepaint_brush::presets().into_iter().find(|p| p.blend_mode() == onepaint_doc::BlendMode::Multiply).unwrap().id;
+    let mut s = Session::new(64, 64, None);
+    s.execute(Command::SelectAll).unwrap();
+    s.execute(Command::SetColor { rgba: Rgba::new(1.0, 1.0, 0.0, 1.0) }).unwrap();
+    s.execute(Command::FillSelection).unwrap();
+    s.execute(Command::Deselect).unwrap();
+    s.execute(Command::SetBrush { preset_id: id }).unwrap();
+    s.execute(Command::SetBrushSize { size: 30.0 }).unwrap();
+    s.execute(Command::SetColor { rgba: Rgba::new(0.0, 1.0, 1.0, 1.0) }).unwrap();
+    let pt = |x: f64| onepaint_stroke::StrokePoint { x, y: 32.0, pressure: 1.0, ..Default::default() };
+    s.stroke_begin(pt(10.0));
+    s.stroke_extend(&[pt(30.0), pt(54.0)]);
+    s.stroke_end();
+    let c = s.pick_color(32, 32);
+    // Normal would mix in cyan's blue; multiply keeps blue at 0 and darkens red.
+    assert!(c.b < 0.01 && c.r < 0.95 && c.g > 0.9, "yellow × cyan multiplies toward green: {c:?}");
+}

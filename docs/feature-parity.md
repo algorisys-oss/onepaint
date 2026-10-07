@@ -47,7 +47,7 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] Symmetry: mirror and radial (angle, centre, 2–24 spokes; Y toggles)
 - [ ] Wet/oil media: wet, height (impasto), settle and bevel
 - [x] Smudge and mixer brushes
-- [~] Kubelka–Munk pigment mixing (mixer reservoir and deposit; the `pigment` layer/brush blend mode is still to do)
+- [x] Kubelka–Munk pigment mixing (mixer reservoir and deposit, and the `pigment` blend mode)
 - [ ] Brush studio: an editor with live preview and a try-it pad
 - [ ] Import `.abr`, Procreate `.brush` and `.brushset`, and `.happybrush`
 
@@ -74,7 +74,7 @@ The modes are:
 - hue, saturation, color, luminosity
 - pigment (brush only)
 
-- [~] All of them on the GPU, matching the CPU oracle (all 19 layer modes are done on the CPU and the composite is shown on the GPU; GPU compositing is not done yet; `pigment` falls back to normal)
+- [~] All of them on the GPU, matching the CPU oracle (all 19 layer modes are done on the CPU and the composite is shown on the GPU; GPU compositing is not done yet)
 
 ## Adjustments and filters (48 kinds)
 Each kind works destructively, as an adjustment layer, and as a smart filter.

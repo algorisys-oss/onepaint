@@ -114,6 +114,8 @@ pub fn blend_color(m: BlendMode, b: [f32; 3], s: [f32; 3]) -> [f32; 3] {
         Saturation => set_lum(set_sat(b, sat(s)), lum(b)),
         Color => set_lum(s, lum(b)),
         Luminosity => set_lum(b, lum(s)),
+        // Subtractive glaze: Kubelka–Munk 50/50 of backdrop and source (compositor.ts:376).
+        Pigment => onepaint_color::pigment::pigment_mix(b, s, 0.5),
         _ => [bc(m, b[0], s[0]), bc(m, b[1], s[1]), bc(m, b[2], s[2])],
     }
 }
@@ -131,8 +133,7 @@ pub fn blend_px(m: BlendMode, bp: Px, src: Px, opacity: f32) -> Px {
         return bp;
     }
     match m {
-        // Pigment needs the Kubelka–Munk port (slice 2); until then it composites as normal.
-        BlendMode::Normal | BlendMode::Pigment => {
+        BlendMode::Normal => {
             let k = 1.0 - sp[3];
             [sp[0] + bp[0] * k, sp[1] + bp[1] * k, sp[2] + bp[2] * k, sp[3] + bp[3] * k]
         }
@@ -161,7 +162,7 @@ pub fn blend_px_alpha_lock(m: BlendMode, bp: Px, src: Px, opacity: f32) -> Px {
     if sp[3] <= 0.0 {
         return bp;
     }
-    if matches!(m, BlendMode::Normal | BlendMode::Pigment) {
+    if m == BlendMode::Normal {
         let k = 1.0 - sp[3];
         return [sp[0] * bp[3] + bp[0] * k, sp[1] * bp[3] + bp[1] * k, sp[2] * bp[3] + bp[2] * k, bp[3]];
     }

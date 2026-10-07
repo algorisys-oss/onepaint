@@ -137,3 +137,14 @@ fn clip_over_keeps_base_alpha() {
     let o = clip_over([0.25, 0.0, 0.0, 0.5], [0.0, 1.0, 0.0, 1.0], 1.0);
     assert!(close(o[3], 0.5) && close(o[1], 0.5) && close(o[0], 0.0));
 }
+
+#[test]
+fn pigment_glazes_subtractively() {
+    use onepaint_compose::blend::blend_color;
+    use onepaint_doc::BlendMode;
+    // Yellow over blue mixes toward green, unlike a normal or multiply blend.
+    let g = blend_color(BlendMode::Pigment, [0.0, 0.0, 1.0], [1.0, 1.0, 0.0]);
+    assert!(g[1] > g[0] && g[1] > g[2], "{g:?}");
+    let same = blend_color(BlendMode::Pigment, [0.9, 0.3, 0.1], [0.9, 0.3, 0.1]);
+    assert!((same[0] - 0.9).abs() < 1e-3 && (same[1] - 0.3).abs() < 1e-3);
+}

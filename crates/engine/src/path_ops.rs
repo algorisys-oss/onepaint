@@ -39,6 +39,10 @@ pub(crate) fn read_paths(l: &Layer) -> Vec<PathSpec> {
 }
 
 fn composite_onto(dst: &mut Surface, src: &Surface, opacity: f32) {
+    composite_mode(dst, src, opacity, BlendMode::Normal);
+}
+
+fn composite_mode(dst: &mut Surface, src: &Surface, opacity: f32, mode: BlendMode) {
     for (tx, ty) in src.tile_keys() {
         let Some(s) = src.tile(tx, ty) else { continue };
         let s = s.to_f32();
@@ -51,7 +55,7 @@ fn composite_onto(dst: &mut Surface, src: &Surface, opacity: f32) {
                 [d[i], d[i + 1], d[i + 2], d[i + 3]],
                 [s[i], s[i + 1], s[i + 2], s[i + 3]],
                 opacity,
-                StrokeMode::Paint(BlendMode::Normal),
+                StrokeMode::Paint(mode),
             );
             d[i..i + 4].copy_from_slice(&o);
         }
@@ -111,7 +115,7 @@ pub fn render_paths(specs: &[PathSpec], w: u32, h: u32) -> Surface {
             for d in &dabs {
                 eng.rasterize(&mut buf, d, None);
             }
-            composite_onto(&mut out, &buf, st.opacity.clamp(0.0, 1.0));
+            composite_mode(&mut out, &buf, st.opacity.clamp(0.0, 1.0), brush.blend_mode());
         }
     }
     out.prune_empty();

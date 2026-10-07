@@ -12,6 +12,7 @@ workspace = true
 png = { workspace = true }
 onepaint-selection = { workspace = true }
 onepaint-raster = { workspace = true }
+onepaint-doc = { workspace = true }
 onepaint-color = { workspace = true }
 onepaint-stroke = { workspace = true }
 serde = { workspace = true }

@@ -174,6 +174,13 @@ pub fn categories() -> Vec<String> {
     library().categories.clone()
 }
 
+impl BrushPreset {
+    /// The mode the stroke composites onto its layer with (`blendMode`, default normal).
+    pub fn blend_mode(&self) -> onepaint_doc::BlendMode {
+        self.extra.get("blendMode").and_then(|v| v.as_str()).map(onepaint_doc::BlendMode::parse).unwrap_or_default()
+    }
+}
+
 pub fn preset(id: &str) -> Option<BrushPreset> {
     library().presets.iter().find(|p| p.id == id).cloned()
 }

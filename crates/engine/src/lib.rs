@@ -745,12 +745,14 @@ impl Session {
         let erase = self.tool == Tool::Eraser;
         let to_mask = self.mask_target();
         let noop = erase && layer.alpha_lock && !to_mask;
+        // The brush's own blend mode (add, multiply, pigment…) applies to layer strokes.
+        let bm = self.current_brush().blend_mode();
         let mode = match (to_mask, erase, layer.alpha_lock) {
             // Masks keep alpha 1: paint coverage with alpha locked (PE:798-801).
             (true, _, _) => StrokeMode::AlphaLock(BlendMode::Normal),
             (false, true, _) => StrokeMode::Erase,
-            (false, false, true) => StrokeMode::AlphaLock(BlendMode::Normal),
-            (false, false, false) => StrokeMode::Paint(BlendMode::Normal),
+            (false, false, true) => StrokeMode::AlphaLock(bm),
+            (false, false, false) => StrokeMode::Paint(bm),
         };
         let brush = self.current_brush().clone();
         let lin = if to_mask {

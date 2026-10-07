@@ -2644,6 +2644,7 @@ name = "onepaint-brush"
 version = "0.1.0"
 dependencies = [
  "onepaint-color",
+ "onepaint-doc",
  "onepaint-raster",
  "onepaint-selection",
  "onepaint-stroke",
