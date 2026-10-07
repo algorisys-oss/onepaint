@@ -9,6 +9,7 @@ pub(crate) struct DocShape {
     pub height: u32,
     pub root: Vec<Node>,
     pub active: NodeId,
+    pub saved: Vec<SavedSelection>,
 }
 
 fn map_layers(nodes: &mut [Node], f: &mut impl FnMut(&mut Layer)) {
@@ -22,7 +23,13 @@ fn map_layers(nodes: &mut [Node], f: &mut impl FnMut(&mut Layer)) {
 
 impl Session {
     fn shape(&self) -> DocShape {
-        DocShape { width: self.doc.width, height: self.doc.height, root: self.doc.root.clone(), active: self.active.clone() }
+        DocShape {
+            width: self.doc.width,
+            height: self.doc.height,
+            root: self.doc.root.clone(),
+            active: self.active.clone(),
+            saved: self.saved.clone(),
+        }
     }
 
     pub(crate) fn apply_shape(&mut self, s: DocShape) {
@@ -30,6 +37,7 @@ impl Session {
         self.doc.height = s.height;
         self.doc.root = s.root;
         self.active = s.active;
+        self.saved = s.saved;
         self.set_selection_raw(None);
         self.events.push(Event::DocumentReplaced);
         self.events.push(Event::LayersChanged);
@@ -64,6 +72,7 @@ impl Session {
                 l.mask = Some(m2);
             }
         });
+        self.shift_saved(width, height, dx, dy);
         self.doc.width = width;
         self.doc.height = height;
         self.record_shape(before);
@@ -98,6 +107,7 @@ impl Session {
                 l.mask = Some(resample(m));
             }
         });
+        self.resample_saved(width, height);
         self.doc.width = width;
         self.doc.height = height;
         self.record_shape(before);

@@ -980,6 +980,48 @@ fn selection(app: &mut App, ui: &mut Ui) {
     act(ui, "circle-dashed", "Smooth", "", Command::SmoothSelection { px: 4.0 }, has);
     act(ui, "paint-bucket", "Fill with colour", "Alt+Backspace", Command::FillSelection, has);
     act(ui, "brush-cleaning", "Clear", "Delete", Command::ClearSelected, true);
+    saved_selections(app, ui, has);
+}
+
+/// Select › Save / Load Selection (spec 20).
+fn saved_selections(app: &mut App, ui: &mut Ui, has: bool) {
+    use onepaint_selection::Mode;
+    let t = Tokens::get(ui.ctx());
+    widgets::hairline(ui);
+    widgets::section_label(ui, "Saved selections");
+    ui.add_enabled_ui(has, |ui| {
+        if widgets::menu_item(ui, Some("check"), "Save selection", "").clicked() {
+            let name = format!("Selection {}", app.session.saved_selections().len() + 1);
+            if let Err(e) = app.session.execute(Command::SaveSelection { name }) {
+                let now = ui.input(|i| i.time);
+                app.notify(e.to_string(), now);
+            }
+        }
+    });
+    let list: Vec<(String, String)> = app.session.saved_selections().iter().map(|s| (s.id.clone(), s.name.clone())).collect();
+    if list.is_empty() {
+        ui.label(RichText::new("Saved selections are kept with the document.").font(theme::medium(10.5)).color(t.fg_faint));
+    }
+    for (id, name) in list {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(&name).color(t.fg));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if icons::button(ui, "trash", 24.0, false, "Delete").clicked() {
+                    let _ = app.session.execute(Command::DeleteSavedSelection { id: id.clone() });
+                }
+                for (icon, mode, tip) in
+                    [("minus", Mode::Subtract, "Subtract from the selection"), ("plus", Mode::Add, "Add to the selection")]
+                {
+                    if icons::button(ui, icon, 24.0, false, tip).clicked() {
+                        let _ = app.session.execute(Command::LoadSelection { id: id.clone(), mode });
+                    }
+                }
+                if icons::button(ui, "square-dashed", 24.0, false, "Load (replace)").clicked() {
+                    let _ = app.session.execute(Command::LoadSelection { id: id.clone(), mode: Mode::Replace });
+                }
+            });
+        });
+    }
 }
 
 fn fill_options(app: &mut App, ui: &mut Ui) {

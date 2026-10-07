@@ -4,6 +4,8 @@
 //! Ported from happypaint `engine/selection/selection.ts` and the flood fill in
 //! `engine/paint-engine.ts`; see `docs/specs/08-selection-fill.md`.
 
+pub mod saved;
+
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 

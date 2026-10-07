@@ -11,12 +11,14 @@ pub mod guides;
 mod liquify_ops;
 mod mask_ops;
 mod paint_ops;
+mod saved_selection_ops;
 mod selection_ops;
 mod smudge_ops;
 mod text_ops;
 pub mod transform;
 pub use guides::Guides;
 pub use onepaint_brush::symmetry::{Symmetry, SymmetryMode};
+pub use saved_selection_ops::SavedSelection;
 pub use smudge_ops::{MixerSettings, PaintSettings};
 pub mod view;
 
@@ -142,6 +144,17 @@ pub enum Command {
         lines: Vec<guides::GuideLine>,
     },
     CommitGuideLines,
+    SaveSelection {
+        name: String,
+    },
+    DeleteSavedSelection {
+        id: String,
+    },
+    LoadSelection {
+        id: String,
+        #[serde(default)]
+        mode: onepaint_selection::Mode,
+    },
     SetSmudgeStrength {
         strength: f64,
     },
@@ -304,6 +317,7 @@ pub enum Event {
     /// The whole document was replaced (new size, new layers).
     DocumentReplaced,
     SelectionChanged,
+    SavedSelectionsChanged,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -320,6 +334,8 @@ pub enum EngineError {
     NothingBelow,
     #[error("{0}")]
     Format(String),
+    #[error("{0}")]
+    Invalid(String),
 }
 
 impl From<onepaint_formats::FormatError> for EngineError {
@@ -339,6 +355,7 @@ pub(crate) enum Change {
     Selection { before: Option<Arc<onepaint_selection::Mask>>, after: Option<Arc<onepaint_selection::Mask>> },
     Document { before: Box<canvas_ops::DocShape>, after: Box<canvas_ops::DocShape> },
     GuideLines { before: Vec<guides::GuideLine>, after: Vec<guides::GuideLine> },
+    SavedSelections { before: Vec<SavedSelection>, after: Vec<SavedSelection> },
 }
 
 struct ActiveStroke {
@@ -379,6 +396,7 @@ pub struct Session {
     guides: Guides,
     /// Guide lines before the edit in progress (one undo step per edit).
     guide_edit_before: Option<Vec<guides::GuideLine>>,
+    saved: Vec<SavedSelection>,
     smudge: Option<smudge_ops::ActiveSmudge>,
     liquify: Option<liquify_ops::ActiveLiquify>,
     /// The Mixer's kept reservoir, keyed by the colour it was loaded with.
@@ -418,10 +436,12 @@ impl Session {
             paint: PaintSettings::default(),
             guides: Guides::default(),
             guide_edit_before: None,
+            saved: Vec::new(),
             smudge: None,
             liquify: None,
             mixer_held: None,
         };
+        s.load_saved_selections();
         s.guides = s.doc.extra.get("guides").and_then(|v| serde_json::from_value::<Guides>(v.clone()).ok()).unwrap_or_default().sanitized();
         s.mark_all_dirty();
         s
@@ -611,6 +631,7 @@ impl Session {
         } else {
             self.doc.extra.remove("guides");
         }
+        self.store_saved_selections();
         self.doc.touch();
         let flat = self.flatten();
         let thumb = onepaint_formats::thumbnail_jpeg(&flat, self.doc.width, self.doc.height, 320, 240).ok();
@@ -920,6 +941,15 @@ impl Session {
                 }
                 self.guides.lines = lines;
                 self.guides = std::mem::take(&mut self.guides).sanitized();
+                Ok(())
+            }
+            Command::SaveSelection { name } => self.save_selection(name),
+            Command::DeleteSavedSelection { id } => {
+                self.delete_saved_selection(&id);
+                Ok(())
+            }
+            Command::LoadSelection { id, mode } => {
+                self.load_selection(&id, mode);
                 Ok(())
             }
             Command::CommitGuideLines => {
@@ -1290,6 +1320,10 @@ impl Session {
                 ChangeRef::Selection(m) => self.set_selection_raw(m),
                 ChangeRef::Document(d) => self.apply_shape(*d),
                 ChangeRef::GuideLines(lines) => self.guides.lines = lines,
+                ChangeRef::SavedSelections(list) => {
+                    self.saved = list;
+                    self.events.push(Event::SavedSelectionsChanged);
+                }
             }
         }
         self.history_changed();
@@ -1305,6 +1339,7 @@ impl Session {
             Change::Selection { before, after } => ChangeRef::Selection(if undo { before.clone() } else { after.clone() }),
             Change::Document { before, after } => ChangeRef::Document(Box::new(if undo { (**before).clone() } else { (**after).clone() })),
             Change::GuideLines { before, after } => ChangeRef::GuideLines(if undo { before.clone() } else { after.clone() }),
+            Change::SavedSelections { before, after } => ChangeRef::SavedSelections(if undo { before.clone() } else { after.clone() }),
         }
     }
 
@@ -1333,4 +1368,5 @@ enum ChangeRef {
     Selection(Option<Arc<onepaint_selection::Mask>>),
     Document(Box<canvas_ops::DocShape>),
     GuideLines(Vec<guides::GuideLine>),
+    SavedSelections(Vec<SavedSelection>),
 }

@@ -38,7 +38,7 @@ impl Session {
     }
 
     /// Replace the selection as one undo step; empty masks clear it.
-    fn commit_selection(&mut self, new: Option<Mask>) {
+    pub(crate) fn commit_selection(&mut self, new: Option<Mask>) {
         let after = new.filter(Mask::has_content).map(Arc::new);
         if after.is_none() && self.selection.is_none() {
             return;
@@ -50,7 +50,7 @@ impl Session {
         self.history_changed();
     }
 
-    fn region_combined(&self, region: &Mask, mode: Mode) -> Mask {
+    pub(crate) fn region_combined(&self, region: &Mask, mode: Mode) -> Mask {
         combine(self.selection.as_deref(), region, mode)
     }
 

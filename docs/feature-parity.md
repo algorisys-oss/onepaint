@@ -101,7 +101,7 @@ Still to do:
 - [x] Rect, ellipse, lasso, polygon and magic wand
 - [x] Add, subtract and intersect
 - [x] Feather, grow and smooth
-- [ ] Saved selections
+- [x] Saved selections (save, load with replace/add/subtract, delete; kept in the file; follow canvas/image size)
 - [x] Marching-ants overlay
 - [~] Fill, stroke and adjust within a selection, auto-rasterizing vector layers first (fill, clear and painting are clipped; adjustments and vector layers come later)
 

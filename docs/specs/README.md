@@ -31,3 +31,4 @@ The happypaint references are relative to `../happypaint/frontend/src/`.
 | 16 | [Smudge, mixer, pigment, symmetry](16-smudge-symmetry.md) | color, brush, engine, app |
 | 17 | [Liquify](17-liquify.md) | filters, engine, app |
 | 19 | [Guides: grid, perspective, snapping](19-guides.md) | stroke, engine, app |
+| 20 | [Saved selections](20-saved-selections.md) | selection, engine, app |

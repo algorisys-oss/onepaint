@@ -1095,4 +1095,25 @@ mod tests {
         assert!((len - 100.0 / app.canvas.view.scale).abs() < 1.0);
         assert_eq!(app.session.doc().layer(app.session.active()).unwrap().pixels.tile_count(), 0);
     }
+
+    #[test]
+    fn save_and_load_a_selection_from_the_popover() {
+        let mut h = harness();
+        h.run();
+        let _ = h.state_mut().session.execute(Command::SelectShape {
+            contours: vec![onepaint_selection::rect_polygon([100.0, 100.0], [300.0, 300.0])],
+            mode: onepaint_selection::Mode::Replace,
+        });
+        h.state_mut().popover = Some(Popover::Selection);
+        h.run_steps(4);
+        h.get_by_label("Save selection").click();
+        h.run_steps(4);
+        assert_eq!(h.state().session.saved_selections().len(), 1);
+        let _ = h.state_mut().session.execute(Command::Deselect);
+        h.run_steps(4);
+        assert!(h.state().session.selection().is_none());
+        h.get_by_label("Load (replace)").click();
+        h.run_steps(4);
+        assert!(h.state().session.selection().is_some_and(|m| m.coverage(200, 200) > 0.5));
+    }
 }
