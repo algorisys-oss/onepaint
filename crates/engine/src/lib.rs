@@ -4,10 +4,12 @@
 //! drained [`Event`]s, mirroring happypaint's store handlers, `PaintSink`
 //! and engine callbacks. No UI or GPU code lives here.
 
+mod clipboard;
 mod selection_ops;
 pub mod transform;
 pub mod view;
 
+pub use clipboard::Region;
 pub use onepaint_selection::{Mask, Mode as SelectMode};
 
 use onepaint_brush::{BrushPreset, StrokeEngine, rasterize_dab};
@@ -175,6 +177,10 @@ pub enum Command {
     },
     CommitTransform,
     CancelTransform,
+    /// Selection to a new layer (Ctrl+J), or cut to a new layer (Ctrl+Shift+J).
+    LayerViaCopy {
+        cut: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -672,6 +678,7 @@ impl Session {
         }
         match cmd {
             Command::BeginTransform => self.begin_transform(),
+            Command::LayerViaCopy { cut } => self.layer_via_copy(cut),
             Command::SetTransform { matrix } => {
                 self.set_transform(matrix);
                 Ok(())

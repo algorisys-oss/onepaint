@@ -2,6 +2,7 @@
 
 mod canvas;
 mod chrome;
+mod clip;
 mod debug;
 mod thumbs;
 
@@ -70,6 +71,9 @@ pub struct App {
     pub pending: Option<Pending>,
     pub last_select_tool: Tool,
     xform_layer: Option<String>,
+    pub clipboard: clip::Clipboard,
+    /// A file chosen by drag-and-drop, opened once unsaved work is dealt with.
+    pub open_later: Option<PathBuf>,
     allow_close: bool,
 }
 
@@ -109,6 +113,8 @@ impl App {
             pending: None,
             last_select_tool: Tool::SelectRect,
             xform_layer: None,
+            clipboard: clip::Clipboard::default(),
+            open_later: None,
             allow_close: false,
         };
         if let Some(p) = open {
@@ -196,7 +202,10 @@ impl App {
         self.popover = None;
         match action {
             Pending::New(w, h) => self.new_document(w, h),
-            Pending::Open => self.open_dialog(),
+            Pending::Open => match self.open_later.take() {
+                Some(p) => self.open_path(p),
+                None => self.open_dialog(),
+            },
             Pending::Close => {
                 self.allow_close = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -223,6 +232,18 @@ impl App {
             .pick_file()
         {
             self.open_path(p);
+        }
+    }
+
+    pub fn place_dialog(&mut self, ctx: &egui::Context) {
+        if let Some(p) = rfd::FileDialog::new()
+            .add_filter(
+                "Images",
+                &["png", "jpg", "jpeg", "webp", "bmp", "gif", "tif", "tiff"],
+            )
+            .pick_file()
+        {
+            clip::drop_file(self, ctx, Some(p), None);
         }
     }
 
@@ -368,6 +389,27 @@ impl App {
             self.canvas.view.zoom_at(c, 0.8);
         }
         if !typing {
+            if sc(cmd | Modifiers::SHIFT, Key::J) {
+                let _ = self.session.execute(Command::LayerViaCopy { cut: true });
+            }
+            if sc(cmd, Key::J) {
+                let _ = self.session.execute(Command::LayerViaCopy { cut: false });
+            }
+            if sc(cmd, Key::C)
+                || ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)))
+            {
+                clip::copy(self);
+            }
+            if sc(cmd, Key::X)
+                || ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Cut)))
+            {
+                clip::cut(self);
+            }
+            if sc(cmd, Key::V)
+                || ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_))))
+            {
+                clip::paste(self);
+            }
             if sc(cmd | Modifiers::SHIFT, Key::I) {
                 let _ = self.session.execute(Command::InvertSelection);
             }
@@ -472,6 +514,10 @@ impl eframe::App for App {
                 }
                 _ => {}
             }
+        }
+        let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+        for f in dropped {
+            clip::drop_file(self, &ctx, Some(f.path().to_path_buf()), None);
         }
         // Switching layers while moving restarts the transform on the new layer.
         if self.session.tool() == Tool::Move
@@ -788,5 +834,27 @@ mod tests {
         key(&mut h, egui::Key::B, egui::Modifiers::NONE);
         assert!(!h.state().session.transform_active());
         assert!(active_alpha(&h, [700.0, 500.0]) > 0.5);
+    }
+
+    #[test]
+    fn copy_paste_and_layer_via_copy() {
+        let mut h = harness();
+        h.run();
+        drag_stroke(&mut h, pos2(560.0, 400.0), pos2(640.0, 400.0));
+        let n = h.state().session.doc().root.len();
+        key(&mut h, egui::Key::C, egui::Modifiers::COMMAND);
+        key(&mut h, egui::Key::V, egui::Modifiers::COMMAND);
+        let app = h.state();
+        assert_eq!(app.session.doc().root.len(), n + 1);
+        assert_eq!(
+            app.session.doc().find(app.session.active()).unwrap().name(),
+            "Pasted"
+        );
+        key(&mut h, egui::Key::J, egui::Modifiers::COMMAND);
+        assert_eq!(
+            h.state().session.doc().root.len(),
+            n + 2,
+            "Ctrl+J without a selection duplicates"
+        );
     }
 }

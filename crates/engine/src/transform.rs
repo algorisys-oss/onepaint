@@ -185,7 +185,7 @@ impl Floating {
     }
 
     /// Resample the lifted pixels through `matrix` into `preview`, clipped to `clip`.
-    fn render(&mut self, clip: Rect) {
+    pub(crate) fn render(&mut self, clip: Rect) {
         let inv = self.matrix.inverse();
         let target = self.matrix.map_rect(self.bounds).intersect(&clip);
         self.preview = Surface::new();

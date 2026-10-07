@@ -428,6 +428,10 @@ fn menu(app: &mut App, ui: &mut Ui) {
     if widgets::menu_item(ui, Some("folder-open"), "Open…", "Ctrl+O").clicked() {
         app.request(crate::Pending::Open, ui.ctx());
     }
+    if widgets::menu_item(ui, Some("image"), "Place image…", "").clicked() {
+        app.popover = None;
+        app.place_dialog(ui.ctx());
+    }
     if widgets::menu_item(ui, Some("check"), "Save", "Ctrl+S").clicked() {
         app.popover = None;
         app.save(false, now);
