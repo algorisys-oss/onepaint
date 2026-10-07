@@ -29,8 +29,14 @@ The performance targets:
 - 60fps or better pan, zoom and rotate on 8k×8k documents with 100+ layers.
 - Filter previews that stay interactive.
 
-> Status: greenfield. This file records the **intended** architecture. When
-> the code disagrees with this file, fix one of them in the same change.
+> Status: slice 1 (a paintable vertical slice) is done; see `README.md`,
+> `docs/specs/00-slice1.md` and `docs/feature-parity.md`. When the code
+> disagrees with this file, fix one of them in the same change.
+>
+> Slice 1 architecture: the CPU tiles (`raster`) are the source of truth;
+> stamping and compositing run on the CPU per dirty tile (rayon); `gpu`
+> displays the composite. GPU stamping and compositing go behind the same
+> APIs next, verified against the CPU oracle.
 
 ---
 
@@ -110,6 +116,7 @@ crates/
   engine/      Session facade: command API, tools, events. No UI imports.
   cloud/       provider trait; Google Drive via a loopback OAuth/PKCE flow
   ui_kit/      design system: theme tokens, fonts, icons, motion, all widgets
+  history/     generic undo stacks (entry cap, byte budget, transactions)
 apps/
   onepaint/        eframe app (UI only)
   onepaint-cli/    headless: render, convert and replay recordings
@@ -165,8 +172,17 @@ cargo build --workspace
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
-cargo run -p onepaint
+cargo run -p onepaint          # or ./dev-start.sh
 ```
+
+The UI is tested with `egui_kittest`: tests in `apps/onepaint/src/main.rs`
+drive real pointer and key events. The GPU present pass has a headless
+render test (`crates/gpu/tests/render.rs`), which is skipped when no
+adapter is present.
+
+To check the UI by eye, use the `ONEPAINT_SCREENSHOT` environment hook
+(see `apps/onepaint/src/debug.rs`). It captures only onepaint's own window;
+never take a screenshot of the whole desktop.
 
 These must stay green before every commit.
 

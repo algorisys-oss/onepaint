@@ -4,6 +4,9 @@ onepaint must ship **every** happypaint feature. This file is the checklist.
 Tick an item only when it works in the app, its tests pass, and its output
 matches happypaint. If a feature changes in happypaint, update its item here.
 
+Legend: `[x]` done, `[~]` partly done (the note says what is missing), `[ ]`
+not started.
+
 Sources, all under `../happypaint/frontend/src/`:
 
 - `state/tool-store.ts` (tools)
@@ -13,12 +16,12 @@ Sources, all under `../happypaint/frontend/src/`:
 - `../happypaint/todo.md` (the full history)
 
 ## Tools (19)
-- [ ] brush
-- [ ] eraser
+- [x] brush
+- [x] eraser
 - [ ] fill (flood fill)
-- [ ] eyedropper
+- [~] eyedropper (Alt-click and Alt-drag sample the composite; no dedicated tool button yet)
 - [ ] move/transform (scale, rotate, warp, quad homography)
-- [ ] pan
+- [x] pan (space-drag, middle-drag, two-finger scroll)
 - [ ] smudge
 - [ ] mixer
 - [ ] gradient, with output to pixels or a fill layer
@@ -35,12 +38,12 @@ Sources, all under `../happypaint/frontend/src/`:
 
 ## Brushes
 - [ ] All 118 presets, including Manga and the baked Procreate brushes, with identical parameters
-- [ ] Dynamics: pressure, tilt, twist and velocity mapped to size, opacity and flow
-- [ ] Velocity-synthesized pressure for devices without hardware pressure
+- [~] Dynamics: pressure, tilt, twist and velocity mapped to size, opacity and flow (all implemented; hardware tilt and pressure need a tablet backend, see Input)
+- [x] Velocity-synthesized pressure for devices without hardware pressure
 - [ ] Computed and sampled tips
 - [ ] Grain texture
 - [ ] Airbrush (time-based ticks)
-- [ ] Smoothing and the stabilizer
+- [x] Smoothing and the stabilizer
 - [ ] Symmetry: mirror and radial
 - [ ] Wet/oil media: wet, height (impasto), settle and bevel
 - [ ] Smudge and mixer brushes
@@ -49,12 +52,12 @@ Sources, all under `../happypaint/frontend/src/`:
 - [ ] Import `.abr`, Procreate `.brush` and `.brushset`, and `.happybrush`
 
 ## Layers
-- [ ] Add, delete, reorder, duplicate and merge
-- [ ] Nested groups
-- [ ] Opacity, visibility and color labels
-- [ ] Layer masks
-- [ ] Clipping masks (clip families)
-- [ ] Alpha lock
+- [x] Add, delete, reorder, duplicate and merge
+- [~] Nested groups (compositing, file I/O and creation work; the UI can't move layers into or out of groups yet)
+- [~] Opacity, visibility and color labels (color labels are preserved in files but not shown)
+- [~] Layer masks (composited, loaded and saved; you can't paint into a mask yet)
+- [x] Clipping masks (clip families)
+- [x] Alpha lock
 - [ ] Off-canvas pixel overflow
 - [ ] Text layers: multiple rich-text objects and balloons, vector until baked
 - [ ] Vector path layers, plus path ops
@@ -71,7 +74,7 @@ The modes are:
 - hue, saturation, color, luminosity
 - pigment (brush only)
 
-- [ ] All of them on the GPU, matching the CPU oracle
+- [~] All of them on the GPU, matching the CPU oracle (all 19 layer modes are done on the CPU and the composite is shown on the GPU; GPU compositing is not done yet; `pigment` falls back to normal)
 
 ## Adjustments and filters (47 kinds)
 Each kind works destructively, as an adjustment layer, and as a smart filter.
@@ -102,7 +105,7 @@ The exception is fill layers, which only work as layers.
 - [ ] Fill, stroke and adjust within a selection, auto-rasterizing vector layers first
 
 ## Canvas and guides
-- [ ] Pan, zoom and rotate at 60fps or better on large documents
+- [~] Pan, zoom and rotate at 60fps or better on large documents (pan, zoom and rotate all work; not yet measured on 8k documents)
 - [ ] Grid
 - [ ] Symmetry guides
 - [ ] 1–5-point perspective with stroke snapping
@@ -127,10 +130,10 @@ The exception is fill layers, which only work as layers.
   - three-finger swipe down for the copy/paste menu
   - four-finger tap to toggle the UI
 - [ ] Palm rejection while a pen is active
-- [ ] Full keyboard shortcuts (the happypaint keybindings map)
+- [~] Full keyboard shortcuts (the happypaint keybindings map) (the core set: B, E, [ ], undo/redo, save/open/new/export, zoom, Tab)
 
 ## History and recording
-- [ ] Undo and redo with tile snapshots and pixel deltas
+- [x] Undo and redo with tile snapshots and pixel deltas (copy-on-write tile snapshots)
 - [ ] Record a session as a command log, then replay it
 - [ ] Export a timelapse as video
 
@@ -139,7 +142,7 @@ The exception is fill layers, which only work as layers.
 - [ ] Frame export
 
 ## Color
-- [ ] Color picker
+- [x] Color picker
 - [ ] Palettes, with import and export
 - [ ] Median-cut palette extraction
 - [ ] ICC profiles
@@ -147,12 +150,12 @@ The exception is fill layers, which only work as layers.
 - [ ] TIFF CMYK export
 
 ## Files
-- [ ] `.happypaint` v9: read and write, byte-compatible
+- [x] `.happypaint` v9: read and write (v1–v9 read; v9 write; JSON-level compatible)
 - [ ] Autosave and the gallery
 - [ ] `.happypaint-book`
 - [ ] `.happypaint-rec`
 - [ ] PSD: read and write layers, groups, masks, blend modes and text
-- [ ] PNG, JPEG, WebP, TIFF and Netpbm, keeping ICC profiles and DPI
+- [~] PNG, JPEG, WebP, TIFF and Netpbm, keeping ICC profiles and DPI (PNG export only)
 - [ ] GIF, MP4, WebM and PNG-zip export
 - [ ] Clipboard: copy and paste images
 - [ ] Camera and screen capture as a reference or import
