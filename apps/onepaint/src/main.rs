@@ -928,4 +928,26 @@ mod tests {
         key(&mut h, egui::Key::B, egui::Modifiers::SHIFT);
         assert_eq!(h.state().session.tool(), Tool::Mixer);
     }
+
+    #[test]
+    fn smudge_and_liquify_follow_the_whole_drag() {
+        for tool in [Tool::Smudge, Tool::Liquify] {
+            let mut h = harness();
+            h.run();
+            drag_stroke(&mut h, pos2(500.0, 430.0), pos2(700.0, 430.0));
+            h.state_mut().set_tool(tool);
+            let _ = h.state_mut().session.execute(Command::SetBrushSize { size: 60.0 });
+            let before = {
+                let app = h.state();
+                app.session.doc().layer(app.session.active()).unwrap().pixels.read_rect(app.session.doc().bounds())
+            };
+            // Drag across the painted line, top to bottom.
+            drag_stroke(&mut h, pos2(600.0, 380.0), pos2(600.0, 480.0));
+            let app = h.state();
+            let after = app.session.doc().layer(app.session.active()).unwrap().pixels.read_rect(app.session.doc().bounds());
+            let changed = before.iter().zip(&after).filter(|(a, b)| a != b).count();
+            assert!(changed > 400, "{tool:?} changed only {changed} values");
+            assert!(app.session.can_undo());
+        }
+    }
 }

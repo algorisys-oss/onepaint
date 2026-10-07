@@ -166,6 +166,8 @@ struct HoldTracker {
     anchor: Pos2,
     since: f64,
     fired: bool,
+    /// Quick-shape applies to brush and eraser strokes only.
+    enabled: bool,
 }
 
 pub struct Canvas {
@@ -293,9 +295,8 @@ impl Canvas {
                 self.pressure = Some(PressureProvider::new(kind));
                 let sp = self.stroke_point(p, time_ms, self.last_pen_force);
                 session.stroke_begin(sp);
-                // Quick-shape straightens brush strokes only.
-                let fired = matches!(tool, Tool::Smudge | Tool::Mixer | Tool::Liquify);
-                self.hold = HoldTracker { points: vec![d], anchor: p, since: time_ms, fired };
+                let enabled = matches!(tool, Tool::Brush | Tool::Eraser);
+                self.hold = HoldTracker { points: vec![d], anchor: p, since: time_ms, fired: false, enabled };
                 Drag::Paint
             }
             Tool::Gradient => {
@@ -563,7 +564,7 @@ impl Canvas {
             ui.ctx().request_repaint();
         }
         // Quick-shape: hold still for 600 ms while painting to straighten the stroke.
-        if matches!(self.drag, Drag::Paint) && !self.hold.fired {
+        if matches!(self.drag, Drag::Paint) && self.hold.enabled && !self.hold.fired {
             if time_ms - self.hold.since >= 600.0 {
                 self.hold.fired = true;
                 if let Some(sh) = recognize(&self.hold.points, shift) {
