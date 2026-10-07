@@ -111,7 +111,7 @@ Still to do:
 - [x] Symmetry guides (axis/spoke overlay)
 - [~] 1–5-point perspective with stroke snapping (soft and hard; vanishing-point editing; fish-eye curved mode still to do)
 - [x] Horizontal/vertical snap
-- [ ] Rulers
+- [x] Rulers, guide lines (drag from rulers, edit/swing/delete, snapping, undo) and measure
 - [x] Quick-shape: hold to straighten a stroke into a line, ellipse or polygon
 - [ ] Speed lines
 - [ ] Reference window

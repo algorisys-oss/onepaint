@@ -445,6 +445,19 @@ impl App {
             if sc(Modifiers::NONE, Key::Delete) || sc(Modifiers::NONE, Key::Backspace) {
                 let _ = self.session.execute(Command::ClearSelected);
             }
+            // Shift+ shortcuts first: a plain-key shortcut also matches with Shift held.
+            if sc(Modifiers::SHIFT, Key::P) && self.session.guides().perspective.enabled {
+                self.canvas.persp_editing = !self.canvas.persp_editing;
+            }
+            if sc(Modifiers::SHIFT, Key::R) {
+                let mut g = self.session.guides().clone();
+                g.rulers = !g.rulers;
+                let _ = self.session.execute(Command::SetGuides { guides: Box::new(g) });
+            }
+            if sc(Modifiers::SHIFT, Key::G) {
+                self.canvas.lines_editing = !self.canvas.lines_editing;
+                self.canvas.measuring = false;
+            }
             for (key, tool) in [
                 (Key::M, Tool::SelectRect),
                 (Key::L, Tool::SelectLasso),
@@ -468,9 +481,6 @@ impl App {
             }
             if sc(Modifiers::NONE, Key::Y) {
                 self.toggle_symmetry();
-            }
-            if sc(Modifiers::SHIFT, Key::P) && self.session.guides().perspective.enabled {
-                self.canvas.persp_editing = !self.canvas.persp_editing;
             }
             if sc(Modifiers::NONE, Key::E) {
                 self.set_tool(Tool::Eraser);
@@ -501,9 +511,12 @@ impl App {
                 self.hide_ui = !self.hide_ui;
             }
             if sc(Modifiers::NONE, Key::Escape) && !self.canvas.cancel_poly() {
-                if self.canvas.persp_editing || self.canvas.sym_editing {
+                if self.canvas.persp_editing || self.canvas.sym_editing || self.canvas.lines_editing || self.canvas.measuring {
                     self.canvas.persp_editing = false;
                     self.canvas.sym_editing = false;
+                    self.canvas.lines_editing = false;
+                    self.canvas.measuring = false;
+                    self.canvas.measure = None;
                 } else if self.session.transform_active() {
                     self.cancel_transform();
                 } else {
@@ -700,6 +713,8 @@ mod tests {
 
     fn key(h: &mut Harness<'_, App>, key: egui::Key, modifiers: egui::Modifiers) {
         h.event(Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
+        h.step();
+        h.event(Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers });
         h.step();
     }
 
@@ -1023,5 +1038,61 @@ mod tests {
         assert_eq!(h.state().session.doc().layer(h.state().session.active()).unwrap().pixels.tile_count(), 0, "no paint while editing");
         key(&mut h, egui::Key::Escape, egui::Modifiers::NONE);
         assert!(!h.state().canvas.persp_editing);
+    }
+
+    #[test]
+    fn rulers_drag_out_guides_and_dropping_back_deletes() {
+        let mut h = harness();
+        h.run();
+        key(&mut h, egui::Key::R, egui::Modifiers::SHIFT);
+        assert!(h.state().session.guides().rulers);
+        let h0 = h.state().session.history_len();
+        drag_stroke(&mut h, pos2(600.0, 9.0), pos2(600.0, 400.0));
+        let app = h.state();
+        assert_eq!(app.session.guides().lines.len(), 1);
+        let g = &app.session.guides().lines[0];
+        let want = app.canvas.view.screen_to_doc([600.0, 400.0])[1];
+        assert!(g.angle == 0.0 && (g.y - want).abs() < 1.0, "horizontal guide at the drop: {g:?}");
+        assert_eq!(app.session.history_len(), h0 + 1, "one undo step");
+        assert_eq!(app.session.doc().layer(app.session.active()).unwrap().pixels.tile_count(), 0, "no paint");
+        // Out of the left bar and straight back onto it: nothing remains, nothing recorded.
+        drag_stroke(&mut h, pos2(9.0, 300.0), pos2(9.0, 320.0));
+        assert_eq!(h.state().session.guides().lines.len(), 1);
+        assert_eq!(h.state().session.history_len(), h0 + 1);
+        key(&mut h, egui::Key::Z, egui::Modifiers::COMMAND);
+        assert!(h.state().session.guides().lines.is_empty());
+    }
+
+    #[test]
+    fn edit_guides_draws_moves_and_deletes() {
+        let mut h = harness();
+        h.run();
+        key(&mut h, egui::Key::G, egui::Modifiers::SHIFT);
+        assert!(h.state().canvas.lines_editing);
+        assert_eq!(h.state().session.tool(), Tool::Brush, "Shift+G is not the fill tool");
+        drag_stroke(&mut h, pos2(500.0, 300.0), pos2(600.0, 400.0));
+        let g = h.state().session.guides().lines[0].clone();
+        assert!((g.angle - std::f64::consts::FRAC_PI_4).abs() < 1e-6, "drawn along the drag: {g:?}");
+        // Grab it at its anchor and throw it far off the document.
+        let app = h.state();
+        let s = app.canvas.view.doc_to_screen([g.x, g.y]);
+        let off = app.canvas.view.doc_to_screen([-50_000.0, g.y]);
+        drag_stroke(&mut h, pos2(s[0] as f32, s[1] as f32), pos2(off[0].max(-30000.0) as f32, s[1] as f32 - 2000.0));
+        assert!(h.state().session.guides().lines.is_empty(), "dragged off the canvas: deleted");
+        key(&mut h, egui::Key::Escape, egui::Modifiers::NONE);
+        assert!(!h.state().canvas.lines_editing);
+    }
+
+    #[test]
+    fn measure_reports_without_painting() {
+        let mut h = harness();
+        h.run();
+        h.state_mut().canvas.measuring = true;
+        drag_stroke(&mut h, pos2(500.0, 400.0), pos2(600.0, 400.0));
+        let app = h.state();
+        let (a, b) = app.canvas.measure.unwrap();
+        let len = (b[0] - a[0]).hypot(b[1] - a[1]);
+        assert!((len - 100.0 / app.canvas.view.scale).abs() < 1.0);
+        assert_eq!(app.session.doc().layer(app.session.active()).unwrap().pixels.tile_count(), 0);
     }
 }

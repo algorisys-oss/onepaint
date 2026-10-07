@@ -159,6 +159,25 @@ enum Drag {
     },
     /// Moving the symmetry centre (symmetry edit mode).
     SymAxis,
+    /// Moving guide `index`; `from_ruler` drags may drop back on a bar to delete.
+    GuideMove {
+        index: usize,
+        offset: Pt,
+        from_ruler: bool,
+    },
+    /// Alt-drag in edit-guides mode: swing guide `index` about its anchor.
+    GuideRotate {
+        index: usize,
+    },
+    /// A drag on empty canvas in edit-guides mode draws a guide along it.
+    GuideDraw {
+        start: Pt,
+        index: Option<usize>,
+    },
+    /// Measure from `start` (doc px).
+    Measure {
+        start: Pt,
+    },
 }
 
 /// The text object being created or edited with the text tool.
@@ -207,6 +226,12 @@ pub struct Canvas {
     /// Transient guide edit modes: canvas drags move handles instead of painting.
     pub persp_editing: bool,
     pub sym_editing: bool,
+    /// Edit guides: drags move, draw and swing guide lines.
+    pub lines_editing: bool,
+    /// Measure: drags report length and angle.
+    pub measuring: bool,
+    /// The last measurement (doc px), shown until the next one or Escape.
+    pub measure: Option<(Pt, Pt)>,
 }
 
 impl Canvas {
@@ -231,6 +256,9 @@ impl Canvas {
             snapper: None,
             persp_editing: false,
             sym_editing: false,
+            lines_editing: false,
+            measuring: false,
+            measure: None,
         }
     }
 
@@ -243,6 +271,29 @@ impl Canvas {
         self.pending.clear();
         self.persp_editing = false;
         self.sym_editing = false;
+        self.lines_editing = false;
+        self.measuring = false;
+        self.measure = None;
+    }
+
+    /// Which pinned ruler bar a canvas-local point is on (rulers on, unrotated).
+    fn ruler_band(&self, session: &Session, p: Pos2) -> Option<bool> {
+        use onepaint_stroke::guide_lines::{RULER_PX, rulers_pinned};
+        if !session.guides().rulers || !session.guides().visible || !rulers_pinned(self.view.rotation) {
+            return None;
+        }
+        let (r, w, h) = (RULER_PX as f32, self.view.view_size[0] as f32, self.view.view_size[1] as f32);
+        if p.y >= 0.0 && p.y <= r && p.x > r && p.x <= w {
+            Some(true)
+        } else if p.x >= 0.0 && p.x <= r && p.y > r && p.y <= h {
+            Some(false)
+        } else {
+            None
+        }
+    }
+
+    fn edit_lines(session: &mut Session, lines: Vec<onepaint_engine::guides::GuideLine>) {
+        let _ = session.execute(Command::EditGuideLines { lines });
     }
 
     /// The vanishing point under screen position `p` (16 px hit radius).
@@ -255,7 +306,7 @@ impl Canvas {
     }
 
     fn snap_config(&self, session: &Session) -> onepaint_stroke::snap::SnapConfig {
-        session.guides().snap_config(self.doc_size[0], self.doc_size[1], self.persp_editing)
+        session.guides().snap_config(self.doc_size[0], self.doc_size[1], self.view.scale, self.persp_editing)
     }
 
     fn doc_pt(&self, p: Pos2) -> Pt {
@@ -306,6 +357,38 @@ impl Canvas {
         }
         if button != PointerButton::Primary {
             return Drag::None;
+        }
+        // A press on a ruler bar drags out a guide, ahead of every tool.
+        if let Some(top) = self.ruler_band(session, p) {
+            let d = self.doc_pt(p);
+            let g = onepaint_engine::guides::GuideLine::new(
+                onepaint_doc::new_id(),
+                d[0],
+                d[1],
+                if top { 0.0 } else { std::f64::consts::FRAC_PI_2 },
+            );
+            let mut lines = session.guides().lines.clone();
+            lines.push(g);
+            let index = lines.len() - 1;
+            Self::edit_lines(session, lines);
+            return Drag::GuideMove { index, offset: [0.0, 0.0], from_ruler: true };
+        }
+        if self.measuring {
+            let d = self.doc_pt(p);
+            self.measure = Some((d, d));
+            return Drag::Measure { start: d };
+        }
+        if self.lines_editing {
+            let d = self.doc_pt(p);
+            let tol = onepaint_stroke::guide_lines::GUIDE_HIT_PX / self.view.scale;
+            return match onepaint_stroke::guide_lines::nearest_guide(&session.guides().lines, d, tol) {
+                Some(index) if m.alt => Drag::GuideRotate { index },
+                Some(index) => {
+                    let g = &session.guides().lines[index];
+                    Drag::GuideMove { index, offset: [g.x - d[0], g.y - d[1]], from_ruler: false }
+                }
+                None => Drag::GuideDraw { start: d, index: None },
+            };
         }
         if self.persp_editing {
             return match self.vp_hit(session, p) {
@@ -533,6 +616,43 @@ impl Canvas {
                             }
                         }
                         Drag::SymAxis => Self::move_symmetry_centre(session, d, self.doc_size),
+                        Drag::GuideMove { index, offset, .. } => {
+                            let (index, offset) = (*index, *offset);
+                            let mut lines = session.guides().lines.clone();
+                            if let Some(g) = lines.get_mut(index) {
+                                (g.x, g.y) = (d[0] + offset[0], d[1] + offset[1]);
+                                Self::edit_lines(session, lines);
+                            }
+                        }
+                        Drag::GuideRotate { index } => {
+                            let index = *index;
+                            let mut lines = session.guides().lines.clone();
+                            if let Some(g) = lines.get_mut(index) {
+                                let a = onepaint_stroke::guide_lines::angle_through([g.x, g.y], d);
+                                g.angle = if shift { onepaint_stroke::guide_lines::snap_angle(a, 15.0) } else { a };
+                                Self::edit_lines(session, lines);
+                            }
+                        }
+                        Drag::GuideDraw { start, index } => {
+                            let start = *start;
+                            if (d[0] - start[0]).hypot(d[1] - start[1]) * self.view.scale >= 4.0 {
+                                let a = onepaint_stroke::guide_lines::angle_through(start, d);
+                                let a = if shift { onepaint_stroke::guide_lines::snap_angle(a, 15.0) } else { a };
+                                let mut lines = session.guides().lines.clone();
+                                match *index {
+                                    Some(i) if i < lines.len() => lines[i].angle = a,
+                                    _ => {
+                                        lines.push(onepaint_engine::guides::GuideLine::new(onepaint_doc::new_id(), start[0], start[1], a));
+                                        *index = Some(lines.len() - 1);
+                                    }
+                                }
+                                Self::edit_lines(session, lines);
+                            }
+                        }
+                        Drag::Measure { start } => {
+                            let start = *start;
+                            self.measure = Some((start, d));
+                        }
                         Drag::Gradient { start } => {
                             let start = *start;
                             let stops = self.gradient_stops(session);
@@ -599,6 +719,23 @@ impl Canvas {
                         Drag::Paint | Drag::PerspLine { .. } => {
                             self.snapper = None;
                             session.stroke_end();
+                        }
+                        Drag::GuideMove { index, from_ruler, .. } => {
+                            // Dragged off the document, or (from a ruler) back onto a bar: delete.
+                            let p = self.last_pos.unwrap_or_default();
+                            let mut lines = session.guides().lines.clone();
+                            if let Some(g) = lines.get(index) {
+                                let (w, h) = (self.doc_size[0] as f64, self.doc_size[1] as f64);
+                                let on_bar = from_ruler && self.ruler_band(session, p).is_some();
+                                if on_bar || !g.intersects_doc(w, h) {
+                                    lines.remove(index);
+                                    Self::edit_lines(session, lines);
+                                }
+                            }
+                            let _ = session.execute(Command::CommitGuideLines);
+                        }
+                        Drag::GuideRotate { .. } | Drag::GuideDraw { .. } => {
+                            let _ = session.execute(Command::CommitGuideLines);
                         }
                         Drag::Gradient { .. } => session.gradient_end(),
                         Drag::ShapeTool { shape, .. } => {
@@ -813,6 +950,20 @@ impl Canvas {
                 }
             }
         }
+        if !g.lines.is_empty() {
+            let col = hex(&g.line_color);
+            let reach = (w.hypot(h) + (self.view.view_size[0].hypot(self.view.view_size[1])) / self.view.scale) * 2.0;
+            for l in &g.lines {
+                let d = l.direction();
+                let a = self.to_screen(rect, [l.x - d[0] * reach, l.y - d[1] * reach]);
+                let b = self.to_screen(rect, [l.x + d[0] * reach, l.y + d[1] * reach]);
+                if l.is_locked() {
+                    painter.extend(egui::Shape::dashed_line(&[a, b], Stroke::new(1.0, col.gamma_multiply(0.55)), 6.0, 4.0));
+                } else {
+                    painter.line_segment([a, b], Stroke::new(1.0, col.gamma_multiply(0.9)));
+                }
+            }
+        }
         if g.snap_hv {
             let c = Color32::from_rgba_unmultiplied(80, 150, 255, 140);
             let (cx, cy) = (w / 2.0, h / 2.0);
@@ -821,6 +972,70 @@ impl Canvas {
                 painter.extend(egui::Shape::dashed_line(&pts, Stroke::new(1.5, c), 6.0, 5.0));
             }
         }
+    }
+
+    /// Pinned ruler bars (unrotated view) and the measure line, on top of everything.
+    fn rulers_and_measure(&self, ui: &egui::Ui, rect: Rect, session: &Session) {
+        use onepaint_stroke::guide_lines::{RULER_PX, measure_between, ruler_ticks_span, rulers_pinned};
+        let g = session.guides();
+        let t = onepaint_ui_kit::Tokens::get(ui.ctx());
+        let dpi = session.doc().dpi;
+        if let Some((a, b)) = self.measure {
+            let col = Color32::from_rgba_unmultiplied(255, 90, 40, 242);
+            let (sa, sb) = (self.to_screen(rect, a), self.to_screen(rect, b));
+            ui.painter().line_segment([sa, sb], Stroke::new(1.5, col));
+            ui.painter().circle_filled(sa, 3.0, col);
+            ui.painter().circle_filled(sb, 3.0, col);
+            let (len, _, deg) = measure_between(a, b, &g.units, dpi);
+            ui.painter().text(
+                sb + egui::vec2(10.0, -10.0),
+                egui::Align2::LEFT_BOTTOM,
+                format!("{len}  {deg:.1}°"),
+                onepaint_ui_kit::theme::mono(11.5),
+                col,
+            );
+        }
+        if !g.rulers || !g.visible || !rulers_pinned(self.view.rotation) {
+            return;
+        }
+        let r = RULER_PX as f32;
+        let painter = ui.painter();
+        let bg = t.panel.gamma_multiply(0.92);
+        let (top, left) = (
+            Rect::from_min_max(rect.min + egui::vec2(r, 0.0), egui::pos2(rect.right(), rect.top() + r)),
+            Rect::from_min_max(rect.min + egui::vec2(0.0, r), egui::pos2(rect.left() + r, rect.bottom())),
+        );
+        painter.rect_filled(top, 0.0, bg);
+        painter.rect_filled(left, 0.0, bg);
+        painter.rect_filled(Rect::from_min_size(rect.min, egui::vec2(r, r)), 0.0, bg);
+        let tick = Stroke::new(1.0, t.fg_faint);
+        let font = onepaint_ui_kit::theme::mono(9.0);
+        let x0 = self.view.screen_to_doc([r as f64, 0.0])[0];
+        let x1 = self.view.screen_to_doc([rect.width() as f64, 0.0])[0];
+        let (from, to) = (x0.min(x1), x0.max(x1));
+        for tk in ruler_ticks_span(from, to, self.view.scale, &g.units, dpi, 2000) {
+            let sx = rect.left() + self.view.doc_to_screen([tk.pos, 0.0])[0] as f32;
+            let len = if tk.major { r * 0.7 } else { r * 0.3 };
+            painter.line_segment([egui::pos2(sx, rect.top() + r - len), egui::pos2(sx, rect.top() + r)], tick);
+            if let Some(lbl) = tk.label {
+                painter.text(egui::pos2(sx + 2.0, rect.top() + 1.0), egui::Align2::LEFT_TOP, lbl, font.clone(), t.fg_muted);
+            }
+        }
+        let y0 = self.view.screen_to_doc([0.0, r as f64])[1];
+        let y1 = self.view.screen_to_doc([0.0, rect.height() as f64])[1];
+        let (from, to) = (y0.min(y1), y0.max(y1));
+        for tk in ruler_ticks_span(from, to, self.view.scale, &g.units, dpi, 2000) {
+            let sy = rect.top() + self.view.doc_to_screen([0.0, tk.pos])[1] as f32;
+            let len = if tk.major { r * 0.7 } else { r * 0.3 };
+            painter.line_segment([egui::pos2(rect.left() + r - len, sy), egui::pos2(rect.left() + r, sy)], tick);
+            if let Some(lbl) = tk.label {
+                let galley = painter.layout_no_wrap(lbl, font.clone(), t.fg_muted);
+                let pos = egui::pos2(rect.left() + 1.0, sy + 2.0 + galley.size().x);
+                painter.add(egui::epaint::TextShape::new(pos, galley, t.fg_muted).with_angle(-std::f32::consts::FRAC_PI_2));
+            }
+        }
+        painter.line_segment([top.left_bottom(), top.right_bottom()], Stroke::new(1.0, t.border));
+        painter.line_segment([left.right_top(), left.right_bottom()], Stroke::new(1.0, t.border));
     }
 
     /// The symmetry mirror axes (or radial spokes) through the centre.
@@ -925,6 +1140,7 @@ impl Canvas {
             let f = self.to_screen(rect, pts[0]);
             ui.painter().circle_stroke(f, 5.0, Stroke::new(1.5, Color32::WHITE));
         }
+        self.rulers_and_measure(ui, rect, session);
         let Some(hp) = hover else { return };
         if space {
             ui.ctx().set_cursor_icon(if matches!(self.drag, Drag::Pan) { CursorIcon::Grabbing } else { CursorIcon::Grab });

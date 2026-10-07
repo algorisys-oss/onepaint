@@ -72,7 +72,8 @@ pigment mixing), symmetry (Y: mirror, quad and radial) and liquify
 
 Slice 11 adds drawing guides, saved with the document: a grid with snapping,
 H/V snap, and 1–5-point perspective with soft or hard-line snapping and
-draggable vanishing points (Shift+P).
+draggable vanishing points (Shift+P), plus rulers (Shift+R) to drag guide
+lines out of, an edit-guides mode (Shift+G) and a measure tool.
 
 Slice 8 adds PSD: open `.psd`/`.psb` (layers, groups, masks, blend modes,
 clipping) and File ▸ Export PSD….
@@ -113,6 +114,7 @@ The app needs a GPU that wgpu supports (Vulkan, Metal, DX12 or GL).
 | Copy / cut / paste | Ctrl+C / Ctrl+X / Ctrl+V; Ctrl+J layer via copy, Ctrl+Shift+J via cut |
 | Smudge / mixer | S / Shift+B (click again for options) |
 | Symmetry on/off | Y (guides button for the mode, spokes, angle and centre) |
+| Rulers / edit guides / edit perspective | Shift+R / Shift+G / Shift+P |
 | Hide the UI | Tab |
 
 ## Develop

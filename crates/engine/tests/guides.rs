@@ -62,17 +62,43 @@ fn guides_travel_with_the_document() {
 #[test]
 fn snap_config_follows_the_guides() {
     let mut g = Guides::default();
-    assert!(!g.snap_config(100, 100, false).active());
+    assert!(!g.snap_config(100, 100, 1.0, false).active());
     g.perspective.enabled = true;
     assert!(g.hard_perspective(false));
     assert!(!g.hard_perspective(true), "editing points suspends it");
-    let c = g.snap_config(100, 100, false);
+    let c = g.snap_config(100, 100, 1.0, false);
     assert_eq!(c.vps, vec![[-80.0, 50.0], [180.0, 50.0]]);
     assert!(!c.soft);
     g.perspective.snap = PerspectiveSnap::Soft;
-    assert!(g.snap_config(100, 100, false).active());
+    assert!(g.snap_config(100, 100, 1.0, false).active());
     g.grid.enabled = true;
     g.grid.snap = true;
     g.grid.subdivisions = 2;
-    assert_eq!(g.snap_config(100, 100, false).grid_step, Some(32.0));
+    assert_eq!(g.snap_config(100, 100, 1.0, false).grid_step, Some(32.0));
+}
+
+#[test]
+fn guide_line_edits_are_one_undo_step() {
+    use onepaint_engine::guides::GuideLine;
+    let mut s = Session::new(200, 100, None);
+    let h0 = s.history_len();
+    for y in [10.0, 20.0, 30.0, 40.0] {
+        s.execute(Command::EditGuideLines { lines: vec![GuideLine::new("a", 0.0, y, 0.0)] }).unwrap();
+    }
+    s.execute(Command::CommitGuideLines).unwrap();
+    assert_eq!(s.history_len(), h0 + 1, "a drag of many positions is one step");
+    assert_eq!(s.guides().lines[0].y, 40.0);
+    s.execute(Command::Undo).unwrap();
+    assert!(s.guides().lines.is_empty());
+    s.execute(Command::Redo).unwrap();
+    assert_eq!(s.guides().lines.len(), 1);
+    // Committing with nothing changed records nothing.
+    s.execute(Command::CommitGuideLines).unwrap();
+    assert_eq!(s.history_len(), h0 + 1);
+    // Angles are canonical: θ + π is the same guide.
+    s.execute(Command::EditGuideLines {
+        lines: vec![GuideLine { angle: std::f64::consts::PI * 1.5, ..GuideLine::new("v", 5.0, 0.0, 0.0) }],
+    })
+    .unwrap();
+    assert!((s.guides().lines[0].angle - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
 }

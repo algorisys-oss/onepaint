@@ -308,6 +308,10 @@ fn status(app: &mut App, ctx: &egui::Context, screen: egui::Rect) {
                 if let Some([x, y]) = app.canvas.hover_doc {
                     ui.label(RichText::new(format!("{:.0}, {:.0}", x, y)).font(theme::mono(11.5)).color(t.fg_faint));
                 }
+                if let Some((a, b)) = app.canvas.measure {
+                    let (len, _, deg) = onepaint_stroke::guide_lines::measure_between(a, b, &app.session.guides().units, d.dpi);
+                    ui.label(RichText::new(format!("↔ {len}  {deg:.1}°")).font(theme::mono(11.5)).color(t.accent));
+                }
             });
         });
     });
@@ -1263,6 +1267,7 @@ fn liquify_options(app: &mut App, ui: &mut Ui) {
 }
 
 fn guides(app: &mut App, ui: &mut Ui) {
+    use onepaint_engine::Guides;
     use onepaint_engine::SymmetryMode as M;
     use onepaint_engine::guides::{PerspectiveSnap as PS, perspective_preset};
     let t = Tokens::get(ui.ctx());
@@ -1284,6 +1289,39 @@ fn guides(app: &mut App, ui: &mut Ui) {
             widgets::toggle(ui, &mut g.grid.snap, "Snap to grid");
         }
         widgets::toggle(ui, &mut g.snap_hv, "Snap horizontal / vertical");
+        widgets::hairline(ui);
+
+        widgets::section_label(ui, "Rulers and guide lines");
+        widgets::toggle(ui, &mut g.rulers, "Rulers (Shift+R): drag a guide out of a bar");
+        let units = ["px", "cm", "in"];
+        let cur = units.iter().position(|u| *u == g.units).unwrap_or(0);
+        if let Some(i) = segmented(ui, &["px", "cm", "in"], cur) {
+            g.units = units[i].into();
+        }
+        widgets::toggle(ui, &mut g.snap_guides, "Snap to guide lines");
+        if widgets::toggle(ui, &mut app.canvas.lines_editing, "Edit guides (Shift+G)").changed() && app.canvas.lines_editing {
+            app.canvas.measuring = false;
+        }
+        if widgets::toggle(ui, &mut app.canvas.measuring, "Measure").changed() && app.canvas.measuring {
+            app.canvas.lines_editing = false;
+        }
+        ui.horizontal(|ui| {
+            let (w, h) = (app.session.doc().width as f64, app.session.doc().height as f64);
+            let mut add = |ui: &mut Ui, label: &str, angle: f64| {
+                if widgets::secondary_button(ui, label, 70.0).clicked() {
+                    let mut lines = app.session.guides().lines.clone();
+                    lines.push(onepaint_engine::guides::GuideLine::new(onepaint_doc::new_id(), w / 2.0, h / 2.0, angle));
+                    let _ = app.session.execute(Command::EditGuideLines { lines });
+                    let _ = app.session.execute(Command::CommitGuideLines);
+                }
+            };
+            add(ui, "+ Horiz", 0.0);
+            add(ui, "+ Vert", std::f64::consts::FRAC_PI_2);
+            if !app.session.guides().lines.is_empty() && widgets::secondary_button(ui, "Clear", 60.0).clicked() {
+                let _ = app.session.execute(Command::EditGuideLines { lines: Vec::new() });
+                let _ = app.session.execute(Command::CommitGuideLines);
+            }
+        });
         widgets::hairline(ui);
 
         widgets::section_label(ui, "Symmetry");
@@ -1347,6 +1385,9 @@ fn guides(app: &mut App, ui: &mut Ui) {
             .color(t.fg_faint),
         );
     });
+    // Buttons above may have changed the lines through their own undo steps.
+    g.lines = app.session.guides().lines.clone();
+    let before = Guides { lines: g.lines.clone(), ..before };
     if g != before {
         let _ = app.session.execute(Command::SetGuides { guides: Box::new(g) });
     }

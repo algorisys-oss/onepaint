@@ -18,3 +18,4 @@ short by fixing entries, not by growing it.
 | 11 | Text rendering | cosmic-text/swash with system fonts; the outline is a dilated glyph mask; balloons are not drawn | Canvas2D `fillText`/`strokeText`, balloons drawn | Metrics differ slightly by font engine; balloons come next. |
 | 12 | PSD text layers | Exported as raster layers (their rendering); no `TySh` editable text | Editable text through ag-psd | Port the `TySh` engine data writer. |
 | 13 | Fish-eye (curved 5-point) perspective | The `curved` flag is preserved in files; guides draw and snap straight | Arcs through the poles, arc snapping | Port `drawFisheyeLines` and `pickFisheyeCurve`. |
+| 14 | Rulers on a rotated canvas | Hidden while the canvas is rotated (pinned rulers only) | A document-attached tick band that turns with the artwork | Draw the doc-edge band when `rulers_pinned` is false. |

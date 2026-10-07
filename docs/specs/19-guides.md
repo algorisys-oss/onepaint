@@ -96,3 +96,44 @@ or guide snap (guide lines exist).
     rightward drag snaps onto y = 50.
   - Soft pulls 70%.
   - A vertical drag gets the added upright axis.
+
+## Guide lines, rulers and measure (slice 12)
+The sources are `state/guide-lines.ts` and `docs/rulers-guides-spec.md`.
+
+**Geometry (`stroke::guide_lines`), ported with happypaint's test cases:**
+- A guide is a point plus an angle, canonicalised to `[0, π)`.
+- Supporting operations: signed distance, projection, `nearest_guide`
+  (skips locked guides, 7 screen px), `intersects_doc` (the delete test) and
+  `snap_point_to_guides` (locked guides still snap).
+- Units: px, cm (`dpi/2.54`) and in (`dpi`).
+- `measure_between` gives the length and the angle (counter-clockwise, 0°
+  pointing right, never −0).
+- `nice_step` (1/2/5×10ⁿ), `tick_steps` (an 80 px major target with 5
+  minors) and `ruler_ticks_span` (capped).
+
+**Snapping:** a stroke origin is pulled onto the nearest guide within
+`7/scale` doc px (after grid snap), and each guide adds its direction as a
+candidate.
+
+**History:**
+- `EditGuideLines` changes the lines live; `CommitGuideLines` records one
+  `GuideLines {before, after}` step if anything changed.
+- A drag of many positions is therefore one undo step.
+
+**Rulers (Shift+R):**
+- 18 px bars pinned to the view's top and left edges while the canvas is
+  unrotated, with ticks over the visible document span.
+- Pressing a bar drags out a horizontal guide (top bar) or a vertical one
+  (left bar), ahead of every tool.
+- Dropping it back on a bar, or anywhere off the document, deletes it.
+
+**Edit guides (Shift+G):**
+- Pressing near a guide moves it; Alt-drag swings it about its anchor.
+- A drag on empty canvas draws a new guide along the drag.
+- Shift snaps angles to 15°.
+
+**Measure:**
+- A drag draws a line, with its length (in the chosen units) and angle on
+  the canvas and in the status bar.
+- It stays until the next measurement or Escape.
+- Escape leaves every edit mode.

@@ -1,6 +1,8 @@
 //! Stroke snapping to H/V, the grid, guide lines and perspective vanishing
 //! points (happypaint `paint-canvas.tsx` snapping, spec 19).
 
+use crate::guide_lines::{GuideLine, snap_point_to_guides};
+
 pub type Pt = [f64; 2];
 
 /// Movement (doc px) before a direction is read, and before it locks.
@@ -20,8 +22,10 @@ pub struct SnapConfig {
     pub vps: Vec<Pt>,
     /// Soft perspective: freehand strokes are pulled toward VP lines.
     pub soft: bool,
-    /// Unit directions of guide lines.
-    pub guide_dirs: Vec<Pt>,
+    /// Guide lines: strokes run parallel to them, and origins are pulled onto
+    /// the nearest one within `guide_tol` doc px.
+    pub guides: Vec<GuideLine>,
+    pub guide_tol: f64,
 }
 
 pub fn grid_node(p: Pt, step: f64) -> Pt {
@@ -37,7 +41,7 @@ fn unit(x: f64, y: f64) -> Option<Pt> {
 impl SnapConfig {
     /// Whether freehand strokes snap at all (hard perspective uses `hard_line_end`).
     pub fn active(&self) -> bool {
-        self.hv || self.grid_step.is_some() || (self.soft && !self.vps.is_empty()) || !self.guide_dirs.is_empty()
+        self.hv || self.grid_step.is_some() || (self.soft && !self.vps.is_empty()) || !self.guides.is_empty()
     }
 
     pub fn candidates(&self, origin: Pt, include_vp: bool) -> Vec<Pt> {
@@ -52,7 +56,7 @@ impl SnapConfig {
             c.push([1.0, 0.0]);
             c.push([0.0, 1.0]);
         }
-        c.extend(self.guide_dirs.iter().copied());
+        c.extend(self.guides.iter().map(GuideLine::direction));
         c
     }
 }
@@ -101,7 +105,8 @@ impl Snapper {
         if !cfg.active() {
             return None;
         }
-        let origin = cfg.grid_step.map_or(o, |s| grid_node(o, s));
+        // Grid first, then guides: a guide placed against this drawing wins.
+        let origin = snap_point_to_guides(&cfg.guides, cfg.grid_step.map_or(o, |s| grid_node(o, s)), cfg.guide_tol);
         Some(Self { cfg, origin, choosing: true, line: None })
     }
 

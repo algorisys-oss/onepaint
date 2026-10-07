@@ -67,3 +67,15 @@ fn hard_line_aims_at_the_nearest_vanishing_point() {
     let e = hard_line_end(&cfg, [100.0, 50.0], [102.0, 120.0]);
     assert!(close(e, [100.0, 120.0]), "vertical drag → upright axis: {e:?}");
 }
+
+#[test]
+fn origin_is_pulled_onto_a_nearby_guide_and_runs_along_it() {
+    use onepaint_stroke::guide_lines::GuideLine;
+    let g = GuideLine::new("g", 0.0, 100.0, 0.0);
+    let cfg = SnapConfig { guides: vec![g], guide_tol: 7.0, ..Default::default() };
+    let mut s = Snapper::arm(cfg.clone(), [40.0, 104.0]).unwrap();
+    assert_eq!(s.origin(), [40.0, 100.0]);
+    assert!(close(s.apply([80.0, 109.0]), [80.0, 100.0]), "parallel to the guide");
+    let far = Snapper::arm(cfg, [40.0, 120.0]).unwrap();
+    assert_eq!(far.origin(), [40.0, 120.0]);
+}

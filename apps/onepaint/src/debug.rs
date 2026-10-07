@@ -179,8 +179,15 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
         g.grid.subdivisions = 2;
         g.perspective.enabled = true;
         g.snap_hv = true;
+        g.rulers = true;
+        let (w, h) = (app.session.doc().width as f64, app.session.doc().height as f64);
+        g.lines = vec![
+            onepaint_engine::guides::GuideLine::new("a", w * 0.25, h * 0.4, 0.0),
+            onepaint_engine::guides::GuideLine::new("b", w * 0.7, h * 0.5, 1.2),
+        ];
         let _ = app.session.execute(Command::SetGuides { guides: Box::new(g) });
         app.canvas.persp_editing = true;
+        app.canvas.measure = Some(([w * 0.2, h * 0.75], [w * 0.55, h * 0.6]));
     }
     if frame == 3 && app.debug.transform {
         app.set_tool(onepaint_engine::Tool::Move);

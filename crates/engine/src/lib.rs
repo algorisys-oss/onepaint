@@ -137,6 +137,11 @@ pub enum Command {
     SetGuides {
         guides: Box<Guides>,
     },
+    /// Change the guide lines live; `CommitGuideLines` makes it one undo step.
+    EditGuideLines {
+        lines: Vec<guides::GuideLine>,
+    },
+    CommitGuideLines,
     SetSmudgeStrength {
         strength: f64,
     },
@@ -333,6 +338,7 @@ pub(crate) enum Change {
     Tree { before: Vec<Node>, after: Vec<Node>, active_before: NodeId, active_after: NodeId, key: Option<String> },
     Selection { before: Option<Arc<onepaint_selection::Mask>>, after: Option<Arc<onepaint_selection::Mask>> },
     Document { before: Box<canvas_ops::DocShape>, after: Box<canvas_ops::DocShape> },
+    GuideLines { before: Vec<guides::GuideLine>, after: Vec<guides::GuideLine> },
 }
 
 struct ActiveStroke {
@@ -371,6 +377,8 @@ pub struct Session {
     mask_target_layer: Option<NodeId>,
     paint: PaintSettings,
     guides: Guides,
+    /// Guide lines before the edit in progress (one undo step per edit).
+    guide_edit_before: Option<Vec<guides::GuideLine>>,
     smudge: Option<smudge_ops::ActiveSmudge>,
     liquify: Option<liquify_ops::ActiveLiquify>,
     /// The Mixer's kept reservoir, keyed by the colour it was loaded with.
@@ -409,6 +417,7 @@ impl Session {
             mask_target_layer: None,
             paint: PaintSettings::default(),
             guides: Guides::default(),
+            guide_edit_before: None,
             smudge: None,
             liquify: None,
             mixer_held: None,
@@ -818,6 +827,8 @@ impl Session {
                 | Command::SetBrushFlow { .. }
                 | Command::SetSymmetry { .. }
                 | Command::SetGuides { .. }
+                | Command::EditGuideLines { .. }
+                | Command::CommitGuideLines
                 | Command::SetSmudgeStrength { .. }
                 | Command::SetMixer { .. }
                 | Command::CleanMixer
@@ -901,6 +912,24 @@ impl Session {
             }
             Command::SetGuides { guides } => {
                 self.guides = guides.sanitized();
+                Ok(())
+            }
+            Command::EditGuideLines { lines } => {
+                if self.guide_edit_before.is_none() {
+                    self.guide_edit_before = Some(self.guides.lines.clone());
+                }
+                self.guides.lines = lines;
+                self.guides = std::mem::take(&mut self.guides).sanitized();
+                Ok(())
+            }
+            Command::CommitGuideLines => {
+                if let Some(before) = self.guide_edit_before.take()
+                    && before != self.guides.lines
+                {
+                    let bytes = 64 * (before.len() + self.guides.lines.len()) + 64;
+                    self.history.push(Change::GuideLines { before, after: self.guides.lines.clone() }, bytes);
+                    self.history_changed();
+                }
                 Ok(())
             }
             Command::SetSmudgeStrength { strength } => {
@@ -1260,6 +1289,7 @@ impl Session {
                 }
                 ChangeRef::Selection(m) => self.set_selection_raw(m),
                 ChangeRef::Document(d) => self.apply_shape(*d),
+                ChangeRef::GuideLines(lines) => self.guides.lines = lines,
             }
         }
         self.history_changed();
@@ -1274,6 +1304,7 @@ impl Session {
             },
             Change::Selection { before, after } => ChangeRef::Selection(if undo { before.clone() } else { after.clone() }),
             Change::Document { before, after } => ChangeRef::Document(Box::new(if undo { (**before).clone() } else { (**after).clone() })),
+            Change::GuideLines { before, after } => ChangeRef::GuideLines(if undo { before.clone() } else { after.clone() }),
         }
     }
 
@@ -1301,4 +1332,5 @@ enum ChangeRef {
     Tree { root: Vec<Node>, active: NodeId },
     Selection(Option<Arc<onepaint_selection::Mask>>),
     Document(Box<canvas_ops::DocShape>),
+    GuideLines(Vec<guides::GuideLine>),
 }

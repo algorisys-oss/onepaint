@@ -2,6 +2,8 @@
 //! document's `guides` key. Edit modes are transient and live in the app.
 
 use onepaint_brush::symmetry::Symmetry;
+use onepaint_stroke::guide_lines::GUIDE_HIT_PX;
+pub use onepaint_stroke::guide_lines::GuideLine;
 use onepaint_stroke::snap::SnapConfig;
 use serde::{Deserialize, Serialize};
 
@@ -85,17 +87,6 @@ impl Default for Perspective {
     }
 }
 
-/// A user-placed guide: an infinite line through (x, y) at `angle` radians.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct GuideLine {
-    pub id: String,
-    pub x: f64,
-    pub y: f64,
-    pub angle: f64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub locked: Option<bool>,
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Guides {
@@ -154,11 +145,15 @@ impl Guides {
         if self.perspective.points.is_empty() {
             self.perspective.points = perspective_preset(2);
         }
+        for l in &mut self.lines {
+            l.angle = onepaint_stroke::guide_lines::normalize_angle(l.angle);
+        }
         self
     }
 
-    /// Stroke snapping for a document of this size (`editing` = VP edit mode).
-    pub fn snap_config(&self, width: u32, height: u32, editing: bool) -> SnapConfig {
+    /// Stroke snapping for a document of this size at view `scale`
+    /// (`editing` = VP edit mode).
+    pub fn snap_config(&self, width: u32, height: u32, scale: f64, editing: bool) -> SnapConfig {
         let (w, h) = (width as f64, height as f64);
         let p = &self.perspective;
         let persp = p.enabled && !editing;
@@ -167,7 +162,8 @@ impl Guides {
             grid_step: (self.grid.enabled && self.grid.snap).then(|| self.grid.step()),
             vps: if persp { p.points.iter().map(|v| [v.x * w, v.y * h]).collect() } else { Vec::new() },
             soft: persp && p.snap == PerspectiveSnap::Soft,
-            guide_dirs: if self.snap_guides { self.lines.iter().map(|l| [l.angle.cos(), l.angle.sin()]).collect() } else { Vec::new() },
+            guides: if self.snap_guides { self.lines.clone() } else { Vec::new() },
+            guide_tol: GUIDE_HIT_PX / scale.max(1e-6),
         }
     }
 
