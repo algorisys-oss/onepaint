@@ -2559,6 +2559,7 @@ dependencies = [
  "onepaint-raster",
  "onepaint-selection",
  "onepaint-stroke",
+ "rayon",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

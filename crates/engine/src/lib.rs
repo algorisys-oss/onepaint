@@ -5,6 +5,7 @@
 //! and engine callbacks. No UI or GPU code lives here.
 
 mod selection_ops;
+pub mod transform;
 pub mod view;
 
 pub use onepaint_selection::{Mask, Mode as SelectMode};
@@ -165,6 +166,14 @@ pub enum Command {
     FillSelection,
     /// Clear the active layer inside the selection (or entirely, with none).
     ClearSelected,
+    /// Lift the active layer (or its selected part) for moving/transforming.
+    BeginTransform,
+    /// Set the transform matrix (doc px → doc px) of the lifted content.
+    SetTransform {
+        matrix: transform::Affine,
+    },
+    CommitTransform,
+    CancelTransform,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -256,6 +265,7 @@ pub struct Session {
     feather: f32,
     clip: Option<Arc<onepaint_selection::Mask>>,
     selection_version: u64,
+    transform: Option<transform::Floating>,
 }
 
 fn tile_bytes(t: &Option<Arc<Tile>>) -> usize {
@@ -292,6 +302,7 @@ impl Session {
             feather: 0.0,
             clip: None,
             selection_version: 0,
+            transform: None,
         };
         s.mark_all_dirty();
         s
@@ -387,6 +398,9 @@ impl Session {
     }
 
     fn overlay(&self) -> Option<StrokeOverlay<'_>> {
+        if let Some(t) = self.transform_overlay() {
+            return Some(t);
+        }
         self.stroke
             .as_ref()
             .filter(|s| !s.noop)
@@ -483,6 +497,7 @@ impl Session {
     // ── Strokes (happypaint PaintSink) ──
 
     pub fn stroke_begin(&mut self, p: StrokePoint) {
+        self.commit_transform();
         self.stroke_cancel();
         let Some(layer) = self.doc.layer(&self.active) else {
             return;
@@ -634,7 +649,39 @@ impl Session {
     // ── Commands ──
 
     pub fn execute(&mut self, cmd: Command) -> Result<(), EngineError> {
+        if self.transform.is_some() {
+            match &cmd {
+                Command::SetTransform { .. }
+                | Command::CommitTransform
+                | Command::CancelTransform => {}
+                Command::SetColor { .. }
+                | Command::SetTool { .. }
+                | Command::SetBrush { .. }
+                | Command::SetBrushSize { .. }
+                | Command::SetBrushOpacity { .. }
+                | Command::SetBrushFlow { .. } => {}
+                // Undo while transforming just abandons the transform.
+                Command::Undo => {
+                    self.cancel_transform();
+                    return Ok(());
+                }
+                _ => self.commit_transform(),
+            }
+        }
         match cmd {
+            Command::BeginTransform => self.begin_transform(),
+            Command::SetTransform { matrix } => {
+                self.set_transform(matrix);
+                Ok(())
+            }
+            Command::CommitTransform => {
+                self.commit_transform();
+                Ok(())
+            }
+            Command::CancelTransform => {
+                self.cancel_transform();
+                Ok(())
+            }
             Command::AddLayer => {
                 self.insert_above_active(Node::Layer(Layer::new(&self.next_layer_name())))
             }
