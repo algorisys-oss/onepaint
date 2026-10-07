@@ -6,6 +6,7 @@
 //! - `ONEPAINT_THEME=light` starts in the light theme.
 //! - `ONEPAINT_TRANSFORM=1` starts a rotated move on the active layer.
 //! - `ONEPAINT_TEXT=1` adds a text object and opens its editor.
+//! - `ONEPAINT_SMUDGE=1` smudges and mixes across the demo, plus a radial-symmetry stroke.
 //! - `ONEPAINT_EXIT=1` closes the app after the screenshot.
 
 use crate::{App, Popover};
@@ -23,6 +24,7 @@ pub struct Debug {
     pub light: bool,
     transform: bool,
     text: bool,
+    smudge: bool,
 }
 
 impl Debug {
@@ -40,12 +42,15 @@ impl Debug {
                 "new" => Some(Popover::NewDoc),
                 "selection" => Some(Popover::Selection),
                 "curves" => Some(Popover::Filter),
+                "guides" => Some(Popover::Guides),
+                "mixer" => Some(Popover::MixerOptions),
                 _ => None,
             }),
             exit: var("ONEPAINT_EXIT").is_some(),
             light: var("ONEPAINT_THEME").is_some_and(|t| t == "light"),
             transform: var("ONEPAINT_TRANSFORM").is_some(),
             text: var("ONEPAINT_TEXT").is_some(),
+            smudge: var("ONEPAINT_SMUDGE").is_some(),
         }
     }
 }
@@ -108,6 +113,50 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
         app.set_tool(onepaint_engine::Tool::Text);
         let id = app.session.active().to_string();
         app.canvas.text_edit = Some(crate::canvas::TextEdit { target: Some((id, 0)), spec });
+    }
+    if frame == 3 && app.debug.smudge {
+        use onepaint_engine::{Symmetry, SymmetryMode, Tool};
+        let (w, h) = (app.session.doc().width as f64, app.session.doc().height as f64);
+        let drag = |app: &mut App, x: f64, y0: f64, y1: f64| {
+            for i in 0..=60 {
+                let p = StrokePoint::at(x + (i as f64 * 0.3).sin() * 6.0, y0 + (y1 - y0) * i as f64 / 60.0, 1.0, i as f64 * 16.0);
+                if i == 0 {
+                    app.session.stroke_begin(p);
+                } else {
+                    app.session.stroke_extend(&[p]);
+                }
+            }
+            app.session.stroke_end();
+        };
+        let _ = app.session.execute(Command::SetBrush { preset_id: "soft-round".into() });
+        let _ = app.session.execute(Command::SetBrushSize { size: 70.0 });
+        app.set_tool(Tool::Smudge);
+        let _ = app.session.execute(Command::SetSmudgeStrength { strength: 0.8 });
+        for k in 0..5 {
+            drag(app, w * (0.2 + k as f64 * 0.06), h * 0.55, h * 0.95);
+        }
+        app.set_tool(Tool::Mixer);
+        app.set_color(Rgba::from_hex("#ddb42c").unwrap_or_default());
+        for k in 0..4 {
+            drag(app, w * (0.55 + k as f64 * 0.06), h * 0.2, h * 0.9);
+        }
+        let _ = app.session.execute(Command::SetSymmetry {
+            symmetry: Symmetry { mode: SymmetryMode::Radial, radial_count: 8, cx: 0.5, cy: 0.5, angle: 0.0 },
+        });
+        app.set_tool(Tool::Brush);
+        let _ = app.session.execute(Command::SetBrush { preset_id: "hard-round".into() });
+        let _ = app.session.execute(Command::SetBrushSize { size: 10.0 });
+        app.set_color(Rgba::from_hex("#a06cf0").unwrap_or_default());
+        for i in 0..=40 {
+            let f = i as f64 / 40.0;
+            let p = StrokePoint::at(w * 0.5 + 80.0 + f * 260.0, h * 0.5 + (f * 7.0).sin() * 50.0, 1.0, f * 600.0);
+            if i == 0 {
+                app.session.stroke_begin(p);
+            } else {
+                app.session.stroke_extend(&[p]);
+            }
+        }
+        app.session.stroke_end();
     }
     if frame == 3 && app.debug.transform {
         app.set_tool(onepaint_engine::Tool::Move);

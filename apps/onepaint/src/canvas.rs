@@ -265,7 +265,7 @@ impl Canvas {
             return Drag::Rotate { last_angle: self.angle_to(p) };
         }
         let tool = session.tool();
-        let painting = matches!(tool, Tool::Brush | Tool::Eraser);
+        let painting = matches!(tool, Tool::Brush | Tool::Eraser | Tool::Smudge | Tool::Mixer);
         if painting && (button == PointerButton::Secondary || (m.ctrl && m.alt)) {
             return Drag::Size { start_x: p.x, start_size: session.current_brush().size };
         }
@@ -288,12 +288,14 @@ impl Canvas {
             return Drag::Transform { handle, grab: d, start: self.xform };
         }
         match tool {
-            Tool::Brush | Tool::Eraser => {
+            Tool::Brush | Tool::Eraser | Tool::Smudge | Tool::Mixer => {
                 let kind = if self.last_pen_force.is_some() { PointerKind::Pen } else { PointerKind::Mouse };
                 self.pressure = Some(PressureProvider::new(kind));
                 let sp = self.stroke_point(p, time_ms, self.last_pen_force);
                 session.stroke_begin(sp);
-                self.hold = HoldTracker { points: vec![d], anchor: p, since: time_ms, fired: false };
+                // Quick-shape straightens brush strokes only.
+                let fired = matches!(tool, Tool::Smudge | Tool::Mixer);
+                self.hold = HoldTracker { points: vec![d], anchor: p, since: time_ms, fired };
                 Drag::Paint
             }
             Tool::Gradient => {
@@ -655,6 +657,43 @@ impl Canvas {
         out
     }
 
+    /// The symmetry mirror axes (or radial spokes) through the centre.
+    fn symmetry_axes(&self, ui: &egui::Ui, rect: Rect, session: &Session) {
+        use onepaint_engine::SymmetryMode as M;
+        let sym = session.paint_settings().symmetry;
+        if !sym.is_on() {
+            return;
+        }
+        let d = session.doc();
+        let c = [sym.cx * d.width as f64, sym.cy * d.height as f64];
+        let len = (d.width as f64).hypot(d.height as f64);
+        let a = sym.angle;
+        let half = std::f64::consts::FRAC_PI_2;
+        let (lines, rays): (Vec<f64>, Vec<f64>) = match sym.mode {
+            M::Off => (vec![], vec![]),
+            M::Vertical => (vec![half + a], vec![]),
+            M::Horizontal => (vec![a], vec![]),
+            M::Both => (vec![a, half + a], vec![]),
+            M::Radial => {
+                let n = sym.radial_count.clamp(2, 24);
+                (vec![], (0..n).map(|i| a - half + i as f64 / n as f64 * std::f64::consts::TAU).collect())
+            }
+        };
+        let accent = onepaint_ui_kit::Tokens::get(ui.ctx()).accent;
+        let seg = |p0: Pt, p1: Pt| {
+            let (s0, s1) = (self.to_screen(rect, p0), self.to_screen(rect, p1));
+            ui.painter().line_segment([s0, s1], Stroke::new(2.5, Color32::from_black_alpha(90)));
+            ui.painter().line_segment([s0, s1], Stroke::new(1.0, accent.gamma_multiply(0.9)));
+        };
+        for t in lines {
+            let (dx, dy) = (t.cos() * len, t.sin() * len);
+            seg([c[0] - dx, c[1] - dy], [c[0] + dx, c[1] + dy]);
+        }
+        for t in rays {
+            seg(c, [c[0] + t.cos() * len, c[1] + t.sin() * len]);
+        }
+    }
+
     fn to_screen(&self, rect: Rect, d: Pt) -> Pos2 {
         let s = self.view.doc_to_screen(d);
         pos2(rect.left() + s[0] as f32, rect.top() + s[1] as f32)
@@ -680,6 +719,7 @@ impl Canvas {
         r: bool,
         resp: &egui::Response,
     ) {
+        self.symmetry_axes(ui, rect, session);
         if let Some(te) = &self.text_edit
             && session.tool() == Tool::Text
         {
@@ -729,7 +769,7 @@ impl Canvas {
         }
         let _ = resp;
         ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
-        if matches!(session.tool(), Tool::Brush | Tool::Eraser) {
+        if matches!(session.tool(), Tool::Brush | Tool::Eraser | Tool::Smudge | Tool::Mixer) {
             let rad = (session.current_brush().size / 2.0 * self.view.scale) as f32;
             if rad > 2.0 {
                 ui.painter().circle_stroke(hp, rad, Stroke::new(1.5, Color32::from_black_alpha(140)));

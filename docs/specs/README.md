@@ -28,3 +28,4 @@ The happypaint references are relative to `../happypaint/frontend/src/`.
 | 13 | [GPU compositor (design)](13-gpu-compositor.md) | gpu |
 | 14 | [Text layers](14-text.md) | text, engine, app |
 | 15 | [PSD import and export](15-psd.md) | formats, engine, app |
+| 16 | [Smudge, mixer, pigment, symmetry](16-smudge-symmetry.md) | color, brush, engine, app |

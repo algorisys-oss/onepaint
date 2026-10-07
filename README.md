@@ -66,6 +66,9 @@ Slices 6 and 7 add:
 - Layer colour labels.
 - Progressive compositing for big documents.
 
+Slice 9 adds smudge (S), the mixer brush (Shift+B, with Kubelka–Munk
+pigment mixing) and symmetry (Y: mirror, quad and radial).
+
 Slice 8 adds PSD: open `.psd`/`.psb` (layers, groups, masks, blend modes,
 clipping) and File ▸ Export PSD….
 
@@ -103,6 +106,8 @@ The app needs a GPU that wgpu supports (Vulkan, Metal, DX12 or GL).
 | New / open / save / export PNG | Ctrl+N / Ctrl+O / Ctrl+S / Ctrl+Shift+E |
 | Move / transform | V or Ctrl+T; drag handles; Enter applies, Esc cancels |
 | Copy / cut / paste | Ctrl+C / Ctrl+X / Ctrl+V; Ctrl+J layer via copy, Ctrl+Shift+J via cut |
+| Smudge / mixer | S / Shift+B (click again for options) |
+| Symmetry on/off | Y (guides button for the mode, spokes, angle and centre) |
 | Hide the UI | Tab |
 
 ## Develop

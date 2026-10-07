@@ -31,6 +31,9 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             Popover::AdjustLayer => popover_at(ctx, "adjust-layer", anchor, Align2::RIGHT_TOP, |ui| crate::adjust::layer_panel(app, ui)),
             Popover::GradientOptions => popover_at(ctx, "gradient", anchor, Align2::RIGHT_TOP, |ui| gradient_options(app, ui)),
             Popover::ShapeOptions => popover_at(ctx, "shape", anchor, Align2::RIGHT_TOP, |ui| shape_options(app, ui)),
+            Popover::SmudgeOptions => popover_at(ctx, "smudge", anchor, Align2::RIGHT_TOP, |ui| smudge_options(app, ui)),
+            Popover::MixerOptions => popover_at(ctx, "mixer", anchor, Align2::RIGHT_TOP, |ui| mixer_options(app, ui)),
+            Popover::Guides => popover_at(ctx, "guides", anchor, Align2::RIGHT_TOP, |ui| guides(app, ui)),
             Popover::Recover => popover_at(ctx, "recover", screen.center(), Align2::CENTER_CENTER, |ui| recover(app, ui)),
             Popover::Fill => popover_at(ctx, "fill", anchor, Align2::RIGHT_TOP, |ui| fill_options(app, ui)),
             Popover::NewDoc => popover_at(ctx, "newdoc", screen.center(), Align2::CENTER_CENTER, |ui| new_doc(app, ui)),
@@ -168,6 +171,11 @@ fn top_bar(app: &mut App, ctx: &egui::Context) {
                     if icons::button(ui, "pipette", 32.0, tool == Tool::Eyedropper, "Eyedropper (I)").clicked() {
                         app.set_tool(Tool::Eyedropper);
                     }
+                    let sym_on = app.session.paint_settings().symmetry.is_on();
+                    if icons::button(ui, "grid-3x3", 32.0, sym_on || app.popover == Some(Popover::Guides), "Guides: symmetry (Y)").clicked()
+                    {
+                        toggle_popover(app, Popover::Guides);
+                    }
                     if icons::button(
                         ui,
                         "sparkles",
@@ -195,6 +203,18 @@ fn top_bar(app: &mut App, ctx: &egui::Context) {
                             toggle_popover(app, Popover::Brushes);
                         }
                         app.set_tool(Tool::Eraser);
+                    }
+                    if icons::button(ui, "fingerprint", 32.0, tool == Tool::Smudge, "Smudge (S)").clicked() {
+                        if tool == Tool::Smudge {
+                            toggle_popover(app, Popover::SmudgeOptions);
+                        }
+                        app.set_tool(Tool::Smudge);
+                    }
+                    if icons::button(ui, "palette", 32.0, tool == Tool::Mixer, "Mixer brush (Shift+B)").clicked() {
+                        if tool == Tool::Mixer {
+                            toggle_popover(app, Popover::MixerOptions);
+                        }
+                        app.set_tool(Tool::Mixer);
                     }
                     if icons::button(ui, "sliders-horizontal", 32.0, app.popover == Some(Popover::Brushes), "Brush library").clicked() {
                         toggle_popover(app, Popover::Brushes);
@@ -1121,6 +1141,141 @@ fn shape_options(app: &mut App, ui: &mut Ui) {
     );
     ui.label(
         RichText::new("Tip: hold still at the end of any brush stroke to straighten it into a shape.")
+            .font(theme::medium(10.5))
+            .color(t.fg_faint),
+    );
+}
+
+fn smudge_options(app: &mut App, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    ui.set_width(280.0);
+    widgets::section_label(ui, "Smudge");
+    let mut v = (app.session.paint_settings().smudge_strength * 100.0) as f32;
+    if widgets::slider_row(ui, "Strength", &mut v, 0.0..=100.0, |v| format!("{v:.0}%")).changed() {
+        let _ = app.session.execute(Command::SetSmudgeStrength { strength: v as f64 / 100.0 });
+    }
+    ui.label(
+        RichText::new("Smears with the current brush's size, hardness, tip and pressure.").font(theme::medium(10.5)).color(t.fg_faint),
+    );
+}
+
+/// Photoshop's Mixer Brush combinations (`utils/mixer-presets.ts`): (name, wet, load, mix).
+const MIXER_PRESETS: [(&str, f64, f64, f64); 12] = [
+    ("Dry", 0.0, 0.5, 0.0),
+    ("Dry, Light Load", 0.0, 0.15, 0.0),
+    ("Dry, Heavy Load", 0.0, 1.0, 0.0),
+    ("Moist", 0.25, 0.4, 0.3),
+    ("Moist, Light Mix", 0.25, 0.4, 0.1),
+    ("Moist, Heavy Mix", 0.25, 0.4, 0.6),
+    ("Wet", 0.6, 0.3, 0.5),
+    ("Wet, Light Mix", 0.6, 0.3, 0.25),
+    ("Wet, Heavy Mix", 0.6, 0.3, 0.75),
+    ("Very Wet", 1.0, 0.15, 0.6),
+    ("Very Wet, Light Mix", 1.0, 0.15, 0.35),
+    ("Very Wet, Heavy Mix", 1.0, 0.15, 0.85),
+];
+
+fn mixer_options(app: &mut App, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    ui.set_width(300.0);
+    widgets::section_label(ui, "Mixer brush");
+    let mut m = app.session.paint_settings().mixer;
+    let pct = |v: f64| (v * 100.0).round() as i32;
+    let current = MIXER_PRESETS
+        .iter()
+        .find(|p| pct(p.1) == pct(m.wet) && pct(p.2) == pct(m.load) && pct(p.3) == pct(m.mix))
+        .map_or("Custom", |p| p.0);
+    let mut changed = false;
+    egui::ComboBox::from_id_salt("mixer-preset").selected_text(current).width(280.0).show_ui(ui, |ui| {
+        for p in MIXER_PRESETS {
+            if ui.selectable_label(current == p.0, p.0).clicked() {
+                (m.wet, m.load, m.mix) = (p.1, p.2, p.3);
+                changed = true;
+            }
+        }
+    });
+    let mut row = |ui: &mut Ui, label: &str, v: &mut f64| {
+        let mut f = (*v * 100.0) as f32;
+        if widgets::slider_row(ui, label, &mut f, 0.0..=100.0, |v| format!("{v:.0}%")).changed() {
+            *v = f as f64 / 100.0;
+            changed = true;
+        }
+    };
+    row(ui, "Wet", &mut m.wet);
+    row(ui, "Load", &mut m.load);
+    row(ui, "Mix", &mut m.mix);
+    if widgets::toggle(ui, &mut m.keep, "Keep colour").changed() {
+        changed = true;
+    }
+    if changed {
+        let _ = app.session.execute(Command::SetMixer { mixer: m });
+    }
+    ui.horizontal(|ui| {
+        if widgets::secondary_button(ui, "Clean brush", 120.0).clicked() {
+            let _ = app.session.execute(Command::CleanMixer);
+        }
+        if let Some(r) = app.session.mixer_reservoir() {
+            let c = onepaint_color::Rgba::from_linear_premul([r[0], r[1], r[2], 1.0]);
+            widgets::swatch(ui, c, 22.0, false).on_hover_text("The colour the brush holds");
+        }
+    });
+    ui.label(
+        RichText::new(
+            "Wet: how much canvas paint it drags. Load: paint on the brush. Mix: canvas share of the colour. Pigment mixing is on.",
+        )
+        .font(theme::medium(10.5))
+        .color(t.fg_faint),
+    );
+}
+
+fn guides(app: &mut App, ui: &mut Ui) {
+    use onepaint_engine::SymmetryMode as M;
+    let t = Tokens::get(ui.ctx());
+    ui.set_width(300.0);
+    widgets::section_label(ui, "Symmetry");
+    let mut sym = app.session.paint_settings().symmetry;
+    let modes = [M::Off, M::Vertical, M::Horizontal, M::Both, M::Radial];
+    let cur = modes.iter().position(|m| *m == sym.mode).unwrap_or(0);
+    let mut changed = false;
+    if let Some(i) = segmented(ui, &["Off", "Vert", "Horiz", "Quad", "Radial"], cur) {
+        sym.mode = modes[i];
+        if sym.mode != M::Off {
+            app.last_symmetry = sym.mode;
+        }
+        changed = true;
+    }
+    if sym.mode == M::Radial {
+        let mut n = sym.radial_count as f32;
+        if widgets::slider_row(ui, "Spokes", &mut n, 2.0..=24.0, |v| format!("{v:.0}")).changed() {
+            sym.radial_count = n.round() as u32;
+            changed = true;
+        }
+    }
+    if sym.is_on() {
+        let mut deg = sym.angle.to_degrees() as f32;
+        if widgets::slider_row(ui, "Angle", &mut deg, -90.0..=90.0, |v| format!("{v:.0}°")).changed() {
+            sym.angle = (deg.round() as f64).to_radians();
+            changed = true;
+        }
+        let (mut cx, mut cy) = ((sym.cx * 100.0) as f32, (sym.cy * 100.0) as f32);
+        if widgets::slider_row(ui, "Centre X", &mut cx, 0.0..=100.0, |v| format!("{v:.0}%")).changed() {
+            sym.cx = cx as f64 / 100.0;
+            changed = true;
+        }
+        if widgets::slider_row(ui, "Centre Y", &mut cy, 0.0..=100.0, |v| format!("{v:.0}%")).changed() {
+            sym.cy = cy as f64 / 100.0;
+            changed = true;
+        }
+        if widgets::secondary_button(ui, "Centre", 90.0).clicked() {
+            (sym.cx, sym.cy) = (0.5, 0.5);
+            changed = true;
+        }
+    }
+    if changed {
+        let _ = app.session.execute(Command::SetSymmetry { symmetry: sym });
+    }
+    ui.label(
+        RichText::new("Brush, eraser, smudge and mixer strokes are mirrored. Y toggles symmetry.")
             .font(theme::medium(10.5))
             .color(t.fg_faint),
     );

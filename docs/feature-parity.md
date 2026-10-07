@@ -22,8 +22,8 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] eyedropper (the tool, Alt-click and Alt-drag sample the composite; touch-and-hold comes with gestures)
 - [~] move/transform (scale, rotate, warp, quad homography) (move, scale, rotate, flip and selection lift are done; distort and warp are not)
 - [x] pan (space-drag, middle-drag, two-finger scroll)
-- [ ] smudge
-- [ ] mixer
+- [x] smudge
+- [x] mixer (Wet/Load/Mix, the 12 Photoshop combinations, Keep colour, Clean; no Alt-click patch load yet)
 - [~] gradient, with output to pixels or a fill layer (5 shapes, colour→clear or →BG, reverse, selection-aware; fill-layer output not done)
 - [ ] liquify (all modes)
 - [x] text (create, edit, move, style, wrap, outline, background, rasterise)
@@ -44,10 +44,10 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] Grain texture
 - [x] Airbrush (time-based ticks)
 - [x] Smoothing and the stabilizer
-- [ ] Symmetry: mirror and radial
+- [x] Symmetry: mirror and radial (angle, centre, 2–24 spokes; Y toggles)
 - [ ] Wet/oil media: wet, height (impasto), settle and bevel
-- [ ] Smudge and mixer brushes
-- [ ] Kubelka–Munk `pigment` brush blend
+- [x] Smudge and mixer brushes
+- [~] Kubelka–Munk pigment mixing (mixer reservoir and deposit; the `pigment` layer/brush blend mode is still to do)
 - [ ] Brush studio: an editor with live preview and a try-it pad
 - [ ] Import `.abr`, Procreate `.brush` and `.brushset`, and `.happybrush`
 
@@ -108,7 +108,7 @@ Still to do:
 ## Canvas and guides
 - [~] Pan, zoom and rotate at 60fps or better on large documents (pan, zoom and rotate all work; not yet measured on 8k documents)
 - [ ] Grid
-- [ ] Symmetry guides
+- [x] Symmetry guides (axis/spoke overlay)
 - [ ] 1–5-point perspective with stroke snapping
 - [ ] Horizontal/vertical snap
 - [ ] Rulers

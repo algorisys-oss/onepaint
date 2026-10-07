@@ -5,6 +5,8 @@
 
 mod assets;
 mod preset;
+pub mod smudge;
+pub mod symmetry;
 mod tips;
 
 pub use tips::{GrainSampler, Mask as TipMask, Tip, grain_for, grain_names, tip_for};
@@ -104,6 +106,8 @@ pub struct StrokeEngine {
     /// Last raw input point and airbrush clock (ms, carried fraction).
     last_input: Option<StrokePoint>,
     air: Option<(f64, f64)>,
+    /// Symmetry copies every dab is replicated through (empty = none).
+    transforms: Vec<symmetry::SymTransform>,
 }
 
 impl StrokeEngine {
@@ -127,6 +131,7 @@ impl StrokeEngine {
             grain: None,
             last_input: None,
             air: None,
+            transforms: Vec::new(),
         }
         .with_tip_and_grain()
     }
@@ -145,6 +150,25 @@ impl StrokeEngine {
             self.grain = GrainSampler::new(&g, off, rot);
         }
         self
+    }
+
+    /// Replicate every dab through these transforms (identity included).
+    pub fn set_symmetry(&mut self, transforms: Vec<symmetry::SymTransform>) {
+        self.transforms = if transforms.len() > 1 { transforms } else { Vec::new() };
+    }
+
+    fn replicate(&self, dabs: Vec<Dab>) -> Vec<Dab> {
+        if self.transforms.is_empty() {
+            return dabs;
+        }
+        let mut out = Vec::with_capacity(dabs.len() * self.transforms.len());
+        for d in dabs {
+            for tf in &self.transforms {
+                let (x, y) = tf.apply(d.x, d.y);
+                out.push(Dab { x, y, rotation: tf.map_angle(d.rotation), ..d });
+            }
+        }
+        out
     }
 
     pub fn tip(&self) -> &Tip {
@@ -172,7 +196,8 @@ impl StrokeEngine {
         let n = acc.floor().min(64.0);
         self.air = Some((now_ms, acc - n));
         let pts = vec![StrokePoint { t: Some(now_ms), ..p }; n as usize];
-        self.emit(&pts)
+        let d = self.emit(&pts);
+        self.replicate(d)
     }
 
     pub fn brush(&self) -> &BrushPreset {
@@ -193,7 +218,8 @@ impl StrokeEngine {
         let sp = self.smoother.next(pt);
         let b = self.brush.clone();
         let stamps = self.sampler.add(sp, &mut |s, _| spacing_gap(&b, s));
-        self.emit(&stamps)
+        let d = self.emit(&stamps);
+        self.replicate(d)
     }
 
     pub fn end(&mut self) -> Vec<Dab> {
@@ -212,7 +238,7 @@ impl StrokeEngine {
                 out.push(d);
             }
         }
-        out
+        self.replicate(out)
     }
 
     fn taper(&self) -> (f64, f64) {

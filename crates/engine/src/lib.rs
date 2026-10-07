@@ -10,8 +10,11 @@ mod filter_ops;
 mod mask_ops;
 mod paint_ops;
 mod selection_ops;
+mod smudge_ops;
 mod text_ops;
 pub mod transform;
+pub use onepaint_brush::symmetry::{Symmetry, SymmetryMode};
+pub use smudge_ops::{MixerSettings, PaintSettings};
 pub mod view;
 
 pub use clipboard::Region;
@@ -44,6 +47,8 @@ pub enum Tool {
     Gradient,
     Shape,
     Text,
+    Smudge,
+    Mixer,
 }
 
 /// Optional layer property edits; `None` leaves a property unchanged.
@@ -121,6 +126,16 @@ pub enum Command {
     SetTool {
         tool: Tool,
     },
+    SetSymmetry {
+        symmetry: Symmetry,
+    },
+    SetSmudgeStrength {
+        strength: f64,
+    },
+    SetMixer {
+        mixer: MixerSettings,
+    },
+    CleanMixer,
     SetBrush {
         preset_id: String,
     },
@@ -342,6 +357,10 @@ pub struct Session {
     filter: Option<filter_ops::FilterSession>,
     /// The layer whose mask strokes paint into (only while it is active).
     mask_target_layer: Option<NodeId>,
+    paint: PaintSettings,
+    smudge: Option<smudge_ops::ActiveSmudge>,
+    /// The Mixer's kept reservoir, keyed by the colour it was loaded with.
+    mixer_held: Option<(String, onepaint_brush::smudge::Reservoir)>,
 }
 
 fn tile_bytes(t: &Option<Arc<Tile>>) -> usize {
@@ -374,6 +393,9 @@ impl Session {
             transform: None,
             filter: None,
             mask_target_layer: None,
+            paint: PaintSettings::default(),
+            smudge: None,
+            mixer_held: None,
         };
         s.mark_all_dirty();
         s
@@ -381,9 +403,9 @@ impl Session {
 
     /// Replace the document (open / new), clearing history.
     pub fn replace_document(&mut self, doc: Document) {
-        let (tool, brush, eraser, color) = (self.tool, self.brush.clone(), self.eraser.clone(), self.color);
+        let (tool, brush, eraser, color, paint) = (self.tool, self.brush.clone(), self.eraser.clone(), self.color, self.paint);
         *self = Self::from_document(doc);
-        (self.tool, self.brush, self.eraser, self.color) = (tool, brush, eraser, color);
+        (self.tool, self.brush, self.eraser, self.color, self.paint) = (tool, brush, eraser, color, paint);
         self.events.push(Event::DocumentReplaced);
         self.events.push(Event::LayersChanged);
         self.history_changed();
@@ -437,7 +459,7 @@ impl Session {
     }
 
     pub fn is_stroking(&self) -> bool {
-        self.stroke.is_some()
+        self.stroke.is_some() || self.smudge.is_some()
     }
 
     pub fn drain_events(&mut self) -> Vec<Event> {
@@ -574,6 +596,10 @@ impl Session {
             self.ensure_raster();
         }
         self.stroke_cancel();
+        if matches!(self.tool, Tool::Smudge | Tool::Mixer) {
+            self.smudge_begin(p);
+            return;
+        }
         let Some(layer) = self.doc.layer(&self.active) else {
             return;
         };
@@ -601,9 +627,11 @@ impl Session {
         };
         self.seed = self.seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
         let opacity = brush.opacity as f32;
+        let mut engine = StrokeEngine::new(brush, [lin[0], lin[1], lin[2]], self.seed);
+        engine.set_symmetry(self.symmetry_transforms());
         let mut st = ActiveStroke {
             layer: self.active.clone(),
-            engine: StrokeEngine::new(brush, [lin[0], lin[1], lin[2]], self.seed),
+            engine,
             buffer: Surface::new(),
             mode,
             opacity,
@@ -617,6 +645,10 @@ impl Session {
     }
 
     pub fn stroke_extend(&mut self, pts: &[StrokePoint]) {
+        if self.smudge.is_some() {
+            self.smudge_extend(pts);
+            return;
+        }
         let Some(st) = self.stroke.as_mut() else {
             return;
         };
@@ -654,6 +686,7 @@ impl Session {
     }
 
     pub fn stroke_cancel(&mut self) {
+        self.smudge_cancel();
         if let Some(st) = self.stroke.take() {
             for (tx, ty) in st.buffer.tile_keys() {
                 self.mark_dirty(Rect::from_tile(tx, ty));
@@ -663,6 +696,7 @@ impl Session {
 
     /// Flatten the stroke into its layer as one undo step.
     pub fn stroke_end(&mut self) {
+        self.smudge_end();
         let Some(mut st) = self.stroke.take() else {
             return;
         };
@@ -744,7 +778,11 @@ impl Session {
                 | Command::SetBrush { .. }
                 | Command::SetBrushSize { .. }
                 | Command::SetBrushOpacity { .. }
-                | Command::SetBrushFlow { .. } => {}
+                | Command::SetBrushFlow { .. }
+                | Command::SetSymmetry { .. }
+                | Command::SetSmudgeStrength { .. }
+                | Command::SetMixer { .. }
+                | Command::CleanMixer => {}
                 // Undo while transforming just abandons the transform.
                 Command::Undo => {
                     self.cancel_transform();
@@ -815,6 +853,26 @@ impl Session {
             Command::ClearLayer { id } => self.clear_layer(&id),
             Command::SetTool { tool } => {
                 self.tool = tool;
+                Ok(())
+            }
+            Command::SetSymmetry { symmetry } => {
+                self.paint.symmetry = Symmetry { radial_count: symmetry.radial_count.clamp(2, 24), ..symmetry };
+                Ok(())
+            }
+            Command::SetSmudgeStrength { strength } => {
+                self.paint.smudge_strength = strength.clamp(0.0, 1.0);
+                Ok(())
+            }
+            Command::SetMixer { mixer } => {
+                let c = |v: f64| v.clamp(0.0, 1.0);
+                self.paint.mixer = MixerSettings { wet: c(mixer.wet), load: c(mixer.load), mix: c(mixer.mix), keep: mixer.keep };
+                if !mixer.keep {
+                    self.mixer_held = None;
+                }
+                Ok(())
+            }
+            Command::CleanMixer => {
+                self.clean_mixer();
                 Ok(())
             }
             Command::SetBrush { preset_id } => {

@@ -49,6 +49,9 @@ pub enum Popover {
     AdjustLayer,
     GradientOptions,
     ShapeOptions,
+    SmudgeOptions,
+    MixerOptions,
+    Guides,
 }
 
 /// What a file opens as.
@@ -95,6 +98,7 @@ pub struct App {
     title: String,
     pub pending: Option<Pending>,
     pub last_select_tool: Tool,
+    pub last_symmetry: onepaint_engine::SymmetryMode,
     xform_layer: Option<String>,
     pub clipboard: clip::Clipboard,
     /// Layer being dragged in the layers panel.
@@ -140,6 +144,7 @@ impl App {
             title: String::new(),
             pending: None,
             last_select_tool: Tool::SelectRect,
+            last_symmetry: onepaint_engine::SymmetryMode::Vertical,
             xform_layer: None,
             clipboard: clip::Clipboard::default(),
             layer_drag: None,
@@ -334,6 +339,18 @@ impl App {
         }
     }
 
+    /// Y: symmetry on/off, restoring the last mode used (vertical at first).
+    pub fn toggle_symmetry(&mut self) {
+        let mut sym = self.session.paint_settings().symmetry;
+        if sym.is_on() {
+            self.last_symmetry = sym.mode;
+            sym.mode = onepaint_engine::SymmetryMode::Off;
+        } else {
+            sym.mode = self.last_symmetry;
+        }
+        let _ = self.session.execute(Command::SetSymmetry { symmetry: sym });
+    }
+
     pub fn set_tool(&mut self, tool: Tool) {
         let was = self.session.tool();
         if was == Tool::Move && tool != Tool::Move {
@@ -436,8 +453,18 @@ impl App {
                     self.set_tool(tool);
                 }
             }
+            // Shift+B first: a plain-B shortcut also matches with Shift held.
+            if sc(Modifiers::SHIFT, Key::B) {
+                self.set_tool(Tool::Mixer);
+            }
             if sc(Modifiers::NONE, Key::B) {
                 self.set_tool(Tool::Brush);
+            }
+            if sc(Modifiers::NONE, Key::S) {
+                self.set_tool(Tool::Smudge);
+            }
+            if sc(Modifiers::NONE, Key::Y) {
+                self.toggle_symmetry();
             }
             if sc(Modifiers::NONE, Key::E) {
                 self.set_tool(Tool::Eraser);
@@ -871,5 +898,29 @@ mod tests {
         let x0 = h.state().session.texts(&id)[0].x;
         drag_stroke(&mut h, pos2(505.0, 310.0), pos2(605.0, 310.0));
         assert!(h.state().session.texts(&id)[0].x > x0 + 100.0);
+    }
+
+    #[test]
+    fn symmetry_mirrors_strokes_and_s_picks_smudge() {
+        let mut h = harness();
+        h.run();
+        key(&mut h, egui::Key::Y, egui::Modifiers::NONE);
+        assert_eq!(h.state().session.paint_settings().symmetry.mode, onepaint_engine::SymmetryMode::Vertical);
+        drag_stroke(&mut h, pos2(500.0, 420.0), pos2(560.0, 440.0));
+        let app = h.state();
+        let layer = app.session.doc().layer(app.session.active()).unwrap();
+        let d = app.canvas.view.screen_to_doc([530.0, 430.0]);
+        let w = app.session.doc().width as f64;
+        assert!(layer.pixels.get(d[0] as i32, d[1] as i32)[3] > 0.5);
+        assert!(layer.pixels.get((w - d[0]) as i32, d[1] as i32)[3] > 0.5, "mirrored copy");
+        key(&mut h, egui::Key::Y, egui::Modifiers::NONE);
+        assert!(!h.state().session.paint_settings().symmetry.is_on());
+        key(&mut h, egui::Key::S, egui::Modifiers::NONE);
+        assert_eq!(h.state().session.tool(), Tool::Smudge);
+        h.get_by_label("Smudge (S)").click();
+        h.run();
+        assert_eq!(h.state().popover, Some(Popover::SmudgeOptions));
+        key(&mut h, egui::Key::B, egui::Modifiers::SHIFT);
+        assert_eq!(h.state().session.tool(), Tool::Mixer);
     }
 }
