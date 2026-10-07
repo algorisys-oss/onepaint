@@ -558,13 +558,33 @@ fn layers(app: &mut App, ui: &mut Ui) {
                 let (fr, _) = child.allocate_exact_size(vec2(36.0, 34.0), Sense::hover());
                 icons::paint(&child, fr, "folder-open", 20.0, t.fg_muted);
             } else if let Some(l) = node.as_layer() {
+                let mask_target = sel && app.session.mask_target();
                 let tex = app.thumbs.layer(child.ctx(), l, doc_size);
-                let (tr, _) = child.allocate_exact_size(vec2(44.0, 34.0), Sense::hover());
+                let (tr, tresp) = child.allocate_exact_size(vec2(44.0, 34.0), Sense::click());
                 let sz = tex.size_vec2();
                 let ir = egui::Rect::from_center_size(tr.center(), sz);
                 widgets::checker(child.painter(), ir, 4.0);
                 child.painter().image(tex.id(), ir, egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
-                child.painter().rect_stroke(ir, 2.0, egui::Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
+                let edge = |on: bool| if on { egui::Stroke::new(2.0, t.accent) } else { egui::Stroke::new(1.0, t.border) };
+                child.painter().rect_stroke(ir, 2.0, edge(sel && l.mask.is_some() && !mask_target), egui::StrokeKind::Outside);
+                if tresp.clicked() {
+                    let _ = app.session.execute(Command::SetActiveLayer { id: r.id.clone() });
+                    let _ = app.session.execute(Command::SetMaskTarget { on: false });
+                }
+                if let Some(mtex) = app.thumbs.mask(child.ctx(), l, doc_size) {
+                    let (mr, mresp) = child.allocate_exact_size(vec2(44.0, 34.0), Sense::click());
+                    let mir = egui::Rect::from_center_size(mr.center(), mtex.size_vec2());
+                    child.painter().image(mtex.id(), mir, egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
+                    child.painter().rect_stroke(mir, 2.0, edge(mask_target), egui::StrokeKind::Outside);
+                    if !l.mask_enabled {
+                        child.painter().line_segment([mir.left_top(), mir.right_bottom()], egui::Stroke::new(2.0, t.danger));
+                    }
+                    let mresp = mresp.on_hover_text("Paint on the mask (black hides, white reveals)");
+                    if mresp.clicked() {
+                        let _ = app.session.execute(Command::SetActiveLayer { id: r.id.clone() });
+                        let _ = app.session.execute(Command::SetMaskTarget { on: true });
+                    }
+                }
             }
             child.vertical(|ui| {
                 ui.add_space(6.0);
@@ -655,6 +675,24 @@ fn layers(app: &mut App, ui: &mut Ui) {
         }
     });
     if let Some(l) = node.as_layer() {
+        ui.horizontal(|ui| {
+            if l.mask.is_none() {
+                if widgets::secondary_button(ui, "Add mask", 90.0).on_hover_text("From the selection, if there is one").clicked() {
+                    let _ = app.session.execute(Command::AddMask);
+                }
+            } else {
+                let mut on = l.mask_enabled;
+                if widgets::toggle(ui, &mut on, "Mask").changed() {
+                    let _ = app.session.execute(Command::SetMaskEnabled { id: active.clone(), enabled: on });
+                }
+                if widgets::secondary_button(ui, "Apply", 64.0).on_hover_text("Bake the mask into the layer").clicked() {
+                    let _ = app.session.execute(Command::ApplyMask { id: active.clone() });
+                }
+                if widgets::secondary_button(ui, "Delete", 64.0).on_hover_text("Remove the mask").clicked() {
+                    let _ = app.session.execute(Command::DeleteMask { id: active.clone() });
+                }
+            }
+        });
         ui.horizontal(|ui| {
             let mut clip = l.clipped;
             if widgets::toggle(ui, &mut clip, "Clip").changed() {

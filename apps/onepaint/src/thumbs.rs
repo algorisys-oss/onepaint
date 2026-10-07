@@ -13,6 +13,7 @@ pub const THUMB: [usize; 2] = [44, 34];
 pub struct Thumbs {
     layers: HashMap<String, TextureHandle>,
     brushes: HashMap<String, TextureHandle>,
+    masks: HashMap<String, TextureHandle>,
 }
 
 fn to_image(s: &Surface, area: Rect, w: usize, h: usize) -> ColorImage {
@@ -43,10 +44,35 @@ mod onepaint_formats_free {
 impl Thumbs {
     pub fn clear(&mut self) {
         self.layers.clear();
+        self.masks.clear();
     }
 
     pub fn invalidate_active(&mut self, id: &str) {
         self.layers.remove(id);
+        self.masks.remove(id);
+    }
+
+    /// Grey thumbnail of a layer mask (coverage in R).
+    pub fn mask(&mut self, ctx: &egui::Context, l: &Layer, doc: [u32; 2]) -> Option<TextureHandle> {
+        let m = l.mask.as_ref()?;
+        if let Some(t) = self.masks.get(&l.id) {
+            return Some(t.clone());
+        }
+        let (dw, dh) = (doc[0] as f32, doc[1] as f32);
+        let s = (THUMB[0] as f32 / dw).min(THUMB[1] as f32 / dh);
+        let (w, h) = (((dw * s).round() as usize).max(1), ((dh * s).round() as usize).max(1));
+        let mut px = Vec::with_capacity(w * h);
+        for y in 0..h {
+            for x in 0..w {
+                let sx = ((x as f32 + 0.5) / w as f32 * dw) as i32;
+                let sy = ((y as f32 + 0.5) / h as f32 * dh) as i32;
+                let v = (m.get(sx, sy)[0].clamp(0.0, 1.0) * 255.0).round() as u8;
+                px.push(egui::Color32::from_gray(v));
+            }
+        }
+        let tex = ctx.load_texture(format!("mask-thumb-{}", l.id), ColorImage::new([w, h], px), TextureOptions::LINEAR);
+        self.masks.insert(l.id.clone(), tex.clone());
+        Some(tex)
     }
 
     pub fn layer(&mut self, ctx: &egui::Context, l: &Layer, doc: [u32; 2]) -> TextureHandle {
