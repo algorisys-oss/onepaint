@@ -46,9 +46,8 @@ impl BlendMode {
     pub const ALL: [BlendMode; 20] = {
         use BlendMode::*;
         [
-            Normal, Multiply, Screen, Overlay, Add, Darken, Lighten, ColorDodge, ColorBurn,
-            HardLight, SoftLight, Difference, Exclusion, LinearBurn, Divide, Hue, Saturation,
-            Color, Luminosity, Pigment,
+            Normal, Multiply, Screen, Overlay, Add, Darken, Lighten, ColorDodge, ColorBurn, HardLight, SoftLight, Difference, Exclusion,
+            LinearBurn, Divide, Hue, Saturation, Color, Luminosity, Pigment,
         ]
     };
 
@@ -117,10 +116,7 @@ impl BlendMode {
 
     /// Unknown strings read as `normal`.
     pub fn parse(s: &str) -> Self {
-        Self::ALL
-            .into_iter()
-            .find(|m| m.as_str() == s)
-            .unwrap_or_default()
+        Self::ALL.into_iter().find(|m| m.as_str() == s).unwrap_or_default()
     }
 }
 
@@ -153,6 +149,14 @@ impl Depth {
     }
 }
 
+/// An adjustment layer's effect (`adjustmentKind` + `adjustmentParams` in files).
+/// The kind stays a string so kinds onepaint can't render yet are preserved.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Adjustment {
+    pub kind: String,
+    pub params: onepaint_filters::Params,
+}
+
 /// A paintable layer.
 #[derive(Clone, Debug)]
 pub struct Layer {
@@ -172,6 +176,8 @@ pub struct Layer {
     pub extra: Extra,
     /// Opaque file chunks onepaint doesn't interpret yet (`height`, `overflow`), re-emitted on save.
     pub chunks: std::collections::BTreeMap<String, Vec<u8>>,
+    /// Set for adjustment and fill layers (they have no pixels of their own).
+    pub adjustment: Option<Adjustment>,
 }
 
 impl Layer {
@@ -191,6 +197,7 @@ impl Layer {
             pixels: Surface::new(),
             extra: Extra::new(),
             chunks: Default::default(),
+            adjustment: None,
         }
     }
 }
@@ -315,10 +322,7 @@ pub struct Document {
 }
 
 fn now_ms() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as f64)
-        .unwrap_or(0.0)
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as f64).unwrap_or(0.0)
 }
 
 impl Document {
@@ -360,11 +364,7 @@ impl Document {
             let tr = Rect::from_tile(tx, ty);
             let Some(ix) = r.intersect(&tr) else { continue };
             if ix == tr {
-                s.set_tile(
-                    tx,
-                    ty,
-                    Some(std::sync::Arc::new(onepaint_raster::Tile::filled(p))),
-                );
+                s.set_tile(tx, ty, Some(std::sync::Arc::new(onepaint_raster::Tile::filled(p))));
             } else {
                 let t = s.tile_mut(tx, ty);
                 for y in ix.y..ix.bottom() {

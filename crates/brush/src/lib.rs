@@ -8,20 +8,14 @@ mod preset;
 pub use preset::*;
 
 use onepaint_raster::{Rect, Surface, TILE};
-use onepaint_stroke::{
-    Mulberry32, Sampler, SensorState, Smoother, Stabilizer, StrokePoint, eval_bindings,
-};
+use onepaint_stroke::{Mulberry32, Sampler, SensorState, Smoother, Stabilizer, StrokePoint, eval_bindings};
 
 fn clamp01(v: f64) -> f64 {
     v.clamp(0.0, 1.0)
 }
 
 pub fn curved_pressure(b: &BrushPreset, p: f64) -> f64 {
-    if b.pressure_curve == 1.0 {
-        clamp01(p)
-    } else {
-        clamp01(p).powf(b.pressure_curve)
-    }
+    if b.pressure_curve == 1.0 { clamp01(p) } else { clamp01(p).powf(b.pressure_curve) }
 }
 
 /// Dab radius from curved pressure (legacy scalar path, 15% floor).
@@ -39,9 +33,7 @@ fn size_bindings(b: &BrushPreset) -> Option<&onepaint_stroke::Binding> {
 
 fn base_radius(b: &BrushPreset, state: &SensorState, cp: f64) -> f64 {
     match &b.dynamics {
-        Some(d) if !d.size.is_empty() => {
-            b.size * eval_bindings(&d.size, state, d.size_combine).max(0.05) / 2.0
-        }
+        Some(d) if !d.size.is_empty() => b.size * eval_bindings(&d.size, state, d.size_combine).max(0.05) / 2.0,
         _ => radius_for(b, cp),
     }
 }
@@ -56,17 +48,8 @@ fn tip_roundness(b: &BrushPreset) -> f64 {
 /// Distance to the next stamp: spacing × the dab's diameter (`brush-engine.ts:221-227, 758-779`).
 pub fn spacing_gap(b: &BrushPreset, p: &StrokePoint) -> f64 {
     let cp = curved_pressure(b, p.pressure);
-    let state = SensorState {
-        pressure: clamp01(p.pressure),
-        angle: 0.5,
-        random: 0.5,
-        ..Default::default()
-    };
-    let r = if size_bindings(b).is_some() {
-        base_radius(b, &state, cp)
-    } else {
-        radius_for(b, cp)
-    };
+    let state = SensorState { pressure: clamp01(p.pressure), angle: 0.5, random: 0.5, ..Default::default() };
+    let r = if size_bindings(b).is_some() { base_radius(b, &state, cp) } else { radius_for(b, cp) };
     b.spacing * 2.0 * r.max(0.5) * tip_roundness(b).sqrt()
 }
 
@@ -116,11 +99,7 @@ pub struct StrokeEngine {
 
 impl StrokeEngine {
     pub fn new(brush: BrushPreset, color_linear: [f32; 3], seed: u32) -> Self {
-        let stabilizer = brush
-            .stabilizer
-            .as_ref()
-            .filter(|s| s.enabled && s.strength > 0.0)
-            .map(|s| Stabilizer::new(s.strength));
+        let stabilizer = brush.stabilizer.as_ref().filter(|s| s.enabled && s.strength > 0.0).map(|s| Stabilizer::new(s.strength));
         Self {
             smoother: Smoother::new(brush.smoothing),
             stabilizer,
@@ -169,11 +148,7 @@ impl StrokeEngine {
             let total = self.cum_dist;
             let degenerate = total <= 1.0;
             for (cd, mut d) in std::mem::take(&mut self.pending) {
-                let f = if degenerate {
-                    1.0
-                } else {
-                    self.entry_factor(cd) * self.exit_factor(cd, total)
-                };
+                let f = if degenerate { 1.0 } else { self.entry_factor(cd) * self.exit_factor(cd, total) };
                 d.radius *= f;
                 out.push(d);
             }
@@ -182,10 +157,7 @@ impl StrokeEngine {
     }
 
     fn taper(&self) -> (f64, f64) {
-        self.brush
-            .taper
-            .as_ref()
-            .map_or((0.0, 0.0), |t| (t.entry.max(0.0), t.exit.max(0.0)))
+        self.brush.taper.as_ref().map_or((0.0, 0.0), |t| (t.entry.max(0.0), t.exit.max(0.0)))
     }
 
     fn entry_factor(&self, cd: f64) -> f64 {
@@ -195,28 +167,19 @@ impl StrokeEngine {
 
     fn exit_factor(&self, cd: f64, total: f64) -> f64 {
         let (_, x) = self.taper();
-        if x > 0.0 {
-            clamp01((total - cd) / x)
-        } else {
-            1.0
-        }
+        if x > 0.0 { clamp01((total - cd) / x) } else { 1.0 }
     }
 
     fn emit(&mut self, stamps: &[StrokePoint]) -> Vec<Dab> {
         let b = &self.brush;
         let mut made = Vec::with_capacity(stamps.len());
         for s in stamps {
-            let dlen = self
-                .prev_pos
-                .map_or(0.0, |(px, py)| (s.x - px).hypot(s.y - py));
+            let dlen = self.prev_pos.map_or(0.0, |(px, py)| (s.x - px).hypot(s.y - py));
             if let Some((px, py)) = self.prev_pos
                 && dlen > DIR_MIN_DIST
             {
                 let (ux, uy) = ((s.x - px) / dlen, (s.y - py) / dlen);
-                let (nx, ny) = (
-                    self.dir.0 + (ux - self.dir.0) * DIR_FOLLOW,
-                    self.dir.1 + (uy - self.dir.1) * DIR_FOLLOW,
-                );
+                let (nx, ny) = (self.dir.0 + (ux - self.dir.0) * DIR_FOLLOW, self.dir.1 + (uy - self.dir.1) * DIR_FOLLOW);
                 let n = nx.hypot(ny);
                 if n > 0.0 {
                     self.dir = (nx / n, ny / n);
@@ -249,59 +212,32 @@ impl StrokeEngine {
             let cp = curved_pressure(b, s.pressure);
             let radius = (base_radius(b, &state, cp) * (1.0 - b.speed_size * speed)).max(0.5);
             let base_alpha = match &b.dynamics {
-                Some(d) if !d.flow.is_empty() => {
-                    b.flow * eval_bindings(&d.flow, &state, d.flow_combine)
-                }
+                Some(d) if !d.flow.is_empty() => b.flow * eval_bindings(&d.flow, &state, d.flow_combine),
                 _ => flow_for(b, cp),
             };
             let target = clamp01(base_alpha * (1.0 - b.speed_flow * speed));
-            let alpha = if b.wash {
-                target
-            } else {
-                linearize_alpha(target, b.spacing, b.opaque_linearize.unwrap_or(0.9))
-            };
+            let alpha = if b.wash { target } else { linearize_alpha(target, b.spacing, b.opaque_linearize.unwrap_or(0.9)) };
             let hardness = match &b.dynamics {
-                Some(d) if !d.hardness.is_empty() => (b.hardness
-                    * eval_bindings(&d.hardness, &state, d.hardness_combine))
-                .clamp(0.0, 0.98),
+                Some(d) if !d.hardness.is_empty() => (b.hardness * eval_bindings(&d.hardness, &state, d.hardness_combine)).clamp(0.0, 0.98),
                 _ => b.hardness.min(0.98),
             };
             let mag = s.tilt_x.hypot(s.tilt_y);
             let (mut rotation, mut aspect) = if b.tilt_strength <= 0.0 || mag < 1e-4 {
                 (0.0, 1.0)
             } else {
-                (
-                    s.tilt_y.atan2(s.tilt_x),
-                    1.0 - mag.min(1.0) * b.tilt_strength * (1.0 - 0.3),
-                )
+                (s.tilt_y.atan2(s.tilt_x), 1.0 - mag.min(1.0) * b.tilt_strength * (1.0 - 0.3))
             };
             let k = tip_roundness(b);
             let radius = radius * k.sqrt();
             aspect *= k;
             rotation += -b.tip_angle_deg.unwrap_or(0.0).to_radians();
-            made.push((
-                self.cum_dist,
-                Dab {
-                    x: s.x,
-                    y: s.y,
-                    radius,
-                    alpha,
-                    rotation,
-                    aspect,
-                    hardness,
-                    color: self.color,
-                },
-            ));
+            made.push((self.cum_dist, Dab { x: s.x, y: s.y, radius, alpha, rotation, aspect, hardness, color: self.color }));
         }
         let (entry, exit) = self.taper();
         if exit > 0.0 {
             self.pending.extend(made);
             let threshold = self.cum_dist - exit;
-            let n = self
-                .pending
-                .iter()
-                .take_while(|(cd, _)| *cd <= threshold)
-                .count();
+            let n = self.pending.iter().take_while(|(cd, _)| *cd <= threshold).count();
             let ready: Vec<_> = self.pending.drain(..n).collect();
             return ready
                 .into_iter()
@@ -331,23 +267,13 @@ fn smoothstep(e0: f64, e1: f64, x: f64) -> f64 {
 /// Bounding box of a dab in document px.
 pub fn dab_bounds(d: &Dab) -> Rect {
     let r = d.radius / d.aspect.max(1e-3).sqrt() + 1.0;
-    Rect::covering(
-        (d.x - r) as f32,
-        (d.y - r) as f32,
-        (d.x + r) as f32,
-        (d.y + r) as f32,
-    )
+    Rect::covering((d.x - r) as f32, (d.y - r) as f32, (d.x + r) as f32, (d.y + r) as f32)
 }
 
 /// Rasterise a round dab into the stroke buffer: premultiplied source-over,
 /// or per-channel max when `wash`. Coverage is multiplied by `clip` (the
 /// selection) when given. Returns the touched rect.
-pub fn rasterize_dab(
-    s: &mut Surface,
-    d: &Dab,
-    wash: bool,
-    clip: Option<&onepaint_selection::Mask>,
-) -> Rect {
+pub fn rasterize_dab(s: &mut Surface, d: &Dab, wash: bool, clip: Option<&onepaint_selection::Mask>) -> Rect {
     let bounds = dab_bounds(d);
     if d.alpha <= 0.0 || d.radius <= 0.0 {
         return bounds;
@@ -385,20 +311,10 @@ pub fn rasterize_dab(
                 let dst = tile.get(lxi, lyi);
                 let src = [d.color[0] * a, d.color[1] * a, d.color[2] * a, a];
                 let out = if wash {
-                    [
-                        dst[0].max(src[0]),
-                        dst[1].max(src[1]),
-                        dst[2].max(src[2]),
-                        dst[3].max(src[3]),
-                    ]
+                    [dst[0].max(src[0]), dst[1].max(src[1]), dst[2].max(src[2]), dst[3].max(src[3])]
                 } else {
                     let k = 1.0 - a;
-                    [
-                        src[0] + dst[0] * k,
-                        src[1] + dst[1] * k,
-                        src[2] + dst[2] * k,
-                        src[3] + dst[3] * k,
-                    ]
+                    [src[0] + dst[0] * k, src[1] + dst[1] * k, src[2] + dst[2] * k, src[3] + dst[3] * k]
                 };
                 tile.set(lxi, lyi, out);
             }

@@ -167,36 +167,20 @@ pub fn default_params(k: Kind) -> Params {
     let mut p = Params::default();
     match k {
         Kind::BrightnessContrast => (p.brightness, p.contrast) = (Some(0.0), Some(0.0)),
-        Kind::HueSaturation => {
-            (p.hue, p.saturation, p.brightness) = (Some(0.0), Some(0.0), Some(0.0))
-        }
+        Kind::HueSaturation => (p.hue, p.saturation, p.brightness) = (Some(0.0), Some(0.0), Some(0.0)),
         Kind::BlackWhite => p.amount = Some(1.0),
         Kind::Invert => {}
         Kind::Threshold => p.threshold = Some(0.5),
         Kind::Posterize => p.levels = Some(4.0),
         Kind::Levels => {
-            (p.in_black, p.in_white, p.gamma, p.out_black, p.out_white) =
-                (Some(0.0), Some(1.0), Some(1.0), Some(0.0), Some(1.0))
+            (p.in_black, p.in_white, p.gamma, p.out_black, p.out_white) = (Some(0.0), Some(1.0), Some(1.0), Some(0.0), Some(1.0))
         }
         Kind::Curves => {
             p.curve = Some(vec![CurvePoint::new(0.0, 0.0), CurvePoint::new(1.0, 1.0)]);
             p.curve_mode = Some("smooth".into());
         }
-        Kind::ColorBalance => {
-            (p.cyan_red, p.magenta_green, p.yellow_blue) = (Some(0.0), Some(0.0), Some(0.0))
-        }
-        Kind::GradientMap => {
-            p.gradient_stops = Some(vec![
-                Stop {
-                    pos: 0.0,
-                    color: [0.0; 3],
-                },
-                Stop {
-                    pos: 1.0,
-                    color: [1.0; 3],
-                },
-            ])
-        }
+        Kind::ColorBalance => (p.cyan_red, p.magenta_green, p.yellow_blue) = (Some(0.0), Some(0.0), Some(0.0)),
+        Kind::GradientMap => p.gradient_stops = Some(vec![Stop { pos: 0.0, color: [0.0; 3] }, Stop { pos: 1.0, color: [1.0; 3] }]),
         Kind::Noise => (p.amount, p.mono) = (Some(0.0), Some(true)),
         Kind::GaussianBlur => p.radius = Some(0.0),
         Kind::MotionBlur => (p.angle, p.distance) = (Some(0.0), Some(0.0)),
@@ -206,8 +190,7 @@ pub fn default_params(k: Kind) -> Params {
 }
 
 fn curve_is_identity(c: &Option<Vec<CurvePoint>>) -> bool {
-    c.as_ref()
-        .is_none_or(|c| c.len() < 2 || c.iter().all(|p| (p.y - p.x).abs() < 1e-3))
+    c.as_ref().is_none_or(|c| c.len() < 2 || c.iter().all(|p| (p.y - p.x).abs() < 1e-3))
 }
 
 /// The destructive preview skips identity params (AR `isIdentity`).
@@ -225,9 +208,7 @@ pub fn is_identity(k: Kind, p: &Params) -> bool {
                 && z(p.out_black)
                 && p.out_white.unwrap_or(1.0) == 1.0
         }
-        Kind::Curves => [&p.curve, &p.curve_r, &p.curve_g, &p.curve_b]
-            .into_iter()
-            .all(curve_is_identity),
+        Kind::Curves => [&p.curve, &p.curve_r, &p.curve_g, &p.curve_b].into_iter().all(curve_is_identity),
         Kind::ColorBalance => z(p.cyan_red) && z(p.magenta_green) && z(p.yellow_blue),
         Kind::GaussianBlur => p.radius.unwrap_or(0.0) <= 0.0,
         Kind::MotionBlur => p.distance.unwrap_or(0.0) <= 0.0,
@@ -238,11 +219,7 @@ pub fn is_identity(k: Kind, p: &Params) -> bool {
 pub type Lut = [[u8; 4]; 256];
 
 fn interp(p: &Params) -> Interp {
-    if p.curve_mode.as_deref() == Some("linear") {
-        Interp::Linear
-    } else {
-        Interp::Smooth
-    }
+    if p.curve_mode.as_deref() == Some("linear") { Interp::Linear } else { Interp::Smooth }
 }
 
 /// Curves LUT (AR `uploadLut`): master curve, then the channel curve on its (unclamped) output.
@@ -273,16 +250,7 @@ fn gradient_stops(p: &Params) -> Vec<Stop> {
             s.sort_by(|a, b| a.pos.total_cmp(&b.pos));
             s
         }
-        _ => vec![
-            Stop {
-                pos: 0.0,
-                color: p.shadow.unwrap_or([0.0; 3]),
-            },
-            Stop {
-                pos: 1.0,
-                color: p.highlight.unwrap_or([1.0; 3]),
-            },
-        ],
+        _ => vec![Stop { pos: 0.0, color: p.shadow.unwrap_or([0.0; 3]) }, Stop { pos: 1.0, color: p.highlight.unwrap_or([1.0; 3]) }],
     }
 }
 
@@ -300,11 +268,7 @@ pub fn build_gradient_lut(p: &Params) -> Lut {
             for w in stops.windows(2) {
                 let (a, b) = (&w[0], &w[1]);
                 if a.pos <= t && t <= b.pos {
-                    let f = if b.pos == a.pos {
-                        0.0
-                    } else {
-                        (t - a.pos) / (b.pos - a.pos)
-                    };
+                    let f = if b.pos == a.pos { 0.0 } else { (t - a.pos) / (b.pos - a.pos) };
                     out = [0, 1, 2].map(|k| a.color[k] + (b.color[k] - a.color[k]) * f);
                     break;
                 }
@@ -333,22 +297,10 @@ fn rgb2hsv(c: [f32; 3]) -> [f32; 3] {
     let k = [0.0f32, -1.0 / 3.0, 2.0 / 3.0, -1.0];
     let step = |edge: f32, x: f32| if x < edge { 0.0 } else { 1.0 };
     let mixv = |a: [f32; 4], b: [f32; 4], t: f32| [0, 1, 2, 3].map(|i| a[i] + (b[i] - a[i]) * t);
-    let p = mixv(
-        [c[2], c[1], k[3], k[2]],
-        [c[1], c[2], k[0], k[1]],
-        step(c[2], c[1]),
-    );
-    let q = mixv(
-        [p[0], p[1], p[3], c[0]],
-        [c[0], p[1], p[2], p[0]],
-        step(p[0], c[0]),
-    );
+    let p = mixv([c[2], c[1], k[3], k[2]], [c[1], c[2], k[0], k[1]], step(c[2], c[1]));
+    let q = mixv([p[0], p[1], p[3], c[0]], [c[0], p[1], p[2], p[0]], step(p[0], c[0]));
     let d = q[0] - q[3].min(q[1]);
-    [
-        (q[2] + (q[3] - q[1]) / (6.0 * d + 1e-10)).abs(),
-        d / (q[0] + 1e-10),
-        q[0],
-    ]
+    [(q[2] + (q[3] - q[1]) / (6.0 * d + 1e-10)).abs(), d / (q[0] + 1e-10), q[0]]
 }
 
 fn hsv2rgb(c: [f32; 3]) -> [f32; 3] {
@@ -389,11 +341,7 @@ pub fn prepare(kind: Kind, p: &Params) -> Prepared {
         Kind::GradientMap => Some(Box::new(build_gradient_lut(p))),
         _ => None,
     };
-    Prepared {
-        kind,
-        p: p.clone(),
-        lut,
-    }
+    Prepared { kind, p: p.clone(), lut }
 }
 
 impl Prepared {
@@ -403,22 +351,14 @@ impl Prepared {
             return s;
         }
         let a = s[3];
-        let un = if a > 0.0 {
-            [s[0] / a, s[1] / a, s[2] / a]
-        } else {
-            [s[0], s[1], s[2]]
-        };
+        let un = if a > 0.0 { [s[0] / a, s[1] / a, s[2] / a] } else { [s[0], s[1], s[2]] };
         let w = un.map(linear_to_srgb);
         let p = &self.p;
         let c01 = |v: f32| v.clamp(0.0, 1.0);
         let o: [f32; 3] = match self.kind {
             Kind::BrightnessContrast => {
                 let (b, c) = (p.brightness.unwrap_or(0.0), p.contrast.unwrap_or(0.0));
-                let k = if c <= 0.0 {
-                    1.0 + c
-                } else {
-                    1.0 / (1.0 - c).max(1e-3)
-                };
+                let k = if c <= 0.0 { 1.0 + c } else { 1.0 / (1.0 - c).max(1e-3) };
                 w.map(|v| c01((v + b - 0.5) * k + 0.5))
             }
             Kind::HueSaturation => {
@@ -436,11 +376,7 @@ impl Prepared {
             Kind::Invert => w.map(|v| c01(1.0 - v)),
             Kind::Threshold => {
                 let l = luma(w);
-                [if l >= p.threshold.unwrap_or(0.5) {
-                    1.0
-                } else {
-                    0.0
-                }; 3]
+                [if l >= p.threshold.unwrap_or(0.5) { 1.0 } else { 0.0 }; 3]
             }
             Kind::Posterize => {
                 let n = p.levels.unwrap_or(4.0).max(2.0) - 1.0;
@@ -456,28 +392,18 @@ impl Prepared {
                 })
             }
             Kind::Curves => {
-                let lut = self
-                    .lut
-                    .as_deref()
-                    .map_or_else(|| build_curves_lut(p), |l| *l);
+                let lut = self.lut.as_deref().map_or_else(|| build_curves_lut(p), |l| *l);
                 [0, 1, 2].map(|i| lut_sample(&lut, c01(w[i]), i))
             }
             Kind::ColorBalance => {
                 let l = luma(w);
                 let k = 1.0 - (2.0 * l - 1.0).abs();
-                let d = [
-                    p.cyan_red.unwrap_or(0.0),
-                    p.magenta_green.unwrap_or(0.0),
-                    p.yellow_blue.unwrap_or(0.0),
-                ];
+                let d = [p.cyan_red.unwrap_or(0.0), p.magenta_green.unwrap_or(0.0), p.yellow_blue.unwrap_or(0.0)];
                 [0, 1, 2].map(|i| c01(w[i] + d[i] * 0.5 * k))
             }
             Kind::GradientMap => {
                 let l = luma(w.map(c01));
-                let lut = self
-                    .lut
-                    .as_deref()
-                    .map_or_else(|| build_gradient_lut(p), |l| *l);
+                let lut = self.lut.as_deref().map_or_else(|| build_gradient_lut(p), |l| *l);
                 [0, 1, 2].map(|i| lut_sample(&lut, l, i))
             }
             Kind::Noise => {
@@ -487,11 +413,7 @@ impl Prepared {
                 let n = if p.mono.unwrap_or(true) {
                     [rnd(px, py, seed) - 0.5; 3]
                 } else {
-                    [
-                        rnd(px, py, seed) - 0.5,
-                        rnd(px, py, seed + 1) - 0.5,
-                        rnd(px, py, seed + 2) - 0.5,
-                    ]
+                    [rnd(px, py, seed) - 0.5, rnd(px, py, seed + 1) - 0.5, rnd(px, py, seed + 2) - 0.5]
                 };
                 [0, 1, 2].map(|i| c01(w[i] + n[i] * amt))
             }
@@ -525,9 +447,7 @@ fn blur_pass(buf: &[f32], w: usize, h: usize, dir: (f32, f32), r: f32) -> Vec<f3
     const HALF: i32 = 32;
     let spread = r.max(1.0) / HALF as f32;
     let sigma = HALF as f32 * 0.5;
-    let weights: Vec<f32> = (-HALF..=HALF)
-        .map(|i| (-0.5 * (i * i) as f32 / (sigma * sigma)).exp())
-        .collect();
+    let weights: Vec<f32> = (-HALF..=HALF).map(|i| (-0.5 * (i * i) as f32 / (sigma * sigma)).exp()).collect();
     let wsum: f32 = weights.iter().sum();
     let mut out = vec![0.0; buf.len()];
     out.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
@@ -567,10 +487,7 @@ pub fn apply_spatial(kind: Kind, p: &Params, buf: &[f32], w: usize, h: usize) ->
             let a = blur_pass(buf, w, h, (1.0, 0.0), 2.0);
             let b = blur_pass(&a, w, h, (0.0, 1.0), 2.0);
             let k = p.amount.unwrap_or(0.0) * 3.0;
-            buf.iter()
-                .zip(&b)
-                .map(|(s, bl)| (s + (s - bl) * k).clamp(0.0, 1.0))
-                .collect()
+            buf.iter().zip(&b).map(|(s, bl)| (s + (s - bl) * k).clamp(0.0, 1.0)).collect()
         }
         _ => buf.to_vec(),
     }

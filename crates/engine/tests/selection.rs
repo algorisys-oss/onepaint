@@ -12,12 +12,7 @@ fn session() -> Session {
 fn line(s: &mut Session, y: f64) {
     s.stroke_begin(StrokePoint::at(-30.0, y, 1.0, 0.0));
     for i in 1..=32 {
-        s.stroke_extend(&[StrokePoint::at(
-            -30.0 + i as f64 * 10.0,
-            y,
-            1.0,
-            i as f64 * 8.0,
-        )]);
+        s.stroke_extend(&[StrokePoint::at(-30.0 + i as f64 * 10.0, y, 1.0, i as f64 * 8.0)]);
     }
     s.stroke_end();
 }
@@ -27,11 +22,7 @@ fn alpha(s: &Session, x: i32, y: i32) -> f32 {
 }
 
 fn select_rect(s: &mut Session, x0: f64, y0: f64, x1: f64, y1: f64, mode: Mode) {
-    s.execute(Command::SelectShape {
-        contours: vec![rect_polygon([x0, y0], [x1, y1])],
-        mode,
-    })
-    .unwrap();
+    s.execute(Command::SelectShape { contours: vec![rect_polygon([x0, y0], [x1, y1])], mode }).unwrap();
 }
 
 #[test]
@@ -66,10 +57,7 @@ fn selection_changes_are_undoable() {
 fn select_all_invert_and_grow() {
     let mut s = session();
     s.execute(Command::InvertSelection).unwrap();
-    assert!(
-        s.selection().is_none(),
-        "invert without a selection does nothing"
-    );
+    assert!(s.selection().is_none(), "invert without a selection does nothing");
     s.execute(Command::SelectAll).unwrap();
     s.execute(Command::InvertSelection).unwrap();
     assert!(s.selection().is_none(), "inverting everything clears it");
@@ -111,22 +99,10 @@ fn fill_floods_the_enclosed_region() {
     s.execute(Command::SetActiveLayer { id: bg }).unwrap();
     s.execute(Command::SetColor { rgba: Rgba::BLACK }).unwrap();
     line(&mut s, 128.0);
-    s.execute(Command::SetColor {
-        rgba: Rgba::new(1.0, 0.0, 0.0, 1.0),
-    })
-    .unwrap();
-    s.execute(Command::Fill {
-        x: 100,
-        y: 40,
-        tolerance: 0.15,
-        grow: 1,
-    })
-    .unwrap();
+    s.execute(Command::SetColor { rgba: Rgba::new(1.0, 0.0, 0.0, 1.0) }).unwrap();
+    s.execute(Command::Fill { x: 100, y: 40, tolerance: 0.15, grow: 1 }).unwrap();
     let px = |s: &Session, y| s.doc().layer(s.active()).unwrap().pixels.get(100, y);
-    assert!(
-        px(&s, 40)[0] > 0.99 && px(&s, 40)[1] < 0.01,
-        "top region filled red"
-    );
+    assert!(px(&s, 40)[0] > 0.99 && px(&s, 40)[1] < 0.01, "top region filled red");
     assert!(px(&s, 220)[1] > 0.99, "bottom region stays white");
     s.execute(Command::Undo).unwrap();
     assert!(px(&s, 40)[1] > 0.99);
@@ -136,37 +112,15 @@ fn fill_floods_the_enclosed_region() {
 fn fill_is_confined_to_the_selection_and_respects_alpha_lock() {
     let mut s = session();
     select_rect(&mut s, 0.0, 0.0, 64.0, 64.0, Mode::Replace);
-    s.execute(Command::SetColor {
-        rgba: Rgba::new(0.0, 0.0, 1.0, 1.0),
-    })
-    .unwrap();
-    s.execute(Command::Fill {
-        x: 10,
-        y: 10,
-        tolerance: 0.1,
-        grow: 0,
-    })
-    .unwrap();
+    s.execute(Command::SetColor { rgba: Rgba::new(0.0, 0.0, 1.0, 1.0) }).unwrap();
+    s.execute(Command::Fill { x: 10, y: 10, tolerance: 0.1, grow: 0 }).unwrap();
     assert!(alpha(&s, 10, 10) > 0.99);
     assert_eq!(alpha(&s, 100, 100), 0.0);
     // Alpha lock: filling a transparent layer changes nothing visible.
     let mut t = session();
     let id = t.active().to_string();
-    t.execute(Command::SetLayerProps {
-        id,
-        props: LayerProps {
-            alpha_lock: Some(true),
-            ..Default::default()
-        },
-    })
-    .unwrap();
-    t.execute(Command::Fill {
-        x: 10,
-        y: 10,
-        tolerance: 0.1,
-        grow: 0,
-    })
-    .unwrap();
+    t.execute(Command::SetLayerProps { id, props: LayerProps { alpha_lock: Some(true), ..Default::default() } }).unwrap();
+    t.execute(Command::Fill { x: 10, y: 10, tolerance: 0.1, grow: 0 }).unwrap();
     assert_eq!(alpha(&t, 10, 10), 0.0);
 }
 
@@ -178,10 +132,7 @@ fn clear_and_fill_selection() {
     s.execute(Command::ClearSelected).unwrap();
     assert_eq!(alpha(&s, 120, 128), 0.0);
     assert!(alpha(&s, 60, 128) > 0.9);
-    s.execute(Command::SetColor {
-        rgba: Rgba::new(0.0, 1.0, 0.0, 1.0),
-    })
-    .unwrap();
+    s.execute(Command::SetColor { rgba: Rgba::new(0.0, 1.0, 0.0, 1.0) }).unwrap();
     s.execute(Command::FillSelection).unwrap();
     assert!(alpha(&s, 120, 10) > 0.99);
     assert_eq!(alpha(&s, 60, 10), 0.0);
@@ -194,27 +145,11 @@ fn clear_and_fill_selection() {
 fn magic_wand_on_layer_and_composite() {
     let mut s = session();
     line(&mut s, 128.0);
-    s.execute(Command::SelectByColor {
-        x: 100,
-        y: 128,
-        tolerance: 0.1,
-        mode: Mode::Replace,
-        contiguous: true,
-        sample_all: false,
-    })
-    .unwrap();
+    s.execute(Command::SelectByColor { x: 100, y: 128, tolerance: 0.1, mode: Mode::Replace, contiguous: true, sample_all: false }).unwrap();
     let m = s.selection().unwrap();
     assert_eq!((m.get(100, 128), m.get(100, 20)), (255, 0));
     // Composite sampling: the white background region is one connected area above the line.
-    s.execute(Command::SelectByColor {
-        x: 100,
-        y: 20,
-        tolerance: 0.1,
-        mode: Mode::Replace,
-        contiguous: true,
-        sample_all: true,
-    })
-    .unwrap();
+    s.execute(Command::SelectByColor { x: 100, y: 20, tolerance: 0.1, mode: Mode::Replace, contiguous: true, sample_all: true }).unwrap();
     let m = s.selection().unwrap();
     assert_eq!((m.get(5, 5), m.get(100, 128), m.get(100, 240)), (255, 0, 0));
 }

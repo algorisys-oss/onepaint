@@ -47,14 +47,8 @@ fn snapshot_is_copy_on_write() {
     a.set(600, 0, [1.0; 4]);
     let b = a.clone();
     a.set(0, 0, [0.5; 4]);
-    assert!(std::sync::Arc::ptr_eq(
-        a.tile(2, 0).unwrap(),
-        b.tile(2, 0).unwrap()
-    ));
-    assert!(!std::sync::Arc::ptr_eq(
-        a.tile(0, 0).unwrap(),
-        b.tile(0, 0).unwrap()
-    ));
+    assert!(std::sync::Arc::ptr_eq(a.tile(2, 0).unwrap(), b.tile(2, 0).unwrap()));
+    assert!(!std::sync::Arc::ptr_eq(a.tile(0, 0).unwrap(), b.tile(0, 0).unwrap()));
 }
 
 #[test]
@@ -72,10 +66,7 @@ fn rect_ops() {
     let b = Rect::new(5, 5, 10, 10);
     assert_eq!(a.intersect(&b), Some(Rect::new(5, 5, 5, 5)));
     assert_eq!(a.union(&b), Rect::new(0, 0, 15, 15));
-    assert_eq!(
-        Rect::new(0, 0, 1, 1).intersect(&Rect::new(5, 5, 1, 1)),
-        None
-    );
+    assert_eq!(Rect::new(0, 0, 1, 1).intersect(&Rect::new(5, 5, 1, 1)), None);
     let tiles: Vec<_> = Rect::new(250, 0, 10, 300).tiles().collect();
     assert_eq!(tiles, vec![(0, 0), (1, 0), (0, 1), (1, 1)]);
 }

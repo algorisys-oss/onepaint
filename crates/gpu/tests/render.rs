@@ -5,9 +5,7 @@ use onepaint_raster::Tile;
 
 fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok()?;
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
     pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()
 }
 
@@ -20,11 +18,7 @@ fn present_pass_draws_document_checker_and_stage() {
     let (w, h) = (64u32, 64u32);
     let target = device.create_texture(&wgpu::TextureDescriptor {
         label: None,
-        size: wgpu::Extent3d {
-            width: w,
-            height: h,
-            depth_or_array_layers: 1,
-        },
+        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -74,10 +68,7 @@ fn present_pass_draws_document_checker_and_stage() {
                 view: &view,
                 resolve_target: None,
                 depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
             })],
             depth_stencil_attachment: None,
             timestamp_writes: None,
@@ -93,25 +84,12 @@ fn present_pass_draws_document_checker_and_stage() {
         mapped_at_creation: false,
     });
     enc.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture: &target,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
+        wgpu::TexelCopyTextureInfo { texture: &target, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
         wgpu::TexelCopyBufferInfo {
             buffer: &buf,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(256),
-                rows_per_image: Some(h),
-            },
+            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(256), rows_per_image: Some(h) },
         },
-        wgpu::Extent3d {
-            width: w,
-            height: h,
-            depth_or_array_layers: 1,
-        },
+        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
     );
     queue.submit([enc.finish()]);
     buf.slice(..).map_async(wgpu::MapMode::Read, |_| {});
@@ -128,10 +106,7 @@ fn present_pass_draws_document_checker_and_stage() {
     assert_eq!(px(2, 2), [0, 0, 255, 255], "stage");
     // Ants on the selection's inner edge (doc x=4 → screen x=20), black or white.
     let edge = px(20, 32);
-    assert!(
-        edge == [0, 0, 0, 255] || edge == [255, 255, 255, 255],
-        "ants {edge:?}"
-    );
+    assert!(edge == [0, 0, 0, 255] || edge == [255, 255, 255, 255], "ants {edge:?}");
     // Away from the edge the content shows through.
     assert_eq!(px(22, 32), [255, 0, 0, 255]);
 }

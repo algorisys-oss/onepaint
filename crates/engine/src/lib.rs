@@ -6,6 +6,7 @@
 
 mod canvas_ops;
 mod clipboard;
+mod filter_ops;
 mod selection_ops;
 pub mod transform;
 pub mod view;
@@ -194,6 +195,13 @@ pub enum Command {
         width: u32,
         height: u32,
     },
+    /// Start a destructive filter on the active layer (live preview).
+    BeginFilter { kind: String },
+    UpdateFilter { params: onepaint_filters::Params },
+    CommitFilter,
+    CancelFilter,
+    AddAdjustmentLayer { kind: String, params: onepaint_filters::Params },
+    SetAdjustment { id: NodeId, params: onepaint_filters::Params },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -239,25 +247,10 @@ pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub(crate) type TileChange = ((i32, i32), Option<Arc<Tile>>, Option<Arc<Tile>>);
 
 pub(crate) enum Change {
-    Tiles {
-        layer: NodeId,
-        tiles: Vec<TileChange>,
-    },
-    Tree {
-        before: Vec<Node>,
-        after: Vec<Node>,
-        active_before: NodeId,
-        active_after: NodeId,
-        key: Option<String>,
-    },
-    Selection {
-        before: Option<Arc<onepaint_selection::Mask>>,
-        after: Option<Arc<onepaint_selection::Mask>>,
-    },
-    Document {
-        before: Box<canvas_ops::DocShape>,
-        after: Box<canvas_ops::DocShape>,
-    },
+    Tiles { layer: NodeId, tiles: Vec<TileChange> },
+    Tree { before: Vec<Node>, after: Vec<Node>, active_before: NodeId, active_after: NodeId, key: Option<String> },
+    Selection { before: Option<Arc<onepaint_selection::Mask>>, after: Option<Arc<onepaint_selection::Mask>> },
+    Document { before: Box<canvas_ops::DocShape>, after: Box<canvas_ops::DocShape> },
 }
 
 struct ActiveStroke {
@@ -290,6 +283,7 @@ pub struct Session {
     clip: Option<Arc<onepaint_selection::Mask>>,
     selection_version: u64,
     transform: Option<transform::Floating>,
+    filter: Option<filter_ops::FilterSession>,
 }
 
 fn tile_bytes(t: &Option<Arc<Tile>>) -> usize {
@@ -302,20 +296,13 @@ impl Session {
     }
 
     pub fn from_document(doc: Document) -> Self {
-        let active = doc
-            .layer_ids()
-            .last()
-            .cloned()
-            .or_else(|| doc.root.last().map(|n| n.id().to_string()))
-            .unwrap_or_default();
+        let active = doc.layer_ids().last().cloned().or_else(|| doc.root.last().map(|n| n.id().to_string())).unwrap_or_default();
         let mut s = Self {
             doc,
             active,
             tool: Tool::Brush,
-            brush: onepaint_brush::preset(onepaint_brush::DEFAULT_BRUSH)
-                .unwrap_or_else(|| onepaint_brush::presets().remove(0)),
-            eraser: onepaint_brush::preset(onepaint_brush::DEFAULT_ERASER)
-                .unwrap_or_else(|| onepaint_brush::presets().remove(0)),
+            brush: onepaint_brush::preset(onepaint_brush::DEFAULT_BRUSH).unwrap_or_else(|| onepaint_brush::presets().remove(0)),
+            eraser: onepaint_brush::preset(onepaint_brush::DEFAULT_ERASER).unwrap_or_else(|| onepaint_brush::presets().remove(0)),
             color: Rgba::BLACK,
             history: History::new(),
             stroke: None,
@@ -327,6 +314,7 @@ impl Session {
             clip: None,
             selection_version: 0,
             transform: None,
+            filter: None,
         };
         s.mark_all_dirty();
         s
@@ -334,12 +322,7 @@ impl Session {
 
     /// Replace the document (open / new), clearing history.
     pub fn replace_document(&mut self, doc: Document) {
-        let (tool, brush, eraser, color) = (
-            self.tool,
-            self.brush.clone(),
-            self.eraser.clone(),
-            self.color,
-        );
+        let (tool, brush, eraser, color) = (self.tool, self.brush.clone(), self.eraser.clone(), self.color);
         *self = Self::from_document(doc);
         (self.tool, self.brush, self.eraser, self.color) = (tool, brush, eraser, color);
         self.events.push(Event::DocumentReplaced);
@@ -425,15 +408,12 @@ impl Session {
         if let Some(t) = self.transform_overlay() {
             return Some(t);
         }
-        self.stroke
-            .as_ref()
-            .filter(|s| !s.noop)
-            .map(|s| StrokeOverlay {
-                layer_id: &s.layer,
-                stroke: &s.buffer,
-                opacity: s.opacity,
-                mode: s.mode,
-            })
+        self.stroke.as_ref().filter(|s| !s.noop).map(|s| StrokeOverlay {
+            layer_id: &s.layer,
+            stroke: &s.buffer,
+            opacity: s.opacity,
+            mode: s.mode,
+        })
     }
 
     /// Composite the given tiles, including any stroke in progress.
@@ -500,28 +480,20 @@ impl Session {
         self.commit_transform();
         self.doc.touch();
         let flat = self.flatten();
-        let thumb =
-            onepaint_formats::thumbnail_jpeg(&flat, self.doc.width, self.doc.height, 320, 240).ok();
-        Ok(onepaint_formats::write_happypaint(
-            &self.doc,
-            thumb.as_deref(),
-            APP_VERSION,
-        )?)
+        let thumb = onepaint_formats::thumbnail_jpeg(&flat, self.doc.width, self.doc.height, 320, 240).ok();
+        Ok(onepaint_formats::write_happypaint(&self.doc, thumb.as_deref(), APP_VERSION)?)
     }
 
     /// The flattened canvas as an 8-bit straight-alpha sRGB PNG.
     pub fn export_png(&self) -> Result<Vec<u8>, EngineError> {
         let rgba = onepaint_formats::flatten_to_srgb8(&self.flatten());
-        Ok(onepaint_formats::encode_png_rgba8(
-            self.doc.width,
-            self.doc.height,
-            &rgba,
-        )?)
+        Ok(onepaint_formats::encode_png_rgba8(self.doc.width, self.doc.height, &rgba)?)
     }
 
     // ── Strokes (happypaint PaintSink) ──
 
     pub fn stroke_begin(&mut self, p: StrokePoint) {
+        self.commit_filter();
         self.commit_transform();
         self.stroke_cancel();
         let Some(layer) = self.doc.layer(&self.active) else {
@@ -539,10 +511,7 @@ impl Session {
         };
         let brush = self.current_brush().clone();
         let lin = self.color.to_linear_premul();
-        self.seed = self
-            .seed
-            .wrapping_mul(1_664_525)
-            .wrapping_add(1_013_904_223);
+        self.seed = self.seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
         let (opacity, wash) = (brush.opacity as f32, brush.wash);
         let mut st = ActiveStroke {
             layer: self.active.clone(),
@@ -579,12 +548,7 @@ impl Session {
         }
         let mut r = Rect::default();
         for d in &dabs {
-            r = r.union(&rasterize_dab(
-                &mut st.buffer,
-                d,
-                st.wash,
-                st.clip.as_deref(),
-            ));
+            r = r.union(&rasterize_dab(&mut st.buffer, d, st.wash, st.clip.as_deref()));
         }
         self.mark_dirty(r);
     }
@@ -606,12 +570,7 @@ impl Session {
         if !st.noop {
             let mut r = Rect::default();
             for d in &tail {
-                r = r.union(&rasterize_dab(
-                    &mut st.buffer,
-                    d,
-                    st.wash,
-                    st.clip.as_deref(),
-                ));
+                r = r.union(&rasterize_dab(&mut st.buffer, d, st.wash, st.clip.as_deref()));
             }
             self.mark_dirty(r);
         }
@@ -628,10 +587,7 @@ impl Session {
                 continue;
             };
             let before = layer.pixels.tile(tx, ty).cloned();
-            let mut dst = before
-                .as_ref()
-                .map(|t| t.to_f32())
-                .unwrap_or_else(|| vec![0.0; TILE_PX * 4]);
+            let mut dst = before.as_ref().map(|t| t.to_f32()).unwrap_or_else(|| vec![0.0; TILE_PX * 4]);
             let s = src.to_f32();
             for i in (0..dst.len()).step_by(4) {
                 if s[i + 3] == 0.0 && s[i] == 0.0 && s[i + 1] == 0.0 && s[i + 2] == 0.0 {
@@ -652,33 +608,32 @@ impl Session {
             changes.push(((tx, ty), before, after));
         }
         if !changes.is_empty() {
-            self.history.push(
-                Change::Tiles {
-                    layer: st.layer,
-                    tiles: changes,
-                },
-                bytes,
-            );
+            self.history.push(Change::Tiles { layer: st.layer, tiles: changes }, bytes);
             self.doc.touch();
             self.history_changed();
         }
     }
 
     fn history_changed(&mut self) {
-        self.events.push(Event::HistoryChanged {
-            can_undo: self.history.can_undo(),
-            can_redo: self.history.can_redo(),
-        });
+        self.events.push(Event::HistoryChanged { can_undo: self.history.can_undo(), can_redo: self.history.can_redo() });
     }
 
     // ── Commands ──
 
     pub fn execute(&mut self, cmd: Command) -> Result<(), EngineError> {
+        if self.filter.is_some() {
+            match &cmd {
+                Command::UpdateFilter { .. } | Command::CommitFilter | Command::CancelFilter => {}
+                Command::Undo => {
+                    self.cancel_filter();
+                    return Ok(());
+                }
+                _ => self.commit_filter(),
+            }
+        }
         if self.transform.is_some() {
             match &cmd {
-                Command::SetTransform { .. }
-                | Command::CommitTransform
-                | Command::CancelTransform => {}
+                Command::SetTransform { .. } | Command::CommitTransform | Command::CancelTransform => {}
                 Command::SetColor { .. }
                 | Command::SetTool { .. }
                 | Command::SetBrush { .. }
@@ -696,13 +651,23 @@ impl Session {
         match cmd {
             Command::BeginTransform => self.begin_transform(),
             Command::LayerViaCopy { cut } => self.layer_via_copy(cut),
-            Command::ResizeCanvas {
-                width,
-                height,
-                dx,
-                dy,
-            } => self.resize_canvas(width, height, dx, dy),
+            Command::ResizeCanvas { width, height, dx, dy } => self.resize_canvas(width, height, dx, dy),
             Command::ScaleImage { width, height } => self.scale_image(width, height),
+            Command::BeginFilter { kind } => self.begin_filter(&kind),
+            Command::UpdateFilter { params } => {
+                self.update_filter(params);
+                Ok(())
+            }
+            Command::CommitFilter => {
+                self.commit_filter();
+                Ok(())
+            }
+            Command::CancelFilter => {
+                self.cancel_filter();
+                Ok(())
+            }
+            Command::AddAdjustmentLayer { kind, params } => self.add_adjustment_layer(&kind, params),
+            Command::SetAdjustment { id, params } => self.set_adjustment(&id, params),
             Command::SetTransform { matrix } => {
                 self.set_transform(matrix);
                 Ok(())
@@ -715,19 +680,13 @@ impl Session {
                 self.cancel_transform();
                 Ok(())
             }
-            Command::AddLayer => {
-                self.insert_above_active(Node::Layer(Layer::new(&self.next_layer_name())))
-            }
-            Command::AddGroup => {
-                self.insert_above_active(Node::Group(Group::new(&self.next_group_name())))
-            }
+            Command::AddLayer => self.insert_above_active(Node::Layer(Layer::new(&self.next_layer_name()))),
+            Command::AddGroup => self.insert_above_active(Node::Group(Group::new(&self.next_group_name()))),
             Command::DeleteLayer { id } => self.delete(&id),
             Command::DuplicateLayer { id } => self.duplicate(&id),
             Command::MoveLayer { id, parent, index } => self.move_layer(&id, parent, index),
             Command::SetActiveLayer { id } => {
-                self.doc
-                    .find(&id)
-                    .ok_or_else(|| EngineError::NoSuchLayer(id.clone()))?;
+                self.doc.find(&id).ok_or_else(|| EngineError::NoSuchLayer(id.clone()))?;
                 self.active = id;
                 self.events.push(Event::ActiveLayerChanged);
                 Ok(())
@@ -740,8 +699,7 @@ impl Session {
                 Ok(())
             }
             Command::SetBrush { preset_id } => {
-                let p = onepaint_brush::preset(&preset_id)
-                    .ok_or(EngineError::UnknownPreset(preset_id))?;
+                let p = onepaint_brush::preset(&preset_id).ok_or(EngineError::UnknownPreset(preset_id))?;
                 if p.is_eraser() {
                     self.eraser = p;
                     self.tool = Tool::Eraser;
@@ -783,12 +741,7 @@ impl Session {
     /// `frac` is the pointer's position within the target row (0 = top).
     /// Returns `(parent, index)` for [`Command::MoveLayer`] (index after removal),
     /// or `None` for an invalid drop.
-    pub fn resolve_drop(
-        &self,
-        dragged: &str,
-        target: &str,
-        frac: f32,
-    ) -> Option<(Option<NodeId>, usize)> {
+    pub fn resolve_drop(&self, dragged: &str, target: &str, frac: f32) -> Option<(Option<NodeId>, usize)> {
         if dragged == target && !self.doc.find(target)?.is_group() {
             return None;
         }
@@ -819,74 +772,35 @@ impl Session {
             .doc
             .layer_ids()
             .iter()
-            .filter_map(|id| {
-                self.doc
-                    .find(id)?
-                    .name()
-                    .strip_prefix("Layer ")?
-                    .parse::<usize>()
-                    .ok()
-            })
+            .filter_map(|id| self.doc.find(id)?.name().strip_prefix("Layer ")?.parse::<usize>().ok())
             .max()
             .unwrap_or(0);
-        format!(
-            "Layer {}",
-            n.max(self.doc.layer_ids().len().saturating_sub(1)) + 1
-        )
+        format!("Layer {}", n.max(self.doc.layer_ids().len().saturating_sub(1)) + 1)
     }
 
     fn next_group_name(&self) -> String {
         fn count(nodes: &[Node]) -> usize {
-            nodes
-                .iter()
-                .map(|n| {
-                    if let Node::Group(g) = n {
-                        1 + count(&g.children)
-                    } else {
-                        0
-                    }
-                })
-                .sum()
+            nodes.iter().map(|n| if let Node::Group(g) = n { 1 + count(&g.children) } else { 0 }).sum()
         }
         format!("Group {}", count(&self.doc.root) + 1)
     }
 
     /// Run a tree edit as one undo step (whole-tree snapshot: tiles are shared, so it's cheap).
-    fn tree_edit(
-        &mut self,
-        key: Option<String>,
-        f: impl FnOnce(&mut Self) -> Result<(), EngineError>,
-    ) -> Result<(), EngineError> {
+    fn tree_edit(&mut self, key: Option<String>, f: impl FnOnce(&mut Self) -> Result<(), EngineError>) -> Result<(), EngineError> {
         let before = self.doc.root.clone();
         let active_before = self.active.clone();
         f(self)?;
         let after = self.doc.root.clone();
         let active_after = self.active.clone();
-        let coalesced = key.is_some()
-            && matches!(self.history.top_mut(), Some(Change::Tree { key: k, .. }) if *k == key)
-            && {
-                if let Some(Change::Tree {
-                    after: a,
-                    active_after: aa,
-                    ..
-                }) = self.history.top_mut()
-                {
-                    *a = after.clone();
-                    *aa = active_after.clone();
-                }
-                true
-            };
+        let coalesced = key.is_some() && matches!(self.history.top_mut(), Some(Change::Tree { key: k, .. }) if *k == key) && {
+            if let Some(Change::Tree { after: a, active_after: aa, .. }) = self.history.top_mut() {
+                *a = after.clone();
+                *aa = active_after.clone();
+            }
+            true
+        };
         if !coalesced {
-            self.history.push(
-                Change::Tree {
-                    before,
-                    after,
-                    active_before,
-                    active_after,
-                    key,
-                },
-                1024,
-            );
+            self.history.push(Change::Tree { before, after, active_before, active_after, key }, 1024);
         }
         self.doc.touch();
         self.events.push(Event::LayersChanged);
@@ -900,10 +814,7 @@ impl Session {
         let id = node.id().to_string();
         self.tree_edit(None, |s| {
             let (parent, index) = match s.doc.path_of(&s.active) {
-                Some(p) => (
-                    s.doc.parent_of(&s.active).flatten(),
-                    p.last().map_or(0, |i| i + 1),
-                ),
+                Some(p) => (s.doc.parent_of(&s.active).flatten(), p.last().map_or(0, |i| i + 1)),
                 None => (None, s.doc.root.len()),
             };
             s.doc.insert(parent.as_deref(), index, node);
@@ -913,38 +824,18 @@ impl Session {
     }
 
     fn delete(&mut self, id: &str) -> Result<(), EngineError> {
-        self.doc
-            .find(id)
-            .ok_or_else(|| EngineError::NoSuchLayer(id.into()))?;
-        let remaining = self
-            .doc
-            .layer_ids()
-            .into_iter()
-            .filter(|l| l != id && !self.is_descendant(l, id))
-            .count();
+        self.doc.find(id).ok_or_else(|| EngineError::NoSuchLayer(id.into()))?;
+        let remaining = self.doc.layer_ids().into_iter().filter(|l| l != id && !self.is_descendant(l, id)).count();
         if remaining == 0 {
             return Err(EngineError::LastLayer);
         }
         self.tree_edit(None, |s| {
-            let (_, parent, idx) = s
-                .doc
-                .remove(id)
-                .ok_or_else(|| EngineError::NoSuchLayer(id.into()))?;
+            let (_, parent, idx) = s.doc.remove(id).ok_or_else(|| EngineError::NoSuchLayer(id.into()))?;
             if s.doc.find(&s.active).is_none() {
-                let siblings = s
-                    .doc
-                    .children(parent.as_deref())
-                    .cloned()
-                    .unwrap_or_default();
-                s.active = match siblings
-                    .get(idx.saturating_sub(1))
-                    .or_else(|| siblings.get(idx))
-                {
+                let siblings = s.doc.children(parent.as_deref()).cloned().unwrap_or_default();
+                s.active = match siblings.get(idx.saturating_sub(1)).or_else(|| siblings.get(idx)) {
                     Some(n) => n.id().to_string(),
-                    None => parent
-                        .clone()
-                        .or_else(|| s.doc.layer_ids().last().cloned())
-                        .unwrap_or_default(),
+                    None => parent.clone().or_else(|| s.doc.layer_ids().last().cloned()).unwrap_or_default(),
                 };
             }
             Ok(())
@@ -959,42 +850,24 @@ impl Session {
     }
 
     fn duplicate(&mut self, id: &str) -> Result<(), EngineError> {
-        let mut node = self
-            .doc
-            .find(id)
-            .ok_or_else(|| EngineError::NoSuchLayer(id.into()))?
-            .clone();
+        let mut node = self.doc.find(id).ok_or_else(|| EngineError::NoSuchLayer(id.into()))?.clone();
         node.reassign_ids();
         let name = format!("{} copy", node.name());
         node.set_name(name);
         let new_id = node.id().to_string();
         self.tree_edit(None, |s| {
             let parent = s.doc.parent_of(id).flatten();
-            let idx = s
-                .doc
-                .path_of(id)
-                .and_then(|p| p.last().copied())
-                .unwrap_or(0);
+            let idx = s.doc.path_of(id).and_then(|p| p.last().copied()).unwrap_or(0);
             s.doc.insert(parent.as_deref(), idx + 1, node);
             s.active = new_id;
             Ok(())
         })
     }
 
-    fn move_layer(
-        &mut self,
-        id: &str,
-        parent: Option<NodeId>,
-        index: usize,
-    ) -> Result<(), EngineError> {
-        self.doc
-            .find(id)
-            .ok_or_else(|| EngineError::NoSuchLayer(id.into()))?;
+    fn move_layer(&mut self, id: &str, parent: Option<NodeId>, index: usize) -> Result<(), EngineError> {
+        self.doc.find(id).ok_or_else(|| EngineError::NoSuchLayer(id.into()))?;
         if let Some(p) = &parent {
-            let g = self
-                .doc
-                .find(p)
-                .ok_or_else(|| EngineError::NoSuchLayer(p.clone()))?;
+            let g = self.doc.find(p).ok_or_else(|| EngineError::NoSuchLayer(p.clone()))?;
             if !g.is_group() || p == id || self.is_descendant(p, id) {
                 return Err(EngineError::InvalidMove);
             }
@@ -1007,9 +880,7 @@ impl Session {
     }
 
     fn set_props(&mut self, id: &str, p: LayerProps) -> Result<(), EngineError> {
-        self.doc
-            .find(id)
-            .ok_or_else(|| EngineError::NoSuchLayer(id.into()))?;
+        self.doc.find(id).ok_or_else(|| EngineError::NoSuchLayer(id.into()))?;
         let key = Some(format!("{id}:{}", p.key()));
         self.tree_edit(key, |s| {
             let Some(n) = s.doc.find_mut(id) else {
@@ -1051,27 +922,15 @@ impl Session {
 
     /// Bake a layer into the paint layer directly below it (keeps the lower layer's props).
     fn merge_down(&mut self, id: &str) -> Result<(), EngineError> {
-        let path = self
-            .doc
-            .path_of(id)
-            .ok_or_else(|| EngineError::NoSuchLayer(id.into()))?;
+        let path = self.doc.path_of(id).ok_or_else(|| EngineError::NoSuchLayer(id.into()))?;
         let idx = *path.last().ok_or(EngineError::NothingBelow)?;
         if idx == 0 {
             return Err(EngineError::NothingBelow);
         }
         let mut below_path = path.clone();
         *below_path.last_mut().ok_or(EngineError::NothingBelow)? = idx - 1;
-        let below = self
-            .doc
-            .node_at(&below_path)
-            .and_then(Node::as_layer)
-            .ok_or(EngineError::NothingBelow)?
-            .clone();
-        let upper = self
-            .doc
-            .node_at(&path)
-            .cloned()
-            .ok_or(EngineError::NothingBelow)?;
+        let below = self.doc.node_at(&below_path).and_then(Node::as_layer).ok_or(EngineError::NothingBelow)?.clone();
+        let upper = self.doc.node_at(&path).cloned().ok_or(EngineError::NothingBelow)?;
         let mut base = below.clone();
         base.opacity = 1.0;
         base.blend_mode = BlendMode::Normal;
@@ -1096,8 +955,7 @@ impl Session {
         self.tree_edit(None, |s| {
             if let Some(l) = s.doc.layer_mut(&below_id) {
                 for ((tx, ty), t) in merged {
-                    l.pixels
-                        .set_tile(tx, ty, (!t.is_empty()).then(|| Arc::new(t)));
+                    l.pixels.set_tile(tx, ty, (!t.is_empty()).then(|| Arc::new(t)));
                 }
             }
             s.doc.remove(id);
@@ -1107,26 +965,13 @@ impl Session {
     }
 
     fn clear_layer(&mut self, id: &str) -> Result<(), EngineError> {
-        let l = self
-            .doc
-            .layer(id)
-            .ok_or_else(|| EngineError::NoSuchLayer(id.into()))?;
-        let tiles: Vec<TileChange> = l
-            .pixels
-            .tiles()
-            .map(|(k, t)| (k, Some(t.clone()), None))
-            .collect();
+        let l = self.doc.layer(id).ok_or_else(|| EngineError::NoSuchLayer(id.into()))?;
+        let tiles: Vec<TileChange> = l.pixels.tiles().map(|(k, t)| (k, Some(t.clone()), None)).collect();
         let bytes = tiles.iter().map(|(_, b, _)| tile_bytes(b)).sum();
         if let Some(l) = self.doc.layer_mut(id) {
             l.pixels.clear();
         }
-        self.history.push(
-            Change::Tiles {
-                layer: id.to_string(),
-                tiles,
-            },
-            bytes,
-        );
+        self.history.push(Change::Tiles { layer: id.to_string(), tiles }, bytes);
         self.mark_all_dirty();
         self.history_changed();
         Ok(())
@@ -1138,11 +983,7 @@ impl Session {
                 ChangeRef::Tiles { layer, tiles } => {
                     if let Some(l) = self.doc.layer_mut(&layer) {
                         for (k, before, after) in &tiles {
-                            l.pixels.set_tile(
-                                k.0,
-                                k.1,
-                                if undo { before.clone() } else { after.clone() },
-                            );
+                            l.pixels.set_tile(k.0, k.1, if undo { before.clone() } else { after.clone() });
                         }
                     }
                     for (k, _, _) in tiles {
@@ -1165,32 +1006,13 @@ impl Session {
 
     fn snapshot(c: &Change, undo: bool) -> ChangeRef {
         match c {
-            Change::Tiles { layer, tiles } => ChangeRef::Tiles {
-                layer: layer.clone(),
-                tiles: tiles.clone(),
-            },
-            Change::Tree {
-                before,
-                after,
-                active_before,
-                active_after,
-                ..
-            } => ChangeRef::Tree {
+            Change::Tiles { layer, tiles } => ChangeRef::Tiles { layer: layer.clone(), tiles: tiles.clone() },
+            Change::Tree { before, after, active_before, active_after, .. } => ChangeRef::Tree {
                 root: if undo { before.clone() } else { after.clone() },
-                active: if undo {
-                    active_before.clone()
-                } else {
-                    active_after.clone()
-                },
+                active: if undo { active_before.clone() } else { active_after.clone() },
             },
-            Change::Selection { before, after } => {
-                ChangeRef::Selection(if undo { before.clone() } else { after.clone() })
-            }
-            Change::Document { before, after } => ChangeRef::Document(Box::new(if undo {
-                (**before).clone()
-            } else {
-                (**after).clone()
-            })),
+            Change::Selection { before, after } => ChangeRef::Selection(if undo { before.clone() } else { after.clone() }),
+            Change::Document { before, after } => ChangeRef::Document(Box::new(if undo { (**before).clone() } else { (**after).clone() })),
         }
     }
 
@@ -1214,14 +1036,8 @@ impl Session {
 }
 
 enum ChangeRef {
-    Tiles {
-        layer: NodeId,
-        tiles: Vec<TileChange>,
-    },
-    Tree {
-        root: Vec<Node>,
-        active: NodeId,
-    },
+    Tiles { layer: NodeId, tiles: Vec<TileChange> },
+    Tree { root: Vec<Node>, active: NodeId },
     Selection(Option<Arc<onepaint_selection::Mask>>),
     Document(Box<canvas_ops::DocShape>),
 }

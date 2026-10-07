@@ -10,16 +10,7 @@ use onepaint_stroke::StrokePoint;
 
 fn dabs(c: &mut Criterion) {
     for r in [6.0, 30.0, 120.0] {
-        let d = Dab {
-            x: 300.0,
-            y: 300.0,
-            radius: r,
-            alpha: 0.5,
-            rotation: 0.3,
-            aspect: 0.8,
-            hardness: 0.6,
-            color: [0.2, 0.4, 0.8],
-        };
+        let d = Dab { x: 300.0, y: 300.0, radius: r, alpha: 0.5, rotation: 0.3, aspect: 0.8, hardness: 0.6, color: [0.2, 0.4, 0.8] };
         c.bench_function(&format!("rasterize_dab r{r}"), |b| {
             let mut s = Surface::new();
             b.iter(|| rasterize_dab(&mut s, black_box(&d), false, None))
@@ -35,13 +26,9 @@ fn composite(c: &mut Criterion) {
         s.stroke_extend(&[StrokePoint::at(2000.0, 1500.0, 1.0, 500.0)]);
         s.stroke_end();
     }
-    c.bench_function("composite one tile, 6 layers", |b| {
-        b.iter(|| s.composite(black_box(&[(3, 2)])))
-    });
+    c.bench_function("composite one tile, 6 layers", |b| b.iter(|| s.composite(black_box(&[(3, 2)]))));
     let all: Vec<_> = s.doc().bounds().tiles().collect();
-    c.bench_function("composite 2048x1536, 6 layers", |b| {
-        b.iter(|| s.composite(black_box(&all)))
-    });
+    c.bench_function("composite 2048x1536, 6 layers", |b| b.iter(|| s.composite(black_box(&all))));
 }
 
 fn stroke(c: &mut Criterion) {
@@ -50,12 +37,7 @@ fn stroke(c: &mut Criterion) {
             let mut s = Session::new(1024, 1024, None);
             s.stroke_begin(StrokePoint::at(10.0, 500.0, 0.5, 0.0));
             for i in 1..=100 {
-                s.stroke_extend(&[StrokePoint::at(
-                    10.0 + i as f64 * 9.0,
-                    500.0,
-                    0.8,
-                    i as f64 * 8.0,
-                )]);
+                s.stroke_extend(&[StrokePoint::at(10.0 + i as f64 * 9.0, 500.0, 0.8, i as f64 * 8.0)]);
             }
             s.stroke_end();
         })

@@ -25,11 +25,7 @@ fn main() -> eframe::Result {
             .with_min_inner_size([720.0, 480.0]),
         ..Default::default()
     };
-    eframe::run_native(
-        "onepaint",
-        options,
-        Box::new(move |cc| Ok(Box::new(App::new(cc, open)))),
-    )
+    eframe::run_native("onepaint", options, Box::new(move |cc| Ok(Box::new(App::new(cc, open)))))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -91,11 +87,7 @@ pub struct App {
 impl App {
     fn new(cc: &eframe::CreationContext, open: Option<PathBuf>) -> Self {
         let debug = debug::Debug::from_env();
-        let theme = if debug.light {
-            ThemeKind::Light
-        } else {
-            ThemeKind::Dark
-        };
+        let theme = if debug.light { ThemeKind::Light } else { ThemeKind::Dark };
         onepaint_ui_kit::install(&cc.egui_ctx, theme);
         let gpu_ok = canvas::init_gpu(cc);
         let session = Session::new(2048, 1536, Some(Rgba::WHITE));
@@ -108,11 +100,7 @@ impl App {
             hide_ui: false,
             path: None,
             saved_history_len: Some(0),
-            hsv: Hsv {
-                h: 0.0,
-                s: 0.0,
-                v: 0.0,
-            },
+            hsv: Hsv { h: 0.0, s: 0.0, v: 0.0 },
             hex: "#000000".into(),
             recent: Vec::new(),
             thumbs: thumbs::Thumbs::default(),
@@ -168,8 +156,7 @@ impl App {
     pub fn new_document(&mut self, w: u32, h: u32) {
         let id = self.session.doc().id.clone();
         self.autosave.clear(&id);
-        self.session
-            .replace_document(onepaint_doc::Document::new(w, h, Some(Rgba::WHITE)));
+        self.session.replace_document(onepaint_doc::Document::new(w, h, Some(Rgba::WHITE)));
         self.canvas.reset_for([w, h]);
         self.path = None;
         self.saved_history_len = Some(0);
@@ -178,22 +165,10 @@ impl App {
 
     pub fn open_path(&mut self, p: PathBuf) {
         let now = 0.0;
-        let native = p
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("happypaint"));
-        let name = p
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("Image")
-            .to_string();
+        let native = p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("happypaint"));
+        let name = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Image").to_string();
         match std::fs::read(&p).map_err(|e| e.to_string()).and_then(|b| {
-            if native {
-                self.session.open_happypaint(&b)
-            } else {
-                self.session.open_image(&b, &name)
-            }
-            .map_err(|e| e.to_string())
+            if native { self.session.open_happypaint(&b) } else { self.session.open_image(&b, &name) }.map_err(|e| e.to_string())
         }) {
             Ok(()) => {
                 let d = self.session.doc();
@@ -238,20 +213,7 @@ impl App {
 
     pub fn open_dialog(&mut self) {
         if let Some(p) = rfd::FileDialog::new()
-            .add_filter(
-                "Images and documents",
-                &[
-                    "happypaint",
-                    "png",
-                    "jpg",
-                    "jpeg",
-                    "webp",
-                    "bmp",
-                    "gif",
-                    "tif",
-                    "tiff",
-                ],
-            )
+            .add_filter("Images and documents", &["happypaint", "png", "jpg", "jpeg", "webp", "bmp", "gif", "tif", "tiff"])
             .pick_file()
         {
             self.open_path(p);
@@ -259,12 +221,8 @@ impl App {
     }
 
     pub fn place_dialog(&mut self, ctx: &egui::Context) {
-        if let Some(p) = rfd::FileDialog::new()
-            .add_filter(
-                "Images",
-                &["png", "jpg", "jpeg", "webp", "bmp", "gif", "tif", "tiff"],
-            )
-            .pick_file()
+        if let Some(p) =
+            rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "webp", "bmp", "gif", "tif", "tiff"]).pick_file()
         {
             clip::drop_file(self, ctx, Some(p), None);
         }
@@ -282,12 +240,7 @@ impl App {
         if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
             self.session.doc_mut_meta().name = stem.to_string();
         }
-        match self
-            .session
-            .save_happypaint()
-            .map_err(|e| e.to_string())
-            .and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string()))
-        {
+        match self.session.save_happypaint().map_err(|e| e.to_string()).and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string())) {
             Ok(()) => {
                 self.saved_history_len = Some(self.session.history_len());
                 let id = self.session.doc().id.clone();
@@ -300,19 +253,12 @@ impl App {
     }
 
     pub fn export_png(&mut self, now: f64) {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("PNG", &["png"])
-            .set_file_name(format!("{}.png", self.session.doc().name))
-            .save_file()
+        let Some(path) =
+            rfd::FileDialog::new().add_filter("PNG", &["png"]).set_file_name(format!("{}.png", self.session.doc().name)).save_file()
         else {
             return;
         };
-        match self
-            .session
-            .export_png()
-            .map_err(|e| e.to_string())
-            .and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string()))
-        {
+        match self.session.export_png().map_err(|e| e.to_string()).and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string())) {
             Ok(()) => self.notify(format!("Exported {}", path.display()), now),
             Err(e) => self.notify(format!("Export failed: {e}"), now),
         }
@@ -344,14 +290,7 @@ impl App {
         if was == Tool::Move && tool != Tool::Move {
             let _ = self.session.execute(Command::CommitTransform);
         }
-        if matches!(
-            tool,
-            Tool::SelectRect
-                | Tool::SelectEllipse
-                | Tool::SelectLasso
-                | Tool::SelectPoly
-                | Tool::SelectWand
-        ) {
+        if matches!(tool, Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectPoly | Tool::SelectWand) {
             self.last_select_tool = tool;
         }
         let _ = self.session.execute(Command::SetTool { tool });
@@ -368,9 +307,7 @@ impl App {
     fn shortcuts(&mut self, ctx: &egui::Context) -> (bool, bool) {
         let now = ctx.input(|i| i.time);
         let cmd = Modifiers::COMMAND;
-        let sc = |m: Modifiers, k: Key| {
-            ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, k)))
-        };
+        let sc = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, k)));
         let typing = ctx.egui_wants_keyboard_input();
         if sc(cmd | Modifiers::SHIFT, Key::Z) || sc(cmd, Key::Y) {
             let _ = self.session.execute(Command::Redo);
@@ -400,17 +337,11 @@ impl App {
             self.canvas.view.actual_pixels();
         }
         if sc(cmd, Key::Plus) || sc(cmd, Key::Equals) {
-            let c = [
-                self.canvas.view.view_size[0] / 2.0,
-                self.canvas.view.view_size[1] / 2.0,
-            ];
+            let c = [self.canvas.view.view_size[0] / 2.0, self.canvas.view.view_size[1] / 2.0];
             self.canvas.view.zoom_at(c, 1.25);
         }
         if sc(cmd, Key::Minus) {
-            let c = [
-                self.canvas.view.view_size[0] / 2.0,
-                self.canvas.view.view_size[1] / 2.0,
-            ];
+            let c = [self.canvas.view.view_size[0] / 2.0, self.canvas.view.view_size[1] / 2.0];
             self.canvas.view.zoom_at(c, 0.8);
         }
         if !typing {
@@ -420,19 +351,13 @@ impl App {
             if sc(cmd, Key::J) {
                 let _ = self.session.execute(Command::LayerViaCopy { cut: false });
             }
-            if sc(cmd, Key::C)
-                || ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)))
-            {
+            if sc(cmd, Key::C) || ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy))) {
                 clip::copy(self);
             }
-            if sc(cmd, Key::X)
-                || ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Cut)))
-            {
+            if sc(cmd, Key::X) || ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Cut))) {
                 clip::cut(self);
             }
-            if sc(cmd, Key::V)
-                || ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_))))
-            {
+            if sc(cmd, Key::V) || ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_)))) {
                 clip::paste(self);
             }
             if sc(cmd | Modifiers::SHIFT, Key::I) {
@@ -476,16 +401,12 @@ impl App {
             }
             if sc(Modifiers::NONE, Key::OpenBracket) {
                 let s = self.session.current_brush().size;
-                let _ = self.session.execute(Command::SetBrushSize {
-                    size: (s / 1.15).floor().max(1.0),
-                });
+                let _ = self.session.execute(Command::SetBrushSize { size: (s / 1.15).floor().max(1.0) });
                 self.canvas.size_flash = 1.0;
             }
             if sc(Modifiers::NONE, Key::CloseBracket) {
                 let s = self.session.current_brush().size;
-                let _ = self.session.execute(Command::SetBrushSize {
-                    size: (s * 1.15).ceil(),
-                });
+                let _ = self.session.execute(Command::SetBrushSize { size: (s * 1.15).ceil() });
                 self.canvas.size_flash = 1.0;
             }
             if sc(Modifiers::NONE, Key::Tab) {
@@ -517,8 +438,7 @@ impl eframe::App for App {
         let was_stroking = self.session.is_stroking();
         let t = onepaint_ui_kit::Tokens::get(&ctx);
         ui.painter().rect_filled(rect, 0.0, t.stage);
-        self.canvas
-            .show(ui, rect, &mut self.session, space, r, self.gpu_ok);
+        self.canvas.show(ui, rect, &mut self.session, space, r, self.gpu_ok);
         if !self.gpu_ok {
             ui.painter().text(
                 rect.center(),
@@ -534,20 +454,14 @@ impl eframe::App for App {
         for e in self.session.drain_events() {
             match e {
                 Event::LayersChanged | Event::DocumentReplaced => self.thumbs.clear(),
-                Event::HistoryChanged { .. } => {
-                    self.thumbs.invalidate_active(self.session.active())
-                }
+                Event::HistoryChanged { .. } => self.thumbs.invalidate_active(self.session.active()),
                 _ => {}
             }
         }
         let now = ctx.input(|i| i.time);
-        let (dirty, busy) = (
-            self.dirty(),
-            self.session.is_stroking() || self.session.transform_active(),
-        );
+        let (dirty, busy) = (self.dirty(), self.session.is_stroking() || self.session.transform_active());
         let doc = &self.session;
-        self.autosave
-            .tick(now, dirty, || (!busy).then(|| doc.doc().clone()));
+        self.autosave.tick(now, dirty, || (!busy).then(|| doc.doc().clone()));
         if dirty {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(autosave::INTERVAL_S));
         }
@@ -569,11 +483,7 @@ impl eframe::App for App {
         if !self.hide_ui {
             chrome::show(self, &ctx);
         }
-        let title = format!(
-            "{}{} — onepaint",
-            if self.dirty() { "• " } else { "" },
-            self.session.doc().name
-        );
+        let title = format!("{}{} — onepaint", if self.dirty() { "• " } else { "" }, self.session.doc().name);
         if title != self.title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.title = title;
@@ -596,18 +506,11 @@ mod tests {
     use egui_kittest::kittest::Queryable;
 
     fn harness() -> Harness<'static, App> {
-        Harness::builder()
-            .with_size(vec2(1200.0, 800.0))
-            .build_eframe(|cc| App::new(cc, None))
+        Harness::builder().with_size(vec2(1200.0, 800.0)).build_eframe(|cc| App::new(cc, None))
     }
 
     fn press(h: &mut Harness<'_, App>, p: egui::Pos2, pressed: bool) {
-        h.event(Event::PointerButton {
-            pos: p,
-            button: PointerButton::Primary,
-            pressed,
-            modifiers: Default::default(),
-        });
+        h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed, modifiers: Default::default() });
         h.step();
     }
 
@@ -630,34 +533,14 @@ mod tests {
         drag_stroke(&mut h, pos2(560.0, 420.0), pos2(720.0, 440.0));
         let app = h.state();
         let layer = app.session.doc().layer(app.session.active()).unwrap();
-        assert!(
-            layer.pixels.tile_count() > 0,
-            "the stroke reached the active layer"
-        );
+        assert!(layer.pixels.tile_count() > 0, "the stroke reached the active layer");
         let d = app.canvas.view.screen_to_doc([640.0, 430.0]);
-        assert!(
-            layer.pixels.get(d[0] as i32, d[1] as i32)[3] > 0.5,
-            "paint under the stroke"
-        );
+        assert!(layer.pixels.get(d[0] as i32, d[1] as i32)[3] > 0.5, "paint under the stroke");
         assert!(app.dirty());
-        h.event(Event::Key {
-            key: egui::Key::Z,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::COMMAND,
-        });
+        h.event(Event::Key { key: egui::Key::Z, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND });
         h.step();
         let app = h.state();
-        assert_eq!(
-            app.session
-                .doc()
-                .layer(app.session.active())
-                .unwrap()
-                .pixels
-                .tile_count(),
-            0
-        );
+        assert_eq!(app.session.doc().layer(app.session.active()).unwrap().pixels.tile_count(), 0);
     }
 
     #[test]
@@ -667,15 +550,7 @@ mod tests {
         // The side rail sits at the left edge.
         drag_stroke(&mut h, pos2(30.0, 400.0), pos2(34.0, 330.0));
         let app = h.state();
-        assert_eq!(
-            app.session
-                .doc()
-                .layer(app.session.active())
-                .unwrap()
-                .pixels
-                .tile_count(),
-            0
-        );
+        assert_eq!(app.session.doc().layer(app.session.active()).unwrap().pixels.tile_count(), 0);
     }
 
     #[test]
@@ -730,13 +605,7 @@ mod tests {
     }
 
     fn key(h: &mut Harness<'_, App>, key: egui::Key, modifiers: egui::Modifiers) {
-        h.event(Event::Key {
-            key,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers,
-        });
+        h.event(Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
         h.step();
     }
 
@@ -764,21 +633,10 @@ mod tests {
         let app = h.state();
         let layer = app.session.doc().layer(app.session.active()).unwrap();
         assert!(layer.pixels.get(inside[0] as i32, inside[1] as i32)[3] > 0.5);
-        assert_eq!(
-            layer.pixels.get(outside[0] as i32, outside[1] as i32)[3],
-            0.0
-        );
+        assert_eq!(layer.pixels.get(outside[0] as i32, outside[1] as i32)[3], 0.0);
         key(&mut h, egui::Key::Delete, egui::Modifiers::NONE);
         let app = h.state();
-        assert_eq!(
-            app.session
-                .doc()
-                .layer(app.session.active())
-                .unwrap()
-                .pixels
-                .get(inside[0] as i32, inside[1] as i32)[3],
-            0.0
-        );
+        assert_eq!(app.session.doc().layer(app.session.active()).unwrap().pixels.get(inside[0] as i32, inside[1] as i32)[3], 0.0);
         key(&mut h, egui::Key::D, egui::Modifiers::COMMAND);
         assert!(h.state().session.selection().is_none());
     }
@@ -794,14 +652,7 @@ mod tests {
         assert!(h.state().session.selection().is_none(), "not committed yet");
         key(&mut h, egui::Key::Enter, egui::Modifiers::NONE);
         let d = h.state().canvas.view.screen_to_doc([660.0, 350.0]);
-        assert_eq!(
-            h.state()
-                .session
-                .selection()
-                .expect("polygon")
-                .get(d[0] as u32, d[1] as u32),
-            255
-        );
+        assert_eq!(h.state().session.selection().expect("polygon").get(d[0] as u32, d[1] as u32), 255);
     }
 
     #[test]
@@ -809,22 +660,12 @@ mod tests {
         let mut h = harness();
         h.run();
         let bg = h.state().session.doc().root[0].id().to_string();
-        let _ = h
-            .state_mut()
-            .session
-            .execute(Command::SetActiveLayer { id: bg });
+        let _ = h.state_mut().session.execute(Command::SetActiveLayer { id: bg });
         h.state_mut().set_color(Rgba::new(1.0, 0.0, 0.0, 1.0));
         key(&mut h, egui::Key::G, egui::Modifiers::NONE);
         click(&mut h, pos2(600.0, 400.0));
         let d = h.state().canvas.view.screen_to_doc([600.0, 400.0]);
-        let px = h
-            .state()
-            .session
-            .doc()
-            .layer(h.state().session.active())
-            .unwrap()
-            .pixels
-            .get(d[0] as i32, d[1] as i32);
+        let px = h.state().session.doc().layer(h.state().session.active()).unwrap().pixels.get(d[0] as i32, d[1] as i32);
         assert!(px[0] > 0.99 && px[1] < 0.01, "filled red {px:?}");
         h.state_mut().set_color(Rgba::BLACK);
         key(&mut h, egui::Key::I, egui::Modifiers::NONE);
@@ -836,10 +677,7 @@ mod tests {
     /// rather than the white background at a screen point.
     fn active_alpha(h: &Harness<'_, App>, screen: [f32; 2]) -> f32 {
         let app = h.state();
-        let d = app
-            .canvas
-            .view
-            .screen_to_doc([screen[0] as f64, screen[1] as f64]);
+        let d = app.canvas.view.screen_to_doc([screen[0] as f64, screen[1] as f64]);
         let c = app.session.sample_color(d[0] as i32, d[1] as i32).unwrap();
         1.0 - c.g
     }
@@ -857,14 +695,8 @@ mod tests {
         assert!(h.state().canvas.xform.dy > 0.0);
         key(&mut h, egui::Key::Enter, egui::Modifiers::NONE);
         assert!(active_alpha(&h, [600.0, 500.0]) > 0.5, "moved");
-        assert!(
-            active_alpha(&h, [600.0, 400.0]) < 1e-3,
-            "left its old place"
-        );
-        assert!(
-            h.state().session.transform_active(),
-            "a new session starts after Apply"
-        );
+        assert!(active_alpha(&h, [600.0, 400.0]) < 1e-3, "left its old place");
+        assert!(h.state().session.transform_active(), "a new session starts after Apply");
         // Esc abandons a pending move.
         drag_stroke(&mut h, pos2(578.0, 500.0), pos2(578.0, 300.0));
         key(&mut h, egui::Key::Escape, egui::Modifiers::NONE);
@@ -886,16 +718,9 @@ mod tests {
         key(&mut h, egui::Key::V, egui::Modifiers::COMMAND);
         let app = h.state();
         assert_eq!(app.session.doc().root.len(), n + 1);
-        assert_eq!(
-            app.session.doc().find(app.session.active()).unwrap().name(),
-            "Pasted"
-        );
+        assert_eq!(app.session.doc().find(app.session.active()).unwrap().name(), "Pasted");
         key(&mut h, egui::Key::J, egui::Modifiers::COMMAND);
-        assert_eq!(
-            h.state().session.doc().root.len(),
-            n + 2,
-            "Ctrl+J without a selection duplicates"
-        );
+        assert_eq!(h.state().session.doc().root.len(), n + 2, "Ctrl+J without a selection duplicates");
     }
 
     #[test]
@@ -917,10 +742,6 @@ mod tests {
         press(&mut h, to, false);
         h.run();
         let root = &h.state().session.doc().root;
-        assert_eq!(
-            root.last().unwrap().id(),
-            bg,
-            "Background dropped above Layer 1"
-        );
+        assert_eq!(root.last().unwrap().id(), bg, "Background dropped above Layer 1");
     }
 }

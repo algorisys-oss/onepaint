@@ -19,71 +19,20 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     if let Some(p) = app.popover {
         let anchor = pos2(screen.right() - M, M + BAR_H + 8.0);
         let rect = match p {
-            Popover::Menu => popover_at(
-                ctx,
-                "menu",
-                pos2(M, M + BAR_H + 8.0),
-                Align2::LEFT_TOP,
-                |ui| menu(app, ui),
-            ),
-            Popover::Brushes => popover_at(ctx, "brushes", anchor, Align2::RIGHT_TOP, |ui| {
-                brushes(app, ui)
-            }),
-            Popover::Layers => popover_at(ctx, "layers", anchor, Align2::RIGHT_TOP, |ui| {
-                layers(app, ui)
-            }),
-            Popover::Color => {
-                popover_at(ctx, "color", anchor, Align2::RIGHT_TOP, |ui| color(app, ui))
-            }
-            Popover::Selection => popover_at(ctx, "selection", anchor, Align2::RIGHT_TOP, |ui| {
-                selection(app, ui)
-            }),
-            Popover::CanvasSize => popover_at(
-                ctx,
-                "canvas-size",
-                screen.center(),
-                Align2::CENTER_CENTER,
-                |ui| canvas_size(app, ui),
-            ),
-            Popover::ImageSize => popover_at(
-                ctx,
-                "image-size",
-                screen.center(),
-                Align2::CENTER_CENTER,
-                |ui| image_size(app, ui),
-            ),
-            Popover::Recover => popover_at(
-                ctx,
-                "recover",
-                screen.center(),
-                Align2::CENTER_CENTER,
-                |ui| recover(app, ui),
-            ),
-            Popover::Fill => popover_at(ctx, "fill", anchor, Align2::RIGHT_TOP, |ui| {
-                fill_options(app, ui)
-            }),
-            Popover::NewDoc => popover_at(
-                ctx,
-                "newdoc",
-                screen.center(),
-                Align2::CENTER_CENTER,
-                |ui| new_doc(app, ui),
-            ),
-            Popover::Confirm => popover_at(
-                ctx,
-                "confirm",
-                screen.center(),
-                Align2::CENTER_CENTER,
-                |ui| confirm(app, ui),
-            ),
+            Popover::Menu => popover_at(ctx, "menu", pos2(M, M + BAR_H + 8.0), Align2::LEFT_TOP, |ui| menu(app, ui)),
+            Popover::Brushes => popover_at(ctx, "brushes", anchor, Align2::RIGHT_TOP, |ui| brushes(app, ui)),
+            Popover::Layers => popover_at(ctx, "layers", anchor, Align2::RIGHT_TOP, |ui| layers(app, ui)),
+            Popover::Color => popover_at(ctx, "color", anchor, Align2::RIGHT_TOP, |ui| color(app, ui)),
+            Popover::Selection => popover_at(ctx, "selection", anchor, Align2::RIGHT_TOP, |ui| selection(app, ui)),
+            Popover::CanvasSize => popover_at(ctx, "canvas-size", screen.center(), Align2::CENTER_CENTER, |ui| canvas_size(app, ui)),
+            Popover::ImageSize => popover_at(ctx, "image-size", screen.center(), Align2::CENTER_CENTER, |ui| image_size(app, ui)),
+            Popover::Recover => popover_at(ctx, "recover", screen.center(), Align2::CENTER_CENTER, |ui| recover(app, ui)),
+            Popover::Fill => popover_at(ctx, "fill", anchor, Align2::RIGHT_TOP, |ui| fill_options(app, ui)),
+            Popover::NewDoc => popover_at(ctx, "newdoc", screen.center(), Align2::CENTER_CENTER, |ui| new_doc(app, ui)),
+            Popover::Confirm => popover_at(ctx, "confirm", screen.center(), Align2::CENTER_CENTER, |ui| confirm(app, ui)),
         };
         // Click outside closes the popover (the top bar handles its own toggles).
-        let pressed = ctx.input(|i| {
-            i.pointer
-                .any_pressed()
-                .then(|| i.pointer.interact_pos())
-                .flatten()
-        });
+        let pressed = ctx.input(|i| i.pointer.any_pressed().then(|| i.pointer.interact_pos()).flatten());
         if let Some(p) = pressed
             && !rect.contains(p)
             && p.y > M + BAR_H + 4.0
@@ -99,29 +48,19 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
 }
 
 fn transform_bar(app: &mut App, ctx: &egui::Context, screen: egui::Rect) {
-    Area::new(Id::new("transform-bar"))
-        .order(Order::Middle)
-        .pivot(Align2::CENTER_TOP)
-        .fixed_pos(pos2(screen.center().x, M))
-        .show(ctx, |ui| {
+    Area::new(Id::new("transform-bar")).order(Order::Middle).pivot(Align2::CENTER_TOP).fixed_pos(pos2(screen.center().x, M)).show(
+        ctx,
+        |ui| {
             glass_frame(ui).show(ui, |ui| {
                 ui.set_height(BAR_H - 12.0);
                 ui.horizontal_centered(|ui| {
                     let s = &mut app.session;
                     let c = &mut app.canvas;
-                    if icons::button(ui, "arrow-left-right", 32.0, false, "Flip horizontal")
-                        .clicked()
-                    {
-                        c.xform_about_centre(s, |p| onepaint_engine::transform::TransformParams {
-                            sx: -p.sx,
-                            ..p
-                        });
+                    if icons::button(ui, "arrow-left-right", 32.0, false, "Flip horizontal").clicked() {
+                        c.xform_about_centre(s, |p| onepaint_engine::transform::TransformParams { sx: -p.sx, ..p });
                     }
                     if icons::button(ui, "arrow-up-down", 32.0, false, "Flip vertical").clicked() {
-                        c.xform_about_centre(s, |p| onepaint_engine::transform::TransformParams {
-                            sy: -p.sy,
-                            ..p
-                        });
+                        c.xform_about_centre(s, |p| onepaint_engine::transform::TransformParams { sy: -p.sy, ..p });
                     }
                     if icons::button(ui, "rotate-ccw", 32.0, false, "Rotate −15°").clicked() {
                         c.xform_about_centre(s, |p| onepaint_engine::transform::TransformParams {
@@ -144,16 +83,11 @@ fn transform_bar(app: &mut App, ctx: &egui::Context, screen: egui::Rect) {
                     }
                 });
             });
-        });
+        },
+    );
 }
 
-fn popover_at(
-    ctx: &egui::Context,
-    id: &str,
-    pos: egui::Pos2,
-    align: Align2,
-    body: impl FnOnce(&mut Ui),
-) -> egui::Rect {
+fn popover_at(ctx: &egui::Context, id: &str, pos: egui::Pos2, align: Align2, body: impl FnOnce(&mut Ui)) -> egui::Rect {
     Area::new(Id::new(("popover", id)))
         .order(Order::Foreground)
         .pivot(align)
@@ -163,49 +97,26 @@ fn popover_at(
 }
 
 fn toggle_popover(app: &mut App, p: Popover) {
-    app.popover = if app.popover == Some(p) {
-        None
-    } else {
-        Some(p)
-    };
+    app.popover = if app.popover == Some(p) { None } else { Some(p) };
 }
 
 fn top_bar(app: &mut App, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
-    Area::new(Id::new("topbar-left"))
-        .order(Order::Middle)
-        .fixed_pos(pos2(M, M))
-        .show(ctx, |ui| {
-            glass_frame(ui).show(ui, |ui| {
-                ui.set_height(BAR_H - 12.0);
-                ui.horizontal_centered(|ui| {
-                    if icons::button(
-                        ui,
-                        "ellipsis",
-                        32.0,
-                        app.popover == Some(Popover::Menu),
-                        "Menu",
-                    )
-                    .clicked()
-                    {
-                        toggle_popover(app, Popover::Menu);
-                    }
-                    ui.label(
-                        RichText::new("onepaint")
-                            .font(theme::semibold(14.0))
-                            .color(t.fg),
-                    );
-                    widgets::vline(ui, 24.0);
-                    let name = format!(
-                        "{}{}",
-                        app.session.doc().name,
-                        if app.dirty() { " •" } else { "" }
-                    );
-                    ui.label(RichText::new(name).color(t.fg_muted));
-                    ui.add_space(4.0);
-                });
+    Area::new(Id::new("topbar-left")).order(Order::Middle).fixed_pos(pos2(M, M)).show(ctx, |ui| {
+        glass_frame(ui).show(ui, |ui| {
+            ui.set_height(BAR_H - 12.0);
+            ui.horizontal_centered(|ui| {
+                if icons::button(ui, "ellipsis", 32.0, app.popover == Some(Popover::Menu), "Menu").clicked() {
+                    toggle_popover(app, Popover::Menu);
+                }
+                ui.label(RichText::new("onepaint").font(theme::semibold(14.0)).color(t.fg));
+                widgets::vline(ui, 24.0);
+                let name = format!("{}{}", app.session.doc().name, if app.dirty() { " •" } else { "" });
+                ui.label(RichText::new(name).color(t.fg_muted));
+                ui.add_space(4.0);
             });
         });
+    });
     Area::new(Id::new("topbar-right"))
         .order(Order::Middle)
         .pivot(Align2::RIGHT_TOP)
@@ -215,9 +126,7 @@ fn top_bar(app: &mut App, ctx: &egui::Context) {
                 ui.set_height(BAR_H - 12.0);
                 ui.horizontal_centered(|ui| {
                     let tool = app.session.tool();
-                    if icons::button(ui, "move", 32.0, tool == Tool::Move, "Move / transform (V)")
-                        .clicked()
-                    {
+                    if icons::button(ui, "move", 32.0, tool == Tool::Move, "Move / transform (V)").clicked() {
                         app.set_tool(Tool::Move);
                     }
                     let selecting = is_select_tool(tool);
@@ -230,69 +139,37 @@ fn top_bar(app: &mut App, ctx: &egui::Context) {
                             app.set_tool(t);
                         }
                     }
-                    if icons::button(ui, "paint-bucket", 32.0, tool == Tool::Fill, "Fill (G)")
-                        .clicked()
-                    {
+                    if icons::button(ui, "paint-bucket", 32.0, tool == Tool::Fill, "Fill (G)").clicked() {
                         if tool == Tool::Fill {
                             toggle_popover(app, Popover::Fill);
                         }
                         app.set_tool(Tool::Fill);
                     }
-                    if icons::button(
-                        ui,
-                        "pipette",
-                        32.0,
-                        tool == Tool::Eyedropper,
-                        "Eyedropper (I)",
-                    )
-                    .clicked()
-                    {
+                    if icons::button(ui, "pipette", 32.0, tool == Tool::Eyedropper, "Eyedropper (I)").clicked() {
                         app.set_tool(Tool::Eyedropper);
                     }
                     widgets::vline(ui, 24.0);
-                    if icons::button(ui, "brush", 32.0, tool == Tool::Brush, "Brush (B)").clicked()
-                    {
+                    if icons::button(ui, "brush", 32.0, tool == Tool::Brush, "Brush (B)").clicked() {
                         if tool == Tool::Brush {
                             toggle_popover(app, Popover::Brushes);
                         }
                         app.set_tool(Tool::Brush);
                     }
-                    if icons::button(ui, "eraser", 32.0, tool == Tool::Eraser, "Eraser (E)")
-                        .clicked()
-                    {
+                    if icons::button(ui, "eraser", 32.0, tool == Tool::Eraser, "Eraser (E)").clicked() {
                         if tool == Tool::Eraser {
                             toggle_popover(app, Popover::Brushes);
                         }
                         app.set_tool(Tool::Eraser);
                     }
-                    if icons::button(
-                        ui,
-                        "sliders-horizontal",
-                        32.0,
-                        app.popover == Some(Popover::Brushes),
-                        "Brush library",
-                    )
-                    .clicked()
-                    {
+                    if icons::button(ui, "sliders-horizontal", 32.0, app.popover == Some(Popover::Brushes), "Brush library").clicked() {
                         toggle_popover(app, Popover::Brushes);
                     }
                     widgets::vline(ui, 24.0);
-                    if icons::button(
-                        ui,
-                        "layers",
-                        32.0,
-                        app.popover == Some(Popover::Layers),
-                        "Layers",
-                    )
-                    .clicked()
-                    {
+                    if icons::button(ui, "layers", 32.0, app.popover == Some(Popover::Layers), "Layers").clicked() {
                         toggle_popover(app, Popover::Layers);
                     }
                     let c = app.session.color();
-                    if widgets::swatch(ui, c, 32.0, app.popover == Some(Popover::Color))
-                        .on_hover_text("Colour")
-                        .clicked()
-                    {
+                    if widgets::swatch(ui, c, 32.0, app.popover == Some(Popover::Color)).on_hover_text("Colour").clicked() {
                         toggle_popover(app, Popover::Color);
                     }
                 });
@@ -302,118 +179,76 @@ fn top_bar(app: &mut App, ctx: &egui::Context) {
 
 fn side_rail(app: &mut App, ctx: &egui::Context, screen: egui::Rect) {
     let t = Tokens::get(ctx);
-    Area::new(Id::new("rail"))
-        .order(Order::Middle)
-        .pivot(Align2::LEFT_CENTER)
-        .fixed_pos(pos2(M, screen.center().y))
-        .show(ctx, |ui| {
-            glass_frame(ui).show(ui, |ui| {
-                ui.vertical_centered(|ui| {
-                    ui.spacing_mut().item_spacing.y = 4.0;
-                    let size = app.session.current_brush().size;
-                    // Size on a perceptual (sqrt) scale.
-                    let mut s = (size as f32).sqrt();
-                    if widgets::vslider(ui, &mut s, 1.0..=31.6, 150.0, "Brush size  [ ]").changed()
-                    {
-                        let _ = app.session.execute(Command::SetBrushSize {
-                            size: (s * s).round() as f64,
-                        });
-                        app.canvas.size_flash = 1.0;
+    Area::new(Id::new("rail")).order(Order::Middle).pivot(Align2::LEFT_CENTER).fixed_pos(pos2(M, screen.center().y)).show(ctx, |ui| {
+        glass_frame(ui).show(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.spacing_mut().item_spacing.y = 4.0;
+                let size = app.session.current_brush().size;
+                // Size on a perceptual (sqrt) scale.
+                let mut s = (size as f32).sqrt();
+                if widgets::vslider(ui, &mut s, 1.0..=31.6, 150.0, "Brush size  [ ]").changed() {
+                    let _ = app.session.execute(Command::SetBrushSize { size: (s * s).round() as f64 });
+                    app.canvas.size_flash = 1.0;
+                }
+                ui.label(RichText::new(format!("{}", app.session.current_brush().size.round())).font(theme::mono(10.5)).color(t.fg_faint));
+                ui.add_space(6.0);
+                let mut o = app.session.current_brush().opacity as f32;
+                if widgets::vslider(ui, &mut o, 0.01..=1.0, 120.0, "Brush opacity").changed() {
+                    let _ = app.session.execute(Command::SetBrushOpacity { opacity: o as f64 });
+                }
+                ui.label(RichText::new(format!("{}%", (o * 100.0).round())).font(theme::mono(10.5)).color(t.fg_faint));
+                ui.add_space(6.0);
+                ui.add_enabled_ui(app.session.can_undo(), |ui| {
+                    if icons::button(ui, "undo-2", 32.0, false, "Undo (Ctrl+Z)").clicked() {
+                        let _ = app.session.execute(Command::Undo);
                     }
-                    ui.label(
-                        RichText::new(format!("{}", app.session.current_brush().size.round()))
-                            .font(theme::mono(10.5))
-                            .color(t.fg_faint),
-                    );
-                    ui.add_space(6.0);
-                    let mut o = app.session.current_brush().opacity as f32;
-                    if widgets::vslider(ui, &mut o, 0.01..=1.0, 120.0, "Brush opacity").changed() {
-                        let _ = app
-                            .session
-                            .execute(Command::SetBrushOpacity { opacity: o as f64 });
+                });
+                ui.add_enabled_ui(app.session.can_redo(), |ui| {
+                    if icons::button(ui, "redo-2", 32.0, false, "Redo (Ctrl+Shift+Z)").clicked() {
+                        let _ = app.session.execute(Command::Redo);
                     }
-                    ui.label(
-                        RichText::new(format!("{}%", (o * 100.0).round()))
-                            .font(theme::mono(10.5))
-                            .color(t.fg_faint),
-                    );
-                    ui.add_space(6.0);
-                    ui.add_enabled_ui(app.session.can_undo(), |ui| {
-                        if icons::button(ui, "undo-2", 32.0, false, "Undo (Ctrl+Z)").clicked() {
-                            let _ = app.session.execute(Command::Undo);
-                        }
-                    });
-                    ui.add_enabled_ui(app.session.can_redo(), |ui| {
-                        if icons::button(ui, "redo-2", 32.0, false, "Redo (Ctrl+Shift+Z)").clicked()
-                        {
-                            let _ = app.session.execute(Command::Redo);
-                        }
-                    });
                 });
             });
         });
+    });
 }
 
 fn status(app: &mut App, ctx: &egui::Context, screen: egui::Rect) {
     let t = Tokens::get(ctx);
-    Area::new(Id::new("status"))
-        .order(Order::Middle)
-        .pivot(Align2::LEFT_BOTTOM)
-        .fixed_pos(pos2(M, screen.bottom() - M))
-        .show(ctx, |ui| {
-            glass_frame(ui).show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let v = &app.canvas.view;
-                    let zoom = format!("{:.0}%", v.scale * 100.0);
-                    if ui
+    Area::new(Id::new("status")).order(Order::Middle).pivot(Align2::LEFT_BOTTOM).fixed_pos(pos2(M, screen.bottom() - M)).show(ctx, |ui| {
+        glass_frame(ui).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let v = &app.canvas.view;
+                let zoom = format!("{:.0}%", v.scale * 100.0);
+                if ui
+                    .add(egui::Label::new(RichText::new(zoom).font(theme::mono(11.5)).color(t.fg)).sense(Sense::click()))
+                    .on_hover_text("Fit (Ctrl+0)")
+                    .clicked()
+                {
+                    app.canvas.view.fit();
+                }
+                let deg = app.canvas.view.rotation.to_degrees().rem_euclid(360.0);
+                if deg.abs() > 0.05
+                    && ui
                         .add(
-                            egui::Label::new(
-                                RichText::new(zoom).font(theme::mono(11.5)).color(t.fg),
-                            )
-                            .sense(Sense::click()),
-                        )
-                        .on_hover_text("Fit (Ctrl+0)")
-                        .clicked()
-                    {
-                        app.canvas.view.fit();
-                    }
-                    let deg = app.canvas.view.rotation.to_degrees().rem_euclid(360.0);
-                    if deg.abs() > 0.05
-                        && ui
-                            .add(
-                                egui::Label::new(
-                                    RichText::new(format!("{deg:.0}°"))
-                                        .font(theme::mono(11.5))
-                                        .color(t.fg_muted),
-                                )
+                            egui::Label::new(RichText::new(format!("{deg:.0}°")).font(theme::mono(11.5)).color(t.fg_muted))
                                 .sense(Sense::click()),
-                            )
-                            .on_hover_text("Reset rotation")
-                            .clicked()
-                    {
-                        let c = [
-                            app.canvas.view.view_size[0] / 2.0,
-                            app.canvas.view.view_size[1] / 2.0,
-                        ];
-                        let r = app.canvas.view.rotation;
-                        app.canvas.view.rotate_at(c, -r);
-                    }
-                    let d = app.session.doc();
-                    ui.label(
-                        RichText::new(format!("{}×{}", d.width, d.height))
-                            .font(theme::mono(11.5))
-                            .color(t.fg_faint),
-                    );
-                    if let Some([x, y]) = app.canvas.hover_doc {
-                        ui.label(
-                            RichText::new(format!("{:.0}, {:.0}", x, y))
-                                .font(theme::mono(11.5))
-                                .color(t.fg_faint),
-                        );
-                    }
-                });
+                        )
+                        .on_hover_text("Reset rotation")
+                        .clicked()
+                {
+                    let c = [app.canvas.view.view_size[0] / 2.0, app.canvas.view.view_size[1] / 2.0];
+                    let r = app.canvas.view.rotation;
+                    app.canvas.view.rotate_at(c, -r);
+                }
+                let d = app.session.doc();
+                ui.label(RichText::new(format!("{}×{}", d.width, d.height)).font(theme::mono(11.5)).color(t.fg_faint));
+                if let Some([x, y]) = app.canvas.hover_doc {
+                    ui.label(RichText::new(format!("{:.0}, {:.0}", x, y)).font(theme::mono(11.5)).color(t.fg_faint));
+                }
             });
         });
+    });
 }
 
 fn toast(app: &mut App, ctx: &egui::Context, screen: egui::Rect) {
@@ -467,20 +302,12 @@ fn menu(app: &mut App, ui: &mut Ui) {
     }
     widgets::hairline(ui);
     if widgets::menu_item(ui, Some("maximize-2"), "Canvas size…", "").clicked() {
-        app.size_dialog = (
-            [app.session.doc().width, app.session.doc().height],
-            (1, 1),
-            true,
-        );
+        app.size_dialog = ([app.session.doc().width, app.session.doc().height], (1, 1), true);
         app.popover = Some(Popover::CanvasSize);
         return;
     }
     if widgets::menu_item(ui, Some("image"), "Image size…", "").clicked() {
-        app.size_dialog = (
-            [app.session.doc().width, app.session.doc().height],
-            (1, 1),
-            true,
-        );
+        app.size_dialog = ([app.session.doc().width, app.session.doc().height], (1, 1), true);
         app.popover = Some(Popover::ImageSize);
         return;
     }
@@ -491,67 +318,38 @@ fn menu(app: &mut App, ui: &mut Ui) {
     if widgets::menu_item(ui, Some("zoom-in"), "Actual pixels", "Ctrl+1").clicked() {
         app.canvas.view.actual_pixels();
     }
-    let (icon, label) = if app.theme == onepaint_ui_kit::ThemeKind::Dark {
-        ("sun", "Light theme")
-    } else {
-        ("moon", "Dark theme")
-    };
+    let (icon, label) = if app.theme == onepaint_ui_kit::ThemeKind::Dark { ("sun", "Light theme") } else { ("moon", "Dark theme") };
     if widgets::menu_item(ui, Some(icon), label, "").clicked() {
         app.toggle_theme(ui.ctx());
     }
     widgets::hairline(ui);
     let t = Tokens::get(ui.ctx());
     ui.label(
-        RichText::new(
-            "Space-drag pan · Ctrl+wheel zoom · R-drag rotate · Alt-click pick · Tab hides UI",
-        )
-        .font(theme::medium(10.5))
-        .color(t.fg_faint),
+        RichText::new("Space-drag pan · Ctrl+wheel zoom · R-drag rotate · Alt-click pick · Tab hides UI")
+            .font(theme::medium(10.5))
+            .color(t.fg_faint),
     );
 }
 
 fn new_doc(app: &mut App, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     ui.set_width(320.0);
-    ui.label(
-        RichText::new("New canvas")
-            .font(theme::semibold(16.0))
-            .color(t.fg),
-    );
+    ui.label(RichText::new("New canvas").font(theme::semibold(16.0)).color(t.fg));
     ui.add_space(8.0);
-    for (name, w, h) in [
-        ("Screen", 1920, 1080),
-        ("Square", 2048, 2048),
-        ("Sketch", 2048, 1536),
-        ("A4 · 300 dpi", 2480, 3508),
-        ("4K", 3840, 2160),
-    ] {
+    for (name, w, h) in
+        [("Screen", 1920, 1080), ("Square", 2048, 2048), ("Sketch", 2048, 1536), ("A4 · 300 dpi", 2480, 3508), ("4K", 3840, 2160)]
+    {
         let sel = app.new_doc == [w, h];
-        if widgets::menu_item(
-            ui,
-            if sel { Some("check") } else { None },
-            name,
-            &format!("{w}×{h}"),
-        )
-        .clicked()
-        {
+        if widgets::menu_item(ui, if sel { Some("check") } else { None }, name, &format!("{w}×{h}")).clicked() {
             app.new_doc = [w, h];
         }
     }
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         ui.label(RichText::new("Size").color(t.fg_muted));
-        ui.add(
-            egui::DragValue::new(&mut app.new_doc[0])
-                .range(16..=16384)
-                .suffix(" px"),
-        );
+        ui.add(egui::DragValue::new(&mut app.new_doc[0]).range(16..=16384).suffix(" px"));
         ui.label("×");
-        ui.add(
-            egui::DragValue::new(&mut app.new_doc[1])
-                .range(16..=16384)
-                .suffix(" px"),
-        );
+        ui.add(egui::DragValue::new(&mut app.new_doc[1]).range(16..=16384).suffix(" px"));
     });
     ui.add_space(12.0);
     ui.horizontal(|ui| {
@@ -568,90 +366,48 @@ fn new_doc(app: &mut App, ui: &mut Ui) {
 fn brushes(app: &mut App, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     ui.set_width(300.0);
-    widgets::section_label(
-        ui,
-        if app.session.tool() == Tool::Eraser {
-            "Eraser"
-        } else {
-            "Brushes"
-        },
-    );
+    widgets::section_label(ui, if app.session.tool() == Tool::Eraser { "Eraser" } else { "Brushes" });
     ui.add_space(4.0);
     let current = app.session.current_brush().id.clone();
     let eraser = app.session.tool() == Tool::Eraser;
-    egui::ScrollArea::vertical()
-        .max_height(360.0)
-        .show(ui, |ui| {
-            for p in onepaint_brush::presets()
-                .into_iter()
-                .filter(|p| p.is_eraser() == eraser)
-            {
-                let sel = p.id == current;
-                let (rect, resp) =
-                    ui.allocate_exact_size(vec2(ui.available_width(), 62.0), Sense::click());
-                if sel {
-                    ui.painter().rect_filled(rect, t.radius, t.accent_soft);
-                } else if resp.hovered() {
-                    ui.painter().rect_filled(rect, t.radius, t.hover);
-                }
-                ui.painter().text(
-                    rect.left_top() + vec2(10.0, 8.0),
-                    Align2::LEFT_TOP,
-                    &p.name,
-                    theme::medium(12.5),
-                    if sel { t.accent } else { t.fg },
-                );
-                ui.painter().text(
-                    rect.right_top() + vec2(-10.0, 9.0),
-                    Align2::RIGHT_TOP,
-                    &p.category,
-                    theme::medium(10.5),
-                    t.fg_faint,
-                );
-                let tex = app.thumbs.brush(ui.ctx(), &p);
-                let img = egui::Rect::from_min_size(
-                    rect.left_top() + vec2(6.0, 18.0),
-                    vec2(rect.width() - 12.0, 44.0),
-                );
-                egui::Image::new(&tex).tint(t.fg).paint_at(ui, img);
-                if resp.clicked() {
-                    let _ = app.session.execute(Command::SetBrush {
-                        preset_id: p.id.clone(),
-                    });
-                }
+    egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+        for p in onepaint_brush::presets().into_iter().filter(|p| p.is_eraser() == eraser) {
+            let sel = p.id == current;
+            let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 62.0), Sense::click());
+            if sel {
+                ui.painter().rect_filled(rect, t.radius, t.accent_soft);
+            } else if resp.hovered() {
+                ui.painter().rect_filled(rect, t.radius, t.hover);
             }
-        });
+            ui.painter().text(
+                rect.left_top() + vec2(10.0, 8.0),
+                Align2::LEFT_TOP,
+                &p.name,
+                theme::medium(12.5),
+                if sel { t.accent } else { t.fg },
+            );
+            ui.painter().text(rect.right_top() + vec2(-10.0, 9.0), Align2::RIGHT_TOP, &p.category, theme::medium(10.5), t.fg_faint);
+            let tex = app.thumbs.brush(ui.ctx(), &p);
+            let img = egui::Rect::from_min_size(rect.left_top() + vec2(6.0, 18.0), vec2(rect.width() - 12.0, 44.0));
+            egui::Image::new(&tex).tint(t.fg).paint_at(ui, img);
+            if resp.clicked() {
+                let _ = app.session.execute(Command::SetBrush { preset_id: p.id.clone() });
+            }
+        }
+    });
     widgets::hairline(ui);
     let b = app.session.current_brush().clone();
     let mut size = b.size as f32;
-    if widgets::slider_row(ui, "Size", &mut size, 1.0..=500.0, |v| {
-        format!("{:.0} px", v)
-    })
-    .changed()
-    {
-        let _ = app.session.execute(Command::SetBrushSize {
-            size: size.round() as f64,
-        });
+    if widgets::slider_row(ui, "Size", &mut size, 1.0..=500.0, |v| format!("{:.0} px", v)).changed() {
+        let _ = app.session.execute(Command::SetBrushSize { size: size.round() as f64 });
     }
     let mut op = b.opacity as f32;
-    if widgets::slider_row(ui, "Opacity", &mut op, 0.01..=1.0, |v| {
-        format!("{:.0}%", v * 100.0)
-    })
-    .changed()
-    {
-        let _ = app
-            .session
-            .execute(Command::SetBrushOpacity { opacity: op as f64 });
+    if widgets::slider_row(ui, "Opacity", &mut op, 0.01..=1.0, |v| format!("{:.0}%", v * 100.0)).changed() {
+        let _ = app.session.execute(Command::SetBrushOpacity { opacity: op as f64 });
     }
     let mut flow = b.flow as f32;
-    if widgets::slider_row(ui, "Flow", &mut flow, 0.01..=1.0, |v| {
-        format!("{:.0}%", v * 100.0)
-    })
-    .changed()
-    {
-        let _ = app
-            .session
-            .execute(Command::SetBrushFlow { flow: flow as f64 });
+    if widgets::slider_row(ui, "Flow", &mut flow, 0.01..=1.0, |v| format!("{:.0}%", v * 100.0)).changed() {
+        let _ = app.session.execute(Command::SetBrushFlow { flow: flow as f64 });
     }
 }
 
@@ -670,22 +426,14 @@ fn color(app: &mut App, ui: &mut Ui) {
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         widgets::swatch(ui, app.session.color(), 28.0, false);
-        let r = ui.add(
-            egui::TextEdit::singleline(&mut app.hex)
-                .font(theme::mono(12.5))
-                .desired_width(90.0),
-        );
+        let r = ui.add(egui::TextEdit::singleline(&mut app.hex).font(theme::mono(12.5)).desired_width(90.0));
         if r.changed()
             && let Some(c) = onepaint_color::Rgba::from_hex(&app.hex)
         {
             let _ = app.session.execute(Command::SetColor { rgba: c });
             app.hsv = onepaint_ui_kit::widgets::Hsv::from_rgba(c);
         }
-        ui.label(
-            RichText::new("Alt-click canvas to pick")
-                .font(theme::medium(10.5))
-                .color(t.fg_faint),
-        );
+        ui.label(RichText::new("Alt-click canvas to pick").font(theme::medium(10.5)).color(t.fg_faint));
     });
     if !app.recent.is_empty() {
         ui.add_space(8.0);
@@ -700,10 +448,7 @@ fn color(app: &mut App, ui: &mut Ui) {
     }
     ui.add_space(4.0);
     ui.horizontal_wrapped(|ui| {
-        for hex in [
-            "#000000", "#ffffff", "#e5484d", "#e8862f", "#ddb42c", "#3ec46d", "#4c8dff", "#a06cf0",
-            "#8a8a90",
-        ] {
+        for hex in ["#000000", "#ffffff", "#e5484d", "#e8862f", "#ddb42c", "#3ec46d", "#4c8dff", "#a06cf0", "#8a8a90"] {
             if let Some(c) = onepaint_color::Rgba::from_hex(hex)
                 && widgets::swatch(ui, c, 24.0, false).clicked()
             {
@@ -721,11 +466,7 @@ struct Row {
 
 fn rows(nodes: &[Node], depth: usize, out: &mut Vec<Row>) {
     for n in nodes.iter().rev() {
-        out.push(Row {
-            id: n.id().to_string(),
-            depth,
-            group: n.is_group(),
-        });
+        out.push(Row { id: n.id().to_string(), depth, group: n.is_group() });
         if let Node::Group(g) = n
             && !g.collapsed
         {
@@ -752,194 +493,113 @@ fn layers(app: &mut App, ui: &mut Ui) {
     rows(&app.session.doc().root, 0, &mut list);
     let doc_size = [app.session.doc().width, app.session.doc().height];
     let active = app.session.active().to_string();
-    egui::ScrollArea::vertical()
-        .max_height(340.0)
-        .show(ui, |ui| {
-            let mut row_rects: Vec<(String, egui::Rect)> = Vec::new();
-            let mut drag_stopped = false;
-            for r in &list {
-                let Some(node) = app.session.doc().find(&r.id).cloned() else {
-                    continue;
-                };
-                let sel = r.id == active;
-                let (rect, resp) = ui
-                    .allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click_and_drag());
-                row_rects.push((r.id.clone(), rect));
-                if resp.drag_started() {
-                    app.layer_drag = Some(r.id.clone());
-                }
-                if resp.drag_stopped() {
-                    drag_stopped = true;
-                }
-                if app.layer_drag.as_deref() == Some(r.id.as_str()) {
-                    ui.painter().rect_filled(rect, t.radius, t.hover);
-                }
-                if sel {
-                    ui.painter().rect_filled(rect, t.radius, t.accent_soft);
-                } else if resp.hovered() {
-                    ui.painter().rect_filled(rect, t.radius, t.hover);
-                }
-                let x0 = rect.left() + 6.0 + r.depth as f32 * 14.0;
-                let mut child = ui.new_child(
-                    egui::UiBuilder::new()
-                        .max_rect(egui::Rect::from_min_max(pos2(x0, rect.top()), rect.max))
-                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
-                );
-                let vis = node.visible();
-                if icons::button(
-                    &mut child,
-                    if vis { "eye" } else { "eye-off" },
-                    26.0,
-                    false,
-                    "Visibility",
-                )
-                .clicked()
-                {
+    egui::ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
+        let mut row_rects: Vec<(String, egui::Rect)> = Vec::new();
+        let mut drag_stopped = false;
+        for r in &list {
+            let Some(node) = app.session.doc().find(&r.id).cloned() else {
+                continue;
+            };
+            let sel = r.id == active;
+            let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click_and_drag());
+            row_rects.push((r.id.clone(), rect));
+            if resp.drag_started() {
+                app.layer_drag = Some(r.id.clone());
+            }
+            if resp.drag_stopped() {
+                drag_stopped = true;
+            }
+            if app.layer_drag.as_deref() == Some(r.id.as_str()) {
+                ui.painter().rect_filled(rect, t.radius, t.hover);
+            }
+            if sel {
+                ui.painter().rect_filled(rect, t.radius, t.accent_soft);
+            } else if resp.hovered() {
+                ui.painter().rect_filled(rect, t.radius, t.hover);
+            }
+            let x0 = rect.left() + 6.0 + r.depth as f32 * 14.0;
+            let mut child = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(egui::Rect::from_min_max(pos2(x0, rect.top()), rect.max))
+                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            );
+            let vis = node.visible();
+            if icons::button(&mut child, if vis { "eye" } else { "eye-off" }, 26.0, false, "Visibility").clicked() {
+                let _ = app
+                    .session
+                    .execute(Command::SetLayerProps { id: r.id.clone(), props: LayerProps { visible: Some(!vis), ..Default::default() } });
+            }
+            if r.group {
+                let collapsed = node.as_group().is_some_and(|g| g.collapsed);
+                if icons::button(&mut child, if collapsed { "chevron-right" } else { "chevron-down" }, 22.0, false, "Expand").clicked() {
                     let _ = app.session.execute(Command::SetLayerProps {
                         id: r.id.clone(),
-                        props: LayerProps {
-                            visible: Some(!vis),
-                            ..Default::default()
-                        },
+                        props: LayerProps { collapsed: Some(!collapsed), ..Default::default() },
                     });
                 }
-                if r.group {
-                    let collapsed = node.as_group().is_some_and(|g| g.collapsed);
-                    if icons::button(
-                        &mut child,
-                        if collapsed {
-                            "chevron-right"
-                        } else {
-                            "chevron-down"
-                        },
-                        22.0,
-                        false,
-                        "Expand",
-                    )
-                    .clicked()
-                    {
-                        let _ = app.session.execute(Command::SetLayerProps {
-                            id: r.id.clone(),
-                            props: LayerProps {
-                                collapsed: Some(!collapsed),
-                                ..Default::default()
-                            },
-                        });
-                    }
-                    let (fr, _) = child.allocate_exact_size(vec2(36.0, 34.0), Sense::hover());
-                    icons::paint(&child, fr, "folder-open", 20.0, t.fg_muted);
-                } else if let Some(l) = node.as_layer() {
-                    let tex = app.thumbs.layer(child.ctx(), l, doc_size);
-                    let (tr, _) = child.allocate_exact_size(vec2(44.0, 34.0), Sense::hover());
-                    let sz = tex.size_vec2();
-                    let ir = egui::Rect::from_center_size(tr.center(), sz);
-                    widgets::checker(child.painter(), ir, 4.0);
-                    child.painter().image(
-                        tex.id(),
-                        ir,
-                        egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                        egui::Color32::WHITE,
-                    );
-                    child.painter().rect_stroke(
-                        ir,
-                        2.0,
-                        egui::Stroke::new(1.0, t.border),
-                        egui::StrokeKind::Outside,
-                    );
+                let (fr, _) = child.allocate_exact_size(vec2(36.0, 34.0), Sense::hover());
+                icons::paint(&child, fr, "folder-open", 20.0, t.fg_muted);
+            } else if let Some(l) = node.as_layer() {
+                let tex = app.thumbs.layer(child.ctx(), l, doc_size);
+                let (tr, _) = child.allocate_exact_size(vec2(44.0, 34.0), Sense::hover());
+                let sz = tex.size_vec2();
+                let ir = egui::Rect::from_center_size(tr.center(), sz);
+                widgets::checker(child.painter(), ir, 4.0);
+                child.painter().image(tex.id(), ir, egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
+                child.painter().rect_stroke(ir, 2.0, egui::Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
+            }
+            child.vertical(|ui| {
+                ui.add_space(6.0);
+                let name_color = if vis { t.fg } else { t.fg_faint };
+                ui.label(RichText::new(node.name()).font(theme::medium(12.5)).color(name_color));
+                let mut tags = vec![node.blend_mode().label().to_string()];
+                if node.opacity() < 1.0 {
+                    tags.push(format!("{:.0}%", node.opacity() * 100.0));
                 }
-                child.vertical(|ui| {
-                    ui.add_space(6.0);
-                    let name_color = if vis { t.fg } else { t.fg_faint };
-                    ui.label(
-                        RichText::new(node.name())
-                            .font(theme::medium(12.5))
-                            .color(name_color),
-                    );
-                    let mut tags = vec![node.blend_mode().label().to_string()];
-                    if node.opacity() < 1.0 {
-                        tags.push(format!("{:.0}%", node.opacity() * 100.0));
+                if let Some(l) = node.as_layer() {
+                    if l.clipped {
+                        tags.push("clipped".into());
                     }
-                    if let Some(l) = node.as_layer() {
-                        if l.clipped {
-                            tags.push("clipped".into());
-                        }
-                        if l.alpha_lock {
-                            tags.push("α-lock".into());
-                        }
+                    if l.alpha_lock {
+                        tags.push("α-lock".into());
                     }
-                    ui.label(
-                        RichText::new(tags.join(" · "))
-                            .font(theme::medium(10.5))
-                            .color(t.fg_faint),
-                    );
-                });
-                if resp.clicked() && !sel {
-                    let _ = app
-                        .session
-                        .execute(Command::SetActiveLayer { id: r.id.clone() });
+                }
+                ui.label(RichText::new(tags.join(" · ")).font(theme::medium(10.5)).color(t.fg_faint));
+            });
+            if resp.clicked() && !sel {
+                let _ = app.session.execute(Command::SetActiveLayer { id: r.id.clone() });
+            }
+        }
+        // Drag-and-drop: show where the layer would land; drop on release.
+        if let Some(dragged) = app.layer_drag.clone() {
+            let pointer = ui.input(|i| i.pointer.interact_pos());
+            let target = pointer.and_then(|p| {
+                let clamped = row_rects.first().map_or(p.y, |f| p.y.clamp(f.1.top(), row_rects.last().map_or(p.y, |l| l.1.bottom() - 1.0)));
+                row_rects
+                    .iter()
+                    .find(|(_, r)| clamped >= r.top() && clamped < r.bottom())
+                    .map(|(id, r)| (id.clone(), *r, ((clamped - r.top()) / r.height()).clamp(0.0, 1.0)))
+            });
+            let resolved = target.as_ref().and_then(|(id, _, f)| app.session.resolve_drop(&dragged, id, *f).map(|d| (d, id.clone(), *f)));
+            if let Some(((parent, _), id, frac)) = &resolved
+                && let Some((_, r, _)) = &target
+            {
+                let into = parent.as_deref() == Some(id.as_str());
+                if into {
+                    ui.painter().rect_stroke(*r, t.radius, egui::Stroke::new(2.0, t.accent), egui::StrokeKind::Inside);
+                } else {
+                    let y = if *frac < 0.5 || (app.session.doc().find(id).is_some_and(|n| n.is_group())) { r.top() } else { r.bottom() };
+                    ui.painter().hline(r.x_range(), y, egui::Stroke::new(2.0, t.accent));
                 }
             }
-            // Drag-and-drop: show where the layer would land; drop on release.
-            if let Some(dragged) = app.layer_drag.clone() {
-                let pointer = ui.input(|i| i.pointer.interact_pos());
-                let target = pointer.and_then(|p| {
-                    let clamped = row_rects.first().map_or(p.y, |f| {
-                        p.y.clamp(
-                            f.1.top(),
-                            row_rects.last().map_or(p.y, |l| l.1.bottom() - 1.0),
-                        )
-                    });
-                    row_rects
-                        .iter()
-                        .find(|(_, r)| clamped >= r.top() && clamped < r.bottom())
-                        .map(|(id, r)| {
-                            (
-                                id.clone(),
-                                *r,
-                                ((clamped - r.top()) / r.height()).clamp(0.0, 1.0),
-                            )
-                        })
-                });
-                let resolved = target.as_ref().and_then(|(id, _, f)| {
-                    app.session
-                        .resolve_drop(&dragged, id, *f)
-                        .map(|d| (d, id.clone(), *f))
-                });
-                if let Some(((parent, _), id, frac)) = &resolved
-                    && let Some((_, r, _)) = &target
-                {
-                    let into = parent.as_deref() == Some(id.as_str());
-                    if into {
-                        ui.painter().rect_stroke(
-                            *r,
-                            t.radius,
-                            egui::Stroke::new(2.0, t.accent),
-                            egui::StrokeKind::Inside,
-                        );
-                    } else {
-                        let y = if *frac < 0.5
-                            || (app.session.doc().find(id).is_some_and(|n| n.is_group()))
-                        {
-                            r.top()
-                        } else {
-                            r.bottom()
-                        };
-                        ui.painter()
-                            .hline(r.x_range(), y, egui::Stroke::new(2.0, t.accent));
-                    }
+            if drag_stopped || !ui.input(|i| i.pointer.any_down()) {
+                if let Some(((parent, index), _, _)) = resolved {
+                    let _ = app.session.execute(Command::MoveLayer { id: dragged, parent, index });
                 }
-                if drag_stopped || !ui.input(|i| i.pointer.any_down()) {
-                    if let Some(((parent, index), _, _)) = resolved {
-                        let _ = app.session.execute(Command::MoveLayer {
-                            id: dragged,
-                            parent,
-                            index,
-                        });
-                    }
-                    app.layer_drag = None;
-                }
+                app.layer_drag = None;
             }
-        });
+        }
+    });
     widgets::hairline(ui);
     // Active layer properties.
     let Some(node) = app.session.doc().find(&active).cloned() else {
@@ -952,46 +612,28 @@ fn layers(app: &mut App, ui: &mut Ui) {
         if r.lost_focus() && name != node.name() {
             let _ = app.session.execute(Command::SetLayerProps {
                 id: active.clone(),
-                props: LayerProps {
-                    name: Some(name.clone()),
-                    ..Default::default()
-                },
+                props: LayerProps { name: Some(name.clone()), ..Default::default() },
             });
         }
     });
     let mut op = node.opacity();
-    if widgets::slider_row(ui, "Opacity", &mut op, 0.0..=1.0, |v| {
-        format!("{:.0}%", v * 100.0)
-    })
-    .changed()
-    {
-        let _ = app.session.execute(Command::SetLayerProps {
-            id: active.clone(),
-            props: LayerProps {
-                opacity: Some(op),
-                ..Default::default()
-            },
-        });
+    if widgets::slider_row(ui, "Opacity", &mut op, 0.0..=1.0, |v| format!("{:.0}%", v * 100.0)).changed() {
+        let _ = app
+            .session
+            .execute(Command::SetLayerProps { id: active.clone(), props: LayerProps { opacity: Some(op), ..Default::default() } });
     }
     ui.horizontal(|ui| {
         ui.label(RichText::new("Blend").color(t.fg_muted));
         let mut mode = node.blend_mode();
-        egui::ComboBox::from_id_salt("blend")
-            .selected_text(mode.label())
-            .width(160.0)
-            .show_ui(ui, |ui| {
-                for m in BlendMode::LAYER_MODES {
-                    ui.selectable_value(&mut mode, m, m.label());
-                }
-            });
+        egui::ComboBox::from_id_salt("blend").selected_text(mode.label()).width(160.0).show_ui(ui, |ui| {
+            for m in BlendMode::LAYER_MODES {
+                ui.selectable_value(&mut mode, m, m.label());
+            }
+        });
         if mode != node.blend_mode() {
-            let _ = app.session.execute(Command::SetLayerProps {
-                id: active.clone(),
-                props: LayerProps {
-                    blend_mode: Some(mode),
-                    ..Default::default()
-                },
-            });
+            let _ = app
+                .session
+                .execute(Command::SetLayerProps { id: active.clone(), props: LayerProps { blend_mode: Some(mode), ..Default::default() } });
         }
     });
     if let Some(l) = node.as_layer() {
@@ -1000,20 +642,14 @@ fn layers(app: &mut App, ui: &mut Ui) {
             if widgets::toggle(ui, &mut clip, "Clip").changed() {
                 let _ = app.session.execute(Command::SetLayerProps {
                     id: active.clone(),
-                    props: LayerProps {
-                        clipped: Some(clip),
-                        ..Default::default()
-                    },
+                    props: LayerProps { clipped: Some(clip), ..Default::default() },
                 });
             }
             let mut al = l.alpha_lock;
             if widgets::toggle(ui, &mut al, "Alpha lock").changed() {
                 let _ = app.session.execute(Command::SetLayerProps {
                     id: active.clone(),
-                    props: LayerProps {
-                        alpha_lock: Some(al),
-                        ..Default::default()
-                    },
+                    props: LayerProps { alpha_lock: Some(al), ..Default::default() },
                 });
             }
         });
@@ -1023,46 +659,24 @@ fn layers(app: &mut App, ui: &mut Ui) {
         let path = app.session.doc().path_of(&active).unwrap_or_default();
         let idx = path.last().copied().unwrap_or(0);
         let parent = app.session.doc().parent_of(&active).flatten();
-        let siblings = app
-            .session
-            .doc()
-            .children(parent.as_deref())
-            .map_or(0, |c| c.len());
+        let siblings = app.session.doc().children(parent.as_deref()).map_or(0, |c| c.len());
         if icons::button(ui, "chevron-up", 28.0, false, "Move up").clicked() && idx + 1 < siblings {
-            let _ = app.session.execute(Command::MoveLayer {
-                id: active.clone(),
-                parent: parent.clone(),
-                index: idx + 1,
-            });
+            let _ = app.session.execute(Command::MoveLayer { id: active.clone(), parent: parent.clone(), index: idx + 1 });
         }
         if icons::button(ui, "chevron-down", 28.0, false, "Move down").clicked() && idx > 0 {
-            let _ = app.session.execute(Command::MoveLayer {
-                id: active.clone(),
-                parent: parent.clone(),
-                index: idx - 1,
-            });
+            let _ = app.session.execute(Command::MoveLayer { id: active.clone(), parent: parent.clone(), index: idx - 1 });
         }
         if icons::button(ui, "copy", 28.0, false, "Duplicate").clicked() {
-            let _ = app
-                .session
-                .execute(Command::DuplicateLayer { id: active.clone() });
+            let _ = app.session.execute(Command::DuplicateLayer { id: active.clone() });
         }
         if !node.is_group() && icons::button(ui, "blend", 28.0, false, "Merge down").clicked() {
-            let _ = app
-                .session
-                .execute(Command::MergeDown { id: active.clone() });
+            let _ = app.session.execute(Command::MergeDown { id: active.clone() });
         }
-        if !node.is_group()
-            && icons::button(ui, "brush-cleaning", 28.0, false, "Clear layer").clicked()
-        {
-            let _ = app
-                .session
-                .execute(Command::ClearLayer { id: active.clone() });
+        if !node.is_group() && icons::button(ui, "brush-cleaning", 28.0, false, "Clear layer").clicked() {
+            let _ = app.session.execute(Command::ClearLayer { id: active.clone() });
         }
         if icons::button(ui, "trash", 28.0, false, "Delete").clicked() {
-            let _ = app
-                .session
-                .execute(Command::DeleteLayer { id: active.clone() });
+            let _ = app.session.execute(Command::DeleteLayer { id: active.clone() });
         }
     });
 }
@@ -1075,19 +689,9 @@ fn confirm(app: &mut App, ui: &mut Ui) {
         return;
     };
     ui.set_width(340.0);
-    ui.label(
-        RichText::new("Unsaved changes")
-            .font(theme::semibold(16.0))
-            .color(t.fg),
-    );
+    ui.label(RichText::new("Unsaved changes").font(theme::semibold(16.0)).color(t.fg));
     ui.add_space(4.0);
-    ui.label(
-        RichText::new(format!(
-            "Save “{}” before continuing?",
-            app.session.doc().name
-        ))
-        .color(t.fg_muted),
-    );
+    ui.label(RichText::new(format!("Save “{}” before continuing?", app.session.doc().name)).color(t.fg_muted));
     ui.add_space(12.0);
     ui.horizontal(|ui| {
         if widgets::primary_button(ui, "Save", 90.0).clicked() {
@@ -1107,14 +711,7 @@ fn confirm(app: &mut App, ui: &mut Ui) {
 }
 
 pub fn is_select_tool(t: Tool) -> bool {
-    matches!(
-        t,
-        Tool::SelectRect
-            | Tool::SelectEllipse
-            | Tool::SelectLasso
-            | Tool::SelectPoly
-            | Tool::SelectWand
-    )
+    matches!(t, Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectPoly | Tool::SelectWand)
 }
 
 fn select_icon(t: Tool) -> &'static str {
@@ -1135,15 +732,9 @@ fn segmented(ui: &mut Ui, labels: &[&str], selected: usize) -> Option<usize> {
         ui.spacing_mut().item_spacing.x = 2.0;
         for (i, l) in labels.iter().enumerate() {
             let sel = i == selected;
-            let text = RichText::new(*l).font(theme::medium(12.0)).color(if sel {
-                t.on_accent
-            } else {
-                t.fg_muted
-            });
-            let b = egui::Button::new(text)
-                .fill(if sel { t.accent } else { t.field })
-                .corner_radius(t.radius_sm)
-                .min_size(vec2(62.0, 26.0));
+            let text = RichText::new(*l).font(theme::medium(12.0)).color(if sel { t.on_accent } else { t.fg_muted });
+            let b =
+                egui::Button::new(text).fill(if sel { t.accent } else { t.field }).corner_radius(t.radius_sm).min_size(vec2(62.0, 26.0));
             if ui.add(b).clicked() {
                 clicked = Some(i);
             }
@@ -1164,15 +755,7 @@ fn selection(app: &mut App, ui: &mut Ui) {
             (Tool::SelectPoly, "Polygon"),
             (Tool::SelectWand, "Magic wand (W)"),
         ] {
-            if icons::button(
-                ui,
-                select_icon(tool),
-                36.0,
-                app.session.tool() == tool,
-                name,
-            )
-            .clicked()
-            {
+            if icons::button(ui, select_icon(tool), 36.0, app.session.tool() == tool, name).clicked() {
                 app.set_tool(tool);
             }
         }
@@ -1184,26 +767,15 @@ fn selection(app: &mut App, ui: &mut Ui) {
         onepaint_engine::SelectMode::Subtract,
         onepaint_engine::SelectMode::Intersect,
     ];
-    let cur = modes
-        .iter()
-        .position(|m| *m == app.canvas.options.select_mode)
-        .unwrap_or(0);
+    let cur = modes.iter().position(|m| *m == app.canvas.options.select_mode).unwrap_or(0);
     if let Some(i) = segmented(ui, &["New", "Add", "Subtract", "Intersect"], cur) {
         app.canvas.options.select_mode = modes[i];
     }
-    ui.label(
-        RichText::new("Shift adds · Alt subtracts · Shift+Alt intersects")
-            .font(theme::medium(10.5))
-            .color(t.fg_faint),
-    );
+    ui.label(RichText::new("Shift adds · Alt subtracts · Shift+Alt intersects").font(theme::medium(10.5)).color(t.fg_faint));
     if app.session.tool() == Tool::SelectWand {
         ui.add_space(4.0);
         let mut tol = app.canvas.options.wand_tolerance * 100.0;
-        if widgets::slider_row(ui, "Tolerance", &mut tol, 0.0..=100.0, |v| {
-            format!("{v:.0}")
-        })
-        .changed()
-        {
+        if widgets::slider_row(ui, "Tolerance", &mut tol, 0.0..=100.0, |v| format!("{v:.0}")).changed() {
             app.canvas.options.wand_tolerance = tol / 100.0;
         }
         ui.horizontal(|ui| {
@@ -1213,23 +785,15 @@ fn selection(app: &mut App, ui: &mut Ui) {
     }
     if app.session.tool() == Tool::SelectPoly {
         ui.label(
-            RichText::new(
-                "Click to add points · click the first point or Enter to close · Esc cancels",
-            )
-            .font(theme::medium(10.5))
-            .color(t.fg_faint),
+            RichText::new("Click to add points · click the first point or Enter to close · Esc cancels")
+                .font(theme::medium(10.5))
+                .color(t.fg_faint),
         );
     }
     widgets::hairline(ui);
     let mut feather = app.session.feather();
-    if widgets::slider_row(ui, "Feather", &mut feather, 0.0..=50.0, |v| {
-        format!("{v:.0} px")
-    })
-    .changed()
-    {
-        let _ = app.session.execute(Command::SetFeather {
-            radius: feather.round(),
-        });
+    if widgets::slider_row(ui, "Feather", &mut feather, 0.0..=50.0, |v| format!("{v:.0} px")).changed() {
+        let _ = app.session.execute(Command::SetFeather { radius: feather.round() });
     }
     let has = app.session.selection().is_some();
     let mut act = |ui: &mut Ui, icon: &str, label: &str, key: &str, cmd: Command, enabled: bool| {
@@ -1239,74 +803,21 @@ fn selection(app: &mut App, ui: &mut Ui) {
             }
         });
     };
-    act(
-        ui,
-        "maximize-2",
-        "Select all",
-        "Ctrl+A",
-        Command::SelectAll,
-        true,
-    );
+    act(ui, "maximize-2", "Select all", "Ctrl+A", Command::SelectAll, true);
     act(ui, "x", "Deselect", "Ctrl+D", Command::Deselect, has);
-    act(
-        ui,
-        "blend",
-        "Invert",
-        "Ctrl+Shift+I",
-        Command::InvertSelection,
-        has,
-    );
-    act(
-        ui,
-        "plus",
-        "Grow 2 px",
-        "",
-        Command::GrowSelection { delta: 2 },
-        has,
-    );
-    act(
-        ui,
-        "minus",
-        "Shrink 2 px",
-        "",
-        Command::GrowSelection { delta: -2 },
-        has,
-    );
-    act(
-        ui,
-        "circle-dashed",
-        "Smooth",
-        "",
-        Command::SmoothSelection { px: 4.0 },
-        has,
-    );
-    act(
-        ui,
-        "paint-bucket",
-        "Fill with colour",
-        "Alt+Backspace",
-        Command::FillSelection,
-        has,
-    );
-    act(
-        ui,
-        "brush-cleaning",
-        "Clear",
-        "Delete",
-        Command::ClearSelected,
-        true,
-    );
+    act(ui, "blend", "Invert", "Ctrl+Shift+I", Command::InvertSelection, has);
+    act(ui, "plus", "Grow 2 px", "", Command::GrowSelection { delta: 2 }, has);
+    act(ui, "minus", "Shrink 2 px", "", Command::GrowSelection { delta: -2 }, has);
+    act(ui, "circle-dashed", "Smooth", "", Command::SmoothSelection { px: 4.0 }, has);
+    act(ui, "paint-bucket", "Fill with colour", "Alt+Backspace", Command::FillSelection, has);
+    act(ui, "brush-cleaning", "Clear", "Delete", Command::ClearSelected, true);
 }
 
 fn fill_options(app: &mut App, ui: &mut Ui) {
     ui.set_width(260.0);
     widgets::section_label(ui, "Fill");
     let mut tol = app.canvas.options.fill_tolerance * 100.0;
-    if widgets::slider_row(ui, "Tolerance", &mut tol, 0.0..=100.0, |v| {
-        format!("{v:.0}")
-    })
-    .changed()
-    {
+    if widgets::slider_row(ui, "Tolerance", &mut tol, 0.0..=100.0, |v| format!("{v:.0}")).changed() {
         app.canvas.options.fill_tolerance = tol / 100.0;
     }
     let mut grow = app.canvas.options.fill_grow as f32;
@@ -1317,10 +828,7 @@ fn fill_options(app: &mut App, ui: &mut Ui) {
 
 fn size_fields(app: &mut App, ui: &mut Ui, keep_aspect: bool) {
     let t = Tokens::get(ui.ctx());
-    let (old_w, old_h) = (
-        app.session.doc().width as f64,
-        app.session.doc().height as f64,
-    );
+    let (old_w, old_h) = (app.session.doc().width as f64, app.session.doc().height as f64);
     let [mut w, mut h] = app.size_dialog.0;
     ui.horizontal(|ui| {
         ui.label(RichText::new("Size").color(t.fg_muted));
@@ -1352,16 +860,8 @@ fn dialog_buttons(app: &mut App, ui: &mut Ui, apply: Command) {
 fn canvas_size(app: &mut App, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     ui.set_width(320.0);
-    ui.label(
-        RichText::new("Canvas size")
-            .font(theme::semibold(16.0))
-            .color(t.fg),
-    );
-    ui.label(
-        RichText::new("Crops or extends the canvas without resampling.")
-            .font(theme::medium(11.0))
-            .color(t.fg_faint),
-    );
+    ui.label(RichText::new("Canvas size").font(theme::semibold(16.0)).color(t.fg));
+    ui.label(RichText::new("Crops or extends the canvas without resampling.").font(theme::medium(11.0)).color(t.fg_faint));
     ui.add_space(8.0);
     size_fields(app, ui, false);
     ui.add_space(6.0);
@@ -1370,10 +870,8 @@ fn canvas_size(app: &mut App, ui: &mut Ui) {
         ui.horizontal(|ui| {
             for col in 0..3u8 {
                 let sel = app.size_dialog.1 == (col, row);
-                let b = egui::Button::new("")
-                    .fill(if sel { t.accent } else { t.field })
-                    .corner_radius(t.radius_sm)
-                    .min_size(vec2(26.0, 22.0));
+                let b =
+                    egui::Button::new("").fill(if sel { t.accent } else { t.field }).corner_radius(t.radius_sm).min_size(vec2(26.0, 22.0));
                 if ui.add(b).clicked() {
                     app.size_dialog.1 = (col, row);
                 }
@@ -1381,10 +879,7 @@ fn canvas_size(app: &mut App, ui: &mut Ui) {
         });
     }
     let [w, h] = app.size_dialog.0;
-    let (ow, oh) = (
-        app.session.doc().width as i64,
-        app.session.doc().height as i64,
-    );
+    let (ow, oh) = (app.session.doc().width as i64, app.session.doc().height as i64);
     let (col, row) = app.size_dialog.1;
     // Centre offset = round((new - old) / 2), as in happypaint's anchor dialog.
     let off = |new: i64, old: i64, k: u8| match k {
@@ -1393,31 +888,14 @@ fn canvas_size(app: &mut App, ui: &mut Ui) {
         _ => (new - old) as i32,
     };
     let (dx, dy) = (off(w as i64, ow, col), off(h as i64, oh, row));
-    dialog_buttons(
-        app,
-        ui,
-        Command::ResizeCanvas {
-            width: w,
-            height: h,
-            dx,
-            dy,
-        },
-    );
+    dialog_buttons(app, ui, Command::ResizeCanvas { width: w, height: h, dx, dy });
 }
 
 fn image_size(app: &mut App, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     ui.set_width(320.0);
-    ui.label(
-        RichText::new("Image size")
-            .font(theme::semibold(16.0))
-            .color(t.fg),
-    );
-    ui.label(
-        RichText::new("Resamples every layer.")
-            .font(theme::medium(11.0))
-            .color(t.fg_faint),
-    );
+    ui.label(RichText::new("Image size").font(theme::semibold(16.0)).color(t.fg));
+    ui.label(RichText::new("Resamples every layer.").font(theme::medium(11.0)).color(t.fg_faint));
     ui.add_space(8.0);
     let keep = app.size_dialog.2;
     size_fields(app, ui, keep);
@@ -1425,28 +903,14 @@ fn image_size(app: &mut App, ui: &mut Ui) {
     widgets::toggle(ui, &mut k, "Keep aspect ratio");
     app.size_dialog.2 = k;
     let [w, h] = app.size_dialog.0;
-    dialog_buttons(
-        app,
-        ui,
-        Command::ScaleImage {
-            width: w,
-            height: h,
-        },
-    );
+    dialog_buttons(app, ui, Command::ScaleImage { width: w, height: h });
 }
 
 fn recover(app: &mut App, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     ui.set_width(340.0);
-    ui.label(
-        RichText::new("Recover unsaved work?")
-            .font(theme::semibold(16.0))
-            .color(t.fg),
-    );
-    ui.label(
-        RichText::new("onepaint found an autosave from a session that didn't close cleanly.")
-            .color(t.fg_muted),
-    );
+    ui.label(RichText::new("Recover unsaved work?").font(theme::semibold(16.0)).color(t.fg));
+    ui.label(RichText::new("onepaint found an autosave from a session that didn't close cleanly.").color(t.fg_muted));
     ui.add_space(12.0);
     ui.horizontal(|ui| {
         if widgets::primary_button(ui, "Recover", 110.0).clicked()

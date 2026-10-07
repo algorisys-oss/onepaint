@@ -45,19 +45,11 @@ impl Mode {
 
 impl Mask {
     pub fn new(w: u32, h: u32) -> Self {
-        Self {
-            w,
-            h,
-            data: vec![0; (w * h) as usize],
-        }
+        Self { w, h, data: vec![0; (w * h) as usize] }
     }
 
     pub fn full(w: u32, h: u32) -> Self {
-        Self {
-            w,
-            h,
-            data: vec![255; (w * h) as usize],
-        }
+        Self { w, h, data: vec![255; (w * h) as usize] }
     }
 
     pub fn from_vec(w: u32, h: u32, data: Vec<u8>) -> Self {
@@ -104,11 +96,7 @@ impl Mask {
     }
 
     pub fn inverted(&self) -> Mask {
-        Mask {
-            w: self.w,
-            h: self.h,
-            data: self.data.iter().map(|v| 255 - v).collect(),
-        }
+        Mask { w: self.w, h: self.h, data: self.data.iter().map(|v| 255 - v).collect() }
     }
 
     /// Bounding box of non-zero coverage as (x, y, w, h).
@@ -128,64 +116,51 @@ impl Mask {
     }
 
     fn sliding(&self, r: u32, max: bool) -> Mask {
-        let pass =
-            |src: &[u8], len: usize, stride: usize, count: usize, outer: usize, dst: &mut [u8]| {
-                let mut q: VecDeque<usize> = VecDeque::new();
-                for o in 0..count {
-                    let base = o * outer;
-                    q.clear();
-                    let r = r as usize;
-                    let mut next = 0;
-                    for i in 0..len {
-                        let hi = (i + r).min(len - 1);
-                        while next <= hi {
-                            let v = src[base + next * stride];
-                            while let Some(&b) = q.back() {
-                                let bv = src[base + b * stride];
-                                if (max && bv <= v) || (!max && bv >= v) {
-                                    q.pop_back();
-                                } else {
-                                    break;
-                                }
+        let pass = |src: &[u8], len: usize, stride: usize, count: usize, outer: usize, dst: &mut [u8]| {
+            let mut q: VecDeque<usize> = VecDeque::new();
+            for o in 0..count {
+                let base = o * outer;
+                q.clear();
+                let r = r as usize;
+                let mut next = 0;
+                for i in 0..len {
+                    let hi = (i + r).min(len - 1);
+                    while next <= hi {
+                        let v = src[base + next * stride];
+                        while let Some(&b) = q.back() {
+                            let bv = src[base + b * stride];
+                            if (max && bv <= v) || (!max && bv >= v) {
+                                q.pop_back();
+                            } else {
+                                break;
                             }
-                            q.push_back(next);
-                            next += 1;
                         }
-                        while q.front().is_some_and(|&f| f + r < i) {
-                            q.pop_front();
-                        }
-                        dst[base + i * stride] = q.front().map_or(0, |&f| src[base + f * stride]);
+                        q.push_back(next);
+                        next += 1;
                     }
+                    while q.front().is_some_and(|&f| f + r < i) {
+                        q.pop_front();
+                    }
+                    dst[base + i * stride] = q.front().map_or(0, |&f| src[base + f * stride]);
                 }
-            };
+            }
+        };
         let (w, h) = (self.w as usize, self.h as usize);
         let mut tmp = vec![0; w * h];
         pass(&self.data, w, 1, h, w, &mut tmp);
         let mut out = vec![0; w * h];
         pass(&tmp, h, w, w, 1, &mut out);
-        Mask {
-            w: self.w,
-            h: self.h,
-            data: out,
-        }
+        Mask { w: self.w, h: self.h, data: out }
     }
 
     /// Square max filter; the window is clipped at the canvas edge (S:453-462).
     pub fn dilated(&self, r: u32) -> Mask {
-        if r == 0 {
-            self.clone()
-        } else {
-            self.sliding(r.min(200), true)
-        }
+        if r == 0 { self.clone() } else { self.sliding(r.min(200), true) }
     }
 
     /// Square min filter; clipped windows mean the border is not eaten.
     pub fn eroded(&self, r: u32) -> Mask {
-        if r == 0 {
-            self.clone()
-        } else {
-            self.sliding(r.min(200), false)
-        }
+        if r == 0 { self.clone() } else { self.sliding(r.min(200), false) }
     }
 
     /// Separable box blur, applied once, clamp-to-edge (S:377-411).
@@ -195,12 +170,7 @@ impl Mask {
         let win = (2 * r + 1) as f32;
         let mut a: Vec<f32> = self.data.iter().map(|&v| v as f32 / 255.0).collect();
         let mut b = vec![0.0f32; w * h];
-        let blur = |src: &[f32],
-                    dst: &mut [f32],
-                    len: usize,
-                    stride: usize,
-                    count: usize,
-                    outer: usize| {
+        let blur = |src: &[f32], dst: &mut [f32], len: usize, stride: usize, count: usize, outer: usize| {
             for o in 0..count {
                 let base = o * outer;
                 let at = |i: i64| src[base + (i.clamp(0, len as i64 - 1) as usize) * stride];
@@ -213,29 +183,14 @@ impl Mask {
         };
         blur(&a, &mut b, w, 1, h, w);
         blur(&b, &mut a, h, w, w, 1);
-        Mask {
-            w: self.w,
-            h: self.h,
-            data: a
-                .iter()
-                .map(|v| (v.min(1.0) * 255.0).round() as u8)
-                .collect(),
-        }
+        Mask { w: self.w, h: self.h, data: a.iter().map(|v| (v.min(1.0) * 255.0).round() as u8).collect() }
     }
 
     /// Feather then threshold at 128 → a hard mask (S:467-472).
     pub fn smoothed(&self, px: f32) -> Mask {
         let r = px.round().clamp(0.0, 100.0);
         let f = self.feathered(r);
-        Mask {
-            w: self.w,
-            h: self.h,
-            data: f
-                .data
-                .iter()
-                .map(|&v| if v >= 128 { 255 } else { 0 })
-                .collect(),
-        }
+        Mask { w: self.w, h: self.h, data: f.data.iter().map(|&v| if v >= 128 { 255 } else { 0 }).collect() }
     }
 
     /// `n` passes of 4-neighbour dilation of non-zero pixels, confined to `within > 0`.
@@ -271,16 +226,8 @@ pub fn combine(base: Option<&Mask>, src: &Mask, mode: Mode) -> Mask {
     match (mode, base) {
         (Mode::Replace, _) | (Mode::Add, None) => {}
         (Mode::Subtract | Mode::Intersect, None) => out.data.fill(0),
-        (Mode::Add, Some(b)) => out
-            .data
-            .iter_mut()
-            .zip(&b.data)
-            .for_each(|(o, &b)| *o = (*o).max(b)),
-        (Mode::Intersect, Some(b)) => out
-            .data
-            .iter_mut()
-            .zip(&b.data)
-            .for_each(|(o, &b)| *o = (*o).min(b)),
+        (Mode::Add, Some(b)) => out.data.iter_mut().zip(&b.data).for_each(|(o, &b)| *o = (*o).max(b)),
+        (Mode::Intersect, Some(b)) => out.data.iter_mut().zip(&b.data).for_each(|(o, &b)| *o = (*o).min(b)),
         (Mode::Subtract, Some(b)) => out.data.iter_mut().zip(&b.data).for_each(|(o, &b)| {
             *o = match *o {
                 0 => b,

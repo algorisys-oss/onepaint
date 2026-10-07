@@ -3,9 +3,7 @@
 
 use eframe::egui_wgpu::{self, CallbackResources, CallbackTrait, ScreenDescriptor};
 use eframe::wgpu;
-use egui::{
-    Color32, CursorIcon, Event, Key, PointerButton, Pos2, Rect, Sense, Stroke, TouchPhase, pos2,
-};
+use egui::{Color32, CursorIcon, Event, Key, PointerButton, Pos2, Rect, Sense, Stroke, TouchPhase, pos2};
 use onepaint_engine::transform::{Handle, TransformParams};
 use onepaint_engine::view::View;
 use onepaint_engine::{Command, SelectMode, Session, Tool};
@@ -24,11 +22,7 @@ pub fn init_gpu(cc: &eframe::CreationContext) -> bool {
     };
     let gpu = CanvasGpu::new(&rs.device, rs.target_format);
     rs.renderer.write().callback_resources.insert(gpu);
-    log::info!(
-        "canvas GPU: {:?} ({:?})",
-        rs.adapter.get_info().name,
-        rs.adapter.get_info().backend
-    );
+    log::info!("canvas GPU: {:?} ({:?})", rs.adapter.get_info().name, rs.adapter.get_info().backend);
     true
 }
 
@@ -62,12 +56,7 @@ impl CallbackTrait for CanvasCallback {
         Vec::new()
     }
 
-    fn paint(
-        &self,
-        _info: egui::PaintCallbackInfo,
-        pass: &mut wgpu::RenderPass<'static>,
-        res: &CallbackResources,
-    ) {
+    fn paint(&self, _info: egui::PaintCallbackInfo, pass: &mut wgpu::RenderPass<'static>, res: &CallbackResources) {
         if let Some(gpu) = res.get::<CanvasGpu>() {
             gpu.draw(pass);
         }
@@ -76,12 +65,7 @@ impl CallbackTrait for CanvasCallback {
 
 fn rgba(c: Color32) -> [f32; 4] {
     let [r, g, b, a] = c.to_srgba_unmultiplied();
-    [
-        r as f32 / 255.0,
-        g as f32 / 255.0,
-        b as f32 / 255.0,
-        a as f32 / 255.0,
-    ]
+    [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, a as f32 / 255.0]
 }
 
 /// Sticky tool options (happypaint tool-store defaults).
@@ -189,17 +173,9 @@ impl Canvas {
 
     fn stroke_point(&mut self, pos: Pos2, t: f64, force: Option<f32>) -> StrokePoint {
         let d = self.doc_pt(pos);
-        let p = self
-            .pressure
-            .get_or_insert_with(|| PressureProvider::new(PointerKind::Mouse));
+        let p = self.pressure.get_or_insert_with(|| PressureProvider::new(PointerKind::Mouse));
         let pressure = p.pressure(pos.x as f64, pos.y as f64, t, force.map(|f| f as f64));
-        StrokePoint {
-            x: d[0],
-            y: d[1],
-            pressure,
-            t: Some(t),
-            ..Default::default()
-        }
+        StrokePoint { x: d[0], y: d[1], pressure, t: Some(t), ..Default::default() }
     }
 
     /// Finish the polygon lasso (Enter, or a click near the first vertex).
@@ -207,10 +183,7 @@ impl Canvas {
         if let Some((pts, mode)) = self.poly.take()
             && pts.len() > 2
         {
-            let _ = session.execute(Command::SelectShape {
-                contours: vec![pts],
-                mode,
-            });
+            let _ = session.execute(Command::SelectShape { contours: vec![pts], mode });
         }
     }
 
@@ -233,29 +206,17 @@ impl Canvas {
             return Drag::Pan;
         }
         if r {
-            return Drag::Rotate {
-                last_angle: self.angle_to(p),
-            };
+            return Drag::Rotate { last_angle: self.angle_to(p) };
         }
         let tool = session.tool();
         let painting = matches!(tool, Tool::Brush | Tool::Eraser);
         if painting && (button == PointerButton::Secondary || (m.ctrl && m.alt)) {
-            return Drag::Size {
-                start_x: p.x,
-                start_size: session.current_brush().size,
-            };
+            return Drag::Size { start_x: p.x, start_size: session.current_brush().size };
         }
         if button != PointerButton::Primary {
             return Drag::None;
         }
-        let selecting = matches!(
-            tool,
-            Tool::SelectRect
-                | Tool::SelectEllipse
-                | Tool::SelectLasso
-                | Tool::SelectPoly
-                | Tool::SelectWand
-        );
+        let selecting = matches!(tool, Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectPoly | Tool::SelectWand);
         if (m.alt && !selecting) || tool == Tool::Eyedropper {
             self.pick(session, p);
             return Drag::Pick;
@@ -268,19 +229,11 @@ impl Canvas {
             };
             let s = self.view.scale;
             let handle = self.xform.hit(self.doc_f(), b, d, 12.0 / s, 28.0 / s);
-            return Drag::Transform {
-                handle,
-                grab: d,
-                start: self.xform,
-            };
+            return Drag::Transform { handle, grab: d, start: self.xform };
         }
         match tool {
             Tool::Brush | Tool::Eraser => {
-                let kind = if self.last_pen_force.is_some() {
-                    PointerKind::Pen
-                } else {
-                    PointerKind::Mouse
-                };
+                let kind = if self.last_pen_force.is_some() { PointerKind::Pen } else { PointerKind::Mouse };
                 self.pressure = Some(PressureProvider::new(kind));
                 let sp = self.stroke_point(p, time_ms, self.last_pen_force);
                 session.stroke_begin(sp);
@@ -308,15 +261,8 @@ impl Canvas {
                 });
                 Drag::None
             }
-            Tool::SelectRect | Tool::SelectEllipse => Drag::Shape {
-                start: d,
-                end: d,
-                mode,
-            },
-            Tool::SelectLasso => Drag::Lasso {
-                points: vec![d],
-                mode,
-            },
+            Tool::SelectRect | Tool::SelectEllipse => Drag::Shape { start: d, end: d, mode },
+            Tool::SelectLasso => Drag::Lasso { points: vec![d], mode },
             Tool::SelectPoly => {
                 let close_dist = 12.0 / self.view.scale;
                 match &mut self.poly {
@@ -349,17 +295,11 @@ impl Canvas {
             p.dy = p.dy.round();
         }
         self.xform = p;
-        let _ = session.execute(Command::SetTransform {
-            matrix: p.to_affine(self.doc_f()),
-        });
+        let _ = session.execute(Command::SetTransform { matrix: p.to_affine(self.doc_f()) });
     }
 
     /// Apply `f` to the parameters, keeping the transformed box centre in place.
-    pub fn xform_about_centre(
-        &mut self,
-        session: &mut Session,
-        f: impl FnOnce(TransformParams) -> TransformParams,
-    ) {
+    pub fn xform_about_centre(&mut self, session: &mut Session, f: impl FnOnce(TransformParams) -> TransformParams) {
         let Some((_, b)) = session.transform_state() else {
             return;
         };
@@ -372,24 +312,12 @@ impl Canvas {
     }
 
     fn shape_contour(tool: Tool, start: Pt, end: Pt) -> Vec<Pt> {
-        if tool == Tool::SelectEllipse {
-            ellipse_polygon(start, end)
-        } else {
-            rect_polygon(start, end)
-        }
+        if tool == Tool::SelectEllipse { ellipse_polygon(start, end) } else { rect_polygon(start, end) }
     }
 
     /// Draw the canvas into `rect` and handle its input.
     #[allow(clippy::too_many_arguments)]
-    pub fn show(
-        &mut self,
-        ui: &mut egui::Ui,
-        rect: Rect,
-        session: &mut Session,
-        space_held: bool,
-        r_held: bool,
-        gpu: bool,
-    ) {
+    pub fn show(&mut self, ui: &mut egui::Ui, rect: Rect, session: &mut Session, space_held: bool, r_held: bool, gpu: bool) {
         let t = Tokens::get(ui.ctx());
         let ppp = ui.ctx().pixels_per_point();
         self.view.view_size = [rect.width() as f64, rect.height() as f64];
@@ -413,12 +341,7 @@ impl Canvas {
         // Raw events, so a stroke starts on press (no drag threshold) and uses every sample.
         for ev in &events {
             match ev {
-                Event::PointerButton {
-                    pos,
-                    button,
-                    pressed: true,
-                    modifiers: m,
-                } if resp.hovered() && matches!(self.drag, Drag::None) => {
+                Event::PointerButton { pos, button, pressed: true, modifiers: m } if resp.hovered() && matches!(self.drag, Drag::None) => {
                     let p = local(*pos);
                     self.drag = self.press(session, p, *button, *m, time_ms, space_held, r_held);
                     self.last_pos = Some(p);
@@ -443,29 +366,15 @@ impl Canvas {
                             self.view.rotate_at(c, a - last);
                             self.drag = Drag::Rotate { last_angle: a };
                         }
-                        Drag::Size {
-                            start_x,
-                            start_size,
-                        } => {
-                            let size = (*start_size + (p.x - *start_x) as f64 / self.view.scale)
-                                .clamp(1.0, 1000.0);
+                        Drag::Size { start_x, start_size } => {
+                            let size = (*start_size + (p.x - *start_x) as f64 / self.view.scale).clamp(1.0, 1000.0);
                             let _ = session.execute(Command::SetBrushSize { size });
                             self.size_flash = 1.0;
                         }
                         Drag::Pick => self.pick(session, p),
-                        Drag::Shape { start, end, .. } => {
-                            *end = if shift {
-                                constrain_square(*start, d)
-                            } else {
-                                d
-                            }
-                        }
+                        Drag::Shape { start, end, .. } => *end = if shift { constrain_square(*start, d) } else { d },
                         Drag::Lasso { points, .. } => points.push(d),
-                        Drag::Transform {
-                            handle,
-                            grab,
-                            start,
-                        } => {
+                        Drag::Transform { handle, grab, start } => {
                             let (handle, grab, start) = (*handle, *grab, *start);
                             if let Some((_, b)) = session.transform_state() {
                                 let alt = ui.input(|i| i.modifiers.alt);
@@ -492,27 +401,17 @@ impl Canvas {
                         }
                         Drag::Shape { start, end, mode } => {
                             let contour = Self::shape_contour(session.tool(), start, end);
-                            let _ = session.execute(Command::SelectShape {
-                                contours: vec![contour],
-                                mode,
-                            });
+                            let _ = session.execute(Command::SelectShape { contours: vec![contour], mode });
                         }
                         Drag::Lasso { points, mode } => {
-                            let _ = session.execute(Command::SelectShape {
-                                contours: vec![points],
-                                mode,
-                            });
+                            let _ = session.execute(Command::SelectShape { contours: vec![points], mode });
                         }
                         _ => {}
                     }
                     self.pressure = None;
                     self.last_pos = None;
                 }
-                Event::Key {
-                    key: Key::Enter,
-                    pressed: true,
-                    ..
-                } if self.poly.is_some() => self.commit_poly(session),
+                Event::Key { key: Key::Enter, pressed: true, .. } if self.poly.is_some() => self.commit_poly(session),
                 _ => {}
             }
         }
@@ -520,12 +419,8 @@ impl Canvas {
             self.poly = None;
         }
         if resp.hovered() {
-            let (scroll, zoom, rot) =
-                ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.rotation_delta()));
-            let at = ui
-                .input(|i| i.pointer.hover_pos())
-                .map(local)
-                .unwrap_or(pos2(rect.width() / 2.0, rect.height() / 2.0));
+            let (scroll, zoom, rot) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.rotation_delta()));
+            let at = ui.input(|i| i.pointer.hover_pos()).map(local).unwrap_or(pos2(rect.width() / 2.0, rect.height() / 2.0));
             if zoom != 1.0 {
                 self.view.zoom_at([at.x as f64, at.y as f64], zoom as f64);
             } else if scroll != egui::Vec2::ZERO {
@@ -535,18 +430,12 @@ impl Canvas {
                 self.view.rotate_at([at.x as f64, at.y as f64], rot as f64);
             }
         }
-        let hover = ui
-            .input(|i| i.pointer.hover_pos())
-            .filter(|p| rect.contains(*p));
+        let hover = ui.input(|i| i.pointer.hover_pos()).filter(|p| rect.contains(*p));
         self.hover_doc = hover.map(|p| self.doc_pt(local(p)));
 
         // ── Display ──
         let dirty = session.take_dirty_tiles();
-        let uploads = if dirty.is_empty() {
-            Vec::new()
-        } else {
-            session.composite(&dirty)
-        };
+        let uploads = if dirty.is_empty() { Vec::new() } else { session.composite(&dirty) };
         let key = (session.selection_version(), self.doc_size);
         let selection = if self.uploaded_selection != Some(key) {
             self.uploaded_selection = Some(key);
@@ -558,10 +447,7 @@ impl Canvas {
         let params = ViewParams {
             origin: [rect.left() * ppp, rect.top() * ppp],
             size: [rect.width() * ppp, rect.height() * ppp],
-            offset: [
-                self.view.offset[0] as f32 * ppp,
-                self.view.offset[1] as f32 * ppp,
-            ],
+            offset: [self.view.offset[0] as f32 * ppp, self.view.offset[1] as f32 * ppp],
             scale: self.view.scale as f32 * ppp,
             rotation: self.view.rotation as f32,
             checker: (10.0 * ppp).max(2.0),
@@ -573,18 +459,12 @@ impl Canvas {
         if gpu {
             ui.painter().add(egui_wgpu::Callback::new_paint_callback(
                 rect,
-                CanvasCallback {
-                    doc_size: self.doc_size,
-                    uploads: Arc::new(uploads),
-                    selection,
-                    params,
-                },
+                CanvasCallback { doc_size: self.doc_size, uploads: Arc::new(uploads), selection, params },
             ));
         }
         if session.selection().is_some() {
             // Marching ants animate; ~20 fps is plenty and keeps idle CPU low.
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(50));
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
         }
         self.draw_overlays(ui, rect, session, hover, space_held, r_held, &resp);
     }
@@ -599,12 +479,8 @@ impl Canvas {
         if closed && let Some(&f) = sp.first() {
             sp.push(f);
         }
-        ui.painter().add(egui::Shape::line(
-            sp.clone(),
-            Stroke::new(2.5, Color32::from_black_alpha(160)),
-        ));
-        ui.painter()
-            .add(egui::Shape::line(sp, Stroke::new(1.0, Color32::WHITE)));
+        ui.painter().add(egui::Shape::line(sp.clone(), Stroke::new(2.5, Color32::from_black_alpha(160))));
+        ui.painter().add(egui::Shape::line(sp, Stroke::new(1.0, Color32::WHITE)));
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -621,37 +497,18 @@ impl Canvas {
         if let Some((_, b)) = session.transform_state() {
             let h = self.xform.handles(self.doc_f(), b);
             self.outline(ui, rect, &h.corners, true);
-            let knob = self
-                .xform
-                .rotate_knob(self.doc_f(), b, 28.0 / self.view.scale);
+            let knob = self.xform.rotate_knob(self.doc_f(), b, 28.0 / self.view.scale);
             let (top, k) = (self.to_screen(rect, h.edges[0]), self.to_screen(rect, knob));
-            ui.painter()
-                .line_segment([top, k], Stroke::new(1.0, Color32::WHITE));
-            ui.painter().circle(
-                k,
-                5.0,
-                Color32::WHITE,
-                Stroke::new(1.0, Color32::from_black_alpha(160)),
-            );
+            ui.painter().line_segment([top, k], Stroke::new(1.0, Color32::WHITE));
+            ui.painter().circle(k, 5.0, Color32::WHITE, Stroke::new(1.0, Color32::from_black_alpha(160)));
             for c in h.corners.iter().chain(h.edges.iter()) {
                 let s = self.to_screen(rect, *c);
                 let r = Rect::from_center_size(s, egui::vec2(9.0, 9.0));
-                ui.painter().rect(
-                    r,
-                    2.0,
-                    Color32::WHITE,
-                    Stroke::new(1.0, Color32::from_black_alpha(160)),
-                    egui::StrokeKind::Middle,
-                );
+                ui.painter().rect(r, 2.0, Color32::WHITE, Stroke::new(1.0, Color32::from_black_alpha(160)), egui::StrokeKind::Middle);
             }
         }
         match &self.drag {
-            Drag::Shape { start, end, .. } => self.outline(
-                ui,
-                rect,
-                &Self::shape_contour(session.tool(), *start, *end),
-                true,
-            ),
+            Drag::Shape { start, end, .. } => self.outline(ui, rect, &Self::shape_contour(session.tool(), *start, *end), true),
             Drag::Lasso { points, .. } => self.outline(ui, rect, points, false),
             _ => {}
         }
@@ -660,24 +517,15 @@ impl Canvas {
             if let Some(h) = hover {
                 let d = self.doc_pt(pos2(h.x - rect.left(), h.y - rect.top()));
                 let last = *p.last().unwrap_or(&d);
-                p.push(if ui.input(|i| i.modifiers.shift) {
-                    constrain_45(last, d)
-                } else {
-                    d
-                });
+                p.push(if ui.input(|i| i.modifiers.shift) { constrain_45(last, d) } else { d });
             }
             self.outline(ui, rect, &p, false);
             let f = self.to_screen(rect, pts[0]);
-            ui.painter()
-                .circle_stroke(f, 5.0, Stroke::new(1.5, Color32::WHITE));
+            ui.painter().circle_stroke(f, 5.0, Stroke::new(1.5, Color32::WHITE));
         }
         let Some(hp) = hover else { return };
         if space {
-            ui.ctx().set_cursor_icon(if matches!(self.drag, Drag::Pan) {
-                CursorIcon::Grabbing
-            } else {
-                CursorIcon::Grab
-            });
+            ui.ctx().set_cursor_icon(if matches!(self.drag, Drag::Pan) { CursorIcon::Grabbing } else { CursorIcon::Grab });
             return;
         }
         if r {
@@ -689,26 +537,14 @@ impl Canvas {
         if matches!(session.tool(), Tool::Brush | Tool::Eraser) {
             let rad = (session.current_brush().size / 2.0 * self.view.scale) as f32;
             if rad > 2.0 {
-                ui.painter().circle_stroke(
-                    hp,
-                    rad,
-                    Stroke::new(1.5, Color32::from_black_alpha(140)),
-                );
-                ui.painter().circle_stroke(
-                    hp,
-                    rad,
-                    Stroke::new(0.75, Color32::from_white_alpha(220)),
-                );
+                ui.painter().circle_stroke(hp, rad, Stroke::new(1.5, Color32::from_black_alpha(140)));
+                ui.painter().circle_stroke(hp, rad, Stroke::new(0.75, Color32::from_white_alpha(220)));
             }
         }
         if self.size_flash > 0.0 {
             let rad = (session.current_brush().size / 2.0 * self.view.scale) as f32;
             let a = (self.size_flash.min(1.0) * 200.0) as u8;
-            ui.painter().circle_stroke(
-                rect.center(),
-                rad,
-                Stroke::new(1.5, Color32::from_white_alpha(a)),
-            );
+            ui.painter().circle_stroke(rect.center(), rad, Stroke::new(1.5, Color32::from_white_alpha(a)));
             self.size_flash -= ui.input(|i| i.stable_dt) as f64 * 1.5;
             ui.ctx().request_repaint();
         }

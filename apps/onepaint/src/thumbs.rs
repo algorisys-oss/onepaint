@@ -35,8 +35,7 @@ mod onepaint_formats_free {
         if a <= 0.0 {
             return [0, 0, 0, 0];
         }
-        let q =
-            |v: f32| (onepaint_color::linear_to_srgb(v / a).clamp(0.0, 1.0) * 255.0).round() as u8;
+        let q = |v: f32| (onepaint_color::linear_to_srgb(v / a).clamp(0.0, 1.0) * 255.0).round() as u8;
         [q(p[0]), q(p[1]), q(p[2]), (a * 255.0).round() as u8]
     }
 }
@@ -56,16 +55,8 @@ impl Thumbs {
         }
         let (dw, dh) = (doc[0] as f32, doc[1] as f32);
         let s = (THUMB[0] as f32 / dw).min(THUMB[1] as f32 / dh);
-        let (w, h) = (
-            ((dw * s).round() as usize).max(1),
-            ((dh * s).round() as usize).max(1),
-        );
-        let img = to_image(
-            &l.pixels,
-            Rect::new(0, 0, doc[0] as i32, doc[1] as i32),
-            w,
-            h,
-        );
+        let (w, h) = (((dw * s).round() as usize).max(1), ((dh * s).round() as usize).max(1));
+        let img = to_image(&l.pixels, Rect::new(0, 0, doc[0] as i32, doc[1] as i32), w, h);
         let tex = ctx.load_texture(format!("layer-thumb-{}", l.id), img, TextureOptions::LINEAR);
         self.layers.insert(l.id.clone(), tex.clone());
         tex
@@ -102,11 +93,7 @@ impl Thumbs {
                 px.push(egui::Color32::from_white_alpha((a * 255.0) as u8));
             }
         }
-        let tex = ctx.load_texture(
-            format!("brush-{}", b.id),
-            ColorImage::new([w, h], px),
-            TextureOptions::LINEAR,
-        );
+        let tex = ctx.load_texture(format!("brush-{}", b.id), ColorImage::new([w, h], px), TextureOptions::LINEAR);
         self.brushes.insert(b.id.clone(), tex.clone());
         tex
     }

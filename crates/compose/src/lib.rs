@@ -54,9 +54,7 @@ fn zeros() -> Buf {
 /// A layer's pixels on one tile, with any live stroke applied and its mask multiplied in.
 fn layer_content(l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeOverlay>) -> Option<Buf> {
     let base = l.pixels.tile(tx, ty);
-    let stroke = ov
-        .filter(|o| o.layer_id == l.id)
-        .and_then(|o| o.stroke.tile(tx, ty).map(|t| (o, t)));
+    let stroke = ov.filter(|o| o.layer_id == l.id).and_then(|o| o.stroke.tile(tx, ty).map(|t| (o, t)));
     if base.is_none() && stroke.is_none() {
         return None;
     }
@@ -137,6 +135,14 @@ fn draw_clipped(fam: &mut [f32], riders: &[Node], tx: i32, ty: i32, ov: Option<&
 fn composite_nodes(nodes: &[Node], tx: i32, ty: i32, target: &mut Buf, ov: Option<&StrokeOverlay>) {
     let mut i = 0;
     while i < nodes.len() {
+        // An adjustment layer is never a clip base: following clipped layers render plainly.
+        if let Node::Layer(l) = &nodes[i]
+            && let Some(adj) = &l.adjustment
+        {
+            draw_adjustment(target, l, adj, tx, ty);
+            i += 1;
+            continue;
+        }
         let j = riders(nodes, i);
         match &nodes[i] {
             Node::Group(g) => {
@@ -168,6 +174,33 @@ fn composite_nodes(nodes: &[Node], tx: i32, ty: i32, target: &mut Buf, ov: Optio
     }
 }
 
+/// Adjustment layer (happypaint `applyAdjustmentLayer`, C:1604-1638): adjust the
+/// backdrop, apply the layer mask, then composite with the layer's mode and opacity.
+/// Only per-pixel kinds can run per tile; spatial kinds are skipped for now.
+fn draw_adjustment(target: &mut Buf, l: &Layer, adj: &onepaint_doc::Adjustment, tx: i32, ty: i32) {
+    if !l.visible || l.opacity <= 0.0 {
+        return;
+    }
+    let Some(kind) = onepaint_filters::Kind::parse(&adj.kind).filter(|k| k.is_color()) else { return };
+    let prepared = onepaint_filters::prepare(kind, &adj.params);
+    let mask = if l.mask_enabled { l.mask.as_ref().map(|m| m.tile(tx, ty).map(|t| t.to_f32())) } else { None };
+    if let Some(None) = mask {
+        return; // fully masked out on this tile
+    }
+    let mut out = vec![0.0; target.len()];
+    for i in (0..target.len()).step_by(4) {
+        let p = (i / 4) as i32;
+        let (x, y) = (tx * TILE + p % TILE, ty * TILE + p / TILE);
+        let mut o = prepared.color_px(px(target, i), x, y);
+        if let Some(Some(m)) = &mask {
+            let k = m[i];
+            o = o.map(|v| v * k);
+        }
+        out[i..i + 4].copy_from_slice(&o);
+    }
+    blend_into(target, &out, l.blend_mode, l.opacity);
+}
+
 fn draw_layer(target: &mut Buf, l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeOverlay>) {
     let Some(mut c) = layer_content(l, tx, ty, ov) else {
         return;
@@ -191,14 +224,8 @@ pub fn composite_tile(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverla
 }
 
 /// Composite many tiles in parallel.
-pub fn composite_tiles(
-    doc: &Document,
-    keys: &[(i32, i32)],
-    ov: Option<&StrokeOverlay>,
-) -> Vec<((i32, i32), Tile)> {
-    keys.par_iter()
-        .map(|&(tx, ty)| ((tx, ty), Tile::from_f32(&composite_tile(doc, tx, ty, ov))))
-        .collect()
+pub fn composite_tiles(doc: &Document, keys: &[(i32, i32)], ov: Option<&StrokeOverlay>) -> Vec<((i32, i32), Tile)> {
+    keys.par_iter().map(|&(tx, ty)| ((tx, ty), Tile::from_f32(&composite_tile(doc, tx, ty, ov)))).collect()
 }
 
 /// Tiles covering the canvas.
@@ -217,10 +244,7 @@ pub fn composite_px(doc: &Document, x: i32, y: i32) -> Px {
 /// The whole canvas as row-major premultiplied linear f32 RGBA.
 pub fn flatten(doc: &Document, ov: Option<&StrokeOverlay>) -> Vec<f32> {
     let (w, h) = (doc.width as usize, doc.height as usize);
-    let tiles: Vec<_> = doc_tiles(doc)
-        .into_par_iter()
-        .map(|(tx, ty)| ((tx, ty), composite_tile(doc, tx, ty, ov)))
-        .collect();
+    let tiles: Vec<_> = doc_tiles(doc).into_par_iter().map(|(tx, ty)| ((tx, ty), composite_tile(doc, tx, ty, ov))).collect();
     let mut out = vec![0.0; w * h * 4];
     let bounds = doc.bounds();
     for ((tx, ty), b) in tiles {

@@ -121,24 +121,13 @@ impl CanvasGpu {
                 buffers: &[],
                 compilation_options: Default::default(),
             },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
             depth_stencil: None,
-            multisample: wgpu::MultisampleState {
-                count: 1,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
+            multisample: wgpu::MultisampleState { count: 1, mask: !0, alpha_to_coverage_enabled: false },
             fragment: Some(wgpu::FragmentState {
                 module: &module,
                 entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: target,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
+                targets: &[Some(wgpu::ColorTargetState { format: target, blend: None, write_mask: wgpu::ColorWrites::ALL })],
                 compilation_options: Default::default(),
             }),
             multiview_mask: None,
@@ -174,20 +163,13 @@ impl CanvasGpu {
             return true;
         }
         if w > self.max_dim || h > self.max_dim || w == 0 || h == 0 {
-            log::error!(
-                "document {w}x{h} exceeds the GPU texture limit {}",
-                self.max_dim
-            );
+            log::error!("document {w}x{h} exceeds the GPU texture limit {}", self.max_dim);
             self.texture = None;
             return false;
         }
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("onepaint_composite"),
-            size: wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -198,11 +180,7 @@ impl CanvasGpu {
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let selection = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("onepaint_selection"),
-            size: wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -215,42 +193,20 @@ impl CanvasGpu {
             label: Some("onepaint_canvas"),
             layout: &self.layout,
             entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.uniforms.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&sel_view),
-                },
+                wgpu::BindGroupEntry { binding: 0, resource: self.uniforms.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&sel_view) },
             ],
         });
-        self.texture = Some(DocTextures {
-            texture,
-            selection,
-            bind,
-            size: [w, h],
-        });
+        self.texture = Some(DocTextures { texture, selection, bind, size: [w, h] });
         self.has_selection = false;
         true
     }
 
     /// Upload composited tiles; edge tiles are clipped to the document.
     pub fn upload(&self, queue: &wgpu::Queue, tiles: &[((i32, i32), Tile)]) {
-        let Some(DocTextures {
-            texture,
-            size: [w, h],
-            ..
-        }) = &self.texture
-        else {
+        let Some(DocTextures { texture, size: [w, h], .. }) = &self.texture else {
             return;
         };
         for ((tx, ty), tile) in tiles {
@@ -264,36 +220,19 @@ impl CanvasGpu {
                 wgpu::TexelCopyTextureInfo {
                     texture,
                     mip_level: 0,
-                    origin: wgpu::Origin3d {
-                        x: x as u32,
-                        y: y as u32,
-                        z: 0,
-                    },
+                    origin: wgpu::Origin3d { x: x as u32, y: y as u32, z: 0 },
                     aspect: wgpu::TextureAspect::All,
                 },
                 bytemuck::cast_slice(&tile.data),
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(TILE as u32 * 8),
-                    rows_per_image: Some(TILE as u32),
-                },
-                wgpu::Extent3d {
-                    width: cw,
-                    height: ch,
-                    depth_or_array_layers: 1,
-                },
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(TILE as u32 * 8), rows_per_image: Some(TILE as u32) },
+                wgpu::Extent3d { width: cw, height: ch, depth_or_array_layers: 1 },
             );
         }
     }
 
     /// Upload the selection coverage (one byte per doc pixel, row-major), or clear it.
     pub fn set_selection(&mut self, queue: &wgpu::Queue, mask: Option<&[u8]>) {
-        let Some(DocTextures {
-            selection,
-            size: [w, h],
-            ..
-        }) = &self.texture
-        else {
+        let Some(DocTextures { selection, size: [w, h], .. }) = &self.texture else {
             return;
         };
         let Some(data) = mask.filter(|m| m.len() == (*w * *h) as usize) else {
@@ -308,23 +247,10 @@ impl CanvasGpu {
             padded[d..d + *w as usize].copy_from_slice(&data[s..s + *w as usize]);
         }
         queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: selection,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
+            wgpu::TexelCopyTextureInfo { texture: selection, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
             &padded,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(stride),
-                rows_per_image: Some(*h),
-            },
-            wgpu::Extent3d {
-                width: *w,
-                height: *h,
-                depth_or_array_layers: 1,
-            },
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(stride), rows_per_image: Some(*h) },
+            wgpu::Extent3d { width: *w, height: *h, depth_or_array_layers: 1 },
         );
         self.has_selection = true;
     }

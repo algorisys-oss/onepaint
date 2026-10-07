@@ -34,9 +34,7 @@ pub struct Tile {
 
 impl Default for Tile {
     fn default() -> Self {
-        Self {
-            data: vec![f16::ZERO; TILE_PX * 4],
-        }
+        Self { data: vec![f16::ZERO; TILE_PX * 4] }
     }
 }
 
@@ -144,22 +142,13 @@ impl Rect {
         }
         let x0 = self.x.min(o.x);
         let y0 = self.y.min(o.y);
-        Rect::new(
-            x0,
-            y0,
-            self.right().max(o.right()) - x0,
-            self.bottom().max(o.bottom()) - y0,
-        )
+        Rect::new(x0, y0, self.right().max(o.right()) - x0, self.bottom().max(o.bottom()) - y0)
     }
 
     /// Tiles this rect touches, row-major.
     pub fn tiles(&self) -> impl Iterator<Item = (i32, i32)> + use<> {
         let (tx0, ty0) = tile_of(self.x, self.y);
-        let (tx1, ty1) = if self.is_empty() {
-            (tx0 - 1, ty0 - 1)
-        } else {
-            tile_of(self.right() - 1, self.bottom() - 1)
-        };
+        let (tx1, ty1) = if self.is_empty() { (tx0 - 1, ty0 - 1) } else { tile_of(self.right() - 1, self.bottom() - 1) };
         (ty0..=ty1).flat_map(move |ty| (tx0..=tx1).map(move |tx| (tx, ty)))
     }
 }
@@ -223,16 +212,10 @@ impl Surface {
 
     pub fn set(&mut self, x: i32, y: i32, p: Px) {
         let (tx, ty) = tile_of(x, y);
-        if p[3] <= 0.0
-            && p[0] == 0.0
-            && p[1] == 0.0
-            && p[2] == 0.0
-            && !self.tiles.contains_key(&(tx, ty))
-        {
+        if p[3] <= 0.0 && p[0] == 0.0 && p[1] == 0.0 && p[2] == 0.0 && !self.tiles.contains_key(&(tx, ty)) {
             return;
         }
-        self.tile_mut(tx, ty)
-            .set((x - tx * TILE) as usize, (y - ty * TILE) as usize, p);
+        self.tile_mut(tx, ty).set((x - tx * TILE) as usize, (y - ty * TILE) as usize, p);
     }
 
     /// Drop tiles whose every pixel has zero alpha.
@@ -269,11 +252,7 @@ impl Surface {
 
     /// Write row-major premultiplied f32 RGBA into a rect (fully transparent tiles are skipped).
     pub fn write_rect(&mut self, r: Rect, data: &[f32]) {
-        assert_eq!(
-            data.len(),
-            (r.w * r.h * 4) as usize,
-            "write_rect: data size"
-        );
+        assert_eq!(data.len(), (r.w * r.h * 4) as usize, "write_rect: data size");
         for (tx, ty) in r.tiles() {
             let Some(ix) = r.intersect(&Rect::from_tile(tx, ty)) else {
                 continue;
@@ -291,11 +270,7 @@ impl Surface {
             for y in ix.y..ix.bottom() {
                 for x in ix.x..ix.right() {
                     let o = (((y - r.y) * r.w + (x - r.x)) * 4) as usize;
-                    t.set(
-                        (x - tx * TILE) as usize,
-                        (y - ty * TILE) as usize,
-                        [data[o], data[o + 1], data[o + 2], data[o + 3]],
-                    );
+                    t.set((x - tx * TILE) as usize, (y - ty * TILE) as usize, [data[o], data[o + 1], data[o + 2], data[o + 3]]);
                 }
             }
         }
@@ -305,13 +280,7 @@ impl Surface {
     pub fn translated(&self, dx: i32, dy: i32) -> Surface {
         if dx % TILE == 0 && dy % TILE == 0 {
             let (tx, ty) = (dx / TILE, dy / TILE);
-            return Surface {
-                tiles: self
-                    .tiles
-                    .iter()
-                    .map(|(&(x, y), t)| ((x + tx, y + ty), t.clone()))
-                    .collect(),
-            };
+            return Surface { tiles: self.tiles.iter().map(|(&(x, y), t)| ((x + tx, y + ty), t.clone())).collect() };
         }
         let mut out = Surface::new();
         for &(tx, ty) in self.tiles.keys() {

@@ -47,21 +47,14 @@ impl Debug {
 }
 
 fn wave(app: &mut App, y: f64, amp: f64, color: Rgba, preset: &str, size: f64) {
-    let _ = app.session.execute(Command::SetBrush {
-        preset_id: preset.into(),
-    });
+    let _ = app.session.execute(Command::SetBrush { preset_id: preset.into() });
     let _ = app.session.execute(Command::SetBrushSize { size });
     app.set_color(color);
     let w = app.session.doc().width as f64;
     let n = 80;
     for i in 0..=n {
         let f = i as f64 / n as f64;
-        let p = StrokePoint::at(
-            w * 0.12 + f * w * 0.76,
-            y + (f * 9.0).sin() * amp,
-            (f * std::f64::consts::PI).sin().max(0.1),
-            f * 900.0,
-        );
+        let p = StrokePoint::at(w * 0.12 + f * w * 0.76, y + (f * 9.0).sin() * amp, (f * std::f64::consts::PI).sin().max(0.1), f * 900.0);
         if i == 0 {
             app.session.stroke_begin(p);
         } else {
@@ -82,42 +75,21 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
         let _ = app.session.execute(Command::AddLayer);
         wave(app, h * 0.5, 90.0, hex("#e5484d"), "hard-round", 28.0);
         let id = app.session.active().to_string();
-        let _ = app.session.execute(Command::SetLayerProps {
-            id,
-            props: LayerProps {
-                opacity: Some(0.8),
-                ..Default::default()
-            },
-        });
+        let _ = app.session.execute(Command::SetLayerProps { id, props: LayerProps { opacity: Some(0.8), ..Default::default() } });
         let _ = app.session.execute(Command::AddLayer);
         wave(app, h * 0.68, 40.0, hex("#1d1d1f"), "comic-inker", 14.0);
         wave(app, h * 0.82, 20.0, hex("#ddb42c"), "soft-airbrush", 120.0);
-        let _ = app.session.execute(Command::SetBrush {
-            preset_id: "hard-round".into(),
-        });
+        let _ = app.session.execute(Command::SetBrush { preset_id: "hard-round".into() });
         if app.debug.popover == Some(Popover::Selection) {
-            let (w, h) = (
-                app.session.doc().width as f64,
-                app.session.doc().height as f64,
-            );
-            let contour =
-                onepaint_selection::ellipse_polygon([w * 0.3, h * 0.2], [w * 0.7, h * 0.75]);
-            let _ = app.session.execute(Command::SelectShape {
-                contours: vec![contour],
-                mode: onepaint_selection::Mode::Replace,
-            });
+            let (w, h) = (app.session.doc().width as f64, app.session.doc().height as f64);
+            let contour = onepaint_selection::ellipse_polygon([w * 0.3, h * 0.2], [w * 0.7, h * 0.75]);
+            let _ = app.session.execute(Command::SelectShape { contours: vec![contour], mode: onepaint_selection::Mode::Replace });
             app.set_tool(onepaint_engine::Tool::SelectEllipse);
         }
     }
     if frame == 3 && app.debug.transform {
         app.set_tool(onepaint_engine::Tool::Move);
-        let p = onepaint_engine::transform::TransformParams {
-            rotation: 0.25,
-            sx: 0.8,
-            sy: 0.8,
-            dx: 60.0,
-            dy: -40.0,
-        };
+        let p = onepaint_engine::transform::TransformParams { rotation: 0.25, sx: 0.8, sy: 0.8, dx: 60.0, dy: -40.0 };
         app.canvas.xform_about_centre(&mut app.session, |_| p);
     }
     if frame == 3 && app.debug.popover.is_some() {
@@ -131,28 +103,12 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
         ctx.request_repaint();
     }
     let shots: Vec<_> = ctx.input(|i| {
-        i.raw
-            .events
-            .iter()
-            .filter_map(|e| {
-                if let egui::Event::Screenshot { image, .. } = e {
-                    Some(image.clone())
-                } else {
-                    None
-                }
-            })
-            .collect()
+        i.raw.events.iter().filter_map(|e| if let egui::Event::Screenshot { image, .. } = e { Some(image.clone()) } else { None }).collect()
     });
     for img in shots {
         if let Some(path) = app.debug.shot.take() {
-            let rgba: Vec<u8> = img
-                .pixels
-                .iter()
-                .flat_map(|c| c.to_srgba_unmultiplied())
-                .collect();
-            match onepaint_formats::encode_png_rgba8(img.size[0] as u32, img.size[1] as u32, &rgba)
-                .map(|b| std::fs::write(&path, b))
-            {
+            let rgba: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
+            match onepaint_formats::encode_png_rgba8(img.size[0] as u32, img.size[1] as u32, &rgba).map(|b| std::fs::write(&path, b)) {
                 Ok(Ok(())) => log::info!("screenshot saved to {path}"),
                 e => log::error!("screenshot failed: {e:?}"),
             }

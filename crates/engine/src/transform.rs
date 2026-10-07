@@ -22,53 +22,27 @@ impl Default for Affine {
 }
 
 impl Affine {
-    pub const IDENTITY: Affine = Affine {
-        a: 1.0,
-        b: 0.0,
-        c: 0.0,
-        d: 1.0,
-        e: 0.0,
-        f: 0.0,
-    };
+    pub const IDENTITY: Affine = Affine { a: 1.0, b: 0.0, c: 0.0, d: 1.0, e: 0.0, f: 0.0 };
 
     pub fn translate(x: f64, y: f64) -> Self {
-        Affine {
-            e: x,
-            f: y,
-            ..Self::IDENTITY
-        }
+        Affine { e: x, f: y, ..Self::IDENTITY }
     }
 
     pub fn scale(sx: f64, sy: f64) -> Self {
-        Affine {
-            a: sx,
-            d: sy,
-            ..Self::IDENTITY
-        }
+        Affine { a: sx, d: sy, ..Self::IDENTITY }
     }
 
     pub fn rotate(r: f64) -> Self {
         let (s, c) = r.sin_cos();
-        Affine {
-            a: c,
-            b: s,
-            c: -s,
-            d: c,
-            e: 0.0,
-            f: 0.0,
-        }
+        Affine { a: c, b: s, c: -s, d: c, e: 0.0, f: 0.0 }
     }
 
     pub fn scale_about(sx: f64, sy: f64, p: [f64; 2]) -> Self {
-        Self::translate(-p[0], -p[1])
-            .then(&Self::scale(sx, sy))
-            .then(&Self::translate(p[0], p[1]))
+        Self::translate(-p[0], -p[1]).then(&Self::scale(sx, sy)).then(&Self::translate(p[0], p[1]))
     }
 
     pub fn rotate_about(r: f64, p: [f64; 2]) -> Self {
-        Self::translate(-p[0], -p[1])
-            .then(&Self::rotate(r))
-            .then(&Self::translate(p[0], p[1]))
+        Self::translate(-p[0], -p[1]).then(&Self::rotate(r)).then(&Self::translate(p[0], p[1]))
     }
 
     /// `self` followed by `next`.
@@ -84,10 +58,7 @@ impl Affine {
     }
 
     pub fn apply(&self, p: [f64; 2]) -> [f64; 2] {
-        [
-            self.a * p[0] + self.c * p[1] + self.e,
-            self.b * p[0] + self.d * p[1] + self.f,
-        ]
+        [self.a * p[0] + self.c * p[1] + self.e, self.b * p[0] + self.d * p[1] + self.f]
     }
 
     pub fn inverse(&self) -> Option<Affine> {
@@ -96,31 +67,14 @@ impl Affine {
             return None;
         }
         let (a, b, c, d) = (self.d / det, -self.b / det, -self.c / det, self.a / det);
-        Some(Affine {
-            a,
-            b,
-            c,
-            d,
-            e: -(a * self.e + c * self.f),
-            f: -(b * self.e + d * self.f),
-        })
+        Some(Affine { a, b, c, d, e: -(a * self.e + c * self.f), f: -(b * self.e + d * self.f) })
     }
 
     /// Bounding box of `r` after the map.
     pub fn map_rect(&self, r: Rect) -> Rect {
         let (x0, y0, x1, y1) = (r.x as f64, r.y as f64, r.right() as f64, r.bottom() as f64);
-        let pts = [
-            self.apply([x0, y0]),
-            self.apply([x1, y0]),
-            self.apply([x0, y1]),
-            self.apply([x1, y1]),
-        ];
-        let (mut mx, mut my, mut nx, mut ny) = (
-            f64::INFINITY,
-            f64::INFINITY,
-            f64::NEG_INFINITY,
-            f64::NEG_INFINITY,
-        );
+        let pts = [self.apply([x0, y0]), self.apply([x1, y0]), self.apply([x0, y1]), self.apply([x1, y1])];
+        let (mut mx, mut my, mut nx, mut ny) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
         for p in pts {
             mx = mx.min(p[0]);
             my = my.min(p[1]);
@@ -151,38 +105,21 @@ pub(crate) struct Floating {
 impl Floating {
     fn sample(&self, x: f64, y: f64) -> [f32; 4] {
         // Bilinear on texel centres, transparent outside.
-        let (fx, fy) = (
-            x - 0.5 - self.bounds.x as f64,
-            y - 0.5 - self.bounds.y as f64,
-        );
+        let (fx, fy) = (x - 0.5 - self.bounds.x as f64, y - 0.5 - self.bounds.y as f64);
         let (x0, y0) = (fx.floor(), fy.floor());
         let (tx, ty) = ((fx - x0) as f32, (fy - y0) as f32);
         let (w, h) = (self.bounds.w as i64, self.bounds.h as i64);
         let clamp = self.clamp_edges;
         let at = |xi: i64, yi: i64| -> [f32; 4] {
-            let (xi, yi) = if clamp {
-                (xi.clamp(0, w - 1), yi.clamp(0, h - 1))
-            } else {
-                (xi, yi)
-            };
+            let (xi, yi) = if clamp { (xi.clamp(0, w - 1), yi.clamp(0, h - 1)) } else { (xi, yi) };
             if xi < 0 || yi < 0 || xi >= w || yi >= h {
                 return [0.0; 4];
             }
             let i = ((yi * w + xi) * 4) as usize;
-            [
-                self.src[i],
-                self.src[i + 1],
-                self.src[i + 2],
-                self.src[i + 3],
-            ]
+            [self.src[i], self.src[i + 1], self.src[i + 2], self.src[i + 3]]
         };
         let (x0, y0) = (x0 as i64, y0 as i64);
-        let (p00, p10, p01, p11) = (
-            at(x0, y0),
-            at(x0 + 1, y0),
-            at(x0, y0 + 1),
-            at(x0 + 1, y0 + 1),
-        );
+        let (p00, p10, p01, p11) = (at(x0, y0), at(x0 + 1, y0), at(x0, y0 + 1), at(x0 + 1, y0 + 1));
         let mut o = [0.0; 4];
         for c in 0..4 {
             let top = p00[c] + (p10[c] - p00[c]) * tx;
@@ -260,12 +197,10 @@ impl Session {
             return Ok(());
         };
         let bounds = match clip.as_ref().and_then(|m| m.bounds()) {
-            Some((x, y, w, h)) => {
-                match content.intersect(&Rect::new(x as i32, y as i32, w as i32, h as i32)) {
-                    Some(b) => b,
-                    None => return Ok(()),
-                }
-            }
+            Some((x, y, w, h)) => match content.intersect(&Rect::new(x as i32, y as i32, w as i32, h as i32)) {
+                Some(b) => b,
+                None => return Ok(()),
+            },
             None => content,
         };
         let mut src = original.read_rect(bounds);
@@ -280,12 +215,7 @@ impl Session {
                     }
                 }
             }
-            let rest: Vec<f32> = original
-                .read_rect(bounds)
-                .iter()
-                .zip(&src)
-                .map(|(o, l)| o - l)
-                .collect();
+            let rest: Vec<f32> = original.read_rect(bounds).iter().zip(&src).map(|(o, l)| o - l).collect();
             layer.pixels.write_rect(bounds, &rest);
             for (tx, ty) in bounds.tiles() {
                 layer.pixels.prune_tile(tx, ty);
@@ -353,11 +283,7 @@ impl Session {
         let mut changes: Vec<TileChange> = Vec::new();
         let mut bytes = 0;
         for (tx, ty) in keys {
-            let mut buf = layer
-                .pixels
-                .tile(tx, ty)
-                .map(|t| t.to_f32())
-                .unwrap_or_else(|| vec![0.0; TILE_PX * 4]);
+            let mut buf = layer.pixels.tile(tx, ty).map(|t| t.to_f32()).unwrap_or_else(|| vec![0.0; TILE_PX * 4]);
             if let Some(p) = f.preview.tile(tx, ty) {
                 let s = p.to_f32();
                 for i in (0..buf.len()).step_by(4) {
@@ -378,13 +304,7 @@ impl Session {
         }
         self.mark_dirty(f.bounds.union(&f.preview_bounds));
         if !changes.is_empty() {
-            self.history.push(
-                Change::Tiles {
-                    layer: f.layer,
-                    tiles: changes,
-                },
-                bytes,
-            );
+            self.history.push(Change::Tiles { layer: f.layer, tiles: changes }, bytes);
             self.doc.touch();
             self.history_changed();
         }
@@ -422,24 +342,14 @@ pub struct TransformParams {
 
 impl Default for TransformParams {
     fn default() -> Self {
-        Self {
-            dx: 0.0,
-            dy: 0.0,
-            sx: 1.0,
-            sy: 1.0,
-            rotation: 0.0,
-        }
+        Self { dx: 0.0, dy: 0.0, sx: 1.0, sy: 1.0, rotation: 0.0 }
     }
 }
 
 fn box_points(b: Rect) -> ([[f64; 2]; 4], [[f64; 2]; 4], [f64; 2]) {
     let (x0, y0, x1, y1) = (b.x as f64, b.y as f64, b.right() as f64, b.bottom() as f64);
     let (mx, my) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
-    (
-        [[x0, y0], [x1, y0], [x1, y1], [x0, y1]],
-        [[mx, y0], [x1, my], [mx, y1], [x0, my]],
-        [mx, my],
-    )
+    ([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], [[mx, y0], [x1, my], [mx, y1], [x0, my]], [mx, my])
 }
 
 fn sub(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
@@ -451,11 +361,7 @@ fn len(v: [f64; 2]) -> f64 {
 }
 
 fn clamp_scale(s: f64) -> f64 {
-    if s.abs() < 0.02 {
-        0.02 * if s < 0.0 { -1.0 } else { 1.0 }
-    } else {
-        s
-    }
+    if s.abs() < 0.02 { 0.02 * if s < 0.0 { -1.0 } else { 1.0 } } else { s }
 }
 
 impl TransformParams {
@@ -467,24 +373,13 @@ impl TransformParams {
         let (cx, cy) = (doc[0] / 2.0, doc[1] / 2.0);
         let (s, c) = self.rotation.sin_cos();
         let (a, b, cc, d) = (c * self.sx, s * self.sx, -s * self.sy, c * self.sy);
-        Affine {
-            a,
-            b,
-            c: cc,
-            d,
-            e: cx + self.dx - (a * cx + cc * cy),
-            f: cy + self.dy - (b * cx + d * cy),
-        }
+        Affine { a, b, c: cc, d, e: cx + self.dx - (a * cx + cc * cy), f: cy + self.dy - (b * cx + d * cy) }
     }
 
     pub fn handles(&self, doc: [f64; 2], b: Rect) -> Handles {
         let m = self.to_affine(doc);
         let (cs, es, c) = box_points(b);
-        Handles {
-            corners: cs.map(|p| m.apply(p)),
-            edges: es.map(|p| m.apply(p)),
-            centre: m.apply(c),
-        }
+        Handles { corners: cs.map(|p| m.apply(p)), edges: es.map(|p| m.apply(p)), centre: m.apply(c) }
     }
 
     /// The rotate knob: `offset` doc px beyond the top edge, away from the centre.
@@ -492,10 +387,7 @@ impl TransformParams {
         let h = self.handles(doc, b);
         let v = sub(h.edges[0], h.centre);
         let l = len(v).max(1e-9);
-        [
-            h.edges[0][0] + v[0] / l * offset,
-            h.edges[0][1] + v[1] / l * offset,
-        ]
+        [h.edges[0][0] + v[0] / l * offset, h.edges[0][1] + v[1] / l * offset]
     }
 
     /// Hit order: rotate, corners, edges, else body (`tol` and `rot_offset` in doc px).
@@ -527,16 +419,7 @@ impl TransformParams {
 
     /// Scale by dragging a corner or edge from `grab` to `p` (transform-drag.ts).
     #[allow(clippy::too_many_arguments)]
-    pub fn scale_drag(
-        &self,
-        doc: [f64; 2],
-        b: Rect,
-        handle: Handle,
-        grab: [f64; 2],
-        p: [f64; 2],
-        shift: bool,
-        alt: bool,
-    ) -> Self {
+    pub fn scale_drag(&self, doc: [f64; 2], b: Rect, handle: Handle, grab: [f64; 2], p: [f64; 2], shift: bool, alt: bool) -> Self {
         let (cs, es, centre) = box_points(b);
         let m = self.to_affine(doc);
         let (orig_handle, orig_opposite, axis_x) = match handle {
@@ -580,24 +463,13 @@ impl TransformParams {
         let c = self.to_affine(doc).apply(centre_o);
         let a0 = (grab[1] - c[1]).atan2(grab[0] - c[0]);
         let a1 = (p[1] - c[1]).atan2(p[0] - c[0]);
-        let next = Self {
-            rotation: self.rotation + (a1 - a0),
-            ..*self
-        };
+        let next = Self { rotation: self.rotation + (a1 - a0), ..*self };
         next.pin(doc, centre_o, c)
     }
 
     /// Body move; Shift snaps to 45° rays from the press point.
     pub fn move_drag(&self, grab: [f64; 2], p: [f64; 2], shift: bool) -> Self {
-        let p = if shift {
-            onepaint_selection::constrain_45(grab, p)
-        } else {
-            p
-        };
-        Self {
-            dx: self.dx + p[0] - grab[0],
-            dy: self.dy + p[1] - grab[1],
-            ..*self
-        }
+        let p = if shift { onepaint_selection::constrain_45(grab, p) } else { p };
+        Self { dx: self.dx + p[0] - grab[0], dy: self.dy + p[1] - grab[1], ..*self }
     }
 }

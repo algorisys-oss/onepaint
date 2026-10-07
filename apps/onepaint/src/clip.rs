@@ -26,9 +26,7 @@ impl Clipboard {
     #[cfg(not(test))]
     fn system(&mut self) -> Option<&mut arboard::Clipboard> {
         if self.system.is_none() {
-            self.system = arboard::Clipboard::new()
-                .map_err(|e| log::warn!("system clipboard unavailable: {e}"))
-                .ok();
+            self.system = arboard::Clipboard::new().map_err(|e| log::warn!("system clipboard unavailable: {e}")).ok();
         }
         self.system.as_mut()
     }
@@ -37,11 +35,7 @@ impl Clipboard {
         self.ours = Some(fingerprint(w, h, &rgba));
         #[cfg(not(test))]
         if let Some(c) = self.system() {
-            let _ = c.set_image(arboard::ImageData {
-                width: w,
-                height: h,
-                bytes: rgba.into(),
-            });
+            let _ = c.set_image(arboard::ImageData { width: w, height: h, bytes: rgba.into() });
         }
     }
 
@@ -53,11 +47,7 @@ impl Clipboard {
             if Some(fingerprint(img.width, img.height, &img.bytes)) == self.ours {
                 return None;
             }
-            Some(DecodedImage {
-                width: img.width as u32,
-                height: img.height as u32,
-                rgba: img.bytes.into_owned(),
-            })
+            Some(DecodedImage { width: img.width as u32, height: img.height as u32, rgba: img.bytes.into_owned() })
         }
         #[cfg(test)]
         None
@@ -69,8 +59,7 @@ pub fn copy(app: &mut App) -> bool {
         return false;
     };
     let rgba = r.to_srgb8();
-    app.clipboard
-        .set_system_image(r.rect.w as usize, r.rect.h as usize, rgba);
+    app.clipboard.set_system_image(r.rect.w as usize, r.rect.h as usize, rgba);
     app.clipboard.region = Some(r);
     true
 }
@@ -90,17 +79,8 @@ pub fn paste(app: &mut App) {
 }
 
 /// Place an image file as a layer, or open a `.happypaint` (asking about unsaved work).
-pub fn drop_file(
-    app: &mut App,
-    ctx: &egui::Context,
-    path: Option<std::path::PathBuf>,
-    bytes: Option<&[u8]>,
-) {
-    let native = path
-        .as_ref()
-        .and_then(|p| p.extension())
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("happypaint"));
+pub fn drop_file(app: &mut App, ctx: &egui::Context, path: Option<std::path::PathBuf>, bytes: Option<&[u8]>) {
+    let native = path.as_ref().and_then(|p| p.extension()).and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("happypaint"));
     if native {
         if let Some(p) = path {
             app.open_later = Some(p);

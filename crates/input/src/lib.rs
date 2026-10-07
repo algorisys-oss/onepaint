@@ -28,12 +28,7 @@ pub struct PressureProvider {
 
 impl PressureProvider {
     pub fn new(kind: PointerKind) -> Self {
-        Self {
-            kind,
-            mode: Mode::Undecided,
-            last: None,
-            ema: 0.7,
-        }
+        Self { kind, mode: Mode::Undecided, last: None, ema: 0.7 }
     }
 
     fn synth(&mut self, x: f64, y: f64, t: f64) -> f64 {

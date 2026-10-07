@@ -77,12 +77,7 @@ fn groups_are_isolated() {
     let d = doc(vec![Node::Layer(bottom), Node::Group(g)]);
     // Multiply inside an isolated group sees transparency, so the group
     // result is the child itself, then composited normally.
-    let exp = blend::blend_px(
-        BlendMode::Normal,
-        [0.5, 0.5, 0.5, 1.0],
-        [0.5, 0.0, 0.0, 0.5],
-        1.0,
-    );
+    let exp = blend::blend_px(BlendMode::Normal, [0.5, 0.5, 0.5, 1.0], [0.5, 0.0, 0.0, 0.5], 1.0);
     let got = composite_px(&d, 1, 1);
     for i in 0..4 {
         assert!((got[i] - exp[i]).abs() < 1e-3, "{got:?} vs {exp:?}");

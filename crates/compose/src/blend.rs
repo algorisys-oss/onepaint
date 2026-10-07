@@ -49,11 +49,7 @@ pub fn bc(m: BlendMode, b: f32, s: f32) -> f32 {
             if s <= 0.5 {
                 b - (1.0 - 2.0 * s) * b * (1.0 - b)
             } else {
-                let d = if b <= 0.25 {
-                    ((16.0 * b - 12.0) * b + 4.0) * b
-                } else {
-                    b.sqrt()
-                };
+                let d = if b <= 0.25 { ((16.0 * b - 12.0) * b + 4.0) * b } else { b.sqrt() };
                 b + (2.0 * s - 1.0) * (d - b)
             }
         }
@@ -106,11 +102,7 @@ fn sat(c: [f32; 3]) -> f32 {
 fn set_sat(c: [f32; 3], s: f32) -> [f32; 3] {
     let mn = c[0].min(c[1]).min(c[2]);
     let mx = c[0].max(c[1]).max(c[2]);
-    if mx > mn {
-        c.map(|v| (v - mn) * s / (mx - mn))
-    } else {
-        [0.0; 3]
-    }
+    if mx > mn { c.map(|v| (v - mn) * s / (mx - mn)) } else { [0.0; 3] }
 }
 
 /// `B(Cb, Cs)` on straight colour, including the non-separable modes.
@@ -128,11 +120,7 @@ pub fn blend_color(m: BlendMode, b: [f32; 3], s: [f32; 3]) -> [f32; 3] {
 
 #[inline]
 fn straight(p: Px) -> [f32; 3] {
-    if p[3] > 0.0 {
-        [p[0] / p[3], p[1] / p[3], p[2] / p[3]]
-    } else {
-        [0.0; 3]
-    }
+    if p[3] > 0.0 { [p[0] / p[3], p[1] / p[3], p[2] / p[3]] } else { [0.0; 3] }
 }
 
 /// Composite `src · opacity` over backdrop `bp` with mode `m`.
@@ -146,19 +134,9 @@ pub fn blend_px(m: BlendMode, bp: Px, src: Px, opacity: f32) -> Px {
         // Pigment needs the Kubelka–Munk port (slice 2); until then it composites as normal.
         BlendMode::Normal | BlendMode::Pigment => {
             let k = 1.0 - sp[3];
-            [
-                sp[0] + bp[0] * k,
-                sp[1] + bp[1] * k,
-                sp[2] + bp[2] * k,
-                sp[3] + bp[3] * k,
-            ]
+            [sp[0] + bp[0] * k, sp[1] + bp[1] * k, sp[2] + bp[2] * k, sp[3] + bp[3] * k]
         }
-        BlendMode::Add => [
-            sp[0] + bp[0],
-            sp[1] + bp[1],
-            sp[2] + bp[2],
-            sp[3] + bp[3] * (1.0 - sp[3]),
-        ],
+        BlendMode::Add => [sp[0] + bp[0], sp[1] + bp[1], sp[2] + bp[2], sp[3] + bp[3] * (1.0 - sp[3])],
         _ => {
             let s = prem_lin_to_srgb(sp);
             let b = prem_lin_to_srgb(bp);
@@ -185,12 +163,7 @@ pub fn blend_px_alpha_lock(m: BlendMode, bp: Px, src: Px, opacity: f32) -> Px {
     }
     if matches!(m, BlendMode::Normal | BlendMode::Pigment) {
         let k = 1.0 - sp[3];
-        return [
-            sp[0] * bp[3] + bp[0] * k,
-            sp[1] * bp[3] + bp[1] * k,
-            sp[2] * bp[3] + bp[2] * k,
-            bp[3],
-        ];
+        return [sp[0] * bp[3] + bp[0] * k, sp[1] * bp[3] + bp[1] * k, sp[2] * bp[3] + bp[2] * k, bp[3]];
     }
     let s = prem_lin_to_srgb(sp);
     let b = prem_lin_to_srgb(bp);
@@ -210,10 +183,5 @@ pub fn blend_px_alpha_lock(m: BlendMode, bp: Px, src: Px, opacity: f32) -> Px {
 pub fn clip_over(d: Px, src: Px, opacity: f32) -> Px {
     let k = 1.0 - src[3] * opacity;
     let da = d[3];
-    [
-        src[0] * opacity * da + d[0] * k,
-        src[1] * opacity * da + d[1] * k,
-        src[2] * opacity * da + d[2] * k,
-        src[3] * opacity * da + d[3] * k,
-    ]
+    [src[0] * opacity * da + d[0] * k, src[1] * opacity * da + d[1] * k, src[2] * opacity * da + d[2] * k, src[3] * opacity * da + d[3] * k]
 }

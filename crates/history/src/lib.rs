@@ -96,10 +96,7 @@ impl<E> History<E> {
             t.bytes += bytes;
             return;
         }
-        self.push_step(Step {
-            entries: vec![e],
-            bytes,
-        });
+        self.push_step(Step { entries: vec![e], bytes });
     }
 
     fn push_step(&mut self, step: Step<E>) {
@@ -115,9 +112,7 @@ impl<E> History<E> {
     }
 
     fn evict(&mut self) {
-        while self.undo.len() > 1
-            && (self.bytes > self.budget || self.undo.len() > self.max_entries)
-        {
+        while self.undo.len() > 1 && (self.bytes > self.budget || self.undo.len() > self.max_entries) {
             if self.bytes > self.budget && self.undo.len() <= self.max_entries {
                 self.memory_limited = true;
             }
@@ -128,10 +123,7 @@ impl<E> History<E> {
 
     /// Group every push inside `f` into one undo step (nesting collapses).
     pub fn transact(&mut self, f: impl FnOnce(&mut Txn<E>)) {
-        let mut step = Step {
-            entries: Vec::new(),
-            bytes: 0,
-        };
+        let mut step = Step { entries: Vec::new(), bytes: 0 };
         f(&mut Txn { step: &mut step });
         self.push_step(step);
     }
@@ -139,10 +131,7 @@ impl<E> History<E> {
     /// Start collecting pushes into one step until [`History::end_transaction`].
     pub fn begin_transaction(&mut self) {
         if self.txn.is_none() {
-            self.txn = Some(Step {
-                entries: Vec::new(),
-                bytes: 0,
-            });
+            self.txn = Some(Step { entries: Vec::new(), bytes: 0 });
         }
     }
 

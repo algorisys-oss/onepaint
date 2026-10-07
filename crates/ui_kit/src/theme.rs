@@ -4,10 +4,7 @@
 //! The palette starts from happypaint's (`frontend/src/styles/global.css`)
 //! so the two apps feel like siblings.
 
-use egui::{
-    Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle,
-    Visuals,
-};
+use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle, Visuals};
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -120,8 +117,7 @@ impl Tokens {
     }
 
     pub fn get(ctx: &egui::Context) -> Tokens {
-        ctx.data(|d| d.get_temp::<Tokens>(egui::Id::new("onepaint-theme")))
-            .unwrap_or_else(|| Tokens::for_kind(ThemeKind::Dark))
+        ctx.data(|d| d.get_temp::<Tokens>(egui::Id::new("onepaint-theme"))).unwrap_or_else(|| Tokens::for_kind(ThemeKind::Dark))
     }
 
     pub fn dark(&self) -> bool {
@@ -136,26 +132,13 @@ pub const JETBRAINS_MONO: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-
 
 pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
-    for (name, bytes) in [
-        ("Inter", INTER_REGULAR),
-        ("Inter-Medium", INTER_MEDIUM),
-        ("Inter-SemiBold", INTER_SEMIBOLD),
-        ("JetBrainsMono", JETBRAINS_MONO),
-    ] {
-        fonts
-            .font_data
-            .insert(name.to_owned(), Arc::new(FontData::from_static(bytes)));
+    for (name, bytes) in
+        [("Inter", INTER_REGULAR), ("Inter-Medium", INTER_MEDIUM), ("Inter-SemiBold", INTER_SEMIBOLD), ("JetBrainsMono", JETBRAINS_MONO)]
+    {
+        fonts.font_data.insert(name.to_owned(), Arc::new(FontData::from_static(bytes)));
     }
-    fonts
-        .families
-        .entry(FontFamily::Proportional)
-        .or_default()
-        .insert(0, "Inter".to_owned());
-    fonts
-        .families
-        .entry(FontFamily::Monospace)
-        .or_default()
-        .insert(0, "JetBrainsMono".to_owned());
+    fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "Inter".to_owned());
+    fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "JetBrainsMono".to_owned());
     let fallback: Vec<String> = fonts.families[&FontFamily::Proportional].clone();
     for (fam, primary) in [("medium", "Inter-Medium"), ("semibold", "Inter-SemiBold")] {
         let mut stack = vec![primary.to_owned()];
@@ -181,11 +164,7 @@ pub fn mono(size: f32) -> FontId {
 pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     let t = Tokens::for_kind(kind);
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("onepaint-theme"), t));
-    let mut v = if t.dark() {
-        Visuals::dark()
-    } else {
-        Visuals::light()
-    };
+    let mut v = if t.dark() { Visuals::dark() } else { Visuals::light() };
     v.panel_fill = t.bg;
     v.window_fill = t.panel;
     v.window_stroke = Stroke::new(1.0, t.border);
@@ -198,18 +177,8 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     v.error_fg_color = t.danger;
     v.window_corner_radius = CornerRadius::same(t.radius_lg as u8);
     v.menu_corner_radius = CornerRadius::same(t.radius as u8);
-    v.window_shadow = egui::Shadow {
-        offset: [0, 12],
-        blur: 36,
-        spread: 0,
-        color: t.shadow,
-    };
-    v.popup_shadow = egui::Shadow {
-        offset: [0, 8],
-        blur: 24,
-        spread: 0,
-        color: t.shadow,
-    };
+    v.window_shadow = egui::Shadow { offset: [0, 12], blur: 36, spread: 0, color: t.shadow };
+    v.popup_shadow = egui::Shadow { offset: [0, 8], blur: 24, spread: 0, color: t.shadow };
     v.selection.bg_fill = t.accent_soft;
     v.selection.stroke = Stroke::new(1.0, t.accent);
     v.slider_trailing_fill = true;

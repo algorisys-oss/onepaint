@@ -22,11 +22,7 @@ impl Session {
     /// whole layer; `None` when nothing visible would be copied.
     pub fn copy_region(&self) -> Option<Region> {
         let l = self.doc.layer(&self.active)?;
-        let mut floating = self
-            .transform
-            .as_ref()
-            .filter(|f| f.layer == l.id)
-            .map(|f| f.preview.clone());
+        let mut floating = self.transform.as_ref().filter(|f| f.layer == l.id).map(|f| f.preview.clone());
         let pixels = match floating.take() {
             // While transforming, copy what is shown.
             Some(p) => {
@@ -55,9 +51,7 @@ impl Session {
                 }
             }
         }
-        data.chunks_exact(4)
-            .any(|p| p[3] > 0.0)
-            .then_some(Region { rect, data })
+        data.chunks_exact(4).any(|p| p[3] > 0.0).then_some(Region { rect, data })
     }
 
     fn insert_layer_with(&mut self, name: &str, pixels: Surface) {
@@ -95,11 +89,8 @@ impl Session {
         let surface = if s >= 1.0 {
             onepaint_formats::image_to_surface(img, ox as i32, oy as i32)
         } else {
-            let src: Vec<f32> = img
-                .rgba
-                .chunks_exact(4)
-                .flat_map(|p| onepaint_formats::srgb8_to_premul_linear([p[0], p[1], p[2], p[3]]))
-                .collect();
+            let src: Vec<f32> =
+                img.rgba.chunks_exact(4).flat_map(|p| onepaint_formats::srgb8_to_premul_linear([p[0], p[1], p[2], p[3]])).collect();
             let bounds = Rect::new(0, 0, img.width as i32, img.height as i32);
             let mut f = transform::Floating {
                 layer: String::new(),
@@ -136,14 +127,7 @@ impl Session {
         }
         let mut s = Surface::new();
         s.write_rect(region.rect, &region.data);
-        self.insert_layer_with(
-            if cut {
-                "Layer via Cut"
-            } else {
-                "Layer via Copy"
-            },
-            s,
-        );
+        self.insert_layer_with(if cut { "Layer via Cut" } else { "Layer via Copy" }, s);
         self.history.end_transaction();
         self.history_changed();
         Ok(())

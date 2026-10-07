@@ -2582,6 +2582,7 @@ version = "0.1.0"
 dependencies = [
  "onepaint-color",
  "onepaint-doc",
+ "onepaint-filters",
  "onepaint-raster",
  "rayon",
 ]
@@ -2591,6 +2592,7 @@ name = "onepaint-doc"
 version = "0.1.0"
 dependencies = [
  "onepaint-color",
+ "onepaint-filters",
  "onepaint-raster",
  "serde",
  "serde_json",
@@ -2607,6 +2609,7 @@ dependencies = [
  "onepaint-color",
  "onepaint-compose",
  "onepaint-doc",
+ "onepaint-filters",
  "onepaint-formats",
  "onepaint-history",
  "onepaint-input",

@@ -9,21 +9,13 @@ pub type Px = [f32; 4];
 
 #[inline]
 pub fn srgb_to_linear(c: f32) -> f32 {
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
+    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
 }
 
 #[inline]
 pub fn linear_to_srgb(c: f32) -> f32 {
     let c = c.max(0.0);
-    if c <= 0.003_130_8 {
-        c * 12.92
-    } else {
-        1.055 * c.powf(1.0 / 2.4) - 0.055
-    }
+    if c <= 0.003_130_8 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 }
 }
 
 #[inline]
@@ -34,11 +26,7 @@ pub fn premultiply(c: Px) -> Px {
 /// Straight color from premultiplied; alpha 0 gives all zeros.
 #[inline]
 pub fn unpremultiply(p: Px) -> Px {
-    if p[3] > 0.0 {
-        [p[0] / p[3], p[1] / p[3], p[2] / p[3], p[3]]
-    } else {
-        [0.0; 4]
-    }
+    if p[3] > 0.0 { [p[0] / p[3], p[1] / p[3], p[2] / p[3], p[3]] } else { [0.0; 4] }
 }
 
 /// Premultiplied linear → premultiplied sRGB (happypaint `premLin2Srgb`).
@@ -46,12 +34,7 @@ pub fn unpremultiply(p: Px) -> Px {
 pub fn prem_lin_to_srgb(p: Px) -> Px {
     let a = p[3];
     let s = |c: f32| if a > 0.0 { c / a } else { c };
-    [
-        linear_to_srgb(s(p[0])) * a,
-        linear_to_srgb(s(p[1])) * a,
-        linear_to_srgb(s(p[2])) * a,
-        a,
-    ]
+    [linear_to_srgb(s(p[0])) * a, linear_to_srgb(s(p[1])) * a, linear_to_srgb(s(p[2])) * a, a]
 }
 
 /// Premultiplied sRGB → premultiplied linear (happypaint `premSrgb2Lin`).
@@ -59,12 +42,7 @@ pub fn prem_lin_to_srgb(p: Px) -> Px {
 pub fn prem_srgb_to_lin(p: Px) -> Px {
     let a = p[3];
     let s = |c: f32| if a > 0.0 { c / a } else { c };
-    [
-        srgb_to_linear(s(p[0])) * a,
-        srgb_to_linear(s(p[1])) * a,
-        srgb_to_linear(s(p[2])) * a,
-        a,
-    ]
+    [srgb_to_linear(s(p[0])) * a, srgb_to_linear(s(p[1])) * a, srgb_to_linear(s(p[2])) * a, a]
 }
 
 /// A straight-alpha sRGB color, the type the UI works in.
@@ -83,18 +61,8 @@ impl Default for Rgba {
 }
 
 impl Rgba {
-    pub const WHITE: Rgba = Rgba {
-        r: 1.0,
-        g: 1.0,
-        b: 1.0,
-        a: 1.0,
-    };
-    pub const BLACK: Rgba = Rgba {
-        r: 0.0,
-        g: 0.0,
-        b: 0.0,
-        a: 1.0,
-    };
+    pub const WHITE: Rgba = Rgba { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
+    pub const BLACK: Rgba = Rgba { r: 0.0, g: 0.0, b: 0.0, a: 1.0 };
 
     pub const fn new(r: f32, g: f32, b: f32, a: f32) -> Self {
         Self { r, g, b, a }
@@ -102,22 +70,12 @@ impl Rgba {
 
     /// Premultiplied linear-light pixel, the document's storage form.
     pub fn to_linear_premul(self) -> Px {
-        premultiply([
-            srgb_to_linear(self.r),
-            srgb_to_linear(self.g),
-            srgb_to_linear(self.b),
-            self.a,
-        ])
+        premultiply([srgb_to_linear(self.r), srgb_to_linear(self.g), srgb_to_linear(self.b), self.a])
     }
 
     pub fn from_linear_premul(p: Px) -> Self {
         let u = unpremultiply(p);
-        Self::new(
-            linear_to_srgb(u[0]),
-            linear_to_srgb(u[1]),
-            linear_to_srgb(u[2]),
-            u[3],
-        )
+        Self::new(linear_to_srgb(u[0]), linear_to_srgb(u[1]), linear_to_srgb(u[2]), u[3])
     }
 
     pub fn from_hex(s: &str) -> Option<Self> {
@@ -125,11 +83,7 @@ impl Rgba {
         if s.len() != 6 || !s.is_ascii() {
             return None;
         }
-        let ch = |i: usize| {
-            u8::from_str_radix(&s[i..i + 2], 16)
-                .ok()
-                .map(|v| v as f32 / 255.0)
-        };
+        let ch = |i: usize| u8::from_str_radix(&s[i..i + 2], 16).ok().map(|v| v as f32 / 255.0);
         Some(Self::new(ch(0)?, ch(2)?, ch(4)?, 1.0))
     }
 

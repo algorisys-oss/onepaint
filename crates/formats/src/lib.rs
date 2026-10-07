@@ -84,30 +84,15 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>, FormatError> {
         return Err(FormatError::UnsupportedVersion(version));
     }
     let len = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
-    let end = HEADER_BYTES
-        .checked_add(len)
-        .filter(|&e| e <= bytes.len())
-        .ok_or_else(|| corrupt("manifest past end of file"))?;
+    let end = HEADER_BYTES.checked_add(len).filter(|&e| e <= bytes.len()).ok_or_else(|| corrupt("manifest past end of file"))?;
     let manifest = serde_json::from_slice(&inflate_raw(&bytes[HEADER_BYTES..end])?)?;
-    Ok(Parsed {
-        manifest,
-        chunks: &bytes[end..],
-    })
+    Ok(Parsed { manifest, chunks: &bytes[end..] })
 }
 
 fn chunk<'a>(chunks: &'a [u8], r: &Value) -> Result<&'a [u8], FormatError> {
-    let off = r
-        .get("offset")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| corrupt("chunk ref without offset"))? as usize;
-    let len = r
-        .get("len")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| corrupt("chunk ref without len"))? as usize;
-    let end = off
-        .checked_add(len)
-        .filter(|&e| e <= chunks.len())
-        .ok_or_else(|| corrupt("chunk past end of file"))?;
+    let off = r.get("offset").and_then(Value::as_u64).ok_or_else(|| corrupt("chunk ref without offset"))? as usize;
+    let len = r.get("len").and_then(Value::as_u64).ok_or_else(|| corrupt("chunk ref without len"))? as usize;
+    let end = off.checked_add(len).filter(|&e| e <= chunks.len()).ok_or_else(|| corrupt("chunk past end of file"))?;
     Ok(&chunks[off..end])
 }
 
@@ -139,28 +124,14 @@ const LEAF_KNOWN: &[&str] = &[
     "height",
     "overflow",
 ];
-const GROUP_KNOWN: &[&str] = &[
-    "id",
-    "name",
-    "visible",
-    "opacity",
-    "blendMode",
-    "collapsed",
-    "children",
-];
+const GROUP_KNOWN: &[&str] = &["id", "name", "visible", "opacity", "blendMode", "collapsed", "children"];
 
 fn extras(o: &Map<String, Value>, known: &[&str]) -> Extra {
-    o.iter()
-        .filter(|(k, _)| !known.contains(&k.as_str()))
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect()
+    o.iter().filter(|(k, _)| !known.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect()
 }
 
 fn s(o: &Map<String, Value>, k: &str) -> String {
-    o.get(k)
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string()
+    o.get(k).and_then(Value::as_str).unwrap_or_default().to_string()
 }
 
 fn b(o: &Map<String, Value>, k: &str, d: bool) -> bool {
@@ -200,27 +171,15 @@ fn paste_mask(s: &mut Surface, x: i32, y: i32, w: u32, h: u32, rgba: &[u8], clip
     }
 }
 
-fn read_tiles(
-    chunks: &[u8],
-    tiles: &[Value],
-    doc: Rect,
-    mask: bool,
-) -> Result<Surface, FormatError> {
+fn read_tiles(chunks: &[u8], tiles: &[Value], doc: Rect, mask: bool) -> Result<Surface, FormatError> {
     let mut s = Surface::new();
     for t in tiles {
-        let key = t
-            .get("key")
-            .and_then(Value::as_i64)
-            .ok_or_else(|| corrupt("tile without key"))?;
+        let key = t.get("key").and_then(Value::as_i64).ok_or_else(|| corrupt("tile without key"))?;
         let (tx, ty) = unpack_key((key & 0xffff_ffff) as u32);
         let Some(clip) = doc.intersect(&Rect::from_tile(tx, ty)) else {
             continue;
         };
-        let c = chunk(
-            chunks,
-            t.get("chunk")
-                .ok_or_else(|| corrupt("tile without chunk"))?,
-        )?;
+        let c = chunk(chunks, t.get("chunk").ok_or_else(|| corrupt("tile without chunk"))?)?;
         let (w, h, rgba) = decode_png_rgba8(c)?;
         if mask {
             paste_mask(&mut s, tx * TILE, ty * TILE, w, h, &rgba, clip);
@@ -232,9 +191,7 @@ fn read_tiles(
 }
 
 fn read_node(v: &Value, chunks: &[u8], doc: Rect) -> Result<Node, FormatError> {
-    let o = v
-        .as_object()
-        .ok_or_else(|| corrupt("node is not an object"))?;
+    let o = v.as_object().ok_or_else(|| corrupt("node is not an object"))?;
     if let Some(children) = o.get("children").and_then(Value::as_array) {
         let mut g = Group::new(&s(o, "name"));
         g.id = s(o, "id");
@@ -259,6 +216,10 @@ fn read_node(v: &Value, chunks: &[u8], doc: Rect) -> Result<Node, FormatError> {
     l.inherit_alpha = b(o, "inheritAlpha", false);
     l.mask_enabled = b(o, "maskEnabled", true);
     l.extra = extras(o, LEAF_KNOWN);
+    if let Some(kind) = l.extra.remove("adjustmentKind").and_then(|v| v.as_str().map(str::to_string)) {
+        let params = l.extra.remove("adjustmentParams").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+        l.adjustment = Some(onepaint_doc::Adjustment { kind, params });
+    }
     if let Some(tiles) = o.get("tiles").and_then(Value::as_array) {
         l.pixels = read_tiles(chunks, tiles, doc, false)?;
     } else if let (Some(bb), Some(c)) = (o.get("bbox"), o.get("chunk")) {
@@ -279,15 +240,9 @@ fn read_node(v: &Value, chunks: &[u8], doc: Rect) -> Result<Node, FormatError> {
         l.chunks.insert("height".into(), chunk(chunks, c)?.to_vec());
     }
     if let Some(ov) = o.get("overflow") {
-        let c = ov
-            .get("chunk")
-            .ok_or_else(|| corrupt("overflow without chunk"))?;
-        l.chunks
-            .insert("overflow".into(), chunk(chunks, c)?.to_vec());
-        l.extra.insert(
-            "__overflowRect".into(),
-            ov.get("rect").cloned().unwrap_or(Value::Null),
-        );
+        let c = ov.get("chunk").ok_or_else(|| corrupt("overflow without chunk"))?;
+        l.chunks.insert("overflow".into(), chunk(chunks, c)?.to_vec());
+        l.extra.insert("__overflowRect".into(), ov.get("rect").cloned().unwrap_or(Value::Null));
     }
     Ok(Node::Layer(l))
 }
@@ -295,29 +250,15 @@ fn read_node(v: &Value, chunks: &[u8], doc: Rect) -> Result<Node, FormatError> {
 /// Read any `.happypaint` (v1–v9) by key presence, never by version number.
 pub fn read_happypaint(bytes: &[u8]) -> Result<Document, FormatError> {
     let p = parse(bytes)?;
-    let d = p
-        .manifest
-        .get("doc")
-        .and_then(Value::as_object)
-        .ok_or_else(|| corrupt("manifest without doc"))?;
-    let width = d
-        .get("width")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| corrupt("doc without width"))? as u32;
-    let height = d
-        .get("height")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| corrupt("doc without height"))? as u32;
+    let d = p.manifest.get("doc").and_then(Value::as_object).ok_or_else(|| corrupt("manifest without doc"))?;
+    let width = d.get("width").and_then(Value::as_u64).ok_or_else(|| corrupt("doc without width"))? as u32;
+    let height = d.get("height").and_then(Value::as_u64).ok_or_else(|| corrupt("doc without height"))? as u32;
     let mut doc = Document::new(width, height, None);
     doc.root.clear();
     doc.id = s(d, "id");
     doc.name = s(d, "name");
     doc.dpi = f(d, "dpi", 300.0);
-    doc.color_space = if s(d, "colorSpace") == "display-p3" {
-        "display-p3".into()
-    } else {
-        "srgb".into()
-    };
+    doc.color_space = if s(d, "colorSpace") == "display-p3" { "display-p3".into() } else { "srgb".into() };
     doc.depth = match d.get("depth").and_then(Value::as_str) {
         Some("8-bit") => Depth::Rgba8,
         Some("32-bit-float") => Depth::Rgba32F,
@@ -325,28 +266,9 @@ pub fn read_happypaint(bytes: &[u8]) -> Result<Document, FormatError> {
     };
     doc.updated_at = f(d, "updatedAt", 0.0);
     doc.created_at = f(d, "createdAt", doc.updated_at);
-    doc.extra = extras(
-        d,
-        &[
-            "id",
-            "name",
-            "width",
-            "height",
-            "dpi",
-            "bitDepth",
-            "colorSpace",
-            "depth",
-            "createdAt",
-            "updatedAt",
-        ],
-    );
+    doc.extra = extras(d, &["id", "name", "width", "height", "dpi", "bitDepth", "colorSpace", "depth", "createdAt", "updatedAt"]);
     let bounds = doc.bounds();
-    for n in p
-        .manifest
-        .get("nodes")
-        .and_then(Value::as_array)
-        .ok_or_else(|| corrupt("manifest without nodes"))?
-    {
+    for n in p.manifest.get("nodes").and_then(Value::as_array).ok_or_else(|| corrupt("manifest without nodes"))? {
         doc.root.push(read_node(n, p.chunks, bounds)?);
     }
     Ok(doc)
@@ -354,11 +276,7 @@ pub fn read_happypaint(bytes: &[u8]) -> Result<Document, FormatError> {
 
 /// JSON number: integral values print without a fraction, like JS.
 fn num(v: f64) -> Value {
-    if v.fract() == 0.0 && v.abs() < 1e15 {
-        json!(v as i64)
-    } else {
-        json!((v * 1e6).round() / 1e6)
-    }
+    if v.fract() == 0.0 && v.abs() < 1e15 { json!(v as i64) } else { json!((v * 1e6).round() / 1e6) }
 }
 
 struct Writer {
@@ -410,8 +328,7 @@ impl Writer {
 
     fn node(&mut self, n: &Node, doc: Rect) -> Result<Value, FormatError> {
         let mut o = Map::new();
-        let (id, name, visible, opacity, mode) =
-            (n.id(), n.name(), n.visible(), n.opacity(), n.blend_mode());
+        let (id, name, visible, opacity, mode) = (n.id(), n.name(), n.visible(), n.opacity(), n.blend_mode());
         o.insert("id".into(), json!(id));
         o.insert("name".into(), json!(name));
         o.insert("visible".into(), json!(visible));
@@ -425,11 +342,7 @@ impl Writer {
                 if g.collapsed {
                     o.insert("collapsed".into(), json!(true));
                 }
-                let children = g
-                    .children
-                    .iter()
-                    .map(|c| self.node(c, doc))
-                    .collect::<Result<Vec<_>, _>>()?;
+                let children = g.children.iter().map(|c| self.node(c, doc)).collect::<Result<Vec<_>, _>>()?;
                 o.insert("children".into(), Value::Array(children));
             }
             Node::Layer(l) => {
@@ -447,11 +360,18 @@ impl Writer {
                 for (k, v) in extra {
                     o.insert(k, v);
                 }
+                if let Some(a) = &l.adjustment {
+                    o.insert("adjustmentKind".into(), json!(a.kind));
+                    o.insert("adjustmentParams".into(), serde_json::to_value(&a.params)?);
+                }
                 if !l.mask_enabled {
                     o.insert("maskEnabled".into(), json!(false));
                 }
-                let tiles = self.tiles(&l.pixels, doc, false)?;
-                o.insert("tiles".into(), Value::Array(tiles));
+                // Adjustment layers carry no pixels of their own (PE:7403-7412).
+                if l.adjustment.is_none() {
+                    let tiles = self.tiles(&l.pixels, doc, false)?;
+                    o.insert("tiles".into(), Value::Array(tiles));
+                }
                 if let Some(m) = &l.mask {
                     let mt = self.tiles(m, doc, true)?;
                     o.insert("maskTiles".into(), Value::Array(mt));
@@ -471,22 +391,11 @@ impl Writer {
 }
 
 /// Write a v9 `.happypaint`. `thumbnail_jpeg` becomes the first chunk.
-pub fn write_happypaint(
-    doc: &Document,
-    thumbnail_jpeg: Option<&[u8]>,
-    app_version: &str,
-) -> Result<Vec<u8>, FormatError> {
-    let mut w = Writer {
-        chunks: Vec::new(),
-        dedup: HashMap::new(),
-    };
+pub fn write_happypaint(doc: &Document, thumbnail_jpeg: Option<&[u8]>, app_version: &str) -> Result<Vec<u8>, FormatError> {
+    let mut w = Writer { chunks: Vec::new(), dedup: HashMap::new() };
     let thumb = thumbnail_jpeg.map(|t| w.push(t));
     let bounds = doc.bounds();
-    let nodes = doc
-        .root
-        .iter()
-        .map(|n| w.node(n, bounds))
-        .collect::<Result<Vec<_>, _>>()?;
+    let nodes = doc.root.iter().map(|n| w.node(n, bounds)).collect::<Result<Vec<_>, _>>()?;
     let mut d = Map::new();
     d.insert("id".into(), json!(doc.id));
     d.insert("name".into(), json!(doc.name));

@@ -53,12 +53,7 @@ fn hex_parse_and_format() {
 
 #[test]
 fn hsv_round_trip() {
-    for &(h, s, v) in &[
-        (0.0, 1.0, 1.0),
-        (120.0, 0.5, 0.75),
-        (300.0, 0.25, 0.4),
-        (0.0, 0.0, 0.3),
-    ] {
+    for &(h, s, v) in &[(0.0, 1.0, 1.0), (120.0, 0.5, 0.75), (300.0, 0.25, 0.4), (0.0, 0.0, 0.3)] {
         let c = Rgba::from_hsv(h, s, v, 1.0);
         let (h2, s2, v2) = c.to_hsv();
         assert!(close(s2, s, 1e-5) && close(v2, v, 1e-5), "{h} {s} {v}");

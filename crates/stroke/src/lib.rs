@@ -22,13 +22,7 @@ pub struct StrokePoint {
 
 impl StrokePoint {
     pub fn at(x: f64, y: f64, pressure: f64, t: f64) -> Self {
-        Self {
-            x,
-            y,
-            pressure,
-            t: Some(t),
-            ..Default::default()
-        }
+        Self { x, y, pressure, t: Some(t), ..Default::default() }
     }
 }
 
@@ -67,10 +61,7 @@ impl Sampler {
             return Vec::new();
         }
         let dir = (dx / dist, dy / dist);
-        let (pt, td) = (
-            prev.t.unwrap_or(0.0),
-            p.t.unwrap_or(0.0) - prev.t.unwrap_or(0.0),
-        );
+        let (pt, td) = (prev.t.unwrap_or(0.0), p.t.unwrap_or(0.0) - prev.t.unwrap_or(0.0));
         let mut out = Vec::new();
         let mut acc = 0.0;
         let mut remaining = dist;
@@ -105,11 +96,7 @@ pub struct Smoother {
 
 impl Smoother {
     pub fn new(strength: f64) -> Self {
-        Self {
-            tau: strength.clamp(0.0, 1.0) * 60.0,
-            current: None,
-            last_t: None,
-        }
+        Self { tau: strength.clamp(0.0, 1.0) * 60.0, current: None, last_t: None }
     }
 
     pub fn next(&mut self, p: StrokePoint) -> StrokePoint {
@@ -126,11 +113,7 @@ impl Smoother {
             dt = 4.0;
         }
         self.last_t = p.t;
-        let follow = if self.tau <= 0.0 {
-            1.0
-        } else {
-            1.0 - (-dt / self.tau).exp()
-        };
+        let follow = if self.tau <= 0.0 { 1.0 } else { 1.0 - (-dt / self.tau).exp() };
         let tf = (follow * 2.0).min(1.0);
         let n = StrokePoint {
             x: c.x + (p.x - c.x) * follow,
@@ -157,11 +140,7 @@ pub const MAX_STRING_PX: f64 = 120.0;
 
 impl Stabilizer {
     pub fn new(strength: f64) -> Self {
-        Self {
-            len: strength.clamp(0.0, 1.0) * MAX_STRING_PX,
-            anchor: None,
-            last: None,
-        }
+        Self { len: strength.clamp(0.0, 1.0) * MAX_STRING_PX, anchor: None, last: None }
     }
 
     pub fn next(&mut self, p: StrokePoint) -> Option<StrokePoint> {
@@ -173,25 +152,12 @@ impl Stabilizer {
         let (dx, dy) = (p.x - a.x, p.y - a.y);
         let d = dx.hypot(dy);
         if d <= self.len || d == 0.0 {
-            self.anchor = Some(StrokePoint {
-                pressure: p.pressure,
-                tilt_x: p.tilt_x,
-                tilt_y: p.tilt_y,
-                t: p.t,
-                ..a
-            });
+            self.anchor = Some(StrokePoint { pressure: p.pressure, tilt_x: p.tilt_x, tilt_y: p.tilt_y, t: p.t, ..a });
             return None;
         }
         let m = (d - self.len) / d;
-        let n = StrokePoint {
-            x: a.x + dx * m,
-            y: a.y + dy * m,
-            pressure: p.pressure,
-            tilt_x: p.tilt_x,
-            tilt_y: p.tilt_y,
-            twist: 0.0,
-            t: p.t,
-        };
+        let n =
+            StrokePoint { x: a.x + dx * m, y: a.y + dy * m, pressure: p.pressure, tilt_x: p.tilt_x, tilt_y: p.tilt_y, twist: 0.0, t: p.t };
         self.anchor = Some(n);
         Some(n)
     }
@@ -263,11 +229,7 @@ fn monotone_tangents(p: &[CurvePoint]) -> Vec<f64> {
     m[0] = sec[0];
     m[n - 1] = sec[n - 2];
     for i in 1..n - 1 {
-        m[i] = if sec[i - 1] * sec[i] <= 0.0 {
-            0.0
-        } else {
-            (sec[i - 1] + sec[i]) / 2.0
-        };
+        m[i] = if sec[i - 1] * sec[i] <= 0.0 { 0.0 } else { (sec[i - 1] + sec[i]) / 2.0 };
     }
     for i in 0..n - 1 {
         let s = sec[i];
@@ -291,11 +253,7 @@ const IDENTITY: [CurvePoint; 2] = [CurvePoint::new(0.0, 0.0), CurvePoint::new(1.
 
 /// Curve lookup, flat beyond the ends (`dynamics.ts:192-216`).
 pub fn eval_curve(curve: &[CurvePoint], x: f64, interp: Interp) -> f64 {
-    let pts = if curve.len() >= 2 {
-        curve
-    } else {
-        &IDENTITY[..]
-    };
+    let pts = if curve.len() >= 2 { curve } else { &IDENTITY[..] };
     if x <= pts[0].x {
         return pts[0].y;
     }

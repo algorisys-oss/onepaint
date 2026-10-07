@@ -6,15 +6,8 @@ use onepaint_selection::{Mode, rect_polygon};
 
 fn session() -> Session {
     let mut s = Session::new(200, 100, Some(Rgba::WHITE));
-    s.execute(Command::SelectShape {
-        contours: vec![rect_polygon([10.0, 10.0], [30.0, 20.0])],
-        mode: Mode::Replace,
-    })
-    .unwrap();
-    s.execute(Command::SetColor {
-        rgba: Rgba::new(0.0, 0.0, 1.0, 1.0),
-    })
-    .unwrap();
+    s.execute(Command::SelectShape { contours: vec![rect_polygon([10.0, 10.0], [30.0, 20.0])], mode: Mode::Replace }).unwrap();
+    s.execute(Command::SetColor { rgba: Rgba::new(0.0, 0.0, 1.0, 1.0) }).unwrap();
     s.execute(Command::FillSelection).unwrap();
     s
 }
@@ -83,11 +76,7 @@ fn layer_via_copy_and_cut() {
 #[test]
 fn place_image_scales_to_fit_and_centres() {
     let mut s = Session::new(100, 100, None);
-    let img = DecodedImage {
-        width: 400,
-        height: 200,
-        rgba: [255u8, 0, 0, 255].repeat(400 * 200),
-    };
+    let img = DecodedImage { width: 400, height: 200, rgba: [255u8, 0, 0, 255].repeat(400 * 200) };
     s.place_image(&img);
     let l = s.active().to_string();
     assert_eq!(s.doc().find(&l).unwrap().name(), "Image");
@@ -97,11 +86,7 @@ fn place_image_scales_to_fit_and_centres() {
     assert_eq!(alpha_on(&s, &l, 50, 10), 0.0);
     assert_eq!(alpha_on(&s, &l, 50, 90), 0.0);
     // Small images keep their size.
-    let small = DecodedImage {
-        width: 10,
-        height: 10,
-        rgba: [0u8, 255, 0, 255].repeat(100),
-    };
+    let small = DecodedImage { width: 10, height: 10, rgba: [0u8, 255, 0, 255].repeat(100) };
     s.place_image(&small);
     let l2 = s.active().to_string();
     assert!(alpha_on(&s, &l2, 50, 50) > 0.99);

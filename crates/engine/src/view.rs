@@ -17,13 +17,7 @@ pub struct View {
 
 impl View {
     pub fn new(view_size: [f64; 2], doc_size: [f64; 2]) -> Self {
-        let mut v = Self {
-            view_size,
-            doc_size,
-            scale: 1.0,
-            rotation: 0.0,
-            offset: [0.0, 0.0],
-        };
+        let mut v = Self { view_size, doc_size, scale: 1.0, rotation: 0.0, offset: [0.0, 0.0] };
         v.fit();
         v
     }
@@ -32,34 +26,22 @@ impl View {
         let (c, s) = (self.rotation.cos(), self.rotation.sin());
         let dx = (p[0] - self.doc_size[0] / 2.0) * self.scale;
         let dy = (p[1] - self.doc_size[1] / 2.0) * self.scale;
-        [
-            self.view_size[0] / 2.0 + self.offset[0] + dx * c - dy * s,
-            self.view_size[1] / 2.0 + self.offset[1] + dx * s + dy * c,
-        ]
+        [self.view_size[0] / 2.0 + self.offset[0] + dx * c - dy * s, self.view_size[1] / 2.0 + self.offset[1] + dx * s + dy * c]
     }
 
     pub fn screen_to_doc(&self, p: [f64; 2]) -> [f64; 2] {
         let (c, s) = (self.rotation.cos(), self.rotation.sin());
         let qx = p[0] - self.view_size[0] / 2.0 - self.offset[0];
         let qy = p[1] - self.view_size[1] / 2.0 - self.offset[1];
-        [
-            self.doc_size[0] / 2.0 + (qx * c + qy * s) / self.scale,
-            self.doc_size[1] / 2.0 + (-qx * s + qy * c) / self.scale,
-        ]
+        [self.doc_size[0] / 2.0 + (qx * c + qy * s) / self.scale, self.doc_size[1] / 2.0 + (-qx * s + qy * c) / self.scale]
     }
 
     /// Multiply the scale by `factor`, keeping the screen point `at` fixed.
     pub fn zoom_at(&mut self, at: [f64; 2], factor: f64) {
         let ns = (self.scale * factor).clamp(MIN_SCALE, MAX_SCALE);
         let f = ns / self.scale;
-        let q = [
-            at[0] - self.view_size[0] / 2.0,
-            at[1] - self.view_size[1] / 2.0,
-        ];
-        self.offset = [
-            q[0] - f * (q[0] - self.offset[0]),
-            q[1] - f * (q[1] - self.offset[1]),
-        ];
+        let q = [at[0] - self.view_size[0] / 2.0, at[1] - self.view_size[1] / 2.0];
+        self.offset = [q[0] - f * (q[0] - self.offset[0]), q[1] - f * (q[1] - self.offset[1])];
         self.scale = ns;
     }
 

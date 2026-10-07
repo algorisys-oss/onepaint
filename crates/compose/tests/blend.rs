@@ -39,10 +39,7 @@ fn separable_golden_values() {
                     _ => unreachable!(),
                 }
             };
-            for m in [
-                Multiply, Screen, Overlay, Darken, Lighten, HardLight, Difference, Exclusion,
-                LinearBurn, Add,
-            ] {
+            for m in [Multiply, Screen, Overlay, Darken, Lighten, HardLight, Difference, Exclusion, LinearBurn, Add] {
                 assert!(close(bc(m, b, s), exp(m)), "{m:?} b={b} s={s}");
             }
         }

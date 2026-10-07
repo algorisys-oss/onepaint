@@ -45,13 +45,7 @@ impl Session {
         }
         let before = self.selection.clone();
         let bytes = (self.doc.width * self.doc.height) as usize * 2;
-        self.history.push(
-            Change::Selection {
-                before,
-                after: after.clone(),
-            },
-            bytes,
-        );
+        self.history.push(Change::Selection { before, after: after.clone() }, bytes);
         self.set_selection_raw(after);
         self.history_changed();
     }
@@ -68,14 +62,7 @@ impl Session {
                 let m = self.region_combined(&region, mode);
                 self.commit_selection(Some(m));
             }
-            Command::SelectByColor {
-                x,
-                y,
-                tolerance,
-                mode,
-                contiguous,
-                sample_all,
-            } => {
+            Command::SelectByColor { x, y, tolerance, mode, contiguous, sample_all } => {
                 let region = if sample_all {
                     let flat = self.flatten();
                     let get = |px: u32, py: u32| {
@@ -122,12 +109,7 @@ impl Session {
                 self.feather = radius.clamp(0.0, 100.0);
                 self.refresh_clip();
             }
-            Command::Fill {
-                x,
-                y,
-                tolerance,
-                grow,
-            } => self.fill(x, y, tolerance, grow.min(8)),
+            Command::Fill { x, y, tolerance, grow } => self.fill(x, y, tolerance, grow.min(8)),
             Command::FillSelection => self.fill_selection(),
             Command::ClearSelected => {
                 if self.clip.is_none() {
@@ -143,14 +125,10 @@ impl Session {
                     return Ok(());
                 };
                 let id = self.active.clone();
-                self.modify_layer(
-                    &id,
-                    Rect::new(bx as i32, by as i32, bw as i32, bh as i32),
-                    |x, y, p| {
-                        let k = 1.0 - clip.coverage(x, y);
-                        p.map(|v| v * k)
-                    },
-                );
+                self.modify_layer(&id, Rect::new(bx as i32, by as i32, bw as i32, bh as i32), |x, y, p| {
+                    let k = 1.0 - clip.coverage(x, y);
+                    p.map(|v| v * k)
+                });
             }
             _ => {}
         }
@@ -158,9 +136,7 @@ impl Session {
     }
 
     fn editable_active(&self) -> Option<&Layer> {
-        self.doc
-            .layer(&self.active)
-            .filter(|l| l.visible && !l.locked)
+        self.doc.layer(&self.active).filter(|l| l.visible && !l.locked)
     }
 
     /// Paint bucket (happypaint `computeFill`, PE:1559-1691).
@@ -181,22 +157,14 @@ impl Session {
         let c = self.color.to_linear_premul();
         let alpha_lock = l.alpha_lock;
         let id = self.active.clone();
-        self.modify_layer(
-            &id,
-            Rect::new(bx as i32, by as i32, bw as i32, bh as i32),
-            |x, y, p| {
-                if region.get(x as u32, y as u32) == 0 {
-                    return p;
-                }
-                let after = if alpha_lock {
-                    [c[0] * p[3], c[1] * p[3], c[2] * p[3], p[3]]
-                } else {
-                    [c[0], c[1], c[2], 1.0]
-                };
-                let s = base.as_ref().map_or(1.0, |m| m.coverage(x, y));
-                [0, 1, 2, 3].map(|i| p[i] + (after[i] - p[i]) * s)
-            },
-        );
+        self.modify_layer(&id, Rect::new(bx as i32, by as i32, bw as i32, bh as i32), |x, y, p| {
+            if region.get(x as u32, y as u32) == 0 {
+                return p;
+            }
+            let after = if alpha_lock { [c[0] * p[3], c[1] * p[3], c[2] * p[3], p[3]] } else { [c[0], c[1], c[2], 1.0] };
+            let s = base.as_ref().map_or(1.0, |m| m.coverage(x, y));
+            [0, 1, 2, 3].map(|i| p[i] + (after[i] - p[i]) * s)
+        });
     }
 
     /// Source-over the current colour at the selection's coverage.
@@ -213,41 +181,22 @@ impl Session {
         };
         let c = self.color.to_linear_premul();
         let id = self.active.clone();
-        self.modify_layer(
-            &id,
-            Rect::new(bx as i32, by as i32, bw as i32, bh as i32),
-            |x, y, p| {
-                let a = clip.coverage(x, y);
-                if a <= 0.0 {
-                    return p;
-                }
-                let k = 1.0 - a;
-                if alpha_lock {
-                    [
-                        c[0] * a * p[3] + p[0] * k,
-                        c[1] * a * p[3] + p[1] * k,
-                        c[2] * a * p[3] + p[2] * k,
-                        p[3],
-                    ]
-                } else {
-                    [
-                        c[0] * a + p[0] * k,
-                        c[1] * a + p[1] * k,
-                        c[2] * a + p[2] * k,
-                        a + p[3] * k,
-                    ]
-                }
-            },
-        );
+        self.modify_layer(&id, Rect::new(bx as i32, by as i32, bw as i32, bh as i32), |x, y, p| {
+            let a = clip.coverage(x, y);
+            if a <= 0.0 {
+                return p;
+            }
+            let k = 1.0 - a;
+            if alpha_lock {
+                [c[0] * a * p[3] + p[0] * k, c[1] * a * p[3] + p[1] * k, c[2] * a * p[3] + p[2] * k, p[3]]
+            } else {
+                [c[0] * a + p[0] * k, c[1] * a + p[1] * k, c[2] * a + p[2] * k, a + p[3] * k]
+            }
+        });
     }
 
     /// Apply `f` to every pixel of a layer inside `rect` (clipped to the canvas) as one undo step.
-    pub(crate) fn modify_layer(
-        &mut self,
-        id: &str,
-        rect: Rect,
-        f: impl Fn(i32, i32, [f32; 4]) -> [f32; 4],
-    ) {
+    pub(crate) fn modify_layer(&mut self, id: &str, rect: Rect, f: impl Fn(i32, i32, [f32; 4]) -> [f32; 4]) {
         let Some(rect) = rect.intersect(&self.doc.bounds()) else {
             return;
         };
@@ -261,10 +210,7 @@ impl Session {
                 continue;
             };
             let before = layer.pixels.tile(tx, ty).cloned();
-            let mut buf = before
-                .as_ref()
-                .map(|t| t.to_f32())
-                .unwrap_or_else(|| vec![0.0; TILE_PX * 4]);
+            let mut buf = before.as_ref().map(|t| t.to_f32()).unwrap_or_else(|| vec![0.0; TILE_PX * 4]);
             for y in ix.y..ix.bottom() {
                 for x in ix.x..ix.right() {
                     let i = (((y - ty * TILE) * TILE + (x - tx * TILE)) * 4) as usize;
@@ -284,13 +230,7 @@ impl Session {
         if changes.is_empty() {
             return;
         }
-        self.history.push(
-            Change::Tiles {
-                layer: id.to_string(),
-                tiles: changes,
-            },
-            bytes,
-        );
+        self.history.push(Change::Tiles { layer: id.to_string(), tiles: changes }, bytes);
         self.mark_dirty(rect);
         self.doc.touch();
         self.history_changed();

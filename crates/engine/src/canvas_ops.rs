@@ -22,12 +22,7 @@ fn map_layers(nodes: &mut [Node], f: &mut impl FnMut(&mut Layer)) {
 
 impl Session {
     fn shape(&self) -> DocShape {
-        DocShape {
-            width: self.doc.width,
-            height: self.doc.height,
-            root: self.doc.root.clone(),
-            active: self.active.clone(),
-        }
+        DocShape { width: self.doc.width, height: self.doc.height, root: self.doc.root.clone(), active: self.active.clone() }
     }
 
     pub(crate) fn apply_shape(&mut self, s: DocShape) {
@@ -43,26 +38,14 @@ impl Session {
 
     fn record_shape(&mut self, before: DocShape) {
         let after = self.shape();
-        self.history.push(
-            Change::Document {
-                before: Box::new(before),
-                after: Box::new(after.clone()),
-            },
-            4096,
-        );
+        self.history.push(Change::Document { before: Box::new(before), after: Box::new(after.clone()) }, 4096);
         self.apply_shape(after);
         self.doc.touch();
         self.history_changed();
     }
 
     /// Crop or extend at 1:1; content moves by (dx, dy). New mask area is white.
-    pub(crate) fn resize_canvas(
-        &mut self,
-        width: u32,
-        height: u32,
-        dx: i32,
-        dy: i32,
-    ) -> Result<(), EngineError> {
+    pub(crate) fn resize_canvas(&mut self, width: u32, height: u32, dx: i32, dy: i32) -> Result<(), EngineError> {
         let (width, height) = (width.clamp(1, 16384), height.clamp(1, 16384));
         let before = self.shape();
         let old = Rect::new(dx, dy, self.doc.width as i32, self.doc.height as i32);
@@ -91,10 +74,7 @@ impl Session {
     pub(crate) fn scale_image(&mut self, width: u32, height: u32) -> Result<(), EngineError> {
         let (width, height) = (width.clamp(1, 16384), height.clamp(1, 16384));
         let before = self.shape();
-        let (sx, sy) = (
-            width as f64 / self.doc.width as f64,
-            height as f64 / self.doc.height as f64,
-        );
+        let (sx, sy) = (width as f64 / self.doc.width as f64, height as f64 / self.doc.height as f64);
         let src_bounds = self.doc.bounds();
         let dst = Rect::new(0, 0, width as i32, height as i32);
         let resample = |s: &Surface| -> Surface {

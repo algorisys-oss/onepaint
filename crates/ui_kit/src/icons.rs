@@ -83,17 +83,10 @@ pub fn exists(name: &str) -> bool {
 }
 
 pub fn image(name: &str, size: f32, tint: Color32) -> egui::Image<'static> {
-    let bytes = white_icons()
-        .get(name)
-        .or_else(|| white_icons().get("x"))
-        .cloned()
-        .unwrap_or_default();
-    egui::Image::from_bytes(
-        format!("bytes://icons/{name}.svg"),
-        egui::load::Bytes::Shared(bytes),
-    )
-    .fit_to_exact_size(Vec2::splat(size))
-    .tint(tint)
+    let bytes = white_icons().get(name).or_else(|| white_icons().get("x")).cloned().unwrap_or_default();
+    egui::Image::from_bytes(format!("bytes://icons/{name}.svg"), egui::load::Bytes::Shared(bytes))
+        .fit_to_exact_size(Vec2::splat(size))
+        .tint(tint)
 }
 
 pub fn paint(ui: &egui::Ui, rect: Rect, name: &str, size: f32, tint: Color32) {
@@ -101,21 +94,11 @@ pub fn paint(ui: &egui::Ui, rect: Rect, name: &str, size: f32, tint: Color32) {
 }
 
 /// Square icon button: transparent until hovered; `selected` gets the accent treatment.
-pub fn button(
-    ui: &mut egui::Ui,
-    name: &str,
-    box_size: f32,
-    selected: bool,
-    tooltip: &str,
-) -> Response {
+pub fn button(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, tooltip: &str) -> Response {
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(box_size), Sense::click());
-    resp.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tooltip)
-    });
-    let hover = ui
-        .ctx()
-        .animate_bool(resp.id.with("h"), resp.hovered() || selected);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tooltip));
+    let hover = ui.ctx().animate_bool(resp.id.with("h"), resp.hovered() || selected);
     let p = ui.painter();
     if selected {
         p.rect_filled(rect, t.radius, t.accent_soft);
@@ -133,16 +116,7 @@ pub fn button(
     };
     paint(ui, rect, name, (box_size * 0.55).round(), tint);
     if resp.has_focus() {
-        p.rect_stroke(
-            rect.expand(1.0),
-            t.radius,
-            egui::Stroke::new(2.0, t.accent),
-            egui::StrokeKind::Outside,
-        );
+        p.rect_stroke(rect.expand(1.0), t.radius, egui::Stroke::new(2.0, t.accent), egui::StrokeKind::Outside);
     }
-    if tooltip.is_empty() {
-        resp
-    } else {
-        resp.on_hover_text(tooltip)
-    }
+    if tooltip.is_empty() { resp } else { resp.on_hover_text(tooltip) }
 }

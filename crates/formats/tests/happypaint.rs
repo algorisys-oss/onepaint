@@ -7,26 +7,15 @@ use std::path::PathBuf;
 
 #[test]
 fn header_bytes() {
-    assert_eq!(
-        header(6, 1234),
-        [
-            0x48, 0x50, 0x4E, 0x54, 0x06, 0x00, 0x00, 0x00, 0xD2, 0x04, 0x00, 0x00
-        ]
-    );
+    assert_eq!(header(6, 1234), [0x48, 0x50, 0x4E, 0x54, 0x06, 0x00, 0x00, 0x00, 0xD2, 0x04, 0x00, 0x00]);
 }
 
 #[test]
 fn rejects_bad_magic_version_and_bounds() {
-    assert!(matches!(
-        read_happypaint(b"NOPE00000000"),
-        Err(FormatError::BadMagic)
-    ));
+    assert!(matches!(read_happypaint(b"NOPE00000000"), Err(FormatError::BadMagic)));
     let mut v10 = header(10, 0).to_vec();
     v10.extend_from_slice(&[0; 4]);
-    assert!(matches!(
-        read_happypaint(&v10),
-        Err(FormatError::UnsupportedVersion(10))
-    ));
+    assert!(matches!(read_happypaint(&v10), Err(FormatError::UnsupportedVersion(10))));
     assert!(read_happypaint(&header(9, 999)).is_err());
     // A manifest whose chunk ref runs past EOF is an error, not a panic.
     let json = br#"{"app":"t","doc":{"id":"d","name":"n","width":4,"height":4,"createdAt":0,"updatedAt":0},
@@ -49,30 +38,14 @@ fn fill(s: &mut Surface, x0: i32, y0: i32, w: i32, h: i32, p: [f32; 4]) {
 fn round_trip_tree_pixels_and_extras() {
     let mut d = Document::new(300, 280, Some(Rgba::WHITE));
     d.name = "Round trip".into();
-    d.extra
-        .insert("guides".into(), serde_json::json!({"visible": true}));
+    d.extra.insert("guides".into(), serde_json::json!({"visible": true}));
     let mut g = Group::new("Group");
     g.opacity = 0.5;
     g.blend_mode = BlendMode::Screen;
     let mut a = Layer::new("A");
-    fill(
-        &mut a.pixels,
-        10,
-        10,
-        20,
-        20,
-        Rgba::new(1.0, 0.5, 0.0, 1.0).to_linear_premul(),
-    );
-    fill(
-        &mut a.pixels,
-        260,
-        260,
-        20,
-        20,
-        Rgba::new(0.0, 0.0, 1.0, 0.5).to_linear_premul(),
-    );
-    a.extra
-        .insert("colorLabel".into(), serde_json::json!("red"));
+    fill(&mut a.pixels, 10, 10, 20, 20, Rgba::new(1.0, 0.5, 0.0, 1.0).to_linear_premul());
+    fill(&mut a.pixels, 260, 260, 20, 20, Rgba::new(0.0, 0.0, 1.0, 0.5).to_linear_premul());
+    a.extra.insert("colorLabel".into(), serde_json::json!("red"));
     let mut m = Surface::new();
     fill(&mut m, 0, 0, 300, 280, [1.0, 1.0, 1.0, 1.0]);
     fill(&mut m, 0, 0, 15, 280, [0.5, 0.5, 0.5, 1.0]);
@@ -89,10 +62,7 @@ fn round_trip_tree_pixels_and_extras() {
 
     let bytes = write_happypaint(&d, Some(&[0xFF, 0xD8, 0xFF, 0xD9]), "test").unwrap();
     let r = read_happypaint(&bytes).unwrap();
-    assert_eq!(
-        (r.name.as_str(), r.width, r.height),
-        ("Round trip", 300, 280)
-    );
+    assert_eq!((r.name.as_str(), r.width, r.height), ("Round trip", 300, 280));
     assert_eq!(r.extra.get("guides"), d.extra.get("guides"));
     assert_eq!(r.root.len(), 3);
     let g2 = r.root[2].as_group().unwrap();
@@ -108,19 +78,13 @@ fn round_trip_tree_pixels_and_extras() {
         assert!((got[i] - orig[i]).abs() < 0.01, "{got:?} vs {orig:?}");
     }
     let semi = a2.pixels.get(270, 270);
-    assert!(
-        (semi[3] - 0.5).abs() < 0.01 && (semi[2] - 0.5).abs() < 0.01,
-        "{semi:?}"
-    );
+    assert!((semi[3] - 0.5).abs() < 0.01 && (semi[2] - 0.5).abs() < 0.01, "{semi:?}");
     assert_eq!(a2.pixels.get(100, 100), [0.0; 4]);
     let c2 = g2.children[1].as_layer().unwrap();
     assert!(c2.clipped && c2.alpha_lock);
     assert_eq!(c2.chunks.get("height"), Some(&vec![1, 2, 3]));
     // Thumbnail is the first chunk.
-    assert_eq!(
-        read_thumbnail(&bytes).unwrap(),
-        Some(vec![0xFF, 0xD8, 0xFF, 0xD9])
-    );
+    assert_eq!(read_thumbnail(&bytes).unwrap(), Some(vec![0xFF, 0xD8, 0xFF, 0xD9]));
 }
 
 #[test]
@@ -130,36 +94,18 @@ fn identical_tiles_are_deduplicated() {
     fill(&mut l.pixels, 0, 0, 512, 256, [0.25, 0.25, 0.25, 1.0]);
     let one = write_happypaint(&d, None, "t").unwrap();
     let mut d1 = Document::new(256, 256, None);
-    fill(
-        &mut d1.root[0].as_layer_mut().unwrap().pixels,
-        0,
-        0,
-        256,
-        256,
-        [0.25, 0.25, 0.25, 1.0],
-    );
+    fill(&mut d1.root[0].as_layer_mut().unwrap().pixels, 0, 0, 256, 256, [0.25, 0.25, 0.25, 1.0]);
     let single = write_happypaint(&d1, None, "t").unwrap();
     // The second identical tile adds only a manifest entry, not a second PNG.
-    assert!(
-        one.len() < single.len() + 200,
-        "{} vs {}",
-        one.len(),
-        single.len()
-    );
+    assert!(one.len() < single.len() + 200, "{} vs {}", one.len(), single.len());
 }
 
 #[test]
 fn srgb8_encoding_rules() {
     assert_eq!(premul_linear_to_srgb8([0.0, 0.0, 0.0, 0.0]), [0, 0, 0, 0]);
-    assert_eq!(
-        premul_linear_to_srgb8([1.0, 0.0, 0.0, 1.0]),
-        [255, 0, 0, 255]
-    );
+    assert_eq!(premul_linear_to_srgb8([1.0, 0.0, 0.0, 1.0]), [255, 0, 0, 255]);
     let half_grey = onepaint_color::srgb_to_linear(0.5);
-    assert_eq!(
-        premul_linear_to_srgb8([half_grey * 0.5, 0.0, 0.0, 0.5]),
-        [128, 0, 0, 128]
-    );
+    assert_eq!(premul_linear_to_srgb8([half_grey * 0.5, 0.0, 0.0, 0.5]), [128, 0, 0, 128]);
     let p = srgb8_to_premul_linear([128, 0, 0, 128]);
     assert!((p[3] - 128.0 / 255.0).abs() < 1e-6);
 }
@@ -181,17 +127,10 @@ fn happypaint_samples_open_and_match_previews() {
         if p.extension().and_then(|x| x.to_str()) != Some("happypaint") {
             continue;
         }
-        let doc = read_happypaint(&std::fs::read(&p).unwrap())
-            .unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+        let doc = read_happypaint(&std::fs::read(&p).unwrap()).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
         n += 1;
         // Animated docs preview a single frame; animation is not in slice 1.
-        if doc
-            .extra
-            .get("animation")
-            .and_then(|a| a.get("enabled"))
-            .and_then(|v| v.as_bool())
-            == Some(true)
-        {
+        if doc.extra.get("animation").and_then(|a| a.get("enabled")).and_then(|v| v.as_bool()) == Some(true) {
             eprintln!("{}: animated, pixel check skipped", p.display());
             continue;
         }
@@ -215,8 +154,7 @@ fn happypaint_samples_open_and_match_previews() {
             }
             let px = l.pixels.read_rect(doc.bounds());
             for (i, p) in px.chunks_exact(4).enumerate() {
-                let s = onepaint_color::prem_lin_to_srgb([p[0], p[1], p[2], p[3]])
-                    .map(|v| v * l.opacity);
+                let s = onepaint_color::prem_lin_to_srgb([p[0], p[1], p[2], p[3]]).map(|v| v * l.opacity);
                 let k = 1.0 - s[3];
                 let d = &mut acc[i];
                 for c in 0..4 {
