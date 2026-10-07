@@ -7,6 +7,7 @@ mod chrome;
 mod clip;
 mod debug;
 mod palettes;
+mod pen;
 mod progressive;
 mod text_ui;
 mod thumbs;
@@ -54,6 +55,7 @@ pub enum Popover {
     MixerOptions,
     Guides,
     LiquifyOptions,
+    PenOptions,
 }
 
 /// What a file opens as.
@@ -364,6 +366,9 @@ impl App {
 
     pub fn set_tool(&mut self, tool: Tool) {
         let was = self.session.tool();
+        if tool != Tool::Pen {
+            self.canvas.pen.building = None;
+        }
         if was == Tool::Move && tool != Tool::Move {
             let _ = self.session.execute(Command::CommitTransform);
         }
@@ -447,6 +452,34 @@ impl App {
                 self.canvas.cancel_poly();
                 let _ = self.session.execute(Command::Deselect);
             }
+            // The pen's path in progress takes Enter, Escape and Backspace.
+            if self.canvas.pen.building.is_some() {
+                if sc(Modifiers::NONE, Key::Enter) {
+                    let fill = self.canvas.options.pen_fill;
+                    pen::finish(&mut self.canvas.pen, &mut self.session, false, fill, ctx.input(|i| (i.time * 1000.0) as u32));
+                }
+                if sc(Modifiers::NONE, Key::Escape) {
+                    self.canvas.pen.building = None;
+                }
+                if sc(Modifiers::NONE, Key::Backspace)
+                    && let Some(b) = self.canvas.pen.building.as_mut()
+                {
+                    b.pop();
+                    if b.is_empty() {
+                        self.canvas.pen.building = None;
+                    }
+                }
+            } else if self.session.tool() == Tool::Pen
+                && (sc(Modifiers::NONE, Key::Delete) || sc(Modifiers::NONE, Key::Backspace))
+                && let Some((obj, sub, anchor)) = self.canvas.pen.last.take()
+            {
+                pen::edit_object(&mut self.session, obj, |s| {
+                    if let Some(sp) = s.subpaths.get_mut(sub) {
+                        onepaint_stroke::bezier::delete_anchor(sp, anchor);
+                    }
+                });
+                let _ = self.session.execute(Command::SealHistory);
+            }
             if sc(Modifiers::ALT, Key::Backspace) {
                 let _ = self.session.execute(Command::FillSelection);
             }
@@ -498,6 +531,9 @@ impl App {
             }
             if sc(Modifiers::NONE, Key::U) {
                 self.set_tool(Tool::Shape);
+            }
+            if sc(Modifiers::NONE, Key::P) {
+                self.set_tool(Tool::Pen);
             }
             if sc(Modifiers::NONE, Key::V) || sc(cmd, Key::T) {
                 self.set_tool(Tool::Move);
@@ -1169,5 +1205,35 @@ mod tests {
         h.get_by_label("Add the current colour").click();
         h.run();
         assert_eq!(h.state().palettes.active().colors.len(), 13, "no duplicates");
+    }
+
+    #[test]
+    fn pen_builds_a_path_layer_and_edits_anchors() {
+        let mut h = harness();
+        h.run();
+        key(&mut h, egui::Key::P, egui::Modifiers::NONE);
+        assert_eq!(h.state().session.tool(), Tool::Pen);
+        for p in [pos2(500.0, 300.0), pos2(700.0, 300.0), pos2(700.0, 450.0)] {
+            click(&mut h, p);
+            h.run();
+        }
+        assert_eq!(h.state().canvas.pen.building.as_ref().map(Vec::len), Some(3));
+        key(&mut h, egui::Key::Enter, egui::Modifiers::NONE);
+        h.run();
+        let app = h.state();
+        let id = app.session.active().to_string();
+        assert!(app.session.is_path_layer(&id), "a path layer was created");
+        assert!(app.canvas.pen.building.is_none());
+        let mid = app.canvas.view.screen_to_doc([600.0, 300.0]);
+        assert!(app.session.doc().layer(&id).unwrap().pixels.get(mid[0] as i32, mid[1] as i32)[3] > 0.5, "stroked");
+        // Drag the corner anchor down.
+        let h0 = app.session.history_len();
+        drag_stroke(&mut h, pos2(700.0, 450.0), pos2(700.0, 520.0));
+        let app = h.state();
+        let a = app.session.paths(&id)[0].subpaths[0].anchors[2];
+        let want = app.canvas.view.screen_to_doc([700.0, 520.0]);
+        assert!((a.y - want[1]).abs() < 1.0, "anchor moved: {a:?}");
+        assert_eq!(app.session.history_len(), h0 + 1, "one step per drag");
+        assert!(app.session.paths(&id)[0].subpaths[0].anchors.len() == 3);
     }
 }

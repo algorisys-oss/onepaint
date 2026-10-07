@@ -8,6 +8,7 @@
 //! - `ONEPAINT_TEXT=1` adds a text object and opens its editor.
 //! - `ONEPAINT_SMUDGE=1` smudges and mixes across the demo, plus a radial-symmetry stroke.
 //! - `ONEPAINT_GUIDES=1` turns on the grid, 2-point perspective and H/V snap.
+//! - `ONEPAINT_PEN=1` adds a curved, filled path layer and selects the pen.
 //! - `ONEPAINT_EXIT=1` closes the app after the screenshot.
 
 use crate::{App, Popover};
@@ -27,13 +28,14 @@ pub struct Debug {
     text: bool,
     smudge: bool,
     guides: bool,
+    pen: bool,
 }
 
 impl Debug {
     /// A scripted run (demo or screenshot): it never autosaves or offers recovery,
     /// so visual checks leave nothing behind in the user's autosave folder.
     pub fn scripted(&self) -> bool {
-        self.demo || self.shot.is_some() || self.popover.is_some() || self.transform || self.text || self.smudge || self.guides
+        self.demo || self.shot.is_some() || self.popover.is_some() || self.transform || self.text || self.smudge || self.guides || self.pen
     }
 
     pub fn from_env() -> Self {
@@ -51,6 +53,8 @@ impl Debug {
                 "selection" => Some(Popover::Selection),
                 "curves" => Some(Popover::Filter),
                 "guides" => Some(Popover::Guides),
+                "pen" => Some(Popover::PenOptions),
+                "adjustments" => Some(Popover::Adjustments),
                 "mixer" => Some(Popover::MixerOptions),
                 "liquify" => Some(Popover::LiquifyOptions),
                 _ => None,
@@ -61,6 +65,7 @@ impl Debug {
             text: var("ONEPAINT_TEXT").is_some(),
             smudge: var("ONEPAINT_SMUDGE").is_some(),
             guides: var("ONEPAINT_GUIDES").is_some(),
+            pen: var("ONEPAINT_PEN").is_some(),
         }
     }
 }
@@ -188,6 +193,18 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
         let _ = app.session.execute(Command::SetGuides { guides: Box::new(g) });
         app.canvas.persp_editing = true;
         app.canvas.measure = Some(([w * 0.2, h * 0.75], [w * 0.55, h * 0.6]));
+    }
+    if frame == 3 && app.debug.pen {
+        use onepaint_stroke::bezier::*;
+        let (w, h) = (app.session.doc().width as f64, app.session.doc().height as f64);
+        let pts = [[w * 0.3, h * 0.35], [w * 0.5, h * 0.2], [w * 0.7, h * 0.4], [w * 0.55, h * 0.7], [w * 0.35, h * 0.6]];
+        let spec = PathSpec {
+            subpaths: vec![Subpath { anchors: catmull_rom_anchors(&pts, true), closed: true }],
+            stroke: Some(PathStroke { brush_id: "comic-inker".into(), size: 14.0, color: [0.1, 0.1, 0.12], opacity: 1.0, seed: Some(9) }),
+            fill: Some(PathFill { color: [0.3, 0.55, 1.0], opacity: 0.6 }),
+        };
+        let _ = app.session.execute(Command::CreatePathLayer { spec: Box::new(spec) });
+        app.set_tool(onepaint_engine::Tool::Pen);
     }
     if frame == 3 && app.debug.transform {
         app.set_tool(onepaint_engine::Tool::Move);

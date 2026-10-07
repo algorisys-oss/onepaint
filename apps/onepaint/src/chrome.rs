@@ -35,6 +35,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             Popover::MixerOptions => popover_at(ctx, "mixer", anchor, Align2::RIGHT_TOP, |ui| mixer_options(app, ui)),
             Popover::Guides => popover_at(ctx, "guides", anchor, Align2::RIGHT_TOP, |ui| guides(app, ui)),
             Popover::LiquifyOptions => popover_at(ctx, "liquify", anchor, Align2::RIGHT_TOP, |ui| liquify_options(app, ui)),
+            Popover::PenOptions => popover_at(ctx, "pen", anchor, Align2::RIGHT_TOP, |ui| pen_options(app, ui)),
             Popover::Recover => popover_at(ctx, "recover", screen.center(), Align2::CENTER_CENTER, |ui| recover(app, ui)),
             Popover::Fill => popover_at(ctx, "fill", anchor, Align2::RIGHT_TOP, |ui| fill_options(app, ui)),
             Popover::NewDoc => popover_at(ctx, "newdoc", screen.center(), Align2::CENTER_CENTER, |ui| new_doc(app, ui)),
@@ -165,6 +166,12 @@ fn top_bar(app: &mut App, ctx: &egui::Context) {
                             toggle_popover(app, Popover::ShapeOptions);
                         }
                         app.set_tool(Tool::Shape);
+                    }
+                    if icons::button(ui, "pen-tool", 32.0, tool == Tool::Pen, "Pen (P)").clicked() {
+                        if tool == Tool::Pen {
+                            toggle_popover(app, Popover::PenOptions);
+                        }
+                        app.set_tool(Tool::Pen);
                     }
                     if icons::button(ui, "type", 32.0, tool == Tool::Text, "Text (T)").clicked() {
                         app.set_tool(Tool::Text);
@@ -1434,6 +1441,65 @@ fn mixer_options(app: &mut App, ui: &mut Ui) {
         .font(theme::medium(10.5))
         .color(t.fg_faint),
     );
+}
+
+fn pen_options(app: &mut App, ui: &mut Ui) {
+    use onepaint_engine::path_ops::StrokePathTool as T;
+    let t = Tokens::get(ui.ctx());
+    let now = ui.input(|i| i.time);
+    ui.set_width(300.0);
+    widgets::section_label(ui, "Pen");
+    widgets::toggle(ui, &mut app.canvas.options.pen_fill, "Fill closed paths");
+    ui.label(
+        RichText::new("Click for corners, drag for curves (Shift: 45°). Click the first point to close; Enter or double-click finishes; Backspace undoes a point. On a path layer: drag anchors and handles, Alt-click toggles smooth, Ctrl-click a segment adds a point, Delete removes the last one touched.")
+            .font(theme::medium(10.5))
+            .color(t.fg_faint),
+    );
+    widgets::hairline(ui);
+    widgets::section_label(ui, "Path");
+    let active = app.session.active().to_string();
+    let is_path = app.session.is_path_layer(&active);
+    let target = app.session.path_op_target();
+    let target_name = target.as_deref().and_then(|id| app.session.doc().layer(id)).map(|l| l.name.clone());
+    let run = |app: &mut App, cmd: Command| {
+        if let Err(e) = app.session.execute(cmd) {
+            app.notify(e.to_string(), now);
+        }
+    };
+    ui.add_enabled_ui(is_path, |ui| {
+        if widgets::menu_item(ui, Some("square-dashed"), "Make selection", "").clicked() {
+            run(app, Command::SelectFromPath { mode: onepaint_selection::Mode::Replace });
+        }
+        ui.add_enabled_ui(target.is_some(), |ui| {
+            if widgets::menu_item(ui, Some("paint-bucket"), "Fill path", "").clicked() {
+                run(app, Command::FillPath);
+            }
+            ui.horizontal(|ui| {
+                let tools = [T::Brush, T::Eraser, T::Smudge, T::Mixer];
+                let cur = tools.iter().position(|x| *x == app.canvas.options.stroke_path_tool).unwrap_or(0);
+                if let Some(i) = segmented(ui, &["Brush", "Eraser", "Smudge", "Mixer"], cur) {
+                    app.canvas.options.stroke_path_tool = tools[i];
+                }
+            });
+            widgets::toggle(ui, &mut app.canvas.options.stroke_path_pressure, "Simulate pressure");
+            if widgets::menu_item(ui, Some("brush"), "Stroke path", "").clicked() {
+                let (tool, simulate_pressure) = (app.canvas.options.stroke_path_tool, app.canvas.options.stroke_path_pressure);
+                run(app, Command::StrokePath { tool, simulate_pressure });
+            }
+            if widgets::menu_item(ui, Some("contrast"), "Mask from path", "").clicked() {
+                run(app, Command::MaskFromPath);
+            }
+        });
+        if widgets::menu_item(ui, Some("image"), "Rasterize path layer", "").clicked() {
+            run(app, Command::RasterizePath { id: active.clone() });
+        }
+    });
+    let hint = match (is_path, target_name) {
+        (false, _) => "Select a path layer to use the path menu.".to_string(),
+        (true, Some(n)) => format!("Pixel operations land on \"{n}\", the layer below."),
+        (true, None) => "Fill, stroke and mask need a paint layer directly below the path.".to_string(),
+    };
+    ui.label(RichText::new(hint).font(theme::medium(10.5)).color(t.fg_faint));
 }
 
 fn liquify_options(app: &mut App, ui: &mut Ui) {

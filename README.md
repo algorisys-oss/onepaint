@@ -70,6 +70,11 @@ Slice 9 adds smudge (S), the mixer brush (Shift+B, with Kubelka–Munk
 pigment mixing), symmetry (Y: mirror, quad and radial) and liquify
 (push, twirl, pinch, expand, reconstruct).
 
+Slice 15 adds the pen tool (P) and vector path layers with Photoshop's path
+menu: make selection, fill, stroke (with simulated pressure) and mask from path.
+Slice 10b merges the remaining 34 happypaint filters, generators and fill
+layers.
+
 Slices 13 and 14 add saved selections (kept with the document) and swatch
 palettes: import .swatches/.aco/.ase/.gpl, export .swatches, and new palettes
 from the canvas or a photo.
@@ -119,6 +124,7 @@ The app needs a GPU that wgpu supports (Vulkan, Metal, DX12 or GL).
 | Smudge / mixer | S / Shift+B (click again for options) |
 | Symmetry on/off | Y (guides button for the mode, spokes, angle and centre) |
 | Rulers / edit guides / edit perspective | Shift+R / Shift+G / Shift+P |
+| Pen | P: click corners, drag curves, Enter finishes, Esc cancels |
 | Hide the UI | Tab |
 
 ## Develop

@@ -87,6 +87,10 @@ pub struct ToolOptions {
     pub shape_sides: u32,
     pub shape_fill: bool,
     pub background: onepaint_color::Rgba,
+    /// Pen: closed paths get a fill in the current colour.
+    pub pen_fill: bool,
+    pub stroke_path_tool: onepaint_engine::path_ops::StrokePathTool,
+    pub stroke_path_pressure: bool,
 }
 
 impl Default for ToolOptions {
@@ -105,6 +109,9 @@ impl Default for ToolOptions {
             shape_sides: 6,
             shape_fill: false,
             background: onepaint_color::Rgba::WHITE,
+            pen_fill: false,
+            stroke_path_tool: Default::default(),
+            stroke_path_pressure: true,
         }
     }
 }
@@ -178,6 +185,17 @@ enum Drag {
     Measure {
         start: Pt,
     },
+    /// Pen: pulling the handle of the anchor just placed.
+    PenNew {
+        index: usize,
+    },
+    /// Pen: dragging an anchor or handle of the active path layer.
+    PenEdit {
+        obj: usize,
+        sub: usize,
+        anchor: usize,
+        part: crate::pen::Part,
+    },
 }
 
 /// The text object being created or edited with the text tool.
@@ -232,6 +250,7 @@ pub struct Canvas {
     pub measuring: bool,
     /// The last measurement (doc px), shown until the next one or Escape.
     pub measure: Option<(Pt, Pt)>,
+    pub pen: crate::pen::PenState,
 }
 
 impl Canvas {
@@ -259,6 +278,7 @@ impl Canvas {
             lines_editing: false,
             measuring: false,
             measure: None,
+            pen: Default::default(),
         }
     }
 
@@ -274,6 +294,94 @@ impl Canvas {
         self.lines_editing = false;
         self.measuring = false;
         self.measure = None;
+    }
+
+    /// Pen press: close or extend the path being built, edit the active path
+    /// layer, or start a new path.
+    fn pen_press(&mut self, session: &mut Session, p: Pos2, d: Pt, m: egui::Modifiers, time_ms: f64) -> Drag {
+        use onepaint_stroke::bezier::{PathAnchor, closest_segment, insert_anchor_at, toggle_anchor_kind};
+        let tol = 10.0 / self.view.scale;
+        let double = self.pen.last_press.is_some_and(|(t, q)| time_ms - t < 350.0 && (q[0] - d[0]).hypot(q[1] - d[1]) <= tol);
+        self.pen.last_press = Some((time_ms, d));
+        let _ = p;
+        if let Some(b) = self.pen.building.as_mut() {
+            let first = b[0];
+            if b.len() >= 2 && (first.x - d[0]).hypot(first.y - d[1]) <= tol {
+                crate::pen::finish(&mut self.pen, session, true, self.options.pen_fill, (time_ms as u32).wrapping_mul(2_654_435_761));
+                return Drag::None;
+            }
+            if double && b.len() >= 2 {
+                crate::pen::finish(&mut self.pen, session, false, self.options.pen_fill, (time_ms as u32).wrapping_mul(2_654_435_761));
+                return Drag::None;
+            }
+            b.push(PathAnchor::corner(d[0], d[1]));
+            return Drag::PenNew { index: b.len() - 1 };
+        }
+        let active = session.active().to_string();
+        if session.is_path_layer(&active) {
+            let specs = session.paths(&active);
+            if let Some((obj, sub, anchor, part)) = crate::pen::hit(&specs, d, tol) {
+                self.pen.last = Some((obj, sub, anchor));
+                if m.alt && part == crate::pen::Part::Anchor {
+                    crate::pen::edit_object(session, obj, |s| toggle_anchor_kind(&mut s.subpaths[sub].anchors, anchor));
+                    let _ = session.execute(Command::SealHistory);
+                    return Drag::None;
+                }
+                return Drag::PenEdit { obj, sub, anchor, part };
+            }
+            if m.command {
+                for (obj, spec) in specs.iter().enumerate() {
+                    for (sub, s) in spec.subpaths.iter().enumerate() {
+                        if let Some((seg, t, _)) = closest_segment(s, d, tol) {
+                            crate::pen::edit_object(session, obj, |sp| insert_anchor_at(&mut sp.subpaths[sub], seg, t));
+                            let _ = session.execute(Command::SealHistory);
+                            return Drag::None;
+                        }
+                    }
+                }
+            }
+        }
+        self.pen.building = Some(vec![PathAnchor::corner(d[0], d[1])]);
+        Drag::PenNew { index: 0 }
+    }
+
+    /// Path outlines, anchors and handles (active path layer and the path being built).
+    fn pen_overlay(&self, ui: &egui::Ui, rect: Rect, session: &Session, hover: Option<Pos2>) {
+        use onepaint_stroke::bezier::{PathSpec, Subpath, flatten_subpath};
+        if session.tool() != Tool::Pen {
+            return;
+        }
+        let accent = onepaint_ui_kit::Tokens::get(ui.ctx()).accent;
+        let painter = ui.painter();
+        let draw = |sub: &Subpath| {
+            let pts: Vec<Pos2> = flatten_subpath(sub, 2.0).into_iter().map(|q| self.to_screen(rect, q)).collect();
+            painter.add(egui::Shape::line(pts.clone(), Stroke::new(2.5, Color32::from_black_alpha(120))));
+            painter.add(egui::Shape::line(pts, Stroke::new(1.0, accent)));
+            for a in &sub.anchors {
+                let c = self.to_screen(rect, [a.x, a.y]);
+                for (has, h) in [(a.has_in(), a.in_handle()), (a.has_out(), a.out_handle())] {
+                    if has {
+                        let e = self.to_screen(rect, [a.x + h[0], a.y + h[1]]);
+                        painter.line_segment([c, e], Stroke::new(1.0, accent.gamma_multiply(0.8)));
+                        painter.circle(e, 3.5, Color32::WHITE, Stroke::new(1.0, accent));
+                    }
+                }
+                let r = Rect::from_center_size(c, egui::vec2(7.0, 7.0));
+                let fill = if a.kind == onepaint_stroke::bezier::AnchorKind::Smooth { accent } else { Color32::WHITE };
+                painter.rect(r, 1.0, fill, Stroke::new(1.0, accent), egui::StrokeKind::Middle);
+            }
+        };
+        let specs: Vec<PathSpec> = session.paths(session.active());
+        for spec in &specs {
+            spec.subpaths.iter().for_each(&draw);
+        }
+        if let Some(b) = &self.pen.building {
+            draw(&Subpath { anchors: b.clone(), closed: false });
+            if let (Some(last), Some(h)) = (b.last(), hover) {
+                let to = pos2(h.x, h.y);
+                painter.line_segment([self.to_screen(rect, [last.x, last.y]), to], Stroke::new(1.0, accent.gamma_multiply(0.6)));
+            }
+        }
     }
 
     /// Which pinned ruler bar a canvas-local point is on (rulers on, unrotated).
@@ -434,6 +542,7 @@ impl Canvas {
                 self.hold = HoldTracker { points: vec![d], anchor: p, since: time_ms, fired: false, enabled };
                 Drag::Paint
             }
+            Tool::Pen => self.pen_press(session, p, d, m, time_ms),
             Tool::Gradient => {
                 session.gradient_begin();
                 let stops = self.gradient_stops(session);
@@ -653,6 +762,32 @@ impl Canvas {
                             let start = *start;
                             self.measure = Some((start, d));
                         }
+                        Drag::PenNew { index } => {
+                            let index = *index;
+                            let anchor = self.pen.building.as_ref().and_then(|b| b.get(index)).map(|a| [a.x, a.y]);
+                            if let (Some(b), Some(a)) = (self.pen.building.as_mut(), anchor)
+                                && (d[0] - a[0]).hypot(d[1] - a[1]) * self.view.scale >= 3.0
+                            {
+                                crate::pen::pull_handle(b, index, d, shift);
+                            }
+                        }
+                        Drag::PenEdit { obj, sub, anchor, part } => {
+                            let (obj, sub, anchor, part) = (*obj, *sub, *anchor, *part);
+                            crate::pen::edit_object(session, obj, |spec| {
+                                let Some(s) = spec.subpaths.get_mut(sub) else { return };
+                                let Some(a) = s.anchors.get(anchor).copied() else { return };
+                                use onepaint_stroke::bezier::{HandleSide, constrain_handle, move_anchor, set_handle};
+                                let h = |d: Pt| {
+                                    let v = [d[0] - a.x, d[1] - a.y];
+                                    if shift { constrain_handle(v[0], v[1]) } else { v }
+                                };
+                                match part {
+                                    crate::pen::Part::Anchor => move_anchor(&mut s.anchors, anchor, d[0], d[1]),
+                                    crate::pen::Part::In => set_handle(&mut s.anchors, anchor, HandleSide::In, h(d)),
+                                    crate::pen::Part::Out => set_handle(&mut s.anchors, anchor, HandleSide::Out, h(d)),
+                                }
+                            });
+                        }
                         Drag::Gradient { start } => {
                             let start = *start;
                             let stops = self.gradient_stops(session);
@@ -736,6 +871,9 @@ impl Canvas {
                         }
                         Drag::GuideRotate { .. } | Drag::GuideDraw { .. } => {
                             let _ = session.execute(Command::CommitGuideLines);
+                        }
+                        Drag::PenEdit { .. } => {
+                            let _ = session.execute(Command::SealHistory);
                         }
                         Drag::Gradient { .. } => session.gradient_end(),
                         Drag::ShapeTool { shape, .. } => {
@@ -1102,6 +1240,7 @@ impl Canvas {
     ) {
         self.guide_overlays(ui, rect, session);
         self.symmetry_axes(ui, rect, session);
+        self.pen_overlay(ui, rect, session, hover);
         if let Some(te) = &self.text_edit
             && session.tool() == Tool::Text
         {

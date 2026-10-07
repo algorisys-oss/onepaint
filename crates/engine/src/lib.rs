@@ -56,6 +56,7 @@ pub enum Tool {
     Smudge,
     Mixer,
     Liquify,
+    Pen,
 }
 
 /// Optional layer property edits; `None` leaves a property unchanged.
@@ -177,6 +178,8 @@ pub enum Command {
         mode: onepaint_selection::Mode,
     },
     FillPath,
+    /// End live-edit coalescing: the next edit is a new undo step.
+    SealHistory,
     StrokePath {
         tool: path_ops::StrokePathTool,
         simulate_pressure: bool,
@@ -424,6 +427,8 @@ pub struct Session {
     /// Guide lines before the edit in progress (one undo step per edit).
     guide_edit_before: Option<Vec<guides::GuideLine>>,
     saved: Vec<SavedSelection>,
+    /// The next coalescing edit starts a new undo step (end of a drag).
+    history_sealed: bool,
     smudge: Option<smudge_ops::ActiveSmudge>,
     liquify: Option<liquify_ops::ActiveLiquify>,
     /// The Mixer's kept reservoir, keyed by the colour it was loaded with.
@@ -464,6 +469,7 @@ impl Session {
             guides: Guides::default(),
             guide_edit_before: None,
             saved: Vec::new(),
+            history_sealed: false,
             smudge: None,
             liquify: None,
             mixer_held: None,
@@ -977,6 +983,10 @@ impl Session {
             Command::RasterizePath { id } => self.rasterize_path(&id),
             Command::SelectFromPath { mode } => self.select_from_path(mode),
             Command::FillPath => self.fill_path(),
+            Command::SealHistory => {
+                self.history_sealed = true;
+                Ok(())
+            }
             Command::StrokePath { tool, simulate_pressure } => self.stroke_path(tool, simulate_pressure),
             Command::MaskFromPath => self.mask_from_path(),
             Command::DeleteSavedSelection { id } => {
@@ -1142,7 +1152,8 @@ impl Session {
         f(self)?;
         let after = self.doc.root.clone();
         let active_after = self.active.clone();
-        let coalesced = key.is_some() && matches!(self.history.top_mut(), Some(Change::Tree { key: k, .. }) if *k == key) && {
+        let sealed = std::mem::take(&mut self.history_sealed);
+        let coalesced = !sealed && key.is_some() && matches!(self.history.top_mut(), Some(Change::Tree { key: k, .. }) if *k == key) && {
             if let Some(Change::Tree { after: a, active_after: aa, .. }) = self.history.top_mut() {
                 *a = after.clone();
                 *aa = active_after.clone();

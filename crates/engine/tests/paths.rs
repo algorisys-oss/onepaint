@@ -119,3 +119,17 @@ fn ops_without_a_layer_below_are_refused() {
     assert!(s.execute(Command::FillPath).is_err());
     let _ = only;
 }
+
+#[test]
+fn sealing_separates_two_drags() {
+    let mut s = Session::new(120, 100, None);
+    s.execute(Command::CreatePathLayer { spec: Box::new(square(20.0, 20.0, 80.0, 70.0, true, false)) }).unwrap();
+    let id = s.active().to_string();
+    let h0 = s.history_len();
+    s.execute(Command::UpdatePathObject { id: id.clone(), index: 0, spec: Some(Box::new(square(20.0, 20.0, 82.0, 70.0, true, false))) })
+        .unwrap();
+    s.execute(Command::SealHistory).unwrap();
+    s.execute(Command::UpdatePathObject { id: id.clone(), index: 0, spec: Some(Box::new(square(20.0, 20.0, 84.0, 70.0, true, false))) })
+        .unwrap();
+    assert_eq!(s.history_len(), h0 + 2);
+}
