@@ -5,6 +5,8 @@
 //! unpremultiplied sRGB, like happypaint's float documents; spatial kinds work
 //! on premultiplied storage values.
 
+pub mod gradient;
+
 use onepaint_color::{linear_to_srgb, srgb_to_linear};
 use onepaint_stroke::{CurvePoint, Interp, eval_curve};
 use rayon::prelude::*;

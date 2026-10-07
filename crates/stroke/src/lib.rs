@@ -4,6 +4,8 @@
 //! Ported from happypaint `engine/stroke/{smoothing,stabilizer}.ts`,
 //! `engine/brush/dynamics.ts` and `engine/util/rng.ts`; see `docs/specs/03-brush-stroke.md`.
 
+pub mod shape;
+
 use serde::{Deserialize, Serialize};
 
 /// One input sample in document pixels.
