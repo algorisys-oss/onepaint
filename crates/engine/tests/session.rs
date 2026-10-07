@@ -264,3 +264,44 @@ fn open_image_as_document() {
     assert!((c.r - 1.0).abs() < 1e-3 && c.g < 1e-3);
     assert!(s.open_image(b"junk", "x").is_err());
 }
+
+#[test]
+fn layer_drop_resolution() {
+    // root: [Background, Layer 1, Group(child), Layer 3]
+    let mut s = new_session();
+    let bg = s.doc().root[0].id().to_string();
+    let l1 = s.doc().root[1].id().to_string();
+    s.execute(Command::AddGroup).unwrap();
+    let g = s.active().to_string();
+    s.execute(Command::AddLayer).unwrap();
+    let l3 = s.active().to_string();
+    s.execute(Command::MoveLayer {
+        id: l3.clone(),
+        parent: Some(g.clone()),
+        index: 0,
+    })
+    .unwrap();
+    s.execute(Command::SetActiveLayer { id: g.clone() })
+        .unwrap();
+    s.execute(Command::AddLayer).unwrap();
+    let top = s.active().to_string();
+    // Dropping bg on the upper half of `top` → above top (root index 4 after removal → 3).
+    assert_eq!(s.resolve_drop(&bg, &top, 0.2), Some((None, 3)));
+    // Lower half of l1 → just below l1: bg is already there, so it's a no-op position 0.
+    assert_eq!(s.resolve_drop(&bg, &l1, 0.8), Some((None, 0)));
+    // Upper third of a group → above it; below that → into it, at the top.
+    assert_eq!(s.resolve_drop(&bg, &g, 0.2), Some((None, 2)));
+    assert_eq!(s.resolve_drop(&bg, &g, 0.6), Some((Some(g.clone()), 1)));
+    // A group can't go into itself or its children.
+    assert_eq!(s.resolve_drop(&g, &l3, 0.2), None);
+    assert_eq!(s.resolve_drop(&g, &g, 0.6), None);
+    // Applying a resolved drop moves the layer.
+    let (p, i) = s.resolve_drop(&bg, &g, 0.6).unwrap();
+    s.execute(Command::MoveLayer {
+        id: bg.clone(),
+        parent: p,
+        index: i,
+    })
+    .unwrap();
+    assert_eq!(s.doc().parent_of(&bg), Some(Some(g.clone())));
+}

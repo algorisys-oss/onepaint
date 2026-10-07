@@ -252,6 +252,8 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
         s.spacing.window_margin = egui::Margin::same(12);
         s.spacing.scroll = egui::style::ScrollStyle::thin();
         s.interaction.tooltip_delay = 0.35;
+        // App chrome, not a document: drags on labels should move things, not select text.
+        s.interaction.selectable_labels = false;
         s.animation_time = 0.14;
     });
 }

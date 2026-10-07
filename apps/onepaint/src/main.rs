@@ -72,6 +72,8 @@ pub struct App {
     pub last_select_tool: Tool,
     xform_layer: Option<String>,
     pub clipboard: clip::Clipboard,
+    /// Layer being dragged in the layers panel.
+    pub layer_drag: Option<String>,
     /// A file chosen by drag-and-drop, opened once unsaved work is dealt with.
     pub open_later: Option<PathBuf>,
     allow_close: bool,
@@ -114,6 +116,7 @@ impl App {
             last_select_tool: Tool::SelectRect,
             xform_layer: None,
             clipboard: clip::Clipboard::default(),
+            layer_drag: None,
             open_later: None,
             allow_close: false,
         };
@@ -855,6 +858,32 @@ mod tests {
             h.state().session.doc().root.len(),
             n + 2,
             "Ctrl+J without a selection duplicates"
+        );
+    }
+
+    #[test]
+    fn layers_reorder_by_drag_and_drop() {
+        let mut h = harness();
+        h.run();
+        h.get_by_label("Layers").click();
+        h.run();
+        let bg = h.state().session.doc().root[0].id().to_string();
+        let from = h.get_by_label("Background").rect().center();
+        let to = h.get_by_label("Layer 1").rect().center() - egui::vec2(0.0, 12.0);
+        h.event(Event::PointerMoved(from));
+        h.step();
+        press(&mut h, from, true);
+        for i in 1..=8 {
+            h.event(Event::PointerMoved(from + (to - from) * (i as f32 / 8.0)));
+            h.step();
+        }
+        press(&mut h, to, false);
+        h.run();
+        let root = &h.state().session.doc().root;
+        assert_eq!(
+            root.last().unwrap().id(),
+            bg,
+            "Background dropped above Layer 1"
         );
     }
 }

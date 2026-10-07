@@ -755,6 +755,41 @@ impl Session {
         }
     }
 
+    /// Where a layer-panel drop lands (happypaint `layer-panel.tsx:285-407`):
+    /// `frac` is the pointer's position within the target row (0 = top).
+    /// Returns `(parent, index)` for [`Command::MoveLayer`] (index after removal),
+    /// or `None` for an invalid drop.
+    pub fn resolve_drop(
+        &self,
+        dragged: &str,
+        target: &str,
+        frac: f32,
+    ) -> Option<(Option<NodeId>, usize)> {
+        if dragged == target && !self.doc.find(target)?.is_group() {
+            return None;
+        }
+        if dragged == target || self.is_descendant(target, dragged) {
+            return None;
+        }
+        let t = self.doc.find(target)?;
+        let parent = self.doc.parent_of(target)?;
+        let idx = *self.doc.path_of(target)?.last()?;
+        let (parent, mut index) = match t {
+            Node::Group(g) if frac >= 0.34 => (Some(target.to_string()), g.children.len()),
+            Node::Group(_) => (parent, idx + 1),
+            _ if frac < 0.5 => (parent, idx + 1),
+            _ => (parent, idx),
+        };
+        // MoveLayer removes first: indices above the dragged layer shift down.
+        if self.doc.parent_of(dragged)? == parent {
+            let di = *self.doc.path_of(dragged)?.last()?;
+            if di < index {
+                index -= 1;
+            }
+        }
+        Some((parent, index))
+    }
+
     fn next_layer_name(&self) -> String {
         let n = self
             .doc

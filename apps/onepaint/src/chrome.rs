@@ -715,13 +715,25 @@ fn layers(app: &mut App, ui: &mut Ui) {
     egui::ScrollArea::vertical()
         .max_height(340.0)
         .show(ui, |ui| {
+            let mut row_rects: Vec<(String, egui::Rect)> = Vec::new();
+            let mut drag_stopped = false;
             for r in &list {
                 let Some(node) = app.session.doc().find(&r.id).cloned() else {
                     continue;
                 };
                 let sel = r.id == active;
-                let (rect, resp) =
-                    ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
+                let (rect, resp) = ui
+                    .allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click_and_drag());
+                row_rects.push((r.id.clone(), rect));
+                if resp.drag_started() {
+                    app.layer_drag = Some(r.id.clone());
+                }
+                if resp.drag_stopped() {
+                    drag_stopped = true;
+                }
+                if app.layer_drag.as_deref() == Some(r.id.as_str()) {
+                    ui.painter().rect_filled(rect, t.radius, t.hover);
+                }
                 if sel {
                     ui.painter().rect_filled(rect, t.radius, t.accent_soft);
                 } else if resp.hovered() {
@@ -825,6 +837,66 @@ fn layers(app: &mut App, ui: &mut Ui) {
                     let _ = app
                         .session
                         .execute(Command::SetActiveLayer { id: r.id.clone() });
+                }
+            }
+            // Drag-and-drop: show where the layer would land; drop on release.
+            if let Some(dragged) = app.layer_drag.clone() {
+                let pointer = ui.input(|i| i.pointer.interact_pos());
+                let target = pointer.and_then(|p| {
+                    let clamped = row_rects.first().map_or(p.y, |f| {
+                        p.y.clamp(
+                            f.1.top(),
+                            row_rects.last().map_or(p.y, |l| l.1.bottom() - 1.0),
+                        )
+                    });
+                    row_rects
+                        .iter()
+                        .find(|(_, r)| clamped >= r.top() && clamped < r.bottom())
+                        .map(|(id, r)| {
+                            (
+                                id.clone(),
+                                *r,
+                                ((clamped - r.top()) / r.height()).clamp(0.0, 1.0),
+                            )
+                        })
+                });
+                let resolved = target.as_ref().and_then(|(id, _, f)| {
+                    app.session
+                        .resolve_drop(&dragged, id, *f)
+                        .map(|d| (d, id.clone(), *f))
+                });
+                if let Some(((parent, _), id, frac)) = &resolved
+                    && let Some((_, r, _)) = &target
+                {
+                    let into = parent.as_deref() == Some(id.as_str());
+                    if into {
+                        ui.painter().rect_stroke(
+                            *r,
+                            t.radius,
+                            egui::Stroke::new(2.0, t.accent),
+                            egui::StrokeKind::Inside,
+                        );
+                    } else {
+                        let y = if *frac < 0.5
+                            || (app.session.doc().find(id).is_some_and(|n| n.is_group()))
+                        {
+                            r.top()
+                        } else {
+                            r.bottom()
+                        };
+                        ui.painter()
+                            .hline(r.x_range(), y, egui::Stroke::new(2.0, t.accent));
+                    }
+                }
+                if drag_stopped || !ui.input(|i| i.pointer.any_down()) {
+                    if let Some(((parent, index), _, _)) = resolved {
+                        let _ = app.session.execute(Command::MoveLayer {
+                            id: dragged,
+                            parent,
+                            index,
+                        });
+                    }
+                    app.layer_drag = None;
                 }
             }
         });

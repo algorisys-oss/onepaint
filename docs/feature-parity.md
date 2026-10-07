@@ -20,7 +20,7 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] eraser
 - [x] fill (flood fill) (tolerance, grow, confined to the selection, alpha lock)
 - [x] eyedropper (the tool, Alt-click and Alt-drag sample the composite; touch-and-hold comes with gestures)
-- [ ] move/transform (scale, rotate, warp, quad homography)
+- [~] move/transform (scale, rotate, warp, quad homography) (move, scale, rotate, flip and selection lift are done; distort and warp are not)
 - [x] pan (space-drag, middle-drag, two-finger scroll)
 - [ ] smudge
 - [ ] mixer
@@ -53,7 +53,7 @@ Sources, all under `../happypaint/frontend/src/`:
 
 ## Layers
 - [x] Add, delete, reorder, duplicate and merge
-- [~] Nested groups (compositing, file I/O and creation work; the UI can't move layers into or out of groups yet)
+- [x] Nested groups (with drag-and-drop into and out of groups)
 - [~] Opacity, visibility and color labels (color labels are preserved in files but not shown)
 - [~] Layer masks (composited, loaded and saved; you can't paint into a mask yet)
 - [x] Clipping masks (clip families)
@@ -157,7 +157,7 @@ The exception is fill layers, which only work as layers.
 - [ ] PSD: read and write layers, groups, masks, blend modes and text
 - [~] PNG, JPEG, WebP, TIFF and Netpbm, keeping ICC profiles and DPI (PNG export only)
 - [ ] GIF, MP4, WebM and PNG-zip export
-- [ ] Clipboard: copy and paste images
+- [x] Clipboard: copy and paste images (in-place paste, the system clipboard, layer via copy/cut)
 - [ ] Camera and screen capture as a reference or import
 
 ## Cloud
