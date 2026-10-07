@@ -2635,6 +2635,8 @@ dependencies = [
  "onepaint-ui-kit",
  "rayon",
  "rfd",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

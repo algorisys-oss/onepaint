@@ -144,8 +144,8 @@ Still to do:
 
 ## Color
 - [x] Color picker
-- [ ] Palettes, with import and export
-- [ ] Median-cut palette extraction
+- [x] Palettes, with import (.swatches, .aco, .ase, .gpl) and export (.swatches)
+- [x] Median-cut palette extraction (from the canvas or an image file)
 - [ ] ICC profiles
 - [ ] CMYK soft-proof and press profiles
 - [ ] TIFF CMYK export

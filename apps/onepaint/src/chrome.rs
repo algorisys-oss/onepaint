@@ -540,16 +540,171 @@ fn color(app: &mut App, ui: &mut Ui) {
             }
         });
     }
-    ui.add_space(4.0);
+    ui.add_space(8.0);
+    palette_section(app, ui);
+}
+
+/// The active swatch palette: pick, manage, import/export (spec 21).
+fn palette_section(app: &mut App, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    let now = ui.input(|i| i.time);
+    ui.horizontal(|ui| {
+        widgets::section_label(ui, "Palette");
+        let active = app.palettes.active().clone();
+        if let Some(name) = app.palette_rename.as_mut() {
+            let r = ui.add(egui::TextEdit::singleline(name).desired_width(150.0));
+            if r.lost_focus() {
+                let name = app.palette_rename.take().unwrap_or_default();
+                app.palettes.rename(&active.id, &name);
+            } else {
+                r.request_focus();
+            }
+            return;
+        }
+        egui::ComboBox::from_id_salt("palette").selected_text(&active.name).width(150.0).show_ui(ui, |ui| {
+            for p in app.palettes.palettes.clone() {
+                if ui.selectable_label(p.id == active.id, &p.name).clicked() {
+                    app.palettes.set_active(&p.id);
+                }
+            }
+        });
+        ui.menu_button(RichText::new("…").font(theme::semibold(14.0)), |ui| {
+            if ui.button("New palette").clicked() {
+                app.palettes.create(None, Vec::new());
+                ui.close();
+            }
+            if ui.button("Rename").clicked() {
+                app.palette_rename = Some(active.name.clone());
+                ui.close();
+            }
+            if ui.button("Duplicate").clicked() {
+                app.palettes.duplicate(&active.id);
+                ui.close();
+            }
+            if ui.button("Delete").clicked() {
+                app.palettes.delete(&active.id);
+                ui.close();
+            }
+            ui.separator();
+            if ui.button("Import…  (.swatches .aco .ase .gpl)").clicked() {
+                ui.close();
+                if let Some(path) = rfd::FileDialog::new().add_filter("Palettes", &["swatches", "aco", "ase", "gpl"]).pick_file() {
+                    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("palette").to_string();
+                    match std::fs::read(&path)
+                        .map_err(|e| e.to_string())
+                        .and_then(|b| onepaint_formats::palette::parse_palette(&name, &b).map_err(|e| e.to_string()))
+                    {
+                        Ok(list) => {
+                            let n = app.palettes.import(list);
+                            app.notify(format!("Imported {n} palette{}", if n == 1 { "" } else { "s" }), now);
+                        }
+                        Err(e) => app.notify(format!("Couldn't import: {e}"), now),
+                    }
+                }
+            }
+            if ui.button("Export as .swatches…").clicked() {
+                ui.close();
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Procreate swatches", &["swatches"])
+                    .set_file_name(format!("{}.swatches", active.name))
+                    .save_file()
+                {
+                    let bytes = onepaint_formats::palette::export_swatches(&active.name, &active.colors);
+                    match std::fs::write(&path, bytes) {
+                        Ok(()) => app.notify(format!("Exported {}", path.display()), now),
+                        Err(e) => app.notify(format!("Export failed: {e}"), now),
+                    }
+                }
+            }
+            ui.separator();
+            if ui.button("New palette from canvas").clicked() {
+                ui.close();
+                let colors = canvas_palette(app);
+                if colors.is_empty() {
+                    app.notify("The canvas has no opaque colour to sample", now);
+                } else {
+                    app.palettes.create(Some("From canvas"), colors);
+                }
+            }
+            if ui.button("New palette from image…").clicked() {
+                ui.close();
+                if let Some(path) =
+                    rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "webp", "bmp", "gif", "tif", "tiff"]).pick_file()
+                {
+                    match std::fs::read(&path)
+                        .map_err(|e| e.to_string())
+                        .and_then(|b| onepaint_formats::decode_image(&b).map_err(|e| e.to_string()))
+                    {
+                        Ok(img) => {
+                            let small = image_thumb_rgba8(&img, 100);
+                            let name = path.file_stem().and_then(|n| n.to_str()).unwrap_or("Image").to_string();
+                            app.palettes.create(Some(&name), onepaint_color::median_cut::extract_palette(&small, 12));
+                        }
+                        Err(e) => app.notify(format!("Couldn't read the image: {e}"), now),
+                    }
+                }
+            }
+        });
+    });
+    let colors = app.palettes.active().colors.clone();
+    let mut remove = None;
     ui.horizontal_wrapped(|ui| {
-        for hex in ["#000000", "#ffffff", "#e5484d", "#e8862f", "#ddb42c", "#3ec46d", "#4c8dff", "#a06cf0", "#8a8a90"] {
-            if let Some(c) = onepaint_color::Rgba::from_hex(hex)
-                && widgets::swatch(ui, c, 24.0, false).clicked()
-            {
+        for (i, hex) in colors.iter().enumerate() {
+            let Some(c) = onepaint_color::Rgba::from_hex(hex) else { continue };
+            let r = widgets::swatch(ui, c, 24.0, c.to_hex() == app.session.color().to_hex()).on_hover_text(hex);
+            if r.clicked() {
                 app.set_color(c);
             }
+            r.context_menu(|ui| {
+                if ui.button("Remove swatch").clicked() {
+                    remove = Some(i);
+                    ui.close();
+                }
+            });
+        }
+        if icons::button(ui, "plus", 24.0, false, "Add the current colour").clicked() {
+            let hex = app.session.color().to_hex();
+            app.palettes.add_swatch(&hex);
         }
     });
+    if let Some(i) = remove {
+        app.palettes.remove_swatch(i);
+    }
+    if colors.is_empty() {
+        ui.label(RichText::new("Empty palette: + adds the current colour.").font(theme::medium(10.5)).color(t.fg_faint));
+    }
+}
+
+/// Median-cut colours from a small downscale of the flattened canvas.
+fn canvas_palette(app: &App) -> Vec<String> {
+    let d = app.session.doc();
+    let (w, h) = (d.width as usize, d.height as usize);
+    let flat = app.session.flatten();
+    let step = (w.max(h) / 100).max(1);
+    let mut px = Vec::new();
+    for y in (0..h).step_by(step) {
+        for x in (0..w).step_by(step) {
+            let i = (y * w + x) * 4;
+            let c = onepaint_color::Rgba::from_linear_premul([flat[i], flat[i + 1], flat[i + 2], flat[i + 3]]);
+            let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+            px.extend([b(c.r), b(c.g), b(c.b), b(c.a)]);
+        }
+    }
+    onepaint_color::median_cut::extract_palette(&px, 12)
+}
+
+/// A nearest-neighbour RGBA8 thumbnail of a decoded image, at most `max` px.
+fn image_thumb_rgba8(img: &onepaint_formats::DecodedImage, max: u32) -> Vec<u8> {
+    let (w, h) = (img.width, img.height);
+    let step = (w.max(h) / max).max(1);
+    let mut out = Vec::new();
+    for y in (0..h).step_by(step as usize) {
+        for x in (0..w).step_by(step as usize) {
+            let i = ((y * w + x) * 4) as usize;
+            out.extend_from_slice(&img.rgba[i..i + 4]);
+        }
+    }
+    out
 }
 
 struct Row {

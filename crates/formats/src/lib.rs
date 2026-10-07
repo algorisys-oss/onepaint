@@ -2,7 +2,9 @@
 //! PNG/JPEG helpers. See `docs/specs/05-file-format.md`.
 
 mod image;
+pub mod palette;
 pub mod psd;
+pub mod zip;
 
 pub use image::*;
 

@@ -70,6 +70,10 @@ Slice 9 adds smudge (S), the mixer brush (Shift+B, with Kubelka–Munk
 pigment mixing), symmetry (Y: mirror, quad and radial) and liquify
 (push, twirl, pinch, expand, reconstruct).
 
+Slices 13 and 14 add saved selections (kept with the document) and swatch
+palettes: import .swatches/.aco/.ase/.gpl, export .swatches, and new palettes
+from the canvas or a photo.
+
 Slice 11 adds drawing guides, saved with the document: a grid with snapping,
 H/V snap, and 1–5-point perspective with soft or hard-line snapping and
 draggable vanishing points (Shift+P), plus rulers (Shift+R) to drag guide

@@ -6,6 +6,7 @@ mod canvas;
 mod chrome;
 mod clip;
 mod debug;
+mod palettes;
 mod progressive;
 mod text_ui;
 mod thumbs;
@@ -91,6 +92,9 @@ pub struct App {
     pub hsv: Hsv,
     pub hex: String,
     pub recent: Vec<Rgba>,
+    pub palettes: palettes::Palettes,
+    /// Inline rename of the active palette in progress.
+    pub palette_rename: Option<String>,
     pub thumbs: thumbs::Thumbs,
     pub toast: Option<(String, f64)>,
     pub new_doc: [u32; 2],
@@ -126,6 +130,8 @@ impl App {
         let gpu_ok = canvas::init_gpu(cc);
         let session = Session::new(2048, 1536, Some(Rgba::WHITE));
         let size = [session.doc().width, session.doc().height];
+        // Tests and scripted runs never touch the user's saved palettes.
+        let palettes = palettes::Palettes::load(if cfg!(test) || debug.scripted() { None } else { palettes::default_path() });
         let mut app = Self {
             session,
             canvas: Canvas::new(size),
@@ -137,6 +143,8 @@ impl App {
             hsv: Hsv { h: 0.0, s: 0.0, v: 0.0 },
             hex: "#000000".into(),
             recent: Vec::new(),
+            palettes,
+            palette_rename: None,
             thumbs: thumbs::Thumbs::default(),
             toast: None,
             new_doc: [2048, 1536],
@@ -1115,5 +1123,21 @@ mod tests {
         h.get_by_label("Load (replace)").click();
         h.run_steps(4);
         assert!(h.state().session.selection().is_some_and(|m| m.coverage(200, 200) > 0.5));
+    }
+
+    #[test]
+    fn colour_popover_adds_to_the_active_palette() {
+        let mut h = harness();
+        h.run();
+        assert_eq!(h.state().palettes.active().colors.len(), 12, "first-run default palette");
+        h.state_mut().set_color(Rgba::from_hex("#123456").unwrap());
+        h.state_mut().popover = Some(Popover::Color);
+        h.run();
+        h.get_by_label("Add the current colour").click();
+        h.run();
+        assert_eq!(h.state().palettes.active().colors.last().map(String::as_str), Some("#123456"));
+        h.get_by_label("Add the current colour").click();
+        h.run();
+        assert_eq!(h.state().palettes.active().colors.len(), 13, "no duplicates");
     }
 }
