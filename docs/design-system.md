@@ -6,6 +6,36 @@ to Procreate than to Photoshop's dense panels. Stock egui looks like a
 debugging tool, so **no default egui widget or visual ever reaches the
 user**. Everything goes through `crates/ui_kit`.
 
+## Starting point: photocraft's `ui-egui`
+
+Bootstrap `ui_kit` from photocraft's design layer
+(`github.com/storytold/photocraft`, `crates/ui-egui/src/`, MIT or
+Apache-2.0). It already solves "egui that doesn't look like egui". Copy or
+adapt its code with an attribution header (`// Adapted from photocraft
+(MIT/Apache-2.0): <path>`), strip any photocraft or ArtCraft branding, and
+decouple it from `PhotocraftApp` and the photocraft crates.
+
+| photocraft file | What to take | onepaint target |
+|---|---|---|
+| `theme.rs` | A `Tokens` struct that widgets read through `Tokens::get` instead of hard-coding colors. Includes `ThemeKind`, font setup (Inter and JetBrains Mono) and the mapping from tokens to egui `Visuals`. | `ui_kit::theme`. Keep the **Studio** and **Studio Light** themes as references and add a happypaint palette. Drop Pro/ProMedium/Classic unless asked. |
+| `widgets.rs` | Cards with pill tabs, thin sliders with round knobs (with optional gradient tracks), monospace value fields with dimmed units, toggles, primary and secondary buttons, dropdowns, swatch popups, a checkerboard, hairlines | `ui_kit::widgets` |
+| `icons.rs` and `icon_data.rs` | Embedded SVGs, rasterized by `egui_extras` at the exact on-screen pixel size and tinted per use; icon buttons and rail buttons | `ui_kit::icons`, with the SVG set swapped for **Lucide** |
+| `tab_strip.rs` | Tab strips that fit any width: labels shrink and elide, then overflow into a » menu | `ui_kit::tabs` |
+| `dock.rs` | A custom dock with panel groups and fixed heights, used instead of `egui_dock` | `ui_kit::dock` (the desktop docked mode) |
+| `gpu_canvas.rs` | An `egui_wgpu` `CallbackTrait` canvas with damaged-rect texture updates | pattern for `apps/onepaint` canvas plus our `gpu` crate |
+| `egui_kittest` snapshot tests | How their visual tests are set up | our snapshot tests |
+
+Where onepaint goes beyond photocraft:
+
+- photocraft follows Photoshop's grammar: dense docked panels and a status
+  bar. onepaint's **default** is the canvas-first, floating, Procreate-like
+  layout below. photocraft's docked style is the optional power-user mode.
+- photocraft has no frosted-glass panels, motion system, SDF shadows or
+  touch-gesture chrome. Those are onepaint additions (see below).
+- photocraft's Studio accent is violet `#8b7cf6`. Our default accent is
+  happypaint's blue `#4c8dff`, and the accent is a token, so a theme can
+  change it.
+
 ## Principles
 
 1. **Canvas first.** The canvas fills the window edge to edge, and the chrome
@@ -78,8 +108,9 @@ The rest of the scale:
   modifier button, and undo and redo.
 - **Popovers** anchor to their trigger, with an arrow and a spring-in. Use
   them for brushes, layers and color.
-- **Optional docked mode** (via `egui_dock`) for desktop power users. It uses
-  the same widgets with denser spacing.
+- **Optional docked mode** (`ui_kit::dock`, adapted from photocraft's
+  `dock.rs`) for desktop power users. It uses the same widgets with denser
+  spacing.
 - **HiDPI:** pixel-perfect at 1×, 1.5×, 2× and 3×. Snap 1 px hairlines to the
   physical pixel grid.
 

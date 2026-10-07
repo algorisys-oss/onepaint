@@ -71,7 +71,7 @@ crate**.
 | Concern | Choice | Notes |
 |---|---|---|
 | Language | Rust stable, edition 2024, Cargo workspace | `unsafe` is forbidden by default. Allow it only per module, with a `// SAFETY:` comment. |
-| UI | **egui / eframe**, with the `wgpu` backend, plus our own `ui_kit` design system | The UI must be **modern and beautiful**; see `docs/design-system.md`. Never ship stock egui visuals. The UI stays a thin layer over the engine. |
+| UI | **egui / eframe**, with the `wgpu` backend, plus our own `ui_kit` design system | The UI must be **modern and beautiful**; see `docs/design-system.md`. Bootstrap `ui_kit` from photocraft's `crates/ui-egui` (theme, widgets, icons, tab strip, dock), keeping attribution. Never ship stock egui visuals. The UI stays a thin layer over the engine. |
 | GPU | **wgpu**, with **WGSL** shaders | GPU-first engine: layers live as GPU tiles. The canvas is an `egui_wgpu` paint callback, so it never round-trips through egui textures. Use compute passes for filters, flood fill, magic wand and selection feathering where they are faster. |
 | Shaders | `.wgsl` files under `crates/gpu/shaders/` | Port happypaint's ~62 GLSL ES 3.0 programs. naga can translate them as a first pass, but hand-review every result. |
 | Pixels | 256² copy-on-write `Arc` tiles, premultiplied alpha | Formats are RGBA8, RGBA16F and RGBA32F, matching happypaint. |
