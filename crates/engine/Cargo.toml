@@ -24,4 +24,10 @@ log = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
+onepaint-brush = { workspace = true }
 onepaint-stroke = { workspace = true }
+
+[[bench]]
+name = "hot_paths"
+harness = false
