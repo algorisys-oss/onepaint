@@ -230,7 +230,7 @@ impl Session {
         if changes.is_empty() {
             return;
         }
-        self.history.push(Change::Tiles { layer: id.to_string(), tiles: changes }, bytes);
+        self.history.push(Change::Tiles { layer: id.to_string(), mask: false, tiles: changes }, bytes);
         self.mark_dirty(rect);
         self.doc.touch();
         self.history_changed();

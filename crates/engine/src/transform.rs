@@ -177,6 +177,7 @@ impl Session {
 
     pub(crate) fn transform_overlay(&self) -> Option<StrokeOverlay<'_>> {
         self.transform.as_ref().map(|f| StrokeOverlay {
+            mask: false,
             layer_id: &f.layer,
             stroke: &f.preview,
             opacity: 1.0,
@@ -304,7 +305,7 @@ impl Session {
         }
         self.mark_dirty(f.bounds.union(&f.preview_bounds));
         if !changes.is_empty() {
-            self.history.push(Change::Tiles { layer: f.layer, tiles: changes }, bytes);
+            self.history.push(Change::Tiles { layer: f.layer, mask: false, tiles: changes }, bytes);
             self.doc.touch();
             self.history_changed();
         }

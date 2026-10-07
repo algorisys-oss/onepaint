@@ -138,7 +138,7 @@ impl Session {
             }
         }
         if !changes.is_empty() {
-            self.history.push(Change::Tiles { layer: f.layer, tiles: changes }, bytes);
+            self.history.push(Change::Tiles { layer: f.layer, mask: false, tiles: changes }, bytes);
             self.doc.touch();
             self.history_changed();
         }

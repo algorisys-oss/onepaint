@@ -7,6 +7,7 @@
 mod canvas_ops;
 mod clipboard;
 mod filter_ops;
+mod mask_ops;
 mod selection_ops;
 pub mod transform;
 pub mod view;
@@ -212,6 +213,23 @@ pub enum Command {
         id: NodeId,
         params: onepaint_filters::Params,
     },
+    /// Add a mask to the active layer: white, or the selection's coverage.
+    AddMask,
+    DeleteMask {
+        id: NodeId,
+    },
+    /// Bake the mask into the pixels, then remove it.
+    ApplyMask {
+        id: NodeId,
+    },
+    SetMaskEnabled {
+        id: NodeId,
+        enabled: bool,
+    },
+    /// Paint into the active layer's mask (true) or its pixels (false).
+    SetMaskTarget {
+        on: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -257,7 +275,7 @@ pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub(crate) type TileChange = ((i32, i32), Option<Arc<Tile>>, Option<Arc<Tile>>);
 
 pub(crate) enum Change {
-    Tiles { layer: NodeId, tiles: Vec<TileChange> },
+    Tiles { layer: NodeId, mask: bool, tiles: Vec<TileChange> },
     Tree { before: Vec<Node>, after: Vec<Node>, active_before: NodeId, active_after: NodeId, key: Option<String> },
     Selection { before: Option<Arc<onepaint_selection::Mask>>, after: Option<Arc<onepaint_selection::Mask>> },
     Document { before: Box<canvas_ops::DocShape>, after: Box<canvas_ops::DocShape> },
@@ -274,6 +292,8 @@ struct ActiveStroke {
     noop: bool,
     /// The selection (feathered) that clips this stroke.
     clip: Option<Arc<onepaint_selection::Mask>>,
+    /// Painting into the layer mask.
+    mask: bool,
 }
 
 pub struct Session {
@@ -294,6 +314,8 @@ pub struct Session {
     selection_version: u64,
     transform: Option<transform::Floating>,
     filter: Option<filter_ops::FilterSession>,
+    /// The layer whose mask strokes paint into (only while it is active).
+    mask_target_layer: Option<NodeId>,
 }
 
 fn tile_bytes(t: &Option<Arc<Tile>>) -> usize {
@@ -325,6 +347,7 @@ impl Session {
             selection_version: 0,
             transform: None,
             filter: None,
+            mask_target_layer: None,
         };
         s.mark_all_dirty();
         s
@@ -419,6 +442,7 @@ impl Session {
             return Some(t);
         }
         self.stroke.as_ref().filter(|s| !s.noop).map(|s| StrokeOverlay {
+            mask: s.mask,
             layer_id: &s.layer,
             stroke: &s.buffer,
             opacity: s.opacity,
@@ -513,14 +537,24 @@ impl Session {
             return;
         }
         let erase = self.tool == Tool::Eraser;
-        let noop = erase && layer.alpha_lock;
-        let mode = match (erase, layer.alpha_lock) {
-            (true, _) => StrokeMode::Erase,
-            (false, true) => StrokeMode::AlphaLock(BlendMode::Normal),
-            (false, false) => StrokeMode::Paint(BlendMode::Normal),
+        let to_mask = self.mask_target();
+        let noop = erase && layer.alpha_lock && !to_mask;
+        let mode = match (to_mask, erase, layer.alpha_lock) {
+            // Masks keep alpha 1: paint coverage with alpha locked (PE:798-801).
+            (true, _, _) => StrokeMode::AlphaLock(BlendMode::Normal),
+            (false, true, _) => StrokeMode::Erase,
+            (false, false, true) => StrokeMode::AlphaLock(BlendMode::Normal),
+            (false, false, false) => StrokeMode::Paint(BlendMode::Normal),
         };
         let brush = self.current_brush().clone();
-        let lin = self.color.to_linear_premul();
+        let lin = if to_mask {
+            // Mask coverage = the brush colour's luminance (white for the eraser), no transfer curve.
+            let c = self.color;
+            let l = if erase { 1.0 } else { 0.299 * c.r + 0.587 * c.g + 0.114 * c.b };
+            [l, l, l, 1.0]
+        } else {
+            self.color.to_linear_premul()
+        };
         self.seed = self.seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
         let (opacity, wash) = (brush.opacity as f32, brush.wash);
         let mut st = ActiveStroke {
@@ -532,6 +566,7 @@ impl Session {
             wash,
             noop,
             clip: self.clip.clone(),
+            mask: to_mask,
         };
         let dabs = st.engine.begin(p);
         self.stroke = Some(st);
@@ -590,13 +625,18 @@ impl Session {
         let Some(layer) = self.doc.layer_mut(&st.layer) else {
             return;
         };
+        let target = match (st.mask, layer.mask.as_mut()) {
+            (true, Some(m)) => m,
+            (true, None) => return,
+            (false, _) => &mut layer.pixels,
+        };
         let mut changes = Vec::new();
         let mut bytes = 0;
         for (tx, ty) in st.buffer.tile_keys() {
             let Some(src) = st.buffer.tile(tx, ty) else {
                 continue;
             };
-            let before = layer.pixels.tile(tx, ty).cloned();
+            let before = target.tile(tx, ty).cloned();
             let mut dst = before.as_ref().map(|t| t.to_f32()).unwrap_or_else(|| vec![0.0; TILE_PX * 4]);
             let s = src.to_f32();
             for i in (0..dst.len()).step_by(4) {
@@ -613,12 +653,12 @@ impl Session {
             }
             let t = Tile::from_f32(&dst);
             let after = (!t.is_empty()).then(|| Arc::new(t));
-            layer.pixels.set_tile(tx, ty, after.clone());
+            target.set_tile(tx, ty, after.clone());
             bytes += tile_bytes(&before) + tile_bytes(&after);
             changes.push(((tx, ty), before, after));
         }
         if !changes.is_empty() {
-            self.history.push(Change::Tiles { layer: st.layer, tiles: changes }, bytes);
+            self.history.push(Change::Tiles { layer: st.layer, mask: st.mask, tiles: changes }, bytes);
             self.doc.touch();
             self.history_changed();
         }
@@ -677,6 +717,15 @@ impl Session {
                 Ok(())
             }
             Command::AddAdjustmentLayer { kind, params } => self.add_adjustment_layer(&kind, params),
+            Command::AddMask => self.add_mask(),
+            Command::DeleteMask { id } => self.delete_mask(&id),
+            Command::ApplyMask { id } => self.apply_mask(&id),
+            Command::SetMaskEnabled { id, enabled } => self.set_mask_enabled(&id, enabled),
+            Command::SetMaskTarget { on } => {
+                self.mask_target_layer =
+                    (on && self.doc.layer(&self.active).is_some_and(|l| l.mask.is_some())).then(|| self.active.clone());
+                Ok(())
+            }
             Command::SetAdjustment { id, params } => self.set_adjustment(&id, params),
             Command::SetTransform { matrix } => {
                 self.set_transform(matrix);
@@ -981,7 +1030,7 @@ impl Session {
         if let Some(l) = self.doc.layer_mut(id) {
             l.pixels.clear();
         }
-        self.history.push(Change::Tiles { layer: id.to_string(), tiles }, bytes);
+        self.history.push(Change::Tiles { layer: id.to_string(), mask: false, tiles }, bytes);
         self.mark_all_dirty();
         self.history_changed();
         Ok(())
@@ -990,10 +1039,15 @@ impl Session {
     fn apply(&mut self, undo: bool, entries: Vec<ChangeRef>) {
         for c in entries {
             match c {
-                ChangeRef::Tiles { layer, tiles } => {
+                ChangeRef::Tiles { layer, mask, tiles } => {
                     if let Some(l) = self.doc.layer_mut(&layer) {
                         for (k, before, after) in &tiles {
-                            l.pixels.set_tile(k.0, k.1, if undo { before.clone() } else { after.clone() });
+                            let t = if undo { before.clone() } else { after.clone() };
+                            match (mask, l.mask.as_mut()) {
+                                (true, Some(m)) => m.set_tile(k.0, k.1, t),
+                                (true, None) => {}
+                                (false, _) => l.pixels.set_tile(k.0, k.1, t),
+                            }
                         }
                     }
                     for (k, _, _) in tiles {
@@ -1016,7 +1070,7 @@ impl Session {
 
     fn snapshot(c: &Change, undo: bool) -> ChangeRef {
         match c {
-            Change::Tiles { layer, tiles } => ChangeRef::Tiles { layer: layer.clone(), tiles: tiles.clone() },
+            Change::Tiles { layer, mask, tiles } => ChangeRef::Tiles { layer: layer.clone(), mask: *mask, tiles: tiles.clone() },
             Change::Tree { before, after, active_before, active_after, .. } => ChangeRef::Tree {
                 root: if undo { before.clone() } else { after.clone() },
                 active: if undo { active_before.clone() } else { active_after.clone() },
@@ -1046,7 +1100,7 @@ impl Session {
 }
 
 enum ChangeRef {
-    Tiles { layer: NodeId, tiles: Vec<TileChange> },
+    Tiles { layer: NodeId, mask: bool, tiles: Vec<TileChange> },
     Tree { root: Vec<Node>, active: NodeId },
     Selection(Option<Arc<onepaint_selection::Mask>>),
     Document(Box<canvas_ops::DocShape>),

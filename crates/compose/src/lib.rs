@@ -40,6 +40,8 @@ pub struct StrokeOverlay<'a> {
     pub stroke: &'a Surface,
     pub opacity: f32,
     pub mode: StrokeMode,
+    /// Paint into the layer's mask instead of its pixels.
+    pub mask: bool,
 }
 
 #[inline]
@@ -54,7 +56,9 @@ fn zeros() -> Buf {
 /// A layer's pixels on one tile, with any live stroke applied and its mask multiplied in.
 fn layer_content(l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeOverlay>) -> Option<Buf> {
     let base = l.pixels.tile(tx, ty);
-    let stroke = ov.filter(|o| o.layer_id == l.id).and_then(|o| o.stroke.tile(tx, ty).map(|t| (o, t)));
+    let on_layer = ov.filter(|o| o.layer_id == l.id);
+    let stroke = on_layer.filter(|o| !o.mask).and_then(|o| o.stroke.tile(tx, ty).map(|t| (o, t)));
+    let mask_stroke = on_layer.filter(|o| o.mask).and_then(|o| o.stroke.tile(tx, ty).map(|t| (o, t)));
     if base.is_none() && stroke.is_none() {
         return None;
     }
@@ -69,7 +73,18 @@ fn layer_content(l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeOverlay>) -> Opt
     if l.mask_enabled
         && let Some(mask) = &l.mask
     {
-        let m = mask.tile(tx, ty)?.to_f32();
+        let mut m = match (mask.tile(tx, ty), &mask_stroke) {
+            (Some(t), _) => t.to_f32(),
+            (None, Some(_)) => zeros(),
+            (None, None) => return None,
+        };
+        if let Some((o, st)) = mask_stroke {
+            let s = st.to_f32();
+            for i in (0..m.len()).step_by(4) {
+                let r = apply_stroke_px(px(&m, i), px(&s, i), o.opacity, o.mode);
+                m[i..i + 4].copy_from_slice(&r);
+            }
+        }
         for i in (0..buf.len()).step_by(4) {
             let k = m[i];
             for c in 0..4 {
