@@ -80,21 +80,22 @@ The modes are:
 Each kind works destructively, as an adjustment layer, and as a smart filter.
 The exception is fill layers, which only work as layers.
 
-- [ ] **Tonal:**
-  - brightness-contrast, hue-saturation, black-white, invert
-  - threshold, posterize, levels, curves
-  - color-balance, gradient-map, color-to-alpha, replace-color, selective-color
-- [ ] **Blur and sharpen:**
-  - gaussian-blur, motion-blur, radial-blur
-  - tilt-shift, iris-blur, field-blur, spin-blur
-  - sharpen
+These 14 are done: destructive with live preview, selection-aware, and as
+adjustment layers. The blur/sharpen ones work as destructive filters only; as
+layers they are preserved but not rendered yet.
+
+- [x] brightness-contrast, hue-saturation, black-white, invert, threshold, posterize, levels, curves, color-balance, gradient-map
+- [x] gaussian-blur, motion-blur, sharpen, noise
+
+Still to do:
+
+- [ ] color-to-alpha, replace-color, selective-color
+- [ ] radial-blur, tilt-shift, iris-blur, field-blur, spin-blur
 - [ ] **Distort:** twirl, pinch, ripple, polar-coordinates
-- [ ] **Stylize:**
-  - noise, bloom, chromatic-aberration, halftone, tone, glitch
-  - mosaic, crystallize, emboss, oil-paint, wind
-  - line-art (Sobel/XDoG)
+- [ ] **Stylize:** bloom, chromatic-aberration, halftone, tone, glitch, mosaic, crystallize, emboss, oil-paint, wind, line-art (Sobel/XDoG)
 - [ ] **Render:** light-rays, lens-flare, clouds, fog, smoke, nebula, starfield, lightning
-- [ ] **Fill:** gradient-fill, solid-fill, pattern-fill (pattern-fill must also load patterns from a URL)
+- [ ] **Fill:** gradient-fill, solid-fill, pattern-fill
+- [ ] Smart-filter stacks (`layer.filters`; preserved in files, not applied yet)
 
 ## Selection
 - [x] Rect, ellipse, lasso, polygon and magic wand

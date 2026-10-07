@@ -13,3 +13,5 @@ short by fixing entries, not by growing it.
 | 6 | Pen pressure on Linux | Velocity-synthesised pressure (winit exposes no tablet pressure on X11/Wayland) | Pointer Events pressure and tilt | A tablet backend (Wayland tablet-v2, XInput2, Windows Ink, macOS) is planned. |
 | 7 | Airbrush ticks, grain/paper texture, image tips | Not applied (preset fields are preserved) | Implemented | Brush engine slice 2+. |
 | 8 | Merge down | Bakes the upper layer into the lower one and keeps the lower layer's opacity and blend mode | (to verify) | Check against happypaint's `mergeDown` behaviour. |
+| 9 | Spatial adjustment layers (blur, motion blur, sharpen) | Preserved in files and editable, but not rendered | Rendered over the backdrop | The tile compositor needs a neighbourhood-aware pass; this comes with GPU compositing. |
+| 10 | Adjustment maths precision | f32 CPU reference (spec 10) | GPU with 16F storage and an 8-bit LUT texture | Within 16F rounding; the LUT lookup replicates the texel-centre bilinear sampling. |

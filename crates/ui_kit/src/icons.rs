@@ -41,6 +41,8 @@ pub static ICONS: &[(&str, &[u8])] = icons![
     "wand",
     "paint-bucket",
     "move",
+    "contrast",
+    "sparkles",
     "arrow-left-right",
     "arrow-up-down",
     "rotate-ccw",

@@ -26,6 +26,9 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             Popover::Selection => popover_at(ctx, "selection", anchor, Align2::RIGHT_TOP, |ui| selection(app, ui)),
             Popover::CanvasSize => popover_at(ctx, "canvas-size", screen.center(), Align2::CENTER_CENTER, |ui| canvas_size(app, ui)),
             Popover::ImageSize => popover_at(ctx, "image-size", screen.center(), Align2::CENTER_CENTER, |ui| image_size(app, ui)),
+            Popover::Adjustments => popover_at(ctx, "adjustments", anchor, Align2::RIGHT_TOP, |ui| crate::adjust::list(app, ui)),
+            Popover::Filter => popover_at(ctx, "filter", anchor, Align2::RIGHT_TOP, |ui| crate::adjust::filter_panel(app, ui)),
+            Popover::AdjustLayer => popover_at(ctx, "adjust-layer", anchor, Align2::RIGHT_TOP, |ui| crate::adjust::layer_panel(app, ui)),
             Popover::Recover => popover_at(ctx, "recover", screen.center(), Align2::CENTER_CENTER, |ui| recover(app, ui)),
             Popover::Fill => popover_at(ctx, "fill", anchor, Align2::RIGHT_TOP, |ui| fill_options(app, ui)),
             Popover::NewDoc => popover_at(ctx, "newdoc", screen.center(), Align2::CENTER_CENTER, |ui| new_doc(app, ui)),
@@ -36,7 +39,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         if let Some(p) = pressed
             && !rect.contains(p)
             && p.y > M + BAR_H + 4.0
-            && app.popover != Some(Popover::Confirm)
+            && !matches!(app.popover, Some(Popover::Confirm | Popover::Filter))
         {
             app.popover = None;
         }
@@ -147,6 +150,21 @@ fn top_bar(app: &mut App, ctx: &egui::Context) {
                     }
                     if icons::button(ui, "pipette", 32.0, tool == Tool::Eyedropper, "Eyedropper (I)").clicked() {
                         app.set_tool(Tool::Eyedropper);
+                    }
+                    if icons::button(
+                        ui,
+                        "sparkles",
+                        32.0,
+                        matches!(app.popover, Some(Popover::Adjustments | Popover::Filter)),
+                        "Adjustments",
+                    )
+                    .clicked()
+                    {
+                        if app.session.filter_active() {
+                            app.popover = Some(Popover::Filter);
+                        } else {
+                            toggle_popover(app, Popover::Adjustments);
+                        }
                     }
                     widgets::vline(ui, 24.0);
                     if icons::button(ui, "brush", 32.0, tool == Tool::Brush, "Brush (B)").clicked() {
@@ -665,6 +683,13 @@ fn layers(app: &mut App, ui: &mut Ui) {
         }
         if icons::button(ui, "chevron-down", 28.0, false, "Move down").clicked() && idx > 0 {
             let _ = app.session.execute(Command::MoveLayer { id: active.clone(), parent: parent.clone(), index: idx - 1 });
+        }
+        if node.as_layer().is_some_and(|l| l.adjustment.is_some())
+            && icons::button(ui, "sparkles", 28.0, false, "Edit adjustment").clicked()
+        {
+            app.curve_tab = 0;
+            app.popover = Some(Popover::AdjustLayer);
+            return;
         }
         if icons::button(ui, "copy", 28.0, false, "Duplicate").clicked() {
             let _ = app.session.execute(Command::DuplicateLayer { id: active.clone() });

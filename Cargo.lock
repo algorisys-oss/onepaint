@@ -2546,6 +2546,7 @@ dependencies = [
  "onepaint-color",
  "onepaint-doc",
  "onepaint-engine",
+ "onepaint-filters",
  "onepaint-formats",
  "onepaint-gpu",
  "onepaint-input",

@@ -37,6 +37,7 @@ impl Debug {
                 "menu" => Some(Popover::Menu),
                 "new" => Some(Popover::NewDoc),
                 "selection" => Some(Popover::Selection),
+                "curves" => Some(Popover::Filter),
                 _ => None,
             }),
             exit: var("ONEPAINT_EXIT").is_some(),
@@ -91,6 +92,18 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
         app.set_tool(onepaint_engine::Tool::Move);
         let p = onepaint_engine::transform::TransformParams { rotation: 0.25, sx: 0.8, sy: 0.8, dx: 60.0, dy: -40.0 };
         app.canvas.xform_about_centre(&mut app.session, |_| p);
+    }
+    if frame == 3 && app.debug.popover == Some(Popover::Filter) {
+        let _ = app.session.execute(Command::BeginFilter { kind: "curves".into() });
+        let s_curve = vec![
+            onepaint_stroke::CurvePoint::new(0.0, 0.0),
+            onepaint_stroke::CurvePoint::new(0.25, 0.12),
+            onepaint_stroke::CurvePoint::new(0.75, 0.9),
+            onepaint_stroke::CurvePoint::new(1.0, 1.0),
+        ];
+        let _ = app.session.execute(Command::UpdateFilter {
+            params: onepaint_filters::Params { curve: Some(s_curve), curve_mode: Some("smooth".into()), ..Default::default() },
+        });
     }
     if frame == 3 && app.debug.popover.is_some() {
         app.popover = app.debug.popover;

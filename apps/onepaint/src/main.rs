@@ -1,5 +1,6 @@
 //! onepaint desktop app: a thin egui shell over `onepaint_engine::Session`.
 
+mod adjust;
 mod autosave;
 mod canvas;
 mod chrome;
@@ -41,6 +42,9 @@ pub enum Popover {
     CanvasSize,
     ImageSize,
     Recover,
+    Adjustments,
+    Filter,
+    AdjustLayer,
 }
 
 /// An action that would discard unsaved work.
@@ -79,6 +83,8 @@ pub struct App {
     pub autosave: autosave::Autosave,
     /// A leftover autosave offered for recovery at launch.
     pub recover: Option<PathBuf>,
+    /// Selected tab in the curves editor.
+    pub curve_tab: usize,
     /// A file chosen by drag-and-drop, opened once unsaved work is dealt with.
     pub open_later: Option<PathBuf>,
     allow_close: bool,
@@ -117,6 +123,7 @@ impl App {
             size_dialog: ([0, 0], (1, 1), true),
             autosave: autosave::Autosave::new(if cfg!(test) { None } else { autosave::dir() }),
             recover: None,
+            curve_tab: 0,
             open_later: None,
             allow_close: false,
         };
@@ -743,5 +750,31 @@ mod tests {
         h.run();
         let root = &h.state().session.doc().root;
         assert_eq!(root.last().unwrap().id(), bg, "Background dropped above Layer 1");
+    }
+
+    #[test]
+    fn adjustments_apply_and_make_layers() {
+        let mut h = harness();
+        h.run();
+        let bg = h.state().session.doc().root[0].id().to_string();
+        let _ = h.state_mut().session.execute(Command::SetActiveLayer { id: bg });
+        h.get_by_label("Adjustments").click();
+        h.run();
+        h.get_by_label("Invert").click();
+        h.run();
+        assert_eq!(h.state().popover, Some(Popover::Filter));
+        h.get_by_label("Apply").click();
+        h.run();
+        let c = h.state().session.pick_color(10, 10);
+        assert!(c.r < 0.01, "white background inverted to black {c:?}");
+        h.get_by_label("Adjustments").click();
+        h.run();
+        h.get_by_label("Invert").click();
+        h.run();
+        h.get_by_label("As adjustment layer").click();
+        h.run();
+        let app = h.state();
+        assert!(app.session.doc().layer(app.session.active()).unwrap().adjustment.is_some());
+        assert!(app.session.pick_color(10, 10).r > 0.99, "the invert layer flips it back to white");
     }
 }

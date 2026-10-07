@@ -327,3 +327,85 @@ pub fn color_picker(ui: &mut Ui, hsv: &mut Hsv, size: f32) -> bool {
     }
     changed
 }
+
+/// Curve editor: drag points, click empty space to add, double-click a point to
+/// remove it (end points stay at x = 0 and 1). `eval` draws the curve between
+/// points so the editor shows exactly what the filter applies. Returns true on change.
+pub fn curve_editor(ui: &mut Ui, points: &mut Vec<[f64; 2]>, size: f32, tint: Color32, eval: &dyn Fn(&[[f64; 2]], f64) -> f64) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click_and_drag());
+    let p = ui.painter();
+    p.rect_filled(rect, t.radius_sm, t.field);
+    for k in 1..4 {
+        let f = k as f32 / 4.0;
+        p.vline(rect.left() + f * rect.width(), rect.y_range(), Stroke::new(1.0, t.border));
+        p.hline(rect.x_range(), rect.top() + f * rect.height(), Stroke::new(1.0, t.border));
+    }
+    p.line_segment([rect.left_bottom(), rect.right_top()], Stroke::new(1.0, t.fg_faint.gamma_multiply(0.5)));
+    let to_screen = |q: [f64; 2]| pos2(rect.left() + q[0] as f32 * rect.width(), rect.bottom() - q[1] as f32 * rect.height());
+    let to_curve = |s: Pos2| {
+        [((s.x - rect.left()) / rect.width()).clamp(0.0, 1.0) as f64, ((rect.bottom() - s.y) / rect.height()).clamp(0.0, 1.0) as f64]
+    };
+    let line: Vec<Pos2> = (0..=64)
+        .map(|i| {
+            let x = i as f64 / 64.0;
+            to_screen([x, eval(points, x).clamp(0.0, 1.0)])
+        })
+        .collect();
+    p.add(egui::Shape::line(line, Stroke::new(2.0, tint)));
+    let id = resp.id.with("drag-point");
+    let mut changed = false;
+    let nearest = |pts: &[[f64; 2]], s: Pos2| {
+        pts.iter()
+            .enumerate()
+            .map(|(i, q)| (i, to_screen(*q).distance(s)))
+            .filter(|(_, d)| *d < 10.0)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i)
+    };
+    if resp.double_clicked()
+        && let Some(s) = resp.interact_pointer_pos()
+        && let Some(i) = nearest(points, s)
+        && i != 0
+        && i != points.len() - 1
+    {
+        points.remove(i);
+        changed = true;
+    } else if (resp.drag_started() || resp.clicked())
+        && let Some(s) = resp.interact_pointer_pos()
+    {
+        let i = match nearest(points, s) {
+            Some(i) => i,
+            None => {
+                let q = to_curve(s);
+                let i = points.iter().position(|p| p[0] > q[0]).unwrap_or(points.len());
+                points.insert(i, q);
+                changed = true;
+                i
+            }
+        };
+        ui.ctx().data_mut(|d| d.insert_temp(id, i));
+    }
+    if resp.dragged()
+        && let (Some(s), Some(i)) = (resp.interact_pointer_pos(), ui.ctx().data(|d| d.get_temp::<usize>(id)))
+        && i < points.len()
+    {
+        let mut q = to_curve(s);
+        let last = points.len() - 1;
+        if i == 0 {
+            q[0] = 0.0;
+        } else if i == last {
+            q[0] = 1.0;
+        } else {
+            q[0] = q[0].clamp(points[i - 1][0] + 0.01, points[i + 1][0] - 0.01);
+        }
+        points[i] = q;
+        changed = true;
+    }
+    for q in points.iter() {
+        let c = to_screen(*q);
+        ui.painter().circle_filled(c, 4.5, Color32::WHITE);
+        ui.painter().circle_stroke(c, 4.5, Stroke::new(1.0, Color32::from_black_alpha(140)));
+    }
+    changed
+}

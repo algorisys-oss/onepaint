@@ -39,6 +39,17 @@ built on **egui** for the UI and **wgpu** for the canvas.
 - Place image and file drop; PNG, JPEG and WebP open as documents.
 - Drag-and-drop layer reordering, including into and out of groups.
 - Canvas size (with an anchor) and image size.
+- Background autosave and crash recovery.
+
+**Slice 4 (adjustments) is complete.** It includes 14 adjustments and
+filters:
+
+- Brightness/contrast, hue/saturation, B&W, invert, threshold, posterize,
+  levels, curves, colour balance and gradient map.
+- Gaussian blur, motion blur, sharpen and noise.
+
+Each one has a live preview and respects the selection, and the colour kinds
+also work as adjustment layers.
 
 [`docs/feature-parity.md`](docs/feature-parity.md) tracks every happypaint
 feature, and [`docs/divergences.md`](docs/divergences.md) lists the known
