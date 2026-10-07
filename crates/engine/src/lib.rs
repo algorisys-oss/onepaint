@@ -444,6 +444,19 @@ impl Session {
         Ok(())
     }
 
+    /// Open a PNG/JPEG/WebP/BMP/GIF/TIFF as a new single-layer document.
+    pub fn open_image(&mut self, bytes: &[u8], name: &str) -> Result<(), EngineError> {
+        let img = onepaint_formats::decode_image(bytes)?;
+        let mut doc = Document::new(img.width, img.height, None);
+        doc.name = name.to_string();
+        if let Some(l) = doc.root.first_mut().and_then(Node::as_layer_mut) {
+            l.name = name.to_string();
+            l.pixels = onepaint_formats::image_to_surface(&img, 0, 0);
+        }
+        self.replace_document(doc);
+        Ok(())
+    }
+
     /// Serialise the document as `.happypaint` v9 with a JPEG thumbnail.
     pub fn save_happypaint(&mut self) -> Result<Vec<u8>, EngineError> {
         self.doc.touch();

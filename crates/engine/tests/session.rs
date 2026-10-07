@@ -246,3 +246,21 @@ fn new_layers_are_numbered_sequentially() {
     s.execute(Command::AddLayer).unwrap();
     assert_eq!(s.doc().find(s.active()).unwrap().name(), "Layer 3");
 }
+
+#[test]
+fn open_image_as_document() {
+    let px: Vec<u8> = (0..30 * 20)
+        .flat_map(|i| [255, (i % 255) as u8, 0, 255])
+        .collect();
+    let png = onepaint_formats::encode_png_rgba8(30, 20, &px).unwrap();
+    let mut s = Session::new(10, 10, None);
+    s.open_image(&png, "photo").unwrap();
+    assert_eq!(
+        (s.doc().width, s.doc().height, s.doc().name.as_str()),
+        (30, 20, "photo")
+    );
+    assert_eq!(s.doc().root.len(), 1);
+    let c = s.pick_color(0, 0);
+    assert!((c.r - 1.0).abs() < 1e-3 && c.g < 1e-3);
+    assert!(s.open_image(b"junk", "x").is_err());
+}

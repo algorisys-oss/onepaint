@@ -141,3 +141,37 @@ pub fn thumbnail_jpeg(
     }
     encode_jpeg_rgb8(tw as u16, th as u16, &rgb, 80)
 }
+
+/// A decoded raster image: straight-alpha sRGB RGBA8, row-major.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DecodedImage {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+/// Decode PNG, JPEG, WebP, BMP, GIF or TIFF (format sniffed from the bytes).
+pub fn decode_image(bytes: &[u8]) -> Result<DecodedImage, FormatError> {
+    let img = image::load_from_memory(bytes).map_err(|e| FormatError::Image(e.to_string()))?;
+    let rgba = img.to_rgba8();
+    Ok(DecodedImage {
+        width: rgba.width(),
+        height: rgba.height(),
+        rgba: rgba.into_raw(),
+    })
+}
+
+/// Place a decoded image into a new surface with its top-left at (x, y),
+/// converting to premultiplied linear light.
+pub fn image_to_surface(img: &DecodedImage, x: i32, y: i32) -> onepaint_raster::Surface {
+    let mut s = onepaint_raster::Surface::new();
+    let mut data = Vec::with_capacity(img.rgba.len());
+    for p in img.rgba.chunks_exact(4) {
+        data.extend_from_slice(&srgb8_to_premul_linear([p[0], p[1], p[2], p[3]]));
+    }
+    s.write_rect(
+        onepaint_raster::Rect::new(x, y, img.width as i32, img.height as i32),
+        &data,
+    );
+    s
+}

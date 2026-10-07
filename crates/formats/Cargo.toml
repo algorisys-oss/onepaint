@@ -16,6 +16,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 flate2 = { workspace = true }
 png = { workspace = true }
+image = { workspace = true }
 jpeg-encoder = { workspace = true }
 
 [dev-dependencies]

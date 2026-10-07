@@ -31,6 +31,7 @@ bytemuck = { version = "1", features = ["derive"] }
 rayon = "1"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 png = "0.18"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif", "tiff"] }
 jpeg-encoder = "0.6"
 uuid = { version = "1", features = ["v4"] }
 log = "0.4"

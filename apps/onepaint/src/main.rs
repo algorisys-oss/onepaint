@@ -150,14 +150,28 @@ impl App {
 
     pub fn open_path(&mut self, p: PathBuf) {
         let now = 0.0;
-        match std::fs::read(&p)
+        let native = p
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("happypaint"));
+        let name = p
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Image")
+            .to_string();
+        match std::fs::read(&p).map_err(|e| e.to_string()).and_then(|b| {
+            if native {
+                self.session.open_happypaint(&b)
+            } else {
+                self.session.open_image(&b, &name)
+            }
             .map_err(|e| e.to_string())
-            .and_then(|b| self.session.open_happypaint(&b).map_err(|e| e.to_string()))
-        {
+        }) {
             Ok(()) => {
                 let d = self.session.doc();
                 self.canvas.reset_for([d.width, d.height]);
-                self.path = Some(p);
+                // An imported image saves as a new .happypaint, never over the source file.
+                self.path = native.then_some(p);
                 self.saved_history_len = Some(0);
                 self.thumbs.clear();
             }
@@ -190,7 +204,20 @@ impl App {
 
     pub fn open_dialog(&mut self) {
         if let Some(p) = rfd::FileDialog::new()
-            .add_filter("happypaint", &["happypaint"])
+            .add_filter(
+                "Images and documents",
+                &[
+                    "happypaint",
+                    "png",
+                    "jpg",
+                    "jpeg",
+                    "webp",
+                    "bmp",
+                    "gif",
+                    "tif",
+                    "tiff",
+                ],
+            )
             .pick_file()
         {
             self.open_path(p);
