@@ -2799,6 +2799,8 @@ dependencies = [
  "cosmic-text",
  "onepaint-color",
  "onepaint-raster",
+ "png 0.18.1",
+ "rayon",
  "serde",
  "serde_json",
 ]

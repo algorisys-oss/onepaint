@@ -64,3 +64,30 @@ fn live_edits_coalesce() {
     }
     assert_eq!(s.history_len(), n + 1);
 }
+
+#[test]
+fn balloons_and_runs_survive_save_and_open() {
+    use onepaint_text::balloon::{Balloon, BalloonShape, Tail};
+    use onepaint_text::runs::{StyleEdit, apply_style};
+    let mut s = Session::new(400, 200, Some(Rgba::WHITE));
+    let b = Balloon {
+        shape: BalloonShape::Cloud,
+        fill: "#ffffff".into(),
+        stroke: Some("#000000".into()),
+        stroke_width: Some(3.0),
+        tail: Some(Tail { x: 40.0, y: 90.0, width: Some(16.0) }),
+        ..Default::default()
+    };
+    let spec = apply_style(&TextSpec { balloon: Some(b), ..hello(60.0) }, 1..3, &StyleEdit::Bold);
+    assert!(spec.runs.is_some());
+    s.execute(Command::AddText { spec: spec.clone() }).unwrap();
+    let id = s.active().to_string();
+    // The balloon is drawn: its fill reaches beyond the glyphs.
+    let ink = s.doc().layer(&id).unwrap().pixels.content_bounds().unwrap();
+    assert!(ink.x < 50 && ink.y < 30, "{ink:?}");
+    assert_eq!(s.text_at(62.0, 32.0), Some((id.clone(), 0)), "the balloon pad is hittable");
+    let bytes = s.save_happypaint().unwrap();
+    let mut t = Session::new(8, 8, None);
+    t.open_happypaint(&bytes).unwrap();
+    assert_eq!(t.texts(&id), vec![spec]);
+}
