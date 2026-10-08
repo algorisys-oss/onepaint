@@ -160,6 +160,24 @@ pub enum Command {
         id: NodeId,
         hold: u32,
     },
+    /// Batch retiming over a frame selection (spec 24); each is one step.
+    SetFramesDuration {
+        ids: Vec<NodeId>,
+        hold: u32,
+    },
+    SplitFrames {
+        ids: Vec<NodeId>,
+        duration: u32,
+    },
+    AddInbetweens {
+        ids: Vec<NodeId>,
+    },
+    DuplicateFrames {
+        ids: Vec<NodeId>,
+    },
+    DeleteFrames {
+        ids: Vec<NodeId>,
+    },
     /// `background`, `foreground`, or `None` for a normal frame.
     SetFrameRole {
         id: NodeId,

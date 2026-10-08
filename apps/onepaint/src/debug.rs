@@ -10,7 +10,8 @@
 //! - `ONEPAINT_GUIDES=1` turns on the grid, 2-point perspective and H/V snap.
 //! - `ONEPAINT_PEN=1` adds a curved, filled path layer and selects the pen.
 //! - `ONEPAINT_ANIM=1` turns the demo layers into frames (background role) with onion skins;
-//!   `ONEPAINT_ANIM=tracks` also converts them to exposure-sheet tracks with markers and a range.
+//!   `ONEPAINT_ANIM=tracks` also converts them to exposure-sheet tracks with markers and a range;
+//!   `ONEPAINT_ANIM=pegs` opens the timing ops with two frames picked and slides a ghost off its pegs.
 //! - `ONEPAINT_IMPASTO=1` paints thick, wet-impasto and oil strokes, blends one, and bevels a shape.
 //! - `ONEPAINT_WET=1` paints live watercolour (blue, then yellow into it) and leaves it wet.
 //! - `ONEPAINT_EXIT=1` closes the app after the screenshot.
@@ -35,6 +36,7 @@ pub struct Debug {
     pen: bool,
     anim: bool,
     tracks: bool,
+    pegs: bool,
     wet: bool,
     impasto: bool,
 }
@@ -88,6 +90,7 @@ impl Debug {
             pen: var("ONEPAINT_PEN").is_some(),
             anim: var("ONEPAINT_ANIM").is_some(),
             tracks: var("ONEPAINT_ANIM").is_some_and(|v| v == "tracks"),
+            pegs: var("ONEPAINT_ANIM").is_some_and(|v| v == "pegs"),
             impasto: var("ONEPAINT_IMPASTO").is_some(),
             wet: var("ONEPAINT_WET").is_some(),
         }
@@ -293,6 +296,18 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
             (a.mark_in, a.mark_out) = (Some(1), Some(5));
             let _ = app.session.execute(Command::SetAnimation { settings: Box::new(a) });
             let _ = app.session.execute(Command::SetAnimSlot { slot: 3 });
+        }
+        if app.debug.pegs {
+            let ids: Vec<String> = app.session.anim_frames().into_iter().map(|f| f.id).collect();
+            app.timing.set_select_mode(true);
+            app.timing.selected = ids.iter().skip(1).take(2).cloned().collect();
+            if let Some(first) = ids.first() {
+                let mut a = app.session.anim_settings().clone();
+                a.out_of_pegs.insert(first.clone(), onepaint_engine::anim::Peg { dx: 120.0, dy: 40.0, rot: 0.3, scale: 1.2 });
+                let _ = app.session.execute(Command::SetAnimation { settings: Box::new(a) });
+                app.timing.set_peg_mode(true);
+                app.timing.peg_target = Some(first.clone());
+            }
         }
     }
     if frame == 3 && app.debug.transform {

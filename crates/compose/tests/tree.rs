@@ -137,3 +137,31 @@ fn tile_composite_matches_full_flatten() {
         }
     }
 }
+
+#[test]
+fn a_pegged_ghost_moves_on_screen_only() {
+    // A 600×400 document spans several tiles, so the peg reaches across them.
+    let pegged = |peg: [f32; 4]| {
+        let mut d = Document::new(600, 400, None);
+        let mut g = Group::new("ghost");
+        g.children.push(Node::Layer(layer("a", Rect::new(250, 190, 20, 20), RED)));
+        g.extra.insert(GHOST_PEG_KEY.into(), serde_json::json!(peg));
+        d.root = vec![Node::Group(g)];
+        d
+    };
+    let still = pegged([0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(composite_px(&still, 255, 195), RED, "identity is exact");
+    assert_eq!(composite_px(&still, 245, 195)[3], 0.0);
+    // Moved 30 px right and 70 down: across the tile seam at y = 256.
+    let moved = pegged([30.0, 70.0, 0.0, 1.0]);
+    assert_eq!(composite_px(&moved, 285, 265), RED);
+    assert_eq!(composite_px(&moved, 255, 195)[3], 0.0, "gone from where it was drawn");
+    // Half a turn about the centre (300, 200): (260, 200) lands at (340, 200).
+    let turned = pegged([0.0, 0.0, std::f32::consts::PI, 1.0]);
+    assert!(composite_px(&turned, 340, 200)[0] > 0.99);
+    assert_eq!(composite_px(&turned, 260, 200)[3], 0.0);
+    // Doubled about the centre: (268, 208) lands at (236, 216).
+    let big = pegged([0.0, 0.0, 0.0, 2.0]);
+    assert!(composite_px(&big, 236, 216)[0] > 0.99);
+    assert_eq!(composite_px(&big, 300, 230)[3], 0.0, "outside the scaled square");
+}

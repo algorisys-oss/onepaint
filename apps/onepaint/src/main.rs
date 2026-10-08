@@ -30,6 +30,7 @@ mod tablet;
 mod text_ui;
 mod thumbs;
 mod timeline;
+mod timing;
 mod track_grid;
 
 use canvas::Canvas;
@@ -177,6 +178,8 @@ pub struct App {
     pub bevel: [f32; 2],
     /// The New canvas dialog's paper preset (index into `PAPER_PRESETS`).
     pub new_paper: usize,
+    /// Frame selection and out-of-pegs mode (the timeline's view state).
+    pub timing: timing::Timing,
     /// A loaded CMYK press profile; the built-in press when none.
     pub press: Option<std::sync::Arc<onepaint_color::cmyk::Press>>,
     /// Settings ▸ Keyboard shortcuts: the action waiting for a key press.
@@ -263,6 +266,7 @@ impl App {
             bevel: [0.0, 0.25],
             new_paper: 0,
             press: None,
+            timing: Default::default(),
             capture: None,
             settings: settings::Settings::load(if cfg!(test) || debug.scripted() { None } else { settings::default_path() }),
             playback: Default::default(),
@@ -1291,6 +1295,8 @@ impl eframe::App for App {
         let was_stroking = self.session.is_stroking();
         let t = onepaint_ui_kit::Tokens::get(&ctx);
         ui.painter().rect_filled(rect, 0.0, t.stage);
+        let pegging = self.timing.peg_mode && self.session.anim_settings().enabled;
+        self.canvas.peg_target = self.timing.peg_target.clone().filter(|_| pegging);
         self.canvas.show(ui, rect, &mut self.session, space, r, self.gpu_ok);
         // Keep a short history of pen samples (the canvas may use a move a frame late).
         let excess = self.canvas.pen_queue.len().saturating_sub(512);
@@ -2241,6 +2247,48 @@ mod tests {
         h.run();
         assert_eq!(h.state().settings.timeline_metric, settings::TimelineMetric::Seconds);
         assert!(h.query_by_label("timeline metric: seconds").is_some());
+    }
+
+    #[test]
+    fn frames_retime_in_a_batch_and_ghosts_slide_off_their_pegs() {
+        let mut h = harness();
+        h.run();
+        h.get_by_label("Animation").click();
+        h.run();
+        for _ in 0..2 {
+            h.get_by_label("Add frame").click();
+            h.run();
+        }
+        let ids: Vec<String> = h.state().session.anim_frames().into_iter().map(|f| f.id).collect();
+        assert!(ids.len() >= 3);
+        // Select mode, two frames, Set duration (2 by default): one undo step.
+        h.get_by_label("Select frames to retime (or Ctrl/Shift-click a frame)").click();
+        h.run();
+        assert!(h.state().timing.select_mode);
+        h.state_mut().timing.selected = vec![ids[0].clone(), ids[2].clone()];
+        h.run();
+        let undo = h.state().session.history_len();
+        h.get_by_label("Set duration").click();
+        h.run();
+        let holds: Vec<usize> = h.state().session.anim_frames().iter().map(|f| f.hold).collect();
+        assert_eq!((holds[0], holds[1], holds[2]), (2, 1, 2));
+        assert_eq!(h.state().session.history_len(), undo + 1);
+        h.get_by_label("Done").click();
+        h.run();
+        assert!(h.state().timing.selected.is_empty(), "leaving select mode drops the batch");
+
+        // Out of pegs: drag the canvas and the previous frame's ghost moves,
+        // with no paint and no undo step.
+        let _ = h.state_mut().session.execute(Command::SetActiveLayer { id: ids[1].clone() });
+        h.state_mut().timing.set_peg_mode(true);
+        h.state_mut().timing.peg_target = Some(ids[0].clone());
+        h.run();
+        let (undo, scale) = (h.state().session.history_len(), h.state().canvas.view.scale);
+        drag_stroke(&mut h, pos2(600.0, 400.0), pos2(660.0, 430.0));
+        h.run();
+        let peg = h.state().session.anim_settings().out_of_pegs[&ids[0]];
+        assert!((peg.dx - 60.0 / scale).abs() < 1.0 && (peg.dy - 30.0 / scale).abs() < 1.0, "{peg:?}");
+        assert_eq!(h.state().session.history_len(), undo, "display only");
     }
 
     #[test]

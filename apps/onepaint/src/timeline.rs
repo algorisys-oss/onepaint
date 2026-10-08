@@ -28,6 +28,8 @@ pub fn toggle(app: &mut App) {
     set_settings(app, |s| s.enabled = on);
     if !on {
         set_playing(app, false);
+        app.timing.set_select_mode(false);
+        app.timing.set_peg_mode(false);
     }
 }
 
@@ -155,7 +157,12 @@ pub fn show(app: &mut App, ctx: &egui::Context, screen: egui::Rect) {
                             (x.onion_before, x.onion_after, x.onion_opacity) = (b.round() as u32, a.round() as u32, o / 100.0);
                             let _ = app.session.execute(Command::SetAnimation { settings: Box::new(x) });
                         }
+                        crate::timing::pegs_panel(app, ui);
                     });
+                    let sel = app.timing.select_mode;
+                    if icons::button(ui, "check", 28.0, sel, "Select frames to retime (or Ctrl/Shift-click a frame)").clicked() {
+                        app.timing.set_select_mode(!sel);
+                    }
                     // Frames or seconds (Settings' timeline metric); click to switch.
                     let slot = app.session.anim_slot();
                     let frames = app.session.anim_frames();
@@ -179,6 +186,7 @@ pub fn show(app: &mut App, ctx: &egui::Context, screen: egui::Rect) {
                 });
                 markers_row(app, ui);
                 crate::track_grid::show(app, ui);
+                crate::timing::ops_bar(app, ui);
                 ui.add_space(4.0);
                 egui::ScrollArea::horizontal().id_salt("frames").max_width(ui.available_width()).show(ui, |ui| {
                     ui.horizontal(|ui| frames_strip(app, ui));
@@ -197,7 +205,8 @@ fn frames_strip(app: &mut App, ui: &mut egui::Ui) {
         let w = 52.0 + (f.hold.min(6) as f32 - 1.0) * 14.0;
         let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 54.0), egui::Sense::click());
         let stroke = if current { egui::Stroke::new(2.0, t.accent) } else { egui::Stroke::new(1.0, t.border) };
-        ui.painter().rect(rect, 6.0, t.field, stroke, egui::StrokeKind::Inside);
+        let picked = app.timing.selected.contains(&f.id);
+        ui.painter().rect(rect, 6.0, if picked { t.accent.gamma_multiply(0.35) } else { t.field }, stroke, egui::StrokeKind::Inside);
         let thumb = egui::Rect::from_min_size(rect.min + egui::vec2(4.0, 4.0), egui::vec2(44.0, 33.0));
         widgets::checker(ui.painter(), thumb, 4.0);
         match app.session.doc().find(&f.id) {
@@ -216,7 +225,7 @@ fn frames_strip(app: &mut App, ui: &mut egui::Ui) {
             if current { t.fg } else { t.fg_muted },
         );
         let id = f.id.clone();
-        if resp.clicked() {
+        if resp.clicked() && !crate::timing::tap(app, &id, ui.input(|i| i.modifiers)) {
             let _ = app.session.execute(Command::SetActiveLayer { id: id.clone() });
             let _ = app.session.execute(Command::SetAnimSlot { slot: f.start });
         }

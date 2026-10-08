@@ -193,6 +193,11 @@ enum Drag {
     PerspLine {
         origin: Pt,
     },
+    /// Out of pegs: sliding a ghost from `from`, grabbed at `start` (doc px).
+    Peg {
+        start: Pt,
+        from: onepaint_engine::anim::Peg,
+    },
     /// Dragging a vanishing point (perspective edit mode).
     Vp {
         index: usize,
@@ -301,6 +306,8 @@ pub struct Canvas {
     /// Transient guide edit modes: canvas drags move handles instead of painting.
     pub persp_editing: bool,
     pub sym_editing: bool,
+    /// Out of pegs: the ghost a canvas drag slides (set by the timeline).
+    pub peg_target: Option<String>,
     /// Edit guides: drags move, draw and swing guide lines.
     pub lines_editing: bool,
     /// Measure: drags report length and angle.
@@ -345,6 +352,7 @@ impl Canvas {
             snapper: None,
             persp_editing: false,
             sym_editing: false,
+            peg_target: None,
             lines_editing: false,
             measuring: false,
             measure: None,
@@ -632,6 +640,10 @@ impl Canvas {
         if self.sym_editing {
             Self::move_symmetry_centre(session, self.doc_pt(p), self.doc_size);
             return Drag::SymAxis;
+        }
+        if let Some(id) = &self.peg_target {
+            let from = session.anim_settings().out_of_pegs.get(id).copied().unwrap_or_default();
+            return Drag::Peg { start: self.doc_pt(p), from };
         }
         let selecting = matches!(tool, Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectPoly | Tool::SelectWand);
         if (m.alt && !selecting) || tool == Tool::Eyedropper {
@@ -1084,6 +1096,17 @@ impl Canvas {
                             self.size_flash = 1.0;
                         }
                         Drag::Pick => self.pick(session, p),
+                        Drag::Peg { start, from } => {
+                            // Slides with the pointer at any zoom or rotation (paint-canvas.tsx:5830).
+                            if let Some(id) = self.peg_target.clone() {
+                                let mut a = session.anim_settings().clone();
+                                a.out_of_pegs.insert(
+                                    id,
+                                    onepaint_engine::anim::Peg { dx: from.dx + d[0] - start[0], dy: from.dy + d[1] - start[1], ..*from },
+                                );
+                                let _ = session.execute(Command::SetAnimation { settings: Box::new(a) });
+                            }
+                        }
                         Drag::Shape { start, end, .. } => *end = if shift { constrain_square(*start, d) } else { d },
                         Drag::Lasso { points, .. } => points.push(d),
                         Drag::Transform { handle, grab, start } => {

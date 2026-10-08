@@ -153,3 +153,39 @@ The background is transparent, white or a hex colour. WebM is not offered
     (`AddSheet`), and is refused where a sheet already shows.
   - "+ Track" adds a track on top with one blank sheet.
 - **Undo:** each edit is one undo step, and a whole drag is one.
+
+## Batch retiming (`frame_ops.rs`, app `timing.rs`; `animation-store.ts:589-760`)
+- **Selection (app state):**
+  - The ☑ button opens the ops bar. Shift-click selects the range from the
+    current frame. Ctrl/⌘-click, or any click while the bar is open,
+    toggles a frame.
+  - With nothing selected, the ops act on the frame under the playhead.
+  - "Done", or leaving animation mode, drops the selection.
+- **Ops (one undo step each; engine commands):**
+  - **Set duration** (`SetFramesDuration`): every target holds N slots
+    (1–99).
+  - **Split** (`SplitFrames`): a frame held longer than N becomes
+    `ceil(hold/N)` copies of N slots, and the last takes the remainder.
+    Total timing is unchanged. Groups and short frames are skipped.
+  - **In-betweens** (`AddInbetweens`): an empty frame after each target.
+    The last one added is selected.
+  - **Duplicate** (`DuplicateFrames`): copies with content; groups are
+    skipped.
+  - **Delete** (`DeleteFrames`): one frame always stays.
+- **Afterwards:** the playhead stays on a real slot.
+- **In a tracks document:** the ops act on the active track's sheets. Split
+  pieces keep explicit starts, and a sheet that would overlap the one
+  before it is pushed right (divergence 21).
+
+## Out of pegs (`animation-store.ts:796-850`, `compositor.ts:2457-2490`)
+- **`AnimSettings.out_of_pegs`:** frame id → `Peg {dx, dy, rot, scale}`,
+  saved as `outOfPegs`. Scale is clamped to 0.1–4.
+- **Display only:** a ghost's group carries `GHOST_PEG_KEY`. Compose samples
+  its content through the inverse of "scale and turn about the document
+  centre, then offset" (bilinear), compositing each source tile it reaches
+  once. Pixels, layers and history never change.
+- **UI (the Onion menu):**
+  - "Out of pegs" picks a ghost (`−1`, `+1`, …; `•` marks a pegged one).
+  - Rotate and Scale sliders; Reset and Reset all.
+  - While it is on, a canvas drag slides the target ghost in document px,
+    whatever the zoom and rotation.

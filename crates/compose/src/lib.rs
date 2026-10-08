@@ -170,8 +170,14 @@ fn composite_nodes(nodes: &[Node], tx: i32, ty: i32, target: &mut Buf, ov: Optio
             Node::Group(g) => {
                 let clip = panel_clip(g, tx, ty);
                 if g.visible && g.opacity > 0.0 && !g.children.is_empty() && clip != Some(TileCoverage::Empty) {
-                    let mut buf = zeros();
-                    composite_nodes(&g.children, tx, ty, &mut buf, ov, frame);
+                    let mut buf = match ghost_peg(g) {
+                        Some(peg) => pegged(&g.children, peg, tx, ty, ov, frame),
+                        None => {
+                            let mut buf = zeros();
+                            composite_nodes(&g.children, tx, ty, &mut buf, ov, frame);
+                            buf
+                        }
+                    };
                     // A panel's frame clips the group before its riders go on (C:1540-1548).
                     if let Some(TileCoverage::Partial(cov)) = &clip {
                         for (p, k) in buf.chunks_exact_mut(4).zip(cov) {
@@ -213,6 +219,79 @@ fn panel_clip(g: &onepaint_doc::Group, tx: i32, ty: i32) -> Option<TileCoverage>
 
 /// Key on a view-only group that tints its result like an onion-skin ghost.
 pub const GHOST_TINT_KEY: &str = "onepaint:ghostTint";
+
+/// Key on a view-only ghost group holding its out-of-pegs offset
+/// `[dx, dy, rot, scale]` (doc px, radians about the document centre).
+pub const GHOST_PEG_KEY: &str = "onepaint:ghostPeg";
+
+fn ghost_peg(g: &onepaint_doc::Group) -> Option<[f32; 4]> {
+    g.extra.get(GHOST_PEG_KEY).and_then(|v| serde_json::from_value(v.clone()).ok())
+}
+
+/// The group's content seen through its peg (`compositor.ts` `pegMatrix`):
+/// each pixel samples the unmoved content through the inverse transform,
+/// bilinear. The source tiles it reaches are composited once each.
+fn pegged(children: &[Node], [dx, dy, rot, scale]: [f32; 4], tx: i32, ty: i32, ov: Option<&StrokeOverlay>, frame: Frame) -> Buf {
+    use onepaint_raster::TILE;
+    let (cx, cy) = (frame.doc_w as f32 / 2.0, frame.doc_h as f32 / 2.0);
+    let k = 1.0 / scale.clamp(0.1, 4.0);
+    let (c, s) = (rot.cos() * k, rot.sin() * k);
+    let inv = |x: f32, y: f32| {
+        let (qx, qy) = (x - cx - dx, y - cy - dy);
+        (cx + c * qx + s * qy, cy - s * qx + c * qy)
+    };
+    let (x0, y0) = ((tx * TILE) as f32, (ty * TILE) as f32);
+    let t = TILE as f32;
+    let corners = [inv(x0, y0), inv(x0 + t, y0), inv(x0, y0 + t), inv(x0 + t, y0 + t)];
+    let fold = |f: fn(f32, f32) -> f32, pick: fn(&(f32, f32)) -> f32, init: f32| corners.iter().map(pick).fold(init, f);
+    let (min_x, max_x) = (fold(f32::min, |p| p.0, f32::MAX), fold(f32::max, |p| p.0, f32::MIN));
+    let (min_y, max_y) = (fold(f32::min, |p| p.1, f32::MAX), fold(f32::max, |p| p.1, f32::MIN));
+    // Only content over the document is shown.
+    let (dtx, dty) = ((frame.doc_w as i32 - 1).div_euclid(TILE), (frame.doc_h as i32 - 1).div_euclid(TILE));
+    let tile_span = |lo: f32, hi: f32, max: i32| {
+        ((lo - 1.0).floor() as i32).div_euclid(TILE).max(0)..=((hi + 1.0).ceil() as i32).div_euclid(TILE).min(max)
+    };
+    let (xs, ys) = (tile_span(min_x, max_x, dtx), tile_span(min_y, max_y, dty));
+    let mut out = zeros();
+    if xs.is_empty() || ys.is_empty() {
+        return out;
+    }
+    let (sx0, sy0) = (*xs.start(), *ys.start());
+    let cols = (xs.end() - sx0 + 1) as usize;
+    let src: Vec<Buf> = ys
+        .clone()
+        .flat_map(|y| xs.clone().map(move |x| (x, y)))
+        .map(|(x, y)| {
+            let mut b = zeros();
+            composite_nodes(children, x, y, &mut b, ov, frame);
+            b
+        })
+        .collect();
+    let rows = src.len() / cols;
+    let at = |x: i32, y: i32| -> Px {
+        let (t_x, t_y) = (x.div_euclid(TILE) - sx0, y.div_euclid(TILE) - sy0);
+        if t_x < 0 || t_y < 0 || t_x as usize >= cols || t_y as usize >= rows {
+            return [0.0; 4];
+        }
+        px(&src[t_y as usize * cols + t_x as usize], (y.rem_euclid(TILE) * TILE + x.rem_euclid(TILE)) as usize * 4)
+    };
+    for py in 0..TILE {
+        for pxl in 0..TILE {
+            let (sx, sy) = inv(x0 + pxl as f32 + 0.5, y0 + py as f32 + 0.5);
+            let (fx, fy) = (sx - 0.5, sy - 0.5);
+            let (ix, iy) = (fx.floor() as i32, fy.floor() as i32);
+            let (wx, wy) = (fx - ix as f32, fy - iy as f32);
+            let (a, b, cc, d) = (at(ix, iy), at(ix + 1, iy), at(ix, iy + 1), at(ix + 1, iy + 1));
+            let o = ((py * TILE + pxl) * 4) as usize;
+            for ch in 0..4 {
+                let top = a[ch] + (b[ch] - a[ch]) * wx;
+                let bot = cc[ch] + (d[ch] - cc[ch]) * wx;
+                out[o + ch] = top + (bot - top) * wy;
+            }
+        }
+    }
+    out
+}
 
 /// Onion ghost tint (compositor.ts:200): `rgb = mix(rgb, tint·a, .65)`, premultiplied.
 fn ghost_tint(buf: &mut [f32], g: &onepaint_doc::Group) {

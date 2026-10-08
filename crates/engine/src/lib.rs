@@ -11,6 +11,7 @@ mod command;
 mod filter_ops;
 pub mod guides;
 pub use command::Command;
+mod frame_ops;
 mod height_ops;
 mod liquify_ops;
 mod mask_ops;
@@ -1048,6 +1049,11 @@ impl Session {
             Command::SetFrameHold { id, hold } => {
                 self.set_frame_meta(&id, "holdFrames", (hold != 1).then(|| serde_json::json!(hold.clamp(1, 99))))
             }
+            Command::SetFramesDuration { ids, hold } => self.set_frames_duration(&ids, hold as usize),
+            Command::SplitFrames { ids, duration } => self.split_frames(&ids, duration as usize),
+            Command::AddInbetweens { ids } => self.add_inbetweens(&ids),
+            Command::DuplicateFrames { ids } => self.duplicate_frames(&ids),
+            Command::DeleteFrames { ids } => self.delete_frames(&ids),
             Command::ConvertToTracks => self.convert_to_tracks(),
             Command::MoveSheet { id, column } => self.move_sheet(&id, column),
             Command::AddSheet { track, column } => self.add_sheet(&track, column),

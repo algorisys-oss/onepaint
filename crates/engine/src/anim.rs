@@ -81,8 +81,37 @@ pub struct AnimSettings {
     pub mark_in: Option<usize>,
     #[serde(default)]
     pub mark_out: Option<usize>,
+    /// Out of pegs: per-frame display offsets for the onion ghosts.
+    #[serde(default)]
+    pub out_of_pegs: std::collections::BTreeMap<NodeId, Peg>,
     #[serde(flatten)]
     pub extra: Extra,
+}
+
+/// An onion ghost slid off its pegs (`animation-store.ts` `Peg`): moved,
+/// turned about the document centre and scaled, on screen only. The
+/// drawing, its layer and history never change.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Peg {
+    /// Offset in document px.
+    pub dx: f64,
+    pub dy: f64,
+    /// Radians, clockwise on screen.
+    pub rot: f64,
+    pub scale: f64,
+}
+
+impl Default for Peg {
+    fn default() -> Self {
+        Self { dx: 0.0, dy: 0.0, rot: 0.0, scale: 1.0 }
+    }
+}
+
+impl Peg {
+    /// Scale kept usable (`setPeg`).
+    pub fn clamped(self) -> Self {
+        Self { scale: if self.scale.is_finite() { self.scale.clamp(0.1, 4.0) } else { 1.0 }, ..self }
+    }
 }
 
 impl AnimSettings {
@@ -295,7 +324,7 @@ fn only_sheet(g: &mut Group, sheet: &str) {
     }
 }
 
-fn ghost_group(node: &Node, tint: Option<[f32; 3]>, opacity: f32) -> Node {
+fn ghost_group(node: &Node, tint: Option<[f32; 3]>, opacity: f32, peg: Option<&Peg>) -> Node {
     let mut g = Group::new("ghost");
     g.id = format!("ghost:{}", node.id());
     let mut inner = node.clone();
@@ -306,6 +335,9 @@ fn ghost_group(node: &Node, tint: Option<[f32; 3]>, opacity: f32) -> Node {
     g.children = vec![inner];
     if let Some(t) = tint {
         g.extra.insert(onepaint_compose::GHOST_TINT_KEY.into(), serde_json::json!(t));
+    }
+    if let Some(p) = peg {
+        g.extra.insert(onepaint_compose::GHOST_PEG_KEY.into(), serde_json::json!([p.dx, p.dy, p.rot, p.scale]));
     }
     Node::Group(g)
 }
@@ -357,7 +389,7 @@ pub fn view_document(doc: &Document, s: &AnimSettings, column: usize, ghosts: bo
                         let (tint, op) = style(d);
                         let mut wrapper = track.clone();
                         wrapper.children = vec![sheet.clone()];
-                        ghost_nodes.push((ti, ghost_group(&Node::Group(wrapper), tint, op)));
+                        ghost_nodes.push((ti, ghost_group(&Node::Group(wrapper), tint, op, s.out_of_pegs.get(&id))));
                     }
                 }
             }
@@ -368,7 +400,7 @@ pub fn view_document(doc: &Document, s: &AnimSettings, column: usize, ghosts: bo
                 for (d, id) in neighbours(&frames, cur) {
                     if let Some(n) = doc.root.iter().find(|n| n.id() == id) {
                         let (tint, op) = style(d);
-                        ghost_nodes.push((cur_idx, ghost_group(n, tint, op)));
+                        ghost_nodes.push((cur_idx, ghost_group(n, tint, op, s.out_of_pegs.get(&id))));
                     }
                 }
             }
@@ -459,6 +491,7 @@ impl Session {
             onion_before: s.onion_before.min(8),
             onion_after: s.onion_after.min(8),
             onion_opacity: s.onion_opacity.clamp(0.0, 1.0),
+            out_of_pegs: s.out_of_pegs.into_iter().map(|(k, p)| (k, p.clamped())).collect(),
             ..s
         };
         if self.anim.enabled && !was {
