@@ -2723,6 +2723,7 @@ dependencies = [
  "onepaint-color",
  "onepaint-raster",
  "onepaint-stroke",
+ "png 0.18.1",
  "rayon",
  "serde",
  "serde_json",

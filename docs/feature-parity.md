@@ -167,3 +167,11 @@ screentone are added as live layers.
 ## Comics
 - [x] Panel layouts and panel tool: six page presets; panels clip their art to the frame, inset by half the gutter; one Millipen border layer that follows every edit; round-trips in `.happypaint`
 - [x] Balloons (in text layers): speech, rounded, shout and thought shapes, tail, fill and rim (spec 28; the tail is aimed by angle, as in happypaint)
+
+## Settings
+- [x] Settings dialog, persisted as `settings.json` in the config dir (spec 34):
+  - documents: tab strip on/off, maximum open tabs
+  - brush: maximum size (10–10000), size relative to canvas or screen, force pressure for size / opacity
+  - cursor: ring, crosshair, both or dot; paint colour; thickness 1–4
+  - history: undo steps (5–1000)
+- [ ] Cursor traced from the tip shape (`cursorTipShape`), timeline metric (frames/seconds), keyboard rebinding

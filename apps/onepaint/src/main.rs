@@ -15,6 +15,7 @@ mod panel_ui;
 mod pen;
 mod progressive;
 mod reference;
+mod settings;
 mod text_ui;
 mod thumbs;
 mod timeline;
@@ -69,6 +70,7 @@ pub enum Popover {
     MoveOptions,
     Help,
     Gallery,
+    Settings,
     /// Three-finger swipe down: copy, cut, paste.
     ClipboardMenu,
     BrushStudio,
@@ -113,6 +115,8 @@ pub struct DocSlot {
     replaying: Option<(Vec<onepaint_engine::recording::RecEvent>, usize)>,
     thumbs: thumbs::Thumbs,
     xform_layer: Option<String>,
+    /// When this tab was last in front (for the open-tab cap).
+    last_active: std::time::Instant,
 }
 
 impl DocSlot {
@@ -126,6 +130,7 @@ impl DocSlot {
             replaying: None,
             thumbs: Default::default(),
             xform_layer: None,
+            last_active: std::time::Instant::now(),
         }
     }
 
@@ -153,6 +158,7 @@ pub struct App {
     pub hex: String,
     pub recent: Vec<Rgba>,
     pub palettes: palettes::Palettes,
+    pub settings: settings::Settings,
     pub playback: timeline::Playback,
     pub reference: reference::ReferenceState,
     pub gallery: gallery::Gallery,
@@ -224,6 +230,7 @@ impl App {
             hex: "#000000".into(),
             recent: Vec::new(),
             palettes,
+            settings: settings::Settings::load(if cfg!(test) || debug.scripted() { None } else { settings::default_path() }),
             playback: Default::default(),
             reference: Default::default(),
             gallery: gallery::Gallery::load(if cfg!(test) || debug.scripted() { None } else { gallery::default_path() }),
@@ -400,6 +407,7 @@ impl App {
         std::mem::swap(&mut self.replaying, &mut s.replaying);
         std::mem::swap(&mut self.thumbs, &mut s.thumbs);
         std::mem::swap(&mut self.xform_layer, &mut s.xform_layer);
+        s.last_active = std::time::Instant::now();
     }
 
     /// Bring tab `i` to the front, keeping the current tools.
@@ -426,6 +434,28 @@ impl App {
         let at = self.active_tab + 1;
         self.tabs.insert(at, None);
         self.active_tab = at;
+        self.enforce_tab_cap();
+    }
+
+    /// Opening past the cap closes the least recently used saved tab
+    /// (happypaint closes the oldest tab; unsaved drawings are kept here).
+    fn enforce_tab_cap(&mut self) {
+        while self.tabs.len() > self.settings.max_open_tabs {
+            let victim = self
+                .tabs
+                .iter()
+                .enumerate()
+                .filter_map(|(i, t)| t.as_ref().filter(|s| !s.dirty()).map(|s| (i, s.last_active)))
+                .min_by_key(|(_, t)| *t)
+                .map(|(i, _)| i);
+            let Some(i) = victim else { break };
+            if let Some(s) = self.tabs.remove(i) {
+                self.autosave.clear(&s.session.doc().id);
+            }
+            if i < self.active_tab {
+                self.active_tab -= 1;
+            }
+        }
     }
 
     /// Close the active tab (the last one becomes a fresh drawing).
@@ -1094,6 +1124,15 @@ impl eframe::App for App {
         }
         let (space, r) = self.shortcuts(&ctx);
         let rect = ui.max_rect();
+        let prefs = self.settings.preferences(self.canvas.view.scale);
+        if self.session.preferences() != prefs {
+            self.session.set_preferences(prefs);
+        }
+        self.canvas.cursor = canvas::CursorPrefs {
+            style: self.settings.brush_cursor,
+            use_color: self.settings.cursor_use_color,
+            thickness: self.settings.cursor_thickness as f32,
+        };
         let was_stroking = self.session.is_stroking();
         let t = onepaint_ui_kit::Tokens::get(&ctx);
         ui.painter().rect_filled(rect, 0.0, t.stage);
@@ -1885,6 +1924,36 @@ mod tests {
         assert!(t[0] > 0.9 && t[1] < 0.1 && t[2] < 0.1, "sampled red: {t:?}");
         assert_eq!(h.state().popover, Some(Popover::Filter));
         assert!(h.state().session.filter_active(), "sampling doesn't end the session");
+    }
+
+    #[test]
+    fn settings_dialog_drives_the_engine_and_the_tab_cap() {
+        let mut h = harness();
+        h.run();
+        h.state_mut().popover = Some(Popover::Menu);
+        h.run();
+        h.get_by_label("Settings…").click();
+        h.run();
+        assert_eq!(h.state().popover, Some(Popover::Settings));
+        // The centred dialog settles over a few frames.
+        for _ in 0..5 {
+            h.step();
+        }
+        h.get_by_label("Always use pressure for size").click();
+        h.run();
+        assert!(h.state().settings.force_size_pressure);
+        assert!(h.state().session.preferences().force_size_pressure);
+        h.get_by_label("Relative to screen").click();
+        h.run();
+        let zoom = h.state().canvas.view.scale;
+        assert_eq!(h.state().session.preferences().screen_zoom, Some(zoom));
+        // Clean tabs past the cap are closed, oldest first.
+        h.state_mut().settings.max_open_tabs = 3;
+        for _ in 0..4 {
+            h.state_mut().new_tab();
+        }
+        assert_eq!(h.state().tabs.len(), 3);
+        assert_eq!(h.state().active_tab, 2);
     }
 
     #[test]

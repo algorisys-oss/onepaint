@@ -28,6 +28,20 @@ pub fn init_gpu(cc: &eframe::CreationContext) -> bool {
     true
 }
 
+/// Brush cursor settings, copied from the app settings each frame.
+#[derive(Clone, Copy, Debug)]
+pub struct CursorPrefs {
+    pub style: crate::settings::CursorStyle,
+    pub use_color: bool,
+    pub thickness: f32,
+}
+
+impl Default for CursorPrefs {
+    fn default() -> Self {
+        Self { style: crate::settings::CursorStyle::Ring, use_color: false, thickness: 1.0 }
+    }
+}
+
 /// A selection upload: `Some(Some(bytes))` sets it, `Some(None)` clears it.
 type SelectionUpload = Option<Option<Arc<Vec<u8>>>>;
 
@@ -254,6 +268,8 @@ pub struct Canvas {
     hold: HoldTracker,
     /// Composite tiles still waiting for a frame's budget.
     pending: std::collections::BTreeSet<(i32, i32)>,
+    /// Brush cursor look (Settings ▸ Cursor).
+    pub cursor: CursorPrefs,
     /// Present-only view modes (grayscale, print preview, gamut warning).
     view_modes: onepaint_color::cmyk::ViewModes,
     pub text_edit: Option<TextEdit>,
@@ -298,6 +314,7 @@ impl Canvas {
             hold: HoldTracker::default(),
             pending: Default::default(),
             view_modes: Default::default(),
+            cursor: Default::default(),
             text_edit: None,
             text_style: onepaint_text::TextSpec::default(),
             snapper: None,
@@ -1542,11 +1559,8 @@ impl Canvas {
         let _ = resp;
         ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
         if matches!(session.tool(), Tool::Brush | Tool::Eraser | Tool::Smudge | Tool::Mixer | Tool::Liquify) {
-            let rad = (session.current_brush().size / 2.0 * self.view.scale) as f32;
-            if rad > 2.0 {
-                ui.painter().circle_stroke(hp, rad, Stroke::new(1.5, Color32::from_black_alpha(140)));
-                ui.painter().circle_stroke(hp, rad, Stroke::new(0.75, Color32::from_white_alpha(220)));
-            }
+            let size = session.preferences().stroke_brush(session.current_brush()).size;
+            self.brush_cursor(ui, hp, (size / 2.0 * self.view.scale) as f32, session);
         }
         if self.size_flash > 0.0 {
             let rad = (session.current_brush().size / 2.0 * self.view.scale) as f32;
@@ -1560,6 +1574,38 @@ impl Canvas {
     fn angle_to(&self, p: Pos2) -> f64 {
         let c = [self.view.view_size[0] / 2.0, self.view.view_size[1] / 2.0];
         (p.y as f64 - c[1]).atan2(p.x as f64 - c[0])
+    }
+
+    /// The brush cursor in the chosen style: ring, crosshair, both, or a dot.
+    fn brush_cursor(&self, ui: &egui::Ui, p: Pos2, rad: f32, session: &Session) {
+        use crate::settings::CursorStyle as S;
+        let c = self.cursor;
+        let w = c.thickness;
+        let fg = if c.use_color {
+            onepaint_ui_kit::widgets::to_color32(onepaint_color::Rgba { a: 1.0, ..session.color() })
+        } else {
+            Color32::from_white_alpha(230)
+        };
+        // A dark halo under the line keeps it visible on any colour.
+        let halo = Stroke::new(w + 1.0, Color32::from_black_alpha(140));
+        let line = Stroke::new(w * 0.75, fg);
+        let painter = ui.painter();
+        let ring = matches!(c.style, S::Ring | S::Both) && rad > 2.0;
+        if ring {
+            painter.circle_stroke(p, rad, halo);
+            painter.circle_stroke(p, rad, line);
+        }
+        if matches!(c.style, S::Crosshair | S::Both) || (c.style == S::Ring && rad <= 2.0) {
+            let a = 6.0 + w;
+            for (from, to) in [(p - egui::vec2(a, 0.0), p + egui::vec2(a, 0.0)), (p - egui::vec2(0.0, a), p + egui::vec2(0.0, a))] {
+                painter.line_segment([from, to], halo);
+                painter.line_segment([from, to], line);
+            }
+        }
+        if c.style == S::Dot {
+            painter.circle_filled(p, 1.5 + w, Color32::from_black_alpha(160));
+            painter.circle_filled(p, 0.75 + w, fg);
+        }
     }
 
     fn pick(&mut self, session: &mut Session, p: Pos2) {

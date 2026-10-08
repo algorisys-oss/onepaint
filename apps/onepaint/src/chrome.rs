@@ -42,6 +42,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             Popover::PanelOptions => popover_at(ctx, "panel", anchor, Align2::RIGHT_TOP, |ui| crate::panel_ui::options(app, ui)),
             Popover::Gallery => popover_at(ctx, "gallery", screen.center(), Align2::CENTER_CENTER, |ui| crate::gallery::show(app, ui)),
             Popover::Help => popover_at(ctx, "help", screen.center(), Align2::CENTER_CENTER, help),
+            Popover::Settings => popover_at(ctx, "settings", screen.center(), Align2::CENTER_CENTER, |ui| crate::settings::dialog(app, ui)),
             Popover::MoveOptions => popover_at(ctx, "move", anchor, Align2::RIGHT_TOP, |ui| move_options(app, ui)),
             Popover::SmartFilters => popover_at(ctx, "smart", anchor, Align2::RIGHT_TOP, |ui| crate::adjust::smart_panel(app, ui)),
             Popover::Export => popover_at(ctx, "export", screen.center(), Align2::CENTER_CENTER, |ui| export_dialog(app, ui)),
@@ -134,8 +135,11 @@ fn top_bar(app: &mut App, ctx: &egui::Context) {
                 widgets::vline(ui, 24.0);
                 // One chip per open drawing (Ctrl+Alt+← / → to switch).
                 let titles = app.tab_titles();
-                let many = titles.len() > 1;
+                let many = titles.len() > 1 && app.settings.document_tabs;
                 for (i, (name, dirty)) in titles.into_iter().enumerate() {
+                    if !many && i != app.active_tab {
+                        continue;
+                    }
                     let active = i == app.active_tab;
                     let label = format!("{name}{}", if dirty { " •" } else { "" });
                     let text = RichText::new(label).color(if active { t.fg } else { t.fg_muted });
@@ -467,6 +471,10 @@ fn menu(app: &mut App, ui: &mut Ui) {
     if widgets::menu_item(ui, Some("zoom-in"), "Actual pixels", "Ctrl+1").clicked() {
         app.canvas.view.actual_pixels();
     }
+    if widgets::menu_item(ui, Some("settings"), "Settings…", "").clicked() {
+        app.popover = Some(Popover::Settings);
+        return;
+    }
     let (icon, label) = if app.theme == onepaint_ui_kit::ThemeKind::Dark { ("sun", "Light theme") } else { ("moon", "Dark theme") };
     if widgets::menu_item(ui, Some(icon), label, "").clicked() {
         app.toggle_theme(ui.ctx());
@@ -606,7 +614,8 @@ fn brushes(app: &mut App, ui: &mut Ui) {
     widgets::hairline(ui);
     let b = app.session.current_brush().clone();
     let mut size = b.size as f32;
-    if widgets::slider_row(ui, "Size", &mut size, 1.0..=500.0, |v| format!("{:.0} px", v)).changed() {
+    let max = app.settings.max_brush_size as f32;
+    if widgets::slider_row(ui, "Size", &mut size, 1.0..=max, |v| format!("{:.0} px", v)).changed() {
         let _ = app.session.execute(Command::SetBrushSize { size: size.round() as f64 });
     }
     let mut op = b.opacity as f32;
@@ -1206,7 +1215,7 @@ fn select_icon(t: Tool) -> &'static str {
 }
 
 /// A row of pill-shaped segmented buttons; returns the clicked index.
-fn segmented(ui: &mut Ui, labels: &[&str], selected: usize) -> Option<usize> {
+pub(crate) fn segmented(ui: &mut Ui, labels: &[&str], selected: usize) -> Option<usize> {
     let t = Tokens::get(ui.ctx());
     let mut clicked = None;
     ui.horizontal(|ui| {

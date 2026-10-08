@@ -496,7 +496,62 @@ struct ActiveStroke {
     mask: bool,
 }
 
+/// App preferences the engine honours (happypaint `settings-store.ts`); not
+/// part of the document or its history.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Preferences {
+    /// Upper limit for brush size, doc px (10..=10000; default 1000).
+    pub max_brush_size: f64,
+    /// Pen pressure fully drives size / flow for any brush (Photoshop's override).
+    pub force_size_pressure: bool,
+    pub force_flow_pressure: bool,
+    /// Brush size is in screen px: strokes divide it by the zoom (`Some(zoom)`).
+    pub screen_zoom: Option<f64>,
+    /// Undo steps kept (5..=1000; default 200).
+    pub max_history_steps: usize,
+}
+
+pub const BRUSH_SIZE_HARD_MAX: f64 = 10000.0;
+
+impl Default for Preferences {
+    fn default() -> Self {
+        Self {
+            max_brush_size: 1000.0,
+            force_size_pressure: false,
+            force_flow_pressure: false,
+            screen_zoom: None,
+            max_history_steps: onepaint_history::DEFAULT_MAX_ENTRIES,
+        }
+    }
+}
+
+impl Preferences {
+    /// The brush a stroke actually paints with.
+    pub fn stroke_brush(&self, b: &BrushPreset) -> BrushPreset {
+        let mut out = b.clone();
+        if let Some(z) = self.screen_zoom.filter(|z| *z > 0.0) {
+            out.size = (out.size / z).max(0.5);
+        }
+        // Forcing = full pressure response with no dynamics: `radius_for`
+        // becomes size·max(0.15, cp)/2 and `flow_for` flow·cp (BE:358-368).
+        if self.force_size_pressure {
+            out.size_pressure = 1.0;
+            if let Some(d) = out.dynamics.as_mut() {
+                d.size.clear();
+            }
+        }
+        if self.force_flow_pressure {
+            out.flow_pressure = 1.0;
+            if let Some(d) = out.dynamics.as_mut() {
+                d.flow.clear();
+            }
+        }
+        out
+    }
+}
+
 pub struct Session {
+    prefs: Preferences,
     doc: Document,
     active: NodeId,
     tool: Tool,
@@ -558,6 +613,7 @@ impl Session {
             eraser: onepaint_brush::preset(onepaint_brush::DEFAULT_ERASER).unwrap_or_else(|| onepaint_brush::presets().remove(0)),
             color: Rgba::BLACK,
             history: History::new(),
+            prefs: Preferences::default(),
             stroke: None,
             events: Vec::new(),
             dirty: BTreeSet::new(),
@@ -624,6 +680,21 @@ impl Session {
 
     pub fn tool(&self) -> Tool {
         self.tool
+    }
+
+    pub fn preferences(&self) -> Preferences {
+        self.prefs
+    }
+
+    pub fn set_preferences(&mut self, p: Preferences) {
+        let mut p = p;
+        p.max_brush_size = p.max_brush_size.round().clamp(10.0, BRUSH_SIZE_HARD_MAX);
+        p.max_history_steps = p.max_history_steps.clamp(5, 1000);
+        self.history.set_max_entries(p.max_history_steps);
+        self.prefs = p;
+        for b in [&mut self.brush, &mut self.eraser] {
+            b.size = b.size.min(p.max_brush_size);
+        }
     }
 
     pub fn color(&self) -> Rgba {
@@ -854,7 +925,7 @@ impl Session {
             (false, false, true) => StrokeMode::AlphaLock(bm),
             (false, false, false) => StrokeMode::Paint(bm),
         };
-        let brush = self.current_brush().clone();
+        let brush = self.prefs.stroke_brush(self.current_brush());
         let lin = if to_mask {
             // Mask coverage = the brush colour's luminance (white for the eraser), no transfer curve.
             let c = self.color;
@@ -1264,7 +1335,8 @@ impl Session {
                 Ok(())
             }
             Command::SetBrushSize { size } => {
-                self.current_brush_mut().size = size.clamp(1.0, 1000.0);
+                let max = self.prefs.max_brush_size;
+                self.current_brush_mut().size = size.clamp(1.0, max);
                 Ok(())
             }
             Command::SetBrushOpacity { opacity } => {
