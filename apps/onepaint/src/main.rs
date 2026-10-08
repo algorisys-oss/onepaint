@@ -1143,6 +1143,7 @@ impl eframe::App for App {
             style: self.settings.brush_cursor,
             use_color: self.settings.cursor_use_color,
             thickness: self.settings.cursor_thickness as f32,
+            tip_shape: self.settings.cursor_tip_shape,
         };
         let was_stroking = self.session.is_stroking();
         let t = onepaint_ui_kit::Tokens::get(&ctx);
@@ -1251,6 +1252,34 @@ mod tests {
         assert_eq!(cursor(&mut h, pos2(640.0, 420.0)), egui::CursorIcon::Crosshair);
         let over_bar = h.get_by_label("Layers").rect().center();
         assert_ne!(cursor(&mut h, over_bar), egui::CursorIcon::Crosshair, "a toolbar over the canvas keeps its own cursor");
+    }
+
+    #[test]
+    fn image_tips_get_a_traced_cursor() {
+        // Longest cursor polyline drawn near the pointer (0 = only rings).
+        fn traced(h: &mut Harness<'_, App>, at: egui::Pos2) -> usize {
+            h.event(Event::PointerMoved(at));
+            h.step();
+            h.step();
+            h.output()
+                .shapes
+                .iter()
+                .filter_map(|c| match &c.shape {
+                    egui::Shape::Path(p) if p.points.len() > 8 && p.points.iter().all(|q| q.distance(at) < 120.0) => Some(p.points.len()),
+                    _ => None,
+                })
+                .max()
+                .unwrap_or(0)
+        }
+        let mut h = harness();
+        h.run();
+        let at = pos2(640.0, 420.0);
+        assert_eq!(traced(&mut h, at), 0, "a round tip keeps its ring");
+        let foliage = onepaint_brush::preset("foliage").unwrap();
+        let _ = h.state_mut().session.execute(Command::SetBrushPreset { preset: Box::new(foliage) });
+        assert!(traced(&mut h, at + egui::vec2(1.0, 0.0)) > 8, "the leaf's outline");
+        h.state_mut().settings.cursor_tip_shape = false;
+        assert_eq!(traced(&mut h, at), 0, "tracing off: the ring again");
     }
 
     #[test]

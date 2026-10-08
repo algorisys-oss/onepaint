@@ -34,11 +34,13 @@ pub struct CursorPrefs {
     pub style: crate::settings::CursorStyle,
     pub use_color: bool,
     pub thickness: f32,
+    /// Trace the tip the brush stamps (Settings ▸ Cursor).
+    pub tip_shape: bool,
 }
 
 impl Default for CursorPrefs {
     fn default() -> Self {
-        Self { style: crate::settings::CursorStyle::Ring, use_color: false, thickness: 1.0 }
+        Self { style: crate::settings::CursorStyle::Ring, use_color: false, thickness: 1.0, tip_shape: true }
     }
 }
 
@@ -1566,7 +1568,37 @@ impl Canvas {
         ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
         if matches!(session.tool(), Tool::Brush | Tool::Eraser | Tool::Smudge | Tool::Mixer | Tool::Liquify) {
             let size = session.preferences().stroke_brush(session.current_brush()).size;
-            self.brush_cursor(ui, hp, (size / 2.0 * self.view.scale) as f32, session);
+            let tool = session.tool();
+            let b = session.current_brush();
+            let tip_cursor = !matches!(tool, Tool::Smudge | Tool::Mixer | Tool::Liquify);
+            let traced = (tip_cursor && self.cursor.tip_shape).then(|| onepaint_brush::tip_outline::tip_outline(&b.tip_id)).flatten();
+            let square = tip_cursor && b.tip_id == "square";
+            if (traced.is_some() || square)
+                && matches!(self.cursor.style, crate::settings::CursorStyle::Ring | crate::settings::CursorStyle::Both)
+            {
+                // The shape the brush stamps, in the dab's own frame (tip angle and roundness).
+                let loops = traced.map(|t| (*t).clone()).unwrap_or_else(|| vec![vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]]);
+                let k = b.tip_roundness.unwrap_or(1.0).clamp(0.05, 1.0);
+                let r = size / 2.0 * k.sqrt();
+                let (ax, ay) = (r / k.sqrt(), r * k.sqrt());
+                let rot = -b.tip_angle_deg.unwrap_or(0.0).to_radians();
+                let (c, sn) = (rot.cos(), rot.sin());
+                let at = self.doc_pt(pos2(hp.x - rect.left(), hp.y - rect.top()));
+                let screen: Vec<Vec<Pos2>> = loops
+                    .iter()
+                    .map(|l| {
+                        l.iter()
+                            .map(|p| {
+                                let (lx, ly) = ((p[0] * 2.0 - 1.0) * ax, (p[1] * 2.0 - 1.0) * ay);
+                                self.to_screen(rect, [at[0] + lx * c - ly * sn, at[1] + lx * sn + ly * c])
+                            })
+                            .collect()
+                    })
+                    .collect();
+                self.shape_cursor(ui, hp, &screen, session);
+            } else {
+                self.brush_cursor(ui, hp, (size / 2.0 * self.view.scale) as f32, session);
+            }
         }
         if self.size_flash > 0.0 {
             let rad = (session.current_brush().size / 2.0 * self.view.scale) as f32;
@@ -1580,6 +1612,37 @@ impl Canvas {
     fn angle_to(&self, p: Pos2) -> f64 {
         let c = [self.view.view_size[0] / 2.0, self.view.view_size[1] / 2.0];
         (p.y as f64 - c[1]).atan2(p.x as f64 - c[0])
+    }
+
+    /// The traced tip (or square) cursor; Both adds the crosshair.
+    fn shape_cursor(&self, ui: &egui::Ui, p: Pos2, loops: &[Vec<Pos2>], session: &Session) {
+        let c = self.cursor;
+        let w = c.thickness;
+        let fg = if c.use_color {
+            onepaint_ui_kit::widgets::to_color32(onepaint_color::Rgba { a: 1.0, ..session.color() })
+        } else {
+            Color32::from_white_alpha(230)
+        };
+        let painter = ui.painter();
+        for l in loops.iter().filter(|l| l.len() >= 3) {
+            let mut pts = l.clone();
+            pts.push(l[0]);
+            painter.add(egui::Shape::line(pts.clone(), Stroke::new(w + 1.0, Color32::from_black_alpha(140))));
+            painter.add(egui::Shape::line(pts, Stroke::new(w * 0.75, fg)));
+        }
+        if c.style == crate::settings::CursorStyle::Both {
+            self.brush_cursor_cross(ui, p, w, fg);
+        }
+    }
+
+    fn brush_cursor_cross(&self, ui: &egui::Ui, p: Pos2, w: f32, fg: Color32) {
+        let halo = Stroke::new(w + 1.0, Color32::from_black_alpha(140));
+        let line = Stroke::new(w * 0.75, fg);
+        let a = 6.0 + w;
+        for (from, to) in [(p - egui::vec2(a, 0.0), p + egui::vec2(a, 0.0)), (p - egui::vec2(0.0, a), p + egui::vec2(0.0, a))] {
+            ui.painter().line_segment([from, to], halo);
+            ui.painter().line_segment([from, to], line);
+        }
     }
 
     /// The brush cursor in the chosen style: ring, crosshair, both, or a dot.
@@ -1602,11 +1665,7 @@ impl Canvas {
             painter.circle_stroke(p, rad, line);
         }
         if matches!(c.style, S::Crosshair | S::Both) || (c.style == S::Ring && rad <= 2.0) {
-            let a = 6.0 + w;
-            for (from, to) in [(p - egui::vec2(a, 0.0), p + egui::vec2(a, 0.0)), (p - egui::vec2(0.0, a), p + egui::vec2(0.0, a))] {
-                painter.line_segment([from, to], halo);
-                painter.line_segment([from, to], line);
-            }
+            self.brush_cursor_cross(ui, p, w, fg);
         }
         if c.style == S::Dot {
             painter.circle_filled(p, 1.5 + w, Color32::from_black_alpha(160));

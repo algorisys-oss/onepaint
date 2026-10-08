@@ -12,6 +12,7 @@ pub mod settle;
 pub mod smudge;
 pub mod studio;
 pub mod symmetry;
+pub mod tip_outline;
 mod tips;
 mod user;
 

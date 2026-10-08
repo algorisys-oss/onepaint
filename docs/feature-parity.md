@@ -177,4 +177,5 @@ screentone are added as live layers.
   - brush: maximum size (10–10000), size relative to canvas or screen, force pressure for size / opacity
   - cursor: ring, crosshair, both or dot; paint colour; thickness 1–4
   - history: undo steps (5–1000)
-- [ ] Cursor traced from the tip shape (`cursorTipShape`), timeline metric (frames/seconds), keyboard rebinding
+- [x] Cursor traced from the tip shape (`cursorTipShape`), square cursor for square tips
+- [ ] Timeline metric (frames/seconds), keyboard rebinding

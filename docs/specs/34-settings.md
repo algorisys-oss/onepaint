@@ -41,6 +41,13 @@ The sources are `state/settings-store.ts` and
   - Ring mode falls back to the crosshair when the ring is under 2 px.
 - **Size slider:** it runs up to the maximum brush size.
 
+- **Traced tip cursor** ("Trace the tip", default on): image tips draw their
+  silhouette, traced at half coverage (`brush::tip_outline`, happypaint's
+  `tip-outline.ts` with its tests). It is placed in the dab's frame (tip
+  angle and roundness) and scaled to the brush. Square tips draw a square.
+  Smudge, Mixer and Liquify keep the ring. Crosshair and Dot styles ignore
+  it, and Both adds the crosshair.
+
 ## Not yet
-- A cursor traced from the tip mask, the timeline metric, and keyboard
-  rebinding (after the timeline and shortcut work lands).
+- Following pen tilt and the stroke direction on the cursor, the timeline
+  metric, and keyboard rebinding (after the timeline and shortcut work lands).

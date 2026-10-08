@@ -47,6 +47,8 @@ pub struct Settings {
     pub brush_cursor: CursorStyle,
     pub cursor_use_color: bool,
     pub cursor_thickness: u8,
+    /// Trace the brush tip's shape (image tips; round and square are exact already).
+    pub cursor_tip_shape: bool,
     pub max_history_steps: usize,
     #[serde(skip)]
     path: Option<PathBuf>,
@@ -64,6 +66,7 @@ impl Default for Settings {
             brush_cursor: CursorStyle::Ring,
             cursor_use_color: false,
             cursor_thickness: 1,
+            cursor_tip_shape: true,
             max_history_steps: DEFAULT_HISTORY_STEPS,
             path: None,
         }
@@ -169,6 +172,8 @@ pub fn dialog(app: &mut App, ui: &mut Ui) {
                 s.brush_cursor = styles[i];
             }
             widgets::toggle(ui, &mut s.cursor_use_color, "Draw the cursor in the paint colour");
+            widgets::toggle(ui, &mut s.cursor_tip_shape, "Trace the tip")
+                .on_hover_text("A leaf brush shows a leaf, not a circle. Round and square tips are unaffected.");
             let mut th = s.cursor_thickness as f32;
             if widgets::slider_row(ui, "Thickness", &mut th, 1.0..=4.0, |v| format!("{v:.0} px")).changed() {
                 s.cursor_thickness = th.round() as u8;
