@@ -457,11 +457,10 @@ fn pattern_ui(ui: &mut Ui, p: &mut Params, colour: onepaint_color::Rgba) -> bool
         if widgets::secondary_button(ui, "Import pattern…", 130.0).clicked()
             && let Some(path) =
                 rfd::FileDialog::new().add_filter("Image", &["png", "jpg", "jpeg", "webp", "bmp", "gif", "tif", "tiff"]).pick_file()
+            && let Some(url) = import_pattern(&path)
         {
-            if let Some(url) = import_pattern(&path) {
-                p.pattern_image = Some(url);
-                ch = true;
-            }
+            p.pattern_image = Some(url);
+            ch = true;
         }
         if imported && widgets::secondary_button(ui, "Use built-in", 110.0).clicked() {
             p.pattern_image = None;
