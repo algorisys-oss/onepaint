@@ -100,6 +100,7 @@ differences.
 ```sh
 ./dev-start.sh                 # debug build and run
 ./dev-start.sh --release       # optimised
+./dev-start.sh --watch         # rebuild and restart on source changes
 ./dev-start.sh -- file.happypaint
 ```
 
