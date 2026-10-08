@@ -43,6 +43,7 @@ pub static ICONS: &[(&str, &[u8])] = icons![
     "move",
     "type",
     "square",
+    "layout-panel-top",
     "contrast",
     "sparkles",
     "arrow-left-right",

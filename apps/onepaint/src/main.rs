@@ -9,6 +9,7 @@ mod clip;
 mod debug;
 mod gallery;
 mod palettes;
+mod panel_ui;
 mod pen;
 mod progressive;
 mod reference;
@@ -60,6 +61,7 @@ pub enum Popover {
     Guides,
     LiquifyOptions,
     PenOptions,
+    PanelOptions,
     Export,
     SmartFilters,
     MoveOptions,

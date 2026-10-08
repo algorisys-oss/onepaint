@@ -122,7 +122,7 @@ pub fn render_paths(specs: &[PathSpec], w: u32, h: u32) -> Surface {
     out
 }
 
-fn write_paths(l: &mut Layer, specs: &[PathSpec], w: u32, h: u32) {
+pub(crate) fn write_paths(l: &mut Layer, specs: &[PathSpec], w: u32, h: u32) {
     if specs.is_empty() {
         l.extra.remove("paths");
     } else {

@@ -205,6 +205,8 @@ enum Drag {
     PenNew {
         index: usize,
     },
+    /// Panel tool: a create, cut, reshape or move gesture (spec 30).
+    Panel(crate::panel_ui::PanelDrag),
     /// Pen: dragging an anchor or handle of the active path layer.
     PenEdit {
         obj: usize,
@@ -267,6 +269,7 @@ pub struct Canvas {
     /// The last measurement (doc px), shown until the next one or Escape.
     pub measure: Option<(Pt, Pt)>,
     pub pen: crate::pen::PenState,
+    pub panel_options: crate::panel_ui::PanelOptions,
 }
 
 impl Canvas {
@@ -295,6 +298,7 @@ impl Canvas {
             measuring: false,
             measure: None,
             pen: Default::default(),
+            panel_options: Default::default(),
         }
     }
 
@@ -578,6 +582,7 @@ impl Canvas {
             }
             Tool::Pen => self.pen_press(session, p, d, m, time_ms),
             Tool::Hand => Drag::Pan,
+            Tool::Panel => Drag::Panel(crate::panel_ui::press(session, d, self.view.scale)),
             Tool::Gradient => {
                 session.gradient_begin();
                 let stops = self.gradient_stops(session);
@@ -878,6 +883,7 @@ impl Canvas {
                                 }
                             });
                         }
+                        Drag::Panel(pd) => crate::panel_ui::drag(pd, session, d),
                         Drag::Gradient { start } => {
                             let start = *start;
                             let stops = self.gradient_stops(session);
@@ -965,6 +971,7 @@ impl Canvas {
                         Drag::PenEdit { .. } => {
                             let _ = session.execute(Command::SealHistory);
                         }
+                        Drag::Panel(pd) => crate::panel_ui::release(pd, session, &self.panel_options),
                         Drag::FillShape { points } => {
                             let opacity = session.current_brush().opacity as f32;
                             let _ = session.execute(Command::FillShape { points, opacity });
@@ -1357,6 +1364,10 @@ impl Canvas {
         self.guide_overlays(ui, rect, session);
         self.symmetry_axes(ui, rect, session);
         self.pen_overlay(ui, rect, session, hover);
+        if session.tool() == Tool::Panel {
+            let pd = if let Drag::Panel(p) = &self.drag { Some(p) } else { None };
+            crate::panel_ui::overlay(ui, session, pd, |d| self.to_screen(rect, d));
+        }
         if let Some(te) = &self.text_edit
             && session.tool() == Tool::Text
         {

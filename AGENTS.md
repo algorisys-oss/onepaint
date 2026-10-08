@@ -111,6 +111,7 @@ crates/
   gpu/         wgpu compositor, stamp/smudge/wet/liquify/filter passes, WGSL
   filters/     adjustment and filter params plus CPU reference impls (48 kinds)
   text/        rich text layout and raster
+  panel/       comic panels: frame geometry, panel spec, derived clip coverage
   formats/     .happypaint v9 (read and write), PSD, PNG/JPEG/TIFF, ABR, Procreate brushes, recording
   input/       PenEvent, pointer router, gestures, palm rejection, pressure synthesis
   engine/      Session facade: command API, tools, events. No UI imports.
