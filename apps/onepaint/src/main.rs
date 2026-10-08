@@ -72,6 +72,7 @@ pub enum Popover {
 pub enum FileKind {
     Native,
     Psd,
+    Book,
     Image,
 }
 
@@ -80,6 +81,7 @@ pub fn kind_of(p: &std::path::Path) -> FileKind {
     match p.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
         Some("happypaint") => FileKind::Native,
         Some("psd" | "psb") => FileKind::Psd,
+        Some("happypaint-book") => FileKind::Book,
         _ => FileKind::Image,
     }
 }
@@ -290,8 +292,71 @@ impl App {
         self.thumbs.clear();
     }
 
+    /// Open every page of a `.happypaint-book` as a tab.
+    pub fn open_book(&mut self, p: PathBuf) {
+        let now = 0.0;
+        let decoded =
+            std::fs::read(&p).map_err(|e| e.to_string()).and_then(|b| onepaint_formats::book::decode_book(&b).map_err(|e| e.to_string()));
+        let (manifest, pages) = match decoded {
+            Ok(d) => d,
+            Err(e) => return self.notify(format!("Couldn't open the book: {e}"), now),
+        };
+        for (i, bytes) in pages.iter().enumerate() {
+            if i > 0 || !self.pristine() {
+                self.new_tab();
+            }
+            match self.session.open_happypaint(bytes) {
+                Ok(()) => {
+                    let d = self.session.doc();
+                    self.canvas.reset_for([d.width, d.height]);
+                    self.saved_history_len = Some(0);
+                    self.thumbs.clear();
+                }
+                Err(e) => self.notify(format!("Page {}: {e}", i + 1), now),
+            }
+        }
+        self.gallery.touch(&p);
+        self.notify(format!("Opened “{}” ({} pages)", manifest.name, pages.len()), now);
+    }
+
+    /// File ▸ Save drawings as book…: every open tab, in order.
+    pub fn save_book(&mut self, now: f64) {
+        let Some(path) =
+            rfd::FileDialog::new().add_filter("happypaint book", &["happypaint-book"]).set_file_name("Chapter.happypaint-book").save_file()
+        else {
+            return;
+        };
+        let mut names = Vec::new();
+        let mut pages = Vec::new();
+        for i in 0..self.tabs.len() {
+            let r = match self.tabs[i].as_mut() {
+                Some(s) => s.session.save_happypaint().map(|b| (s.session.doc().name.clone(), b)),
+                None => self.session.save_happypaint().map(|b| (self.session.doc().name.clone(), b)),
+            };
+            match r {
+                Ok((n, b)) => {
+                    names.push(n);
+                    pages.push(b);
+                }
+                Err(e) => return self.notify(format!("Save failed: {e}"), now),
+            }
+        }
+        let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Chapter").to_string();
+        let bytes = onepaint_formats::book::encode_book(&name, &names, &pages, concat!("onepaint ", env!("CARGO_PKG_VERSION")));
+        match bytes.map_err(|e| e.to_string()).and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string())) {
+            Ok(()) => {
+                self.gallery.touch(&path);
+                self.notify(format!("Saved {} pages to {}", names.len(), path.display()), now);
+            }
+            Err(e) => self.notify(format!("Save failed: {e}"), now),
+        }
+    }
+
     pub fn open_path(&mut self, p: PathBuf) {
         let now = 0.0;
+        if kind_of(&p) == FileKind::Book {
+            return self.open_book(p);
+        }
         let kind = kind_of(&p);
         let native = kind == FileKind::Native;
         let name = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Image").to_string();
@@ -299,7 +364,7 @@ impl App {
             match kind {
                 FileKind::Native => self.session.open_happypaint(&b),
                 FileKind::Psd => self.session.open_psd(&b, &name),
-                FileKind::Image => self.session.open_image(&b, &name),
+                FileKind::Image | FileKind::Book => self.session.open_image(&b, &name),
             }
             .map_err(|e| e.to_string())
         }) {
@@ -432,7 +497,25 @@ impl App {
         if let Some(p) = rfd::FileDialog::new()
             .add_filter(
                 "Images and documents",
-                &["happypaint", "psd", "psb", "pbm", "pgm", "ppm", "pam", "pnm", "png", "jpg", "jpeg", "webp", "bmp", "gif", "tif", "tiff"],
+                &[
+                    "happypaint",
+                    "happypaint-book",
+                    "psd",
+                    "psb",
+                    "pbm",
+                    "pgm",
+                    "ppm",
+                    "pam",
+                    "pnm",
+                    "png",
+                    "jpg",
+                    "jpeg",
+                    "webp",
+                    "bmp",
+                    "gif",
+                    "tif",
+                    "tiff",
+                ],
             )
             .pick_file()
         {
@@ -1867,6 +1950,28 @@ mod tests {
         h.state_mut().popover = Some(Popover::Gallery);
         h.run();
         assert!(h.query_by_label("New drawing").is_some());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_book_opens_as_tabs() {
+        let mut h = harness();
+        h.run();
+        let pages: Vec<Vec<u8>> = [(320u32, 200u32), (640, 480)]
+            .iter()
+            .map(|&(w, hh)| Session::new(w, hh, Some(Rgba::WHITE)).save_happypaint().unwrap())
+            .collect();
+        let book = onepaint_formats::book::encode_book("Ch", &["A".into(), "B".into()], &pages, "t").unwrap();
+        let dir = std::env::temp_dir().join(format!("onepaint-book-{}", onepaint_doc::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ch.happypaint-book");
+        std::fs::write(&path, book).unwrap();
+        h.state_mut().open_path(path);
+        h.run();
+        assert_eq!(h.state().tabs.len(), 2, "the blank start drawing was reused");
+        assert_eq!(h.state().session.doc().width, 640);
+        key(&mut h, egui::Key::ArrowLeft, egui::Modifiers::COMMAND | egui::Modifiers::ALT);
+        assert_eq!(h.state().session.doc().width, 320);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

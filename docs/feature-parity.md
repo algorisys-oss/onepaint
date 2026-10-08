@@ -153,7 +153,7 @@ screentone are added as live layers.
 ## Files
 - [x] `.happypaint` v9: read and write (v1–v9 read; v9 write; JSON-level compatible)
 - [x] Autosave and the gallery (crash-recovery autosave; a gallery of recent drawings with thumbnails, shown at launch)
-- [ ] `.happypaint-book`
+- [x] `.happypaint-book` (open as tabs; save all tabs as a book)
 - [ ] `.happypaint-rec`
 - [~] PSD: read and write layers, groups, masks, blend modes, clipping, DPI and simple adjustments (8/16-bit RGB/grey read, PSB read; text exported as pixels)
 - [~] PNG, JPEG, WebP, TIFF and Netpbm, keeping ICC profiles and DPI (import all; export PNG/JPEG/TIFF/PPM with scale and DPI; no ICC embedding yet)

@@ -403,6 +403,10 @@ fn menu(app: &mut App, ui: &mut Ui) {
         app.popover = None;
         app.save(true, now);
     }
+    if widgets::menu_item(ui, Some("layers"), "Save drawings as book…", "").clicked() {
+        app.popover = None;
+        app.save_book(now);
+    }
     if widgets::menu_item(ui, Some("image"), "Export…", "Ctrl+Shift+E").clicked() {
         app.popover = Some(Popover::Export);
         return;

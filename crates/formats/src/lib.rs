@@ -1,6 +1,7 @@
 //! File formats: the native `.happypaint` container (v1–v9 read, v9 write) and
 //! PNG/JPEG helpers. See `docs/specs/05-file-format.md`.
 
+pub mod book;
 pub mod brushes;
 pub mod export;
 mod image;
