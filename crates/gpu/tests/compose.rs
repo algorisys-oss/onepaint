@@ -198,3 +198,33 @@ fn changed_tiles_are_reuploaded() {
     let (e, at) = max_error(&doc, None, &read(&device, &queue, &tex));
     assert!(e <= TOL, "error {e} at {at:?}");
 }
+
+/// Normal layers that cover only some tiles, with one multiply layer on a
+/// single tile: one batch holds lean jobs and general jobs side by side.
+#[test]
+fn lean_and_general_jobs_share_a_batch() {
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let mut gc = GpuCompositor::new(&device, 64 << 20);
+    let (w, h) = (700, 600);
+    let tex = target(&device, w, h);
+    let view = tex.create_view(&Default::default());
+    let mut doc = Document::new(w, h, Some(onepaint_color::Rgba::WHITE));
+    let mut r = Rng::new(7);
+    for i in 0..4 {
+        let mut l = Layer::new(&format!("n{i}"));
+        let x = i * 150;
+        onepaint_compose::testdocs::noise(&mut l.pixels, &mut r, onepaint_raster::Rect::new(x, x / 2, 300, 260));
+        l.opacity = 0.6 + 0.1 * i as f32;
+        doc.root.push(Node::Layer(l));
+    }
+    let mut m = Layer::new("multiply");
+    onepaint_compose::testdocs::noise(&mut m.pixels, &mut r, onepaint_raster::Rect::new(20, 20, 200, 200));
+    m.blend_mode = onepaint_doc::BlendMode::Multiply;
+    doc.root.push(Node::Layer(m));
+    gc.run(&device, &queue, &programs(&doc, None), &view, [w, h]);
+    let (e, at) = max_error(&doc, None, &read(&device, &queue, &tex));
+    assert!(e <= TOL, "error {e} at {at:?}");
+}

@@ -25,9 +25,16 @@ Built (first cut). The parts:
   CPU path.
 - Tests: `crates/gpu/tests/compose.rs` (random documents and strokes
   against the oracle, atlas eviction, re-upload of changed tiles).
+- Two pipelines from one shader: a lean one for jobs that are only plain
+  normal layers (base tile, no stroke, mask or inherit alpha), and the full
+  interpreter for the rest. Register pressure from the interpreter halves
+  occupancy, so the split nearly halves a typical recomposite. Jobs are
+  partitioned per batch; both dispatches share one bind group.
 - Bench (`crates/gpu/benches/compose.rs`, Iris Xe): a full 4096² × 20-layer
-  recomposite takes 130 ms on the GPU and 847 ms on the CPU, and planning
-  takes 0.3 ms. That is still short of the 50 ms target below.
+  recomposite takes 60 ms on the GPU (124 ms with the interpreter alone)
+  and 847 ms on the CPU, and planning takes 0.3 ms. The texture loads
+  alone take about 55 ms on this GPU, so the 50 ms target below sits at
+  the hardware floor of an iGPU.
 
 ## Why
 The CPU compositor is memory-bound (spec 00, performance notes): a full

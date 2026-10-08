@@ -13,7 +13,7 @@
 struct Params {
     doc_size: vec2<u32>,
     per_atlas: u32,
-    _pad: u32,
+    general_base: u32,
 }
 
 struct Job {
@@ -88,6 +88,12 @@ const STACK: u32 = 8u;
 // Off unless the batch has a Pigment op: the Kubelka–Munk code is large, and
 // leaving it out keeps every other program fast.
 override PIGMENT: bool = true;
+
+// Off for the lean pipeline, whose jobs are all plain normal layers (base
+// tile, no stroke, mask or inherit alpha). Leaving the interpreter out keeps
+// register use low, which nearly halves the time of a typical recomposite.
+// The general jobs follow the lean ones in `jobs`, from `general_base`.
+override GENERAL: bool = true;
 
 fn sstep(e0: f32, e1: f32, x: f32) -> f32 {
     let t = clamp((x - e0) / (e1 - e0), 0.0, 1.0);
@@ -304,9 +310,9 @@ fn content(o: Op, p: vec2<i32>) -> vec4<f32> {
     return c;
 }
 
-@compute @workgroup_size(16, 16, 1)
+@compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let job = jobs[gid.z];
+    let job = jobs[gid.z + select(0u, prm.general_base, GENERAL)];
     let g = job.origin + gid.xy;
     if (g.x >= prm.doc_size.x || g.y >= prm.doc_size.y) {
         return;
@@ -316,6 +322,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var stack: array<vec4<f32>, STACK>;
     var top = vec4<f32>(0.0);
     var sp = 0u;
+    if (!GENERAL) {
+        for (var i = job.op_start; i < job.op_start + job.op_count; i++) {
+            let o = ops[i];
+            let c = load(o.b.x, p) * bitcast<f32>(o.a.z);
+            top = c + top * (1.0 - c.w);
+        }
+        textureStore(out_tex, vec2<i32>(g), top);
+        return;
+    }
     for (var i = job.op_start; i < job.op_start + job.op_count; i++) {
         let o = ops[i];
         let opacity = bitcast<f32>(o.a.z);

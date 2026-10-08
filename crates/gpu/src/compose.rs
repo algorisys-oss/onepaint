@@ -30,7 +30,8 @@ pub const DEFAULT_BUDGET: u64 = 1 << 30;
 struct Params {
     doc_size: [u32; 2],
     per_atlas: u32,
-    _pad: u32,
+    /// Index of the first general job (the simple ones come first).
+    general_base: u32,
 }
 
 #[repr(C)]
@@ -71,12 +72,29 @@ fn uses_pigment(p: &TileProgram) -> bool {
     })
 }
 
+/// Whether every op is a plain normal layer, which the lean pipeline runs.
+fn is_simple(p: &TileProgram) -> bool {
+    p.ops.iter().all(|op| {
+        matches!(
+            op,
+            Op::Layer {
+                content: Content { base: Some(_), stroke: None, mask: MaskSrc::None, mask_stroke: None },
+                mode: BlendMode::Normal,
+                inherit_alpha: false,
+                ..
+            }
+        )
+    })
+}
+
 fn key(t: &Arc<Tile>) -> usize {
     Arc::as_ptr(t) as usize
 }
 
 pub struct GpuCompositor {
-    /// Without and with the Kubelka–Munk (Pigment mode) code.
+    /// Plain normal layers only (keeps registers low, so occupancy high).
+    simple: wgpu::ComputePipeline,
+    /// The full interpreter, without and with the Kubelka–Munk (Pigment mode) code.
     pipelines: [wgpu::ComputePipeline; 2],
     layout: wgpu::BindGroupLayout,
     params: wgpu::Buffer,
@@ -150,20 +168,25 @@ impl GpuCompositor {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let pipeline = |pigment: bool| {
+        let pipeline = |general: bool, pigment: bool| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some(if pigment { "compose (pigment)" } else { "compose" }),
+                label: Some(match (general, pigment) {
+                    (false, _) => "compose (simple)",
+                    (true, false) => "compose",
+                    (true, true) => "compose (pigment)",
+                }),
                 layout: Some(&pl),
                 module: &module,
                 entry_point: Some("main"),
                 compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &[("PIGMENT", if pigment { 1.0 } else { 0.0 })],
+                    constants: &[("GENERAL", f64::from(u8::from(general))), ("PIGMENT", f64::from(u8::from(pigment)))],
                     ..Default::default()
                 },
                 cache: None,
             })
         };
-        let pipelines = [pipeline(false), pipeline(true)];
+        let simple = pipeline(false, false);
+        let pipelines = [pipeline(true, false), pipeline(true, true)];
         let (b, t) = onepaint_color::pigment::basis_matrices();
         let mut km: Vec<f32> = b.iter().flat_map(|r| [r[0] as f32, r[1] as f32, r[2] as f32, 0.0]).collect();
         km.extend((0..9).flat_map(|k| [t[0][k] as f32, t[1][k] as f32, t[2][k] as f32, 0.0]));
@@ -194,6 +217,7 @@ impl GpuCompositor {
         let per_atlas = device.limits().max_texture_array_layers.clamp(1, 256);
         let max_atlases = ((budget / TILE_BYTES) as usize).div_ceil(per_atlas as usize).clamp(1, ATLASES);
         Self {
+            simple,
             pipelines,
             layout,
             params,
@@ -381,7 +405,8 @@ impl GpuCompositor {
         }
         let mut jobs = Vec::with_capacity(batch.len());
         let mut ops = Vec::new();
-        for p in batch {
+        let (simple, general): (Vec<&TileProgram>, Vec<&TileProgram>) = batch.iter().partition(|p| is_simple(p));
+        for p in simple.iter().chain(&general) {
             let op_start = ops.len() as u32;
             ops.extend(p.ops.iter().map(|op| self.encode(op)));
             jobs.push(Job { origin: [(p.tx * TILE) as u32, (p.ty * TILE) as u32], op_start, op_count: ops.len() as u32 - op_start });
@@ -399,7 +424,11 @@ impl GpuCompositor {
         }
         queue.write_buffer(&self.jobs, 0, jobs_bytes);
         queue.write_buffer(&self.ops, 0, ops_bytes);
-        queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&Params { doc_size, per_atlas: self.per_atlas, _pad: 0 }));
+        queue.write_buffer(
+            &self.params,
+            0,
+            bytemuck::bytes_of(&Params { doc_size, per_atlas: self.per_atlas, general_base: simple.len() as u32 }),
+        );
         let mut entries = vec![
             wgpu::BindGroupEntry { binding: 0, resource: self.params.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 1, resource: self.km.as_entire_binding() },
@@ -415,10 +444,16 @@ impl GpuCompositor {
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("compose") });
         {
             let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("compose"), timestamp_writes: None });
-            pass.set_pipeline(&self.pipelines[batch.iter().any(uses_pigment) as usize]);
             pass.set_bind_group(0, &bind, &[]);
-            let n = (TILE as u32) / 16;
-            pass.dispatch_workgroups(n, n, jobs.len() as u32);
+            let n = (TILE as u32) / 8;
+            if !simple.is_empty() {
+                pass.set_pipeline(&self.simple);
+                pass.dispatch_workgroups(n, n, simple.len() as u32);
+            }
+            if !general.is_empty() {
+                pass.set_pipeline(&self.pipelines[general.iter().any(|p| uses_pigment(p)) as usize]);
+                pass.dispatch_workgroups(n, n, general.len() as u32);
+            }
         }
         // Submit per batch: the next batch's uploads may evict slots this one reads.
         queue.submit([enc.finish()]);
