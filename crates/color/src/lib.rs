@@ -5,6 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 /// A premultiplied RGBA pixel in f32.
+pub mod cmyk;
 pub mod median_cut;
 pub mod pigment;
 

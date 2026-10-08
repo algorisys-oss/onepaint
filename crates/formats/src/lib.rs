@@ -7,6 +7,7 @@ pub mod export;
 mod image;
 pub mod palette;
 pub mod psd;
+pub mod tiff_cmyk;
 pub mod zip;
 
 pub use image::*;
