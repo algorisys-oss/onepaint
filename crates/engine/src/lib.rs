@@ -186,6 +186,11 @@ pub enum Command {
     FillPath,
     /// End live-edit coalescing: the next edit is a new undo step.
     SealHistory,
+    /// Brush fill mode: fill a freehand silhouette (doc px) at `opacity`.
+    FillShape {
+        points: Vec<[f64; 2]>,
+        opacity: f32,
+    },
     /// Switch the transform in progress to 4-corner distort.
     BeginDistort,
     /// Switch the transform in progress to mesh warp.
@@ -1118,6 +1123,7 @@ impl Session {
             Command::SetSmartFilters { id, filters } => self.set_smart_filters(&id, filters),
             Command::AddSmartFilter { id, kind, params } => self.add_smart_filter(&id, &kind, params),
             Command::BakeSmartFilters { id } => self.bake_smart_filters(&id),
+            Command::FillShape { points, opacity } => self.fill_shape(points, opacity.clamp(0.0, 1.0)),
             Command::BeginDistort => {
                 self.begin_warp(false);
                 Ok(())

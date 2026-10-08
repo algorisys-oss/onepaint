@@ -91,6 +91,8 @@ pub struct ToolOptions {
     pub pen_fill: bool,
     /// Gradient: add a live gradient-fill layer instead of painting pixels.
     pub gradient_layer: bool,
+    /// Brush fill mode (F): a stroke fills its silhouette.
+    pub fill_shape: bool,
     pub stroke_path_tool: onepaint_engine::path_ops::StrokePathTool,
     pub stroke_path_pressure: bool,
 }
@@ -113,6 +115,7 @@ impl Default for ToolOptions {
             background: onepaint_color::Rgba::WHITE,
             pen_fill: false,
             gradient_layer: false,
+            fill_shape: false,
             stroke_path_tool: Default::default(),
             stroke_path_pressure: true,
         }
@@ -187,6 +190,10 @@ enum Drag {
     /// Measure from `start` (doc px).
     Measure {
         start: Pt,
+    },
+    /// Brush fill mode: the silhouette being drawn (doc px).
+    FillShape {
+        points: Vec<Pt>,
     },
     /// Dragging a distort corner or warp lattice point (`None` = the whole set).
     WarpPoint {
@@ -550,6 +557,7 @@ impl Canvas {
             return Drag::Transform { handle, grab: d, start: self.xform };
         }
         match tool {
+            Tool::Brush if self.options.fill_shape => Drag::FillShape { points: vec![d] },
             Tool::Brush | Tool::Eraser | Tool::Smudge | Tool::Mixer | Tool::Liquify => {
                 let kind = if self.last_pen_force.is_some() { PointerKind::Pen } else { PointerKind::Mouse };
                 self.pressure = Some(PressureProvider::new(kind));
@@ -752,6 +760,11 @@ impl Canvas {
                             }
                         }
                         Drag::SymAxis => Self::move_symmetry_centre(session, d, self.doc_size),
+                        Drag::FillShape { points } => {
+                            if points.last().is_none_or(|q| (q[0] - d[0]).hypot(q[1] - d[1]) * self.view.scale >= 1.5) {
+                                points.push(d);
+                            }
+                        }
                         Drag::WarpPoint { index, grab, start } => {
                             use onepaint_engine::transform::WarpMode;
                             let (dx, dy) = (d[0] - grab[0], d[1] - grab[1]);
@@ -925,6 +938,10 @@ impl Canvas {
                         }
                         Drag::PenEdit { .. } => {
                             let _ = session.execute(Command::SealHistory);
+                        }
+                        Drag::FillShape { points } => {
+                            let opacity = session.current_brush().opacity as f32;
+                            let _ = session.execute(Command::FillShape { points, opacity });
                         }
                         Drag::Gradient { start } if self.options.gradient_layer => {
                             session.stroke_cancel();
@@ -1345,7 +1362,7 @@ impl Canvas {
         }
         match &self.drag {
             Drag::Shape { start, end, .. } => self.outline(ui, rect, &Self::shape_contour(session.tool(), *start, *end), true),
-            Drag::Lasso { points, .. } => self.outline(ui, rect, points, false),
+            Drag::Lasso { points, .. } | Drag::FillShape { points } => self.outline(ui, rect, points, false),
             _ => {}
         }
         if let Some((pts, _)) = &self.poly {

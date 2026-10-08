@@ -133,3 +133,19 @@ fn sealing_separates_two_drags() {
         .unwrap();
     assert_eq!(s.history_len(), h0 + 2);
 }
+
+#[test]
+fn fill_shape_fills_the_silhouette_with_symmetry() {
+    let mut s = Session::new(100, 80, None);
+    s.execute(Command::SetColor { rgba: Rgba::new(0.0, 0.0, 1.0, 1.0) }).unwrap();
+    s.execute(Command::SetSymmetry { symmetry: Symmetry { mode: SymmetryMode::Vertical, ..Default::default() } }).unwrap();
+    let tri = vec![[10.0, 10.0], [40.0, 10.0], [25.0, 50.0]];
+    s.execute(Command::FillShape { points: tri, opacity: 0.5 }).unwrap();
+    let id = s.active().to_string();
+    let p = px(&s, &id, 25, 20);
+    assert!((p[3] - 0.5).abs() < 0.02 && p[2] > 0.45, "half-opacity blue: {p:?}");
+    assert!(px(&s, &id, 74, 20)[3] > 0.45, "mirrored");
+    assert_eq!(px(&s, &id, 50, 70)[3], 0.0);
+    s.execute(Command::Undo).unwrap();
+    assert_eq!(px(&s, &id, 25, 20)[3], 0.0, "one undo step");
+}

@@ -319,3 +319,72 @@ impl Session {
         Ok(())
     }
 }
+
+impl Session {
+    /// Brush fill mode (PE:1779): the stroke's silhouette filled with the
+    /// current colour at `opacity`, replicated through symmetry, confined to
+    /// the selection, honouring alpha lock; one undo step.
+    pub(crate) fn fill_shape(&mut self, points: Vec<[f64; 2]>, opacity: f32) -> Result<(), EngineError> {
+        if points.len() < 3 {
+            return Ok(());
+        }
+        self.ensure_raster();
+        let Some(l) = self.doc.layer(&self.active) else { return Ok(()) };
+        if !l.visible || l.locked || l.adjustment.is_some() {
+            return Ok(());
+        }
+        let (w, h) = (self.doc.width, self.doc.height);
+        let tfs = self.symmetry_transforms();
+        let polys: Vec<Vec<[f64; 2]>> = if tfs.is_empty() {
+            vec![points]
+        } else {
+            tfs.iter()
+                .map(|t| {
+                    points
+                        .iter()
+                        .map(|p| {
+                            let q = t.apply(p[0], p[1]);
+                            [q.0, q.1]
+                        })
+                        .collect()
+                })
+                .collect()
+        };
+        let mut cov = vec![0u8; (w * h) as usize];
+        for poly in &polys {
+            let m = rasterize_polygons(w, h, std::slice::from_ref(poly));
+            cov.iter_mut().zip(m.data()).for_each(|(c, &v)| *c = (*c).max(v));
+        }
+        let sel = self.selection.clone();
+        let c = self.color.to_linear_premul();
+        let id = self.active.clone();
+        self.tree_edit(None, |s| {
+            let Some(l) = s.doc.layer_mut(&id) else { return Ok(()) };
+            let mode = if l.alpha_lock { StrokeMode::AlphaLock(BlendMode::Normal) } else { StrokeMode::Paint(BlendMode::Normal) };
+            let mut buf = Surface::new();
+            let data: Vec<f32> = cov
+                .iter()
+                .enumerate()
+                .flat_map(|(i, &v)| {
+                    let k = sel.as_ref().map_or(1.0, |m| m.data()[i] as f32 / 255.0);
+                    let a = v as f32 / 255.0 * k;
+                    [c[0] * a, c[1] * a, c[2] * a, a]
+                })
+                .collect();
+            buf.write_rect(Rect::new(0, 0, w as i32, h as i32), &data);
+            buf.prune_empty();
+            for (tx, ty) in buf.tile_keys() {
+                let Some(src) = buf.tile(tx, ty) else { continue };
+                let s32 = src.to_f32();
+                let mut d = l.pixels.tile(tx, ty).map(|t| t.to_f32()).unwrap_or_else(|| vec![0.0; TILE_PX * 4]);
+                for i in (0..d.len()).step_by(4) {
+                    let o =
+                        apply_stroke_px([d[i], d[i + 1], d[i + 2], d[i + 3]], [s32[i], s32[i + 1], s32[i + 2], s32[i + 3]], opacity, mode);
+                    d[i..i + 4].copy_from_slice(&o);
+                }
+                l.pixels.set_tile(tx, ty, Some(Arc::new(Tile::from_f32(&d))));
+            }
+            Ok(())
+        })
+    }
+}

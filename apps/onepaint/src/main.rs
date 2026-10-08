@@ -712,6 +712,11 @@ impl App {
             if sc(Modifiers::NONE, Key::H) {
                 self.set_tool(Tool::Hand);
             }
+            if sc(Modifiers::NONE, Key::F) {
+                self.canvas.options.fill_shape = !self.canvas.options.fill_shape;
+                let msg = if self.canvas.options.fill_shape { "Fill mode on: brush strokes fill their outline" } else { "Fill mode off" };
+                self.notify(msg, now);
+            }
             if sc(Modifiers::ALT, Key::Backspace) {
                 let _ = self.session.execute(Command::FillSelection);
             }
@@ -1640,5 +1645,24 @@ mod tests {
         assert_eq!(h.state().popover, Some(Popover::Help));
         key(&mut h, egui::Key::A, egui::Modifiers::SHIFT);
         assert!(h.state().session.anim_settings().enabled, "Shift+A toggles animation");
+    }
+
+    #[test]
+    fn fill_mode_fills_the_outline() {
+        let mut h = harness();
+        h.run();
+        key(&mut h, egui::Key::F, egui::Modifiers::NONE);
+        assert!(h.state().canvas.options.fill_shape);
+        h.event(Event::PointerMoved(pos2(500.0, 300.0)));
+        h.step();
+        press(&mut h, pos2(500.0, 300.0), true);
+        for p in [pos2(600.0, 300.0), pos2(700.0, 300.0), pos2(650.0, 400.0), pos2(550.0, 400.0)] {
+            h.event(Event::PointerMoved(p));
+            h.step();
+        }
+        press(&mut h, pos2(550.0, 400.0), false);
+        h.run();
+        assert!(alpha_at(&h, [600.0, 350.0]) > 0.9, "inside filled");
+        assert_eq!(alpha_at(&h, [450.0, 350.0]), 0.0);
     }
 }

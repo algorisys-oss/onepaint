@@ -131,7 +131,7 @@ screentone are added as live layers.
   - three-finger swipe down for the copy/paste menu
   - four-finger tap to toggle the UI
 - [ ] Palm rejection while a pen is active
-- [~] Full keyboard shortcuts (the happypaint keybindings map) (all default bindings except F silhouette fill, multi-document tabs, markers and mark in/out; no rebinding UI yet)
+- [~] Full keyboard shortcuts (the happypaint keybindings map) (all default bindings except multi-document tabs, markers and mark in/out; no rebinding UI yet)
 
 ## History and recording
 - [x] Undo and redo with tile snapshots and pixel deltas (copy-on-write tile snapshots)
