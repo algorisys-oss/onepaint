@@ -37,8 +37,8 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] select-wand
 
 ## Brushes
-- [~] All 118 presets, including Manga and the baked Procreate brushes, with identical parameters (all 124 load with verbatim parameters, tips and grains; wet, impasto, settle and live-fluid presets all paint with their media)
-- [~] Dynamics: pressure, tilt, twist and velocity mapped to size, opacity and flow (all implemented; hardware tilt and pressure need a tablet backend, see Input)
+- [x] All 118 presets, including Manga and the baked Procreate brushes, with identical parameters (all 124 load with verbatim parameters, tips and grains, and every preset field is painted: wet, impasto, settle, fluid, dual brush, colour tips, grain movement)
+- [x] Dynamics: pressure, tilt, twist and velocity mapped to size, opacity and flow (hardware pressure, tilt and twist arrive from the tablet backends, see Input)
 - [x] Velocity-synthesized pressure for devices without hardware pressure
 - [x] Document paper (spec 36): Smooth, Rough, Fine grain, Canvas, Linen with texture scale; dry brushes bite the tooth by their paper response, the canvas and exports show it, wet paint soaks and granulates into it
 - [x] Computed and sampled tips (happypaint's generators baked to PNG)
