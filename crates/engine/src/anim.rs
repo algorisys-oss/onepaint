@@ -375,11 +375,14 @@ impl Session {
 
     /// The document compositing shows: the animation view when enabled.
     pub(crate) fn display_doc(&self) -> std::borrow::Cow<'_, Document> {
-        if self.anim.enabled && total_slots(&self.doc.root) > 0 {
-            std::borrow::Cow::Owned(view_document(&self.doc, &self.anim, self.anim_slot, !self.anim_playing, &self.active))
-        } else {
-            std::borrow::Cow::Borrowed(&self.doc)
+        let anim = self.anim.enabled && total_slots(&self.doc.root) > 0;
+        if !anim && !self.has_smart_filters() {
+            return std::borrow::Cow::Borrowed(&self.doc);
         }
+        let mut view =
+            if anim { view_document(&self.doc, &self.anim, self.anim_slot, !self.anim_playing, &self.active) } else { self.doc.clone() };
+        self.apply_smart_filters(&mut view.root);
+        std::borrow::Cow::Owned(view)
     }
 
     pub(crate) fn set_anim(&mut self, s: AnimSettings) {
@@ -479,7 +482,8 @@ impl Session {
 
     /// Composite one timeline slot without ghosts, for export (straight sRGB 8-bit).
     pub fn render_slot_rgba8(&self, slot: usize, background: Option<Rgba>) -> Vec<u8> {
-        let view = view_document(&self.doc, &self.anim, slot, false, &self.active);
+        let mut view = view_document(&self.doc, &self.anim, slot, false, &self.active);
+        self.apply_smart_filters(&mut view.root);
         let mut flat = onepaint_compose::flatten(&view, None);
         if let Some(bg) = background {
             let b = bg.to_linear_premul();

@@ -15,6 +15,7 @@ mod paint_ops;
 pub mod path_ops;
 mod saved_selection_ops;
 mod selection_ops;
+pub mod smart_filter_ops;
 mod smudge_ops;
 mod text_ops;
 pub mod transform;
@@ -181,6 +182,19 @@ pub enum Command {
     FillPath,
     /// End live-edit coalescing: the next edit is a new undo step.
     SealHistory,
+    /// Replace a layer's smart-filter stack (live edits coalesce; seal to end).
+    SetSmartFilters {
+        id: NodeId,
+        filters: Vec<smart_filter_ops::SmartFilter>,
+    },
+    AddSmartFilter {
+        id: NodeId,
+        kind: String,
+        params: onepaint_filters::Params,
+    },
+    BakeSmartFilters {
+        id: NodeId,
+    },
     SetAnimation {
         settings: Box<anim::AnimSettings>,
     },
@@ -454,6 +468,7 @@ pub struct Session {
     anim_ever: bool,
     anim_slot: usize,
     anim_playing: bool,
+    smart_cache: smart_filter_ops::SmartCache,
     smudge: Option<smudge_ops::ActiveSmudge>,
     liquify: Option<liquify_ops::ActiveLiquify>,
     /// The Mixer's kept reservoir, keyed by the colour it was loaded with.
@@ -499,6 +514,7 @@ impl Session {
             anim_ever: false,
             anim_slot: 0,
             anim_playing: false,
+            smart_cache: Default::default(),
             smudge: None,
             liquify: None,
             mixer_held: None,
@@ -614,6 +630,11 @@ impl Session {
 
     /// Flattened canvas as premultiplied linear f32.
     pub fn flatten(&self) -> Vec<f32> {
+        if self.has_smart_filters() {
+            let mut d = self.doc.clone();
+            self.apply_smart_filters(&mut d.root);
+            return onepaint_compose::flatten(&d, self.overlay().as_ref());
+        }
         onepaint_compose::flatten(&self.doc, self.overlay().as_ref())
     }
 
@@ -705,9 +726,11 @@ impl Session {
     /// What you see (the current animation frame, without onion ghosts), encoded.
     pub fn export_image(&self, o: &onepaint_formats::export::ExportOptions) -> Result<Vec<u8>, EngineError> {
         let flat = if self.anim.enabled && anim::total_slots(&self.doc.root) > 0 {
-            onepaint_compose::flatten(&anim::view_document(&self.doc, &self.anim, self.anim_slot, false, &self.active), None)
+            let mut v = anim::view_document(&self.doc, &self.anim, self.anim_slot, false, &self.active);
+            self.apply_smart_filters(&mut v.root);
+            onepaint_compose::flatten(&v, None)
         } else {
-            onepaint_compose::flatten(&self.doc, None)
+            self.flatten()
         };
         let o = onepaint_formats::export::ExportOptions { dpi: self.doc.dpi, ..*o };
         Ok(onepaint_formats::export::export_flat(&flat, self.doc.width, self.doc.height, &o)?.0)
@@ -1046,6 +1069,9 @@ impl Session {
             Command::RasterizePath { id } => self.rasterize_path(&id),
             Command::SelectFromPath { mode } => self.select_from_path(mode),
             Command::FillPath => self.fill_path(),
+            Command::SetSmartFilters { id, filters } => self.set_smart_filters(&id, filters),
+            Command::AddSmartFilter { id, kind, params } => self.add_smart_filter(&id, &kind, params),
+            Command::BakeSmartFilters { id } => self.bake_smart_filters(&id),
             Command::SealHistory => {
                 self.history_sealed = true;
                 Ok(())

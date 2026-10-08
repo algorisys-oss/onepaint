@@ -37,6 +37,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             Popover::Guides => popover_at(ctx, "guides", anchor, Align2::RIGHT_TOP, |ui| guides(app, ui)),
             Popover::LiquifyOptions => popover_at(ctx, "liquify", anchor, Align2::RIGHT_TOP, |ui| liquify_options(app, ui)),
             Popover::PenOptions => popover_at(ctx, "pen", anchor, Align2::RIGHT_TOP, |ui| pen_options(app, ui)),
+            Popover::SmartFilters => popover_at(ctx, "smart", anchor, Align2::RIGHT_TOP, |ui| crate::adjust::smart_panel(app, ui)),
             Popover::Export => popover_at(ctx, "export", screen.center(), Align2::CENTER_CENTER, |ui| export_dialog(app, ui)),
             Popover::Recover => popover_at(ctx, "recover", screen.center(), Align2::CENTER_CENTER, |ui| recover(app, ui)),
             Popover::Fill => popover_at(ctx, "fill", anchor, Align2::RIGHT_TOP, |ui| fill_options(app, ui)),

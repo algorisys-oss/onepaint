@@ -58,6 +58,7 @@ pub enum Popover {
     LiquifyOptions,
     PenOptions,
     Export,
+    SmartFilters,
 }
 
 /// What a file opens as.
@@ -100,6 +101,10 @@ pub struct App {
     pub playback: timeline::Playback,
     pub export_opts: onepaint_formats::export::ExportOptions,
     pub export_psd: bool,
+    /// The smart filter whose params are open.
+    pub smart_edit: Option<usize>,
+    /// End live-edit coalescing before the next smart-filter change.
+    pub session_seal: bool,
     /// Inline rename of the active palette in progress.
     pub palette_rename: Option<String>,
     pub thumbs: thumbs::Thumbs,
@@ -154,6 +159,8 @@ impl App {
             playback: Default::default(),
             export_opts: Default::default(),
             export_psd: false,
+            smart_edit: None,
+            session_seal: false,
             palette_rename: None,
             thumbs: thumbs::Thumbs::default(),
             toast: None,
@@ -1334,5 +1341,23 @@ mod tests {
         h.get_by_label("Cancel").click();
         h.run();
         assert_eq!(h.state().popover, None);
+    }
+
+    #[test]
+    fn a_filter_becomes_a_smart_filter_and_bakes() {
+        let mut h = harness();
+        h.run();
+        let _ = h.state_mut().session.execute(Command::BeginFilter { kind: "invert".into() });
+        h.state_mut().popover = Some(Popover::Filter);
+        h.run();
+        h.get_by_label("As smart filter").click();
+        h.run();
+        let id = h.state().session.active().to_string();
+        assert_eq!(h.state().session.smart_filters(&id).len(), 1);
+        assert_eq!(h.state().popover, Some(Popover::SmartFilters));
+        assert!(!h.state().session.filter_active(), "the destructive preview was cancelled");
+        h.get_by_label("Bake into pixels").click();
+        h.run();
+        assert!(h.state().session.smart_filters(&id).is_empty());
     }
 }

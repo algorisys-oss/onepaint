@@ -62,7 +62,7 @@ Sources, all under `../happypaint/frontend/src/`:
 - [~] Text layers: multiple rich-text objects and balloons, vector until baked (rich runs render; balloons are kept in files but not drawn; no rich-text editing UI yet)
 - [x] Vector path layers, plus path ops
 - [~] Adjustment layers and fill layers (colour and fill kinds composite live; spatial kinds are kept but not rendered)
-- [ ] Per-layer smart-filter stacks
+- [x] Per-layer smart-filter stacks (add from any filter, toggle, edit, remove, bake; cached; exported)
 
 ## Blend modes (20)
 The modes are:
@@ -95,7 +95,7 @@ screentone are added as live layers.
 - [x] **Stylize:** bloom, chromatic-aberration, halftone, tone, glitch, mosaic, crystallize, emboss, oil-paint, wind, line-art (Sobel/XDoG)
 - [~] **Render:** light-rays, lens-flare, clouds, fog, smoke, nebula, starfield, lightning (no on-canvas handles; the lightning raster replaces Canvas2D)
 - [~] **Fill:** gradient-fill, solid-fill, pattern-fill (imported pattern images are not decoded; the built-ins are)
-- [ ] Smart-filter stacks (`layer.filters`; preserved in files, not applied yet)
+- [x] Smart-filter stacks (`layer.filters`)
 
 ## Selection
 - [x] Rect, ellipse, lasso, polygon and magic wand

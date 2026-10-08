@@ -137,73 +137,7 @@ impl Session {
             self.mark_all_dirty();
             return;
         }
-        let mut out = f.original.clone();
-        let content = f.original.content_bounds().and_then(|b| b.intersect(&doc));
-        if let Some(content) = content
-            && !is_identity(kind, &params)
-        {
-            let keep = |x: i32, y: i32| clip.as_ref().map_or(1.0, |m| m.coverage(x, y));
-            if kind.is_pixelwise() {
-                let prepared = prepare_in(kind, &params, frame);
-                let keys: Vec<_> =
-                    f.original.tile_keys().into_iter().filter(|&(tx, ty)| Rect::from_tile(tx, ty).intersect(&doc).is_some()).collect();
-                let tiles: Vec<_> = keys
-                    .par_iter()
-                    .filter_map(|&(tx, ty)| {
-                        let t = f.original.tile(tx, ty)?;
-                        let mut buf = t.to_f32();
-                        for i in (0..buf.len()).step_by(4) {
-                            let p = (i / 4) as i32;
-                            let (x, y) = (tx * TILE + p % TILE, ty * TILE + p / TILE);
-                            let s = [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]];
-                            let k = keep(x, y);
-                            if k <= 0.0 {
-                                continue;
-                            }
-                            let o = prepared.color_px(s, x, y);
-                            for c in 0..4 {
-                                buf[i + c] = s[c] + (o[c] - s[c]) * k;
-                            }
-                        }
-                        Some(((tx, ty), Arc::new(Tile::from_f32(&buf))))
-                    })
-                    .collect();
-                for ((tx, ty), t) in tiles {
-                    out.set_tile(tx, ty, Some(t));
-                }
-            } else {
-                // Spatial: run over the content plus the kernel's reach, clipped to the
-                // canvas; kinds that depend on the whole canvas run over all of it.
-                let r = reach(kind, &params);
-                let region = if r >= GLOBAL_REACH {
-                    doc
-                } else {
-                    Rect::new(content.x - r, content.y - r, content.w + 2 * r, content.h + 2 * r).intersect(&doc).unwrap_or(content)
-                };
-                let src = f.original.read_rect(region);
-                let rf = Frame::region(region.x, region.y, frame.doc_w, frame.doc_h, frame.dpi);
-                let res = apply_spatial_in(kind, &params, &src, region.w as usize, region.h as usize, rf);
-                let mixed: Vec<f32> = if clip.is_some() {
-                    let mut m = res;
-                    for y in 0..region.h {
-                        for x in 0..region.w {
-                            let k = keep(region.x + x, region.y + y);
-                            let i = ((y * region.w + x) * 4) as usize;
-                            for c in 0..4 {
-                                m[i + c] = src[i + c] + (m[i + c] - src[i + c]) * k;
-                            }
-                        }
-                    }
-                    m
-                } else {
-                    res
-                };
-                out.write_rect(region, &mixed);
-                for (tx, ty) in region.tiles() {
-                    out.prune_tile(tx, ty);
-                }
-            }
-        }
+        let out = apply_filter(&f.original, doc, frame, kind, &params, clip.as_deref());
         let id = f.layer.clone();
         if let Some(l) = self.doc.layer_mut(&id) {
             l.pixels = out;
@@ -289,4 +223,83 @@ impl Session {
             Ok(())
         })
     }
+}
+
+/// Apply one filter to a layer's pixels (selection-weighted when `clip` is
+/// given); spatial kinds read their reach around the content.
+pub(crate) fn apply_filter(
+    src: &Surface,
+    doc: Rect,
+    frame: Frame,
+    kind: Kind,
+    params: &Params,
+    clip: Option<&onepaint_selection::Mask>,
+) -> Surface {
+    let mut out = src.clone();
+    let content = src.content_bounds().and_then(|b| b.intersect(&doc));
+    if let Some(content) = content
+        && !is_identity(kind, params)
+    {
+        let keep = |x: i32, y: i32| clip.map_or(1.0, |m| m.coverage(x, y));
+        if kind.is_pixelwise() {
+            let prepared = prepare_in(kind, params, frame);
+            let keys: Vec<_> = src.tile_keys().into_iter().filter(|&(tx, ty)| Rect::from_tile(tx, ty).intersect(&doc).is_some()).collect();
+            let tiles: Vec<_> = keys
+                .par_iter()
+                .filter_map(|&(tx, ty)| {
+                    let t = src.tile(tx, ty)?;
+                    let mut buf = t.to_f32();
+                    for i in (0..buf.len()).step_by(4) {
+                        let p = (i / 4) as i32;
+                        let (x, y) = (tx * TILE + p % TILE, ty * TILE + p / TILE);
+                        let s = [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]];
+                        let k = keep(x, y);
+                        if k <= 0.0 {
+                            continue;
+                        }
+                        let o = prepared.color_px(s, x, y);
+                        for c in 0..4 {
+                            buf[i + c] = s[c] + (o[c] - s[c]) * k;
+                        }
+                    }
+                    Some(((tx, ty), Arc::new(Tile::from_f32(&buf))))
+                })
+                .collect();
+            for ((tx, ty), t) in tiles {
+                out.set_tile(tx, ty, Some(t));
+            }
+        } else {
+            // Spatial: run over the content plus the kernel's reach, clipped to the
+            // canvas; kinds that depend on the whole canvas run over all of it.
+            let r = reach(kind, params);
+            let region = if r >= GLOBAL_REACH {
+                doc
+            } else {
+                Rect::new(content.x - r, content.y - r, content.w + 2 * r, content.h + 2 * r).intersect(&doc).unwrap_or(content)
+            };
+            let src = src.read_rect(region);
+            let rf = Frame::region(region.x, region.y, frame.doc_w, frame.doc_h, frame.dpi);
+            let res = apply_spatial_in(kind, params, &src, region.w as usize, region.h as usize, rf);
+            let mixed: Vec<f32> = if clip.is_some() {
+                let mut m = res;
+                for y in 0..region.h {
+                    for x in 0..region.w {
+                        let k = keep(region.x + x, region.y + y);
+                        let i = ((y * region.w + x) * 4) as usize;
+                        for c in 0..4 {
+                            m[i + c] = src[i + c] + (m[i + c] - src[i + c]) * k;
+                        }
+                    }
+                }
+                m
+            } else {
+                res
+            };
+            out.write_rect(region, &mixed);
+            for (tx, ty) in region.tiles() {
+                out.prune_tile(tx, ty);
+            }
+        }
+    }
+    out
 }

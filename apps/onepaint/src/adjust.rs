@@ -15,6 +15,12 @@ use serde_json::Value;
 /// screentone) to add it as a layer.
 pub fn list(app: &mut App, ui: &mut Ui) {
     ui.set_width(240.0);
+    let id = app.session.active().to_string();
+    let n = app.session.smart_filters(&id).len();
+    if n > 0 && widgets::menu_item(ui, Some("sliders-horizontal"), &format!("Smart filters on this layer ({n})"), "").clicked() {
+        app.popover = Some(Popover::SmartFilters);
+        return;
+    }
     egui::ScrollArea::vertical().max_height(520.0).show(ui, |ui| {
         for section in SECTIONS {
             widgets::section_label(ui, section);
@@ -356,6 +362,16 @@ pub fn filter_panel(app: &mut App, ui: &mut Ui) {
             app.popover = None;
         }
     });
+    if onepaint_engine::smart_filter_ops::is_smart_kind(kind)
+        && widgets::menu_item(ui, Some("sliders-horizontal"), "As smart filter", "").clicked()
+    {
+        let _ = app.session.execute(Command::CancelFilter);
+        let id = app.session.active().to_string();
+        let _ = app.session.execute(Command::AddSmartFilter { id, kind: kind.as_str().into(), params: p.clone() });
+        app.smart_edit = Some(app.session.smart_filters(app.session.active()).len().saturating_sub(1));
+        app.popover = Some(Popover::SmartFilters);
+        return;
+    }
     if kind.is_color() && widgets::menu_item(ui, Some("layers"), "As adjustment layer", "").clicked() {
         let _ = app.session.execute(Command::CancelFilter);
         let _ = app.session.execute(Command::AddAdjustmentLayer { kind: kind.as_str().into(), params: p });
@@ -386,5 +402,72 @@ pub fn layer_panel(app: &mut App, ui: &mut Ui) {
     }
     if !kind.is_color() {
         ui.label(RichText::new("Spatial filter layers are kept in the file but not shown yet.").font(theme::medium(11.0)).color(t.warning));
+    }
+}
+
+/// The active layer's smart-filter stack: toggle, edit, delete, bake.
+pub fn smart_panel(app: &mut App, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    let id = app.session.active().to_string();
+    let mut list = app.session.smart_filters(&id);
+    ui.set_width(300.0);
+    ui.label(RichText::new("Smart filters").font(theme::semibold(15.0)).color(t.fg));
+    ui.label(RichText::new("Non-destructive: the layer's pixels stay as painted.").font(theme::medium(10.5)).color(t.fg_faint));
+    ui.add_space(6.0);
+    if list.is_empty() {
+        ui.label(RichText::new("None on this layer. Run a filter and choose “As smart filter”.").color(t.fg_muted));
+        return;
+    }
+    let mut changed = false;
+    let mut remove = None;
+    for (i, f) in list.iter_mut().enumerate() {
+        let label = Kind::parse(&f.kind).map_or(f.kind.clone(), |k| k.label().to_string());
+        ui.horizontal(|ui| {
+            let mut on = f.is_on();
+            if ui.checkbox(&mut on, "").changed() {
+                f.enabled = (!on).then_some(false);
+                changed = true;
+                app.session_seal = true;
+            }
+            let sel = app.smart_edit == Some(i);
+            if ui.selectable_label(sel, &label).clicked() {
+                app.smart_edit = if sel { None } else { Some(i) };
+                app.session_seal = true;
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if onepaint_ui_kit::icons::button(ui, "trash", 22.0, false, "Remove filter").clicked() {
+                    remove = Some(i);
+                }
+            });
+        });
+    }
+    if let Some(i) = remove {
+        list.remove(i);
+        changed = true;
+        app.smart_edit = None;
+        app.session_seal = true;
+    }
+    if let Some(i) = app.smart_edit
+        && let Some(f) = list.get_mut(i)
+        && let Some(kind) = Kind::parse(&f.kind)
+    {
+        widgets::hairline(ui);
+        let colour = app.session.color();
+        if params_ui(ui, kind, &mut f.params, &mut app.curve_tab, colour) {
+            changed = true;
+        }
+    }
+    if app.session_seal {
+        let _ = app.session.execute(Command::SealHistory);
+        app.session_seal = false;
+    }
+    if changed {
+        let _ = app.session.execute(Command::SetSmartFilters { id: id.clone(), filters: list });
+    }
+    ui.add_space(8.0);
+    if widgets::secondary_button(ui, "Bake into pixels", 140.0).clicked() {
+        let _ = app.session.execute(Command::BakeSmartFilters { id });
+        app.smart_edit = None;
+        app.popover = None;
     }
 }
