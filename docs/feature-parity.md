@@ -43,6 +43,7 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] Document paper (spec 36): Smooth, Rough, Fine grain, Canvas, Linen with texture scale; dry brushes bite the tooth by their paper response, the canvas and exports show it, wet paint soaks and granulates into it
 - [x] Computed and sampled tips (happypaint's generators baked to PNG)
 - [x] Grain texture, with movement (spec 37)
+- [x] Fill shape mode (F): a brush stroke fills its outline, with symmetry
 - [x] Dual brush (mask tip), colour (RGBA) tips with recolour, spacing jitter, hue shift and two-colour load (spec 37)
 - [x] Airbrush (time-based ticks)
 - [x] Smoothing and the stabilizer

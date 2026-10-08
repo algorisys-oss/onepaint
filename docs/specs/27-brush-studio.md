@@ -188,13 +188,16 @@ onepaint renders each stroke into a stroke buffer, composites it onto the
 pad at the brush opacity on stroke end, and shows pad + live stroke over
 white. Resizing the dialog clears the pad.
 
-## Not ported (see `divergences.md`)
+## Later additions
 
-Tip colour (`useTipColor`, tip hue/sat/bright), Fill shape, brush-size
-scaling and the global force-pressure toggles, Space·J, Hue→Shift, Tip col,
-the Wet, Fluid and Dual brush sections, grain Move, and Paper: onepaint's
-stroke engine does not implement them yet. Their preset values are preserved untouched in
-`extra` or the typed fields.
+- **Where they live:**
+  - Brush-size scaling and the force-pressure toggles are in Settings
+    (spec 34).
+  - The Wet, Fluid and Paper controls are in spec 35 and spec 36.
+  - Tip colour, Space·J, Hue→Shift, Tip col, Dual brush and grain Movement
+    are in spec 37.
+- **Fill shape:** a canvas mode toggled with F, not a studio control. A
+  brush stroke fills its outline (`Command::FillShape`).
 
 ## Tests
 
