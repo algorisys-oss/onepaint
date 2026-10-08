@@ -45,3 +45,4 @@ The happypaint references are relative to `../happypaint/frontend/src/`.
 | 30 | [Comic panels](30-panels.md) | panel, compose, engine, app |
 | 32 | [CMYK soft-proof, value check, CMYK TIFF](32-cmyk-proof.md) | color, formats, app |
 | 34 | [Settings](34-settings.md) | engine, app |
+| 35 | [Wet and oil media](35-wet-media.md) | brush, engine |

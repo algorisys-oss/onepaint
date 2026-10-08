@@ -182,6 +182,38 @@ impl BrushPreset {
     }
 }
 
+/// Wet media (`wet`, `brush-presets.ts:153-196`): a brush with `wetness > 0`
+/// paints through the mixer path, picking up and dragging canvas paint.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct WetMedia {
+    pub wetness: f64,
+    /// Paint in the reservoir ("Pigment" for body paint).
+    pub load: f64,
+    /// 0 = all reservoir paint, 1 = all canvas pickup.
+    pub mix: f64,
+    /// Kubelka–Munk mixing.
+    pub pigment: bool,
+    /// The brush tip shapes each wet dab (else the classic soft disc).
+    pub tip: bool,
+    /// Levels relief instead of building it (blender).
+    pub blend: f64,
+}
+
+impl Default for WetMedia {
+    fn default() -> Self {
+        Self { wetness: 0.0, load: 1.0, mix: 0.5, pigment: false, tip: false, blend: 0.0 }
+    }
+}
+
+impl BrushPreset {
+    /// The wet settings, when the brush paints wet (`wetness > 0`).
+    pub fn wet(&self) -> Option<WetMedia> {
+        let w: WetMedia = serde_json::from_value(self.extra.get("wet")?.clone()).ok()?;
+        (w.wetness > 0.0).then_some(w)
+    }
+}
+
 /// A built-in preset, or an imported one from the user library.
 pub fn preset(id: &str) -> Option<BrushPreset> {
     library().presets.iter().find(|p| p.id == id).cloned().or_else(|| crate::user::user_preset(id))

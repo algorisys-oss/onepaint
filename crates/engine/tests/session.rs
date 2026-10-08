@@ -252,13 +252,16 @@ fn colour_labels_set_clear_and_undo() {
 fn strokes_use_the_brush_blend_mode() {
     use onepaint_color::Rgba;
     // A multiply preset darkens instead of covering.
-    let id = onepaint_brush::presets().into_iter().find(|p| p.blend_mode() == onepaint_doc::BlendMode::Multiply).unwrap().id;
+    // (The library's multiply presets are all wet, and the wet path is source-over
+    // as in happypaint; a dry copy keeps the mode.)
+    let mut b = onepaint_brush::presets().into_iter().find(|p| p.blend_mode() == onepaint_doc::BlendMode::Multiply).unwrap();
+    b.extra.remove("wet");
     let mut s = Session::new(64, 64, None);
     s.execute(Command::SelectAll).unwrap();
     s.execute(Command::SetColor { rgba: Rgba::new(1.0, 1.0, 0.0, 1.0) }).unwrap();
     s.execute(Command::FillSelection).unwrap();
     s.execute(Command::Deselect).unwrap();
-    s.execute(Command::SetBrush { preset_id: id }).unwrap();
+    s.execute(Command::SetBrushPreset { preset: Box::new(b) }).unwrap();
     s.execute(Command::SetBrushSize { size: 30.0 }).unwrap();
     s.execute(Command::SetColor { rgba: Rgba::new(0.0, 1.0, 1.0, 1.0) }).unwrap();
     let pt = |x: f64| onepaint_stroke::StrokePoint { x, y: 32.0, pressure: 1.0, ..Default::default() };

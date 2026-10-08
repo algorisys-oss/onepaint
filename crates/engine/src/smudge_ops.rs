@@ -63,18 +63,38 @@ impl Session {
         let mixer = self.tool == Tool::Mixer;
         let b = &self.brush;
         let m = self.paint.mixer;
-        let params = SmudgeParams {
-            size: b.size,
-            strength: if mixer { b.opacity } else { self.paint.smudge_strength },
-            hardness: b.hardness,
-            tip: onepaint_brush::tip_for(&b.tip_id),
-            size_pressure: b.size_pressure,
-            flow_pressure: b.flow_pressure,
-            spacing: Some(b.spacing),
-            wet: mixer.then_some(WetParams { mix: m.mix, load: m.load, wetness: m.wet, pigment: true }),
+        let params = match (mixer, b.wet().filter(|_| self.tool == Tool::Brush)) {
+            // A wet preset: the classic 0.35 disc every 0.25 of the size, its
+            // tip only with `wet.tip`, opacity as the master coverage
+            // (PE:2847-2945); pressure knobs include the force overrides.
+            (false, Some(w)) => {
+                let fb = self.prefs.stroke_brush(b);
+                let tip = if w.tip { onepaint_brush::tip_for(&b.tip_id) } else { onepaint_brush::Tip::Circle };
+                SmudgeParams {
+                    size: b.size,
+                    strength: b.opacity,
+                    hardness: 0.35,
+                    tip,
+                    size_pressure: fb.size_pressure,
+                    flow_pressure: fb.flow_pressure,
+                    spacing: None,
+                    wet: Some(WetParams { mix: w.mix, load: w.load, wetness: w.wetness, pigment: w.pigment }),
+                }
+            }
+            _ => SmudgeParams {
+                size: b.size,
+                strength: if mixer { b.opacity } else { self.paint.smudge_strength },
+                hardness: b.hardness,
+                tip: onepaint_brush::tip_for(&b.tip_id),
+                size_pressure: b.size_pressure,
+                flow_pressure: b.flow_pressure,
+                spacing: Some(b.spacing),
+                wet: mixer.then_some(WetParams { mix: m.mix, load: m.load, wetness: m.wet, pigment: true }),
+            },
         };
+        let paints = params.wet.is_some();
         let lin = self.color.to_linear_premul();
-        let color = mixer.then_some([lin[0], lin[1], lin[2]]);
+        let color = paints.then_some([lin[0], lin[1], lin[2]]);
         let key = mixer.then(|| self.color.to_hex());
         let held = match (&self.mixer_held, mixer && m.keep) {
             (Some((k, r)), true) if Some(k) == key.as_ref() => Some(*r),

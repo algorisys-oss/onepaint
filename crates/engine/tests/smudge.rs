@@ -116,3 +116,34 @@ fn smudge_and_liquify_rasterise_a_text_layer_first() {
         assert!(!s.is_text_layer(&id), "{tool:?} edits pixels, so the layer is raster now");
     }
 }
+
+fn select_preset(s: &mut Session, id: &str) {
+    let p = onepaint_brush::preset(id).unwrap();
+    s.execute(Command::SetTool { tool: Tool::Brush }).unwrap();
+    s.execute(Command::SetBrushPreset { preset: Box::new(p) }).unwrap();
+    s.execute(Command::SetBrushSize { size: 20.0 }).unwrap();
+}
+
+#[test]
+fn wet_presets_paint_through_the_mixer() {
+    let p = onepaint_brush::preset("blender").unwrap();
+    let w = p.wet().unwrap();
+    assert_eq!((w.wetness, w.load, w.mix, w.pigment, w.tip), (0.75, 1.0, 0.94, true, false));
+    assert!(onepaint_brush::preset("hard-round").unwrap().wet().is_none());
+
+    // A blender pulls the red it crosses out past the square, as a dry stamp can't.
+    let mut s = session();
+    select_preset(&mut s, "blender");
+    s.execute(Command::SetColor { rgba: Rgba::new(0.0, 0.0, 1.0, 1.0) }).unwrap();
+    drag(&mut s, 30.0, 90.0, 50.0);
+    let px = active_px(&s, 60, 50);
+    assert!(px[3] > 0.05 && px[0] > px[2] * 0.2, "dragged red: {px:?}");
+    s.execute(Command::Undo).unwrap();
+    assert_eq!(active_px(&s, 60, 50)[3], 0.0, "one undo step");
+
+    // A wash (mix 0.3) mostly lays its own colour down on bare canvas.
+    select_preset(&mut s, "wet-wash");
+    drag(&mut s, 100.0, 160.0, 50.0);
+    let px = active_px(&s, 120, 50);
+    assert!(px[3] > 0.3 && px[2] > 0.3 && px[0] < 1e-3, "blue wash: {px:?}");
+}

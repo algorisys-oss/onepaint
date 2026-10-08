@@ -899,7 +899,9 @@ impl Session {
             self.ensure_raster();
         }
         self.stroke_cancel();
-        if matches!(self.tool, Tool::Smudge | Tool::Mixer) {
+        // Wet presets paint through the mixer path (paint-canvas.tsx:5706-5758).
+        let wet_brush = self.tool == Tool::Brush && !self.mask_target() && self.brush.wet().is_some();
+        if matches!(self.tool, Tool::Smudge | Tool::Mixer) || wet_brush {
             self.smudge_begin(p);
             return;
         }
