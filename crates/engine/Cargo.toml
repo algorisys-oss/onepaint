@@ -18,6 +18,7 @@ onepaint-selection = { workspace = true }
 onepaint-raster = { workspace = true }
 onepaint-color = { workspace = true }
 onepaint-doc = { workspace = true }
+onepaint-panel = { workspace = true }
 onepaint-compose = { workspace = true }
 onepaint-history = { workspace = true }
 onepaint-stroke = { workspace = true }

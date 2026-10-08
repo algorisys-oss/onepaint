@@ -8,6 +8,7 @@ pub mod blend;
 use blend::{blend_px, blend_px_alpha_lock, clip_over};
 use onepaint_doc::{BlendMode, Document, Layer, Node};
 use onepaint_filters::Frame;
+use onepaint_panel::coverage::{TileCoverage, tile_coverage};
 use onepaint_raster::{Px, Rect, Surface, TILE, TILE_PX, Tile};
 use rayon::prelude::*;
 
@@ -162,9 +163,16 @@ fn composite_nodes(nodes: &[Node], tx: i32, ty: i32, target: &mut Buf, ov: Optio
         let j = riders(nodes, i);
         match &nodes[i] {
             Node::Group(g) => {
-                if g.visible && g.opacity > 0.0 && !g.children.is_empty() {
+                let clip = panel_clip(g, tx, ty);
+                if g.visible && g.opacity > 0.0 && !g.children.is_empty() && clip != Some(TileCoverage::Empty) {
                     let mut buf = zeros();
                     composite_nodes(&g.children, tx, ty, &mut buf, ov, frame);
+                    // A panel's frame clips the group before its riders go on (C:1540-1548).
+                    if let Some(TileCoverage::Partial(cov)) = &clip {
+                        for (p, k) in buf.chunks_exact_mut(4).zip(cov) {
+                            p.iter_mut().for_each(|v| *v *= k);
+                        }
+                    }
                     draw_clipped(&mut buf, &nodes[i + 1..j], tx, ty, ov);
                     ghost_tint(&mut buf, g);
                     blend_into(target, &buf, g.blend_mode, g.opacity);
@@ -189,6 +197,13 @@ fn composite_nodes(nodes: &[Node], tx: i32, ty: i32, target: &mut Buf, ov: Optio
         }
         i = j;
     }
+}
+
+/// The clip of a panel group over one tile (`None` for a plain group). The
+/// mask is derived from the spec, never stored (spec 30).
+fn panel_clip(g: &onepaint_doc::Group, tx: i32, ty: i32) -> Option<TileCoverage> {
+    g.extra.get("panel")?;
+    onepaint_panel::panel_of(g).map(|spec| tile_coverage(&spec, tx, ty))
 }
 
 /// Key on a view-only group that tints its result like an onion-skin ghost.

@@ -64,6 +64,7 @@ impl Debug {
                 "curves" => Some(Popover::Filter),
                 "guides" => Some(Popover::Guides),
                 "pen" => Some(Popover::PenOptions),
+                "panel" => Some(Popover::PanelOptions),
                 "adjustments" => Some(Popover::Adjustments),
                 "mixer" => Some(Popover::MixerOptions),
                 "liquify" => Some(Popover::LiquifyOptions),

@@ -29,6 +29,9 @@ fn composite(c: &mut Criterion) {
     c.bench_function("composite one tile, 6 layers", |b| b.iter(|| s.composite(black_box(&[(3, 2)]))));
     let all: Vec<_> = s.doc().bounds().tiles().collect();
     c.bench_function("composite 2048x1536, 6 layers", |b| b.iter(|| s.composite(black_box(&all))));
+    // A 4×2 manga page: every panel's clip is derived per tile (spec 30).
+    s.execute(Command::CreatePanelGrid { rows: 4, cols: 2, gutter: 24.0, margin: 40.0, border: 4.0 }).unwrap();
+    c.bench_function("composite 2048x1536, 4x2 panel page", |b| b.iter(|| s.composite(black_box(&all))));
 }
 
 fn stroke(c: &mut Criterion) {

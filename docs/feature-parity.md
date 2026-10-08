@@ -29,7 +29,7 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] text (create, edit, move, style, wrap, outline, background, rasterise)
 - [~] pen: path layers (stroke/fill), anchor/handle editing, path menu (selection, fill, stroke with simulated pressure, mask, rasterize); no free-transform path or speed lines yet
 - [x] shape (line, rect, ellipse and 3–12-sided polygon, stroked with the brush, optional fill)
-- [ ] panel (comic panels)
+- [x] panel (comic panels): draw a frame, cut along a line, drag corners to reshape and frame lines to move, with live gutter and border width
 - [x] select-rect
 - [x] select-ellipse
 - [x] select-lasso
@@ -165,5 +165,5 @@ screentone are added as live layers.
 - [ ] Google Drive provider, with desktop OAuth (loopback + PKCE)
 
 ## Comics
-- [ ] Panel layouts and panel tool
+- [x] Panel layouts and panel tool: six page presets; panels clip their art to the frame, inset by half the gutter; one Millipen border layer that follows every edit; round-trips in `.happypaint`
 - [x] Balloons (in text layers): speech, rounded, shout and thought shapes, tail, fill and rim (spec 28; the tail is aimed by angle, as in happypaint)

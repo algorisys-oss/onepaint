@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 onepaint-engine = { workspace = true }
+onepaint-panel = { workspace = true }
 onepaint-gpu = { workspace = true }
 onepaint-ui-kit = { workspace = true }
 onepaint-color = { workspace = true }

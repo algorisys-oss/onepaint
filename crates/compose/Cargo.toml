@@ -14,4 +14,5 @@ serde_json = { workspace = true }
 onepaint-raster = { workspace = true }
 onepaint-color = { workspace = true }
 onepaint-doc = { workspace = true }
+onepaint-panel = { workspace = true }
 rayon = { workspace = true }

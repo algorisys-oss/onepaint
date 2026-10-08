@@ -12,6 +12,7 @@ pub mod guides;
 mod liquify_ops;
 mod mask_ops;
 mod paint_ops;
+mod panel_ops;
 pub mod path_ops;
 pub mod recording;
 mod saved_selection_ops;
@@ -63,6 +64,8 @@ pub enum Tool {
     Pen,
     /// Hand: drags pan the view.
     Hand,
+    /// Comic panels: draw, cut, reshape and move frames (spec 30).
+    Panel,
 }
 
 /// Optional layer property edits; `None` leaves a property unchanged.
@@ -386,6 +389,42 @@ pub enum Command {
     /// Turn a text layer into plain pixels.
     RasterizeText {
         id: NodeId,
+    },
+    /// Lay out a page of `rows × cols` panels (spec 30).
+    CreatePanelGrid {
+        rows: u32,
+        cols: u32,
+        gutter: f64,
+        margin: f64,
+        border: f64,
+    },
+    /// One panel from a drag rectangle (doc px).
+    CreatePanel {
+        a: [f64; 2],
+        b: [f64; 2],
+        gutter: f64,
+        border: f64,
+    },
+    /// Cut panel `id` along the line a→b.
+    SplitPanel {
+        id: NodeId,
+        a: [f64; 2],
+        b: [f64; 2],
+    },
+    /// Replace a panel's frame; live edits coalesce until `SealHistory`.
+    SetPanelOutline {
+        id: NodeId,
+        outline: Vec<[f64; 2]>,
+    },
+    /// Gutter and/or border width of one panel, or every panel (`id: None`);
+    /// live edits coalesce until `SealHistory`.
+    SetPanelStyle {
+        #[serde(default)]
+        id: Option<NodeId>,
+        #[serde(default)]
+        gutter: Option<f64>,
+        #[serde(default)]
+        border: Option<f64>,
     },
 }
 
@@ -1054,6 +1093,11 @@ impl Session {
             Command::UpdateText { id, index, spec } => self.update_text(&id, index, Some(spec)),
             Command::DeleteText { id, index } => self.update_text(&id, index, None),
             Command::RasterizeText { id } => self.rasterize_text(&id),
+            Command::CreatePanelGrid { rows, cols, gutter, margin, border } => self.create_panel_grid(rows, cols, gutter, margin, border),
+            Command::CreatePanel { a, b, gutter, border } => self.create_panel(a, b, gutter, border),
+            Command::SplitPanel { id, a, b } => self.split_panel(&id, a, b),
+            Command::SetPanelOutline { id, outline } => self.set_panel_outline(&id, outline),
+            Command::SetPanelStyle { id, gutter, border } => self.set_panel_style(id.as_deref(), gutter, border),
             Command::AddMask => self.add_mask(),
             Command::DeleteMask { id } => self.delete_mask(&id),
             Command::ApplyMask { id } => self.apply_mask(&id),

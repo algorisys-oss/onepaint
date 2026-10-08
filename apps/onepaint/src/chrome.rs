@@ -39,6 +39,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             Popover::LiquifyOptions => popover_at(ctx, "liquify", anchor, Align2::RIGHT_TOP, |ui| liquify_options(app, ui)),
             Popover::PenOptions => popover_at(ctx, "pen", anchor, Align2::RIGHT_TOP, |ui| pen_options(app, ui)),
             Popover::ClipboardMenu => popover_at(ctx, "clipboard", screen.center(), Align2::CENTER_CENTER, |ui| clipboard_menu(app, ui)),
+            Popover::PanelOptions => popover_at(ctx, "panel", anchor, Align2::RIGHT_TOP, |ui| crate::panel_ui::options(app, ui)),
             Popover::Gallery => popover_at(ctx, "gallery", screen.center(), Align2::CENTER_CENTER, |ui| crate::gallery::show(app, ui)),
             Popover::Help => popover_at(ctx, "help", screen.center(), Align2::CENTER_CENTER, help),
             Popover::MoveOptions => popover_at(ctx, "move", anchor, Align2::RIGHT_TOP, |ui| move_options(app, ui)),
@@ -197,6 +198,12 @@ fn top_bar(app: &mut App, ctx: &egui::Context) {
                             toggle_popover(app, Popover::PenOptions);
                         }
                         app.set_tool(Tool::Pen);
+                    }
+                    if icons::button(ui, "layout-panel-top", 32.0, tool == Tool::Panel, "Panel (manga)").clicked() {
+                        if tool == Tool::Panel {
+                            toggle_popover(app, Popover::PanelOptions);
+                        }
+                        app.set_tool(Tool::Panel);
                     }
                     if icons::button(ui, "type", 32.0, tool == Tool::Text, "Text (T)").clicked() {
                         app.set_tool(Tool::Text);
