@@ -1,0 +1,150 @@
+# onepaint todo
+
+The working list, grouped by area. `[x]` is done and `[ ]` is pending. The
+item-by-item parity checklist with notes is `docs/feature-parity.md`. When
+an item changes there, change it here too.
+
+## 1. Feature parity with happypaint
+
+### 1.1 Tools
+- [x] Brush, eraser, smudge, mixer
+- [x] Fill, gradient (to pixels or a fill layer)
+- [x] Eyedropper (tool, Alt-click, Alt-drag, touch-and-hold)
+- [x] Move/transform (scale, rotate, warp, quad homography), pan, liquify
+- [x] Text, pen (path layers), shape, panel
+- [x] Selection tools: rect, ellipse, lasso, polygon, wand
+- [ ] Mixer: Alt-click to load the reservoir from a patch
+
+### 1.2 Brushes
+- [x] All presets (124 load with verbatim parameters, tips and grains)
+- [x] Dynamics: pressure, tilt, twist, velocity; synthesized pressure
+- [x] Tips, grain with movement, dual brush, colour tips, fill shape mode
+- [x] Airbrush, smoothing, stabilizer, symmetry (mirror and radial)
+- [x] Wet media: impasto, settle, live watercolour and oils (GPU and CPU)
+- [x] Kubelka–Munk pigment mixing
+- [x] Document paper (spec 36)
+- [x] Brush studio (spec 27, 37)
+- [x] Import `.abr`, `.brush`, `.brushset`, `.happybrush`; export `.happybrush`
+
+### 1.3 Layers
+- [x] Add, delete, reorder, duplicate, merge; nested groups with drag-and-drop
+- [x] Opacity, visibility, colour labels, alpha lock
+- [x] Layer masks, clipping masks (clip families)
+- [x] Off-canvas overflow
+- [x] Text layers (rich text, balloons), vector path layers with path ops
+- [x] Adjustment and fill layers, smart-filter stacks
+
+### 1.4 Blend modes
+- [x] All 20 modes on the CPU (19 layer modes plus brush-only pigment)
+- [ ] All of them on the GPU in every case (see 2.1 for the fallbacks left)
+
+### 1.5 Adjustments and filters (48 kinds)
+- [x] CPU references for all 48, in the sectioned menu
+- [x] Colour kinds: destructive, live preview, selection-aware, live layers
+- [x] Blur, sharpen, noise; colour-to-alpha, replace and selective colour
+- [x] Stylize, fill kinds, smart-filter stacks
+- [x] Spatial kinds as live adjustment layers
+- [ ] On-canvas handles
+  - [ ] Radial, tilt-shift, iris, field and spin blur (centres and pins)
+  - [ ] Distort: twirl, pinch, ripple, polar coordinates
+  - [ ] Render: light rays, lens flare, clouds, fog, smoke, nebula, starfield, lightning
+
+### 1.6 Selection
+- [x] Shapes and the wand; add, subtract, intersect
+- [x] Feather, grow, smooth; saved selections; marching ants
+- [x] Paint, fill and filter within a selection (auto-rasterizing vector layers)
+
+### 1.7 Canvas and guides
+- [x] Pan, zoom, rotate
+- [ ] Measure pan, zoom and rotate at 60 fps on 8k × 8k with 100+ layers
+- [x] Grid and snapping, symmetry guides, 1–5-point perspective
+- [x] Rulers, guide lines, measure; quick-shape; speed lines
+- [x] Reference window; multi-document tabs
+
+### 1.8 Input
+- [x] Wayland tablets: pressure, tilt, twist, eraser end
+- [ ] Windows Ink/Wintab: tilt, twist and eraser end (pressure works)
+- [ ] macOS tablet backend
+- [ ] X11 tablet backend
+- [x] Coalesced pen samples, multi-touch gestures, palm rejection
+- [x] Keyboard shortcuts, rebindable
+
+### 1.9 History and recording
+- [x] Undo and redo with copy-on-write tile snapshots
+- [x] Record and replay sessions (`.onepaint-rec`)
+- [x] Timelapse export (MP4, GIF)
+- [ ] Read happypaint recordings (`.happypaint-rec`)
+
+### 1.10 Animation
+- [x] Animation Assist: frames, holds, onion skins, playback, timeline,
+      exposure sheets, markers and range, batch timing ops, out of pegs
+- [x] Frame export (GIF, PNG sequence zip, MP4)
+
+### 1.11 Colour
+- [x] Picker, palettes with import and export, median-cut extraction
+- [x] ICC profiles, CMYK soft-proof and press profiles, TIFF CMYK export
+
+### 1.12 Files
+- [x] `.happypaint` v1–v9 read, v9 write; `.happypaint-book`
+- [x] Autosave and the gallery
+- [x] PNG, JPEG, WebP, TIFF, Netpbm with ICC and DPI; GIF, MP4, PNG-zip
+- [x] Clipboard copy and paste
+- [x] PSD read and write: layers, groups, masks, modes, clipping, DPI, simple adjustments
+- [ ] PSD: editable text on export (text is exported as pixels)
+- [ ] Camera and screen capture as a reference or import
+
+### 1.13 Cloud
+- [ ] Google Drive provider with desktop OAuth (loopback + PKCE)
+
+### 1.14 Comics
+- [x] Panel layouts and the panel tool
+- [x] Balloons
+
+### 1.15 Settings
+- [x] Settings dialog and `settings.json`, cursor shapes, shortcut rebinding, timeline metric
+
+## 2. Engine and performance
+
+### 2.1 GPU compositor (spec 13)
+- [x] Tile programs (`compose::program`) with a CPU interpreter checked against the oracle
+- [x] Compute-pass interpreter with resident tile atlases and LRU eviction
+- [x] All 19 modes, groups, clip families, masks, inherit alpha, ghost tints, strokes in progress
+- [x] Lean pipeline for plain normal layers (4096² × 20 layers: 130 ms → 60 ms on Iris Xe)
+- [x] Oracle tests and a criterion bench
+- [ ] Remaining CPU fallbacks on the GPU
+  - [ ] Colour adjustment layers (LUTs for curves and gradient maps)
+  - [ ] Spatial adjustment layers (a padded backdrop pass)
+  - [ ] Relief lighting (impasto height)
+  - [ ] Paper shading
+  - [ ] Partial panel clips
+  - [ ] Ghost pegs (out-of-pegs onion offsets)
+  - [ ] Present-only view modes
+- [ ] Opacity-drag bench: 60 fps on 8k × 100 layers
+- [ ] Decide the GPU memory budget on integrated GPUs
+- [ ] Decide whether to drop the CPU tile copy once GPU-resident
+
+### 2.2 GPU painting
+- [x] Live wet media on the GPU (spec 35)
+- [ ] GPU stamping (instanced dabs into the stroke slot), checked against the CPU rasteriser
+- [ ] GPU smudge, liquify and filter passes with interactive previews
+- [ ] Flood fill, magic wand and feathering as compute passes
+
+### 2.3 Platforms
+- [x] Linux (X11 and Wayland)
+- [ ] Windows: verify the full app and tablet input
+- [ ] macOS: verify the full app and tablet input
+- [ ] WASM/WebGPU build
+
+## 3. Beyond parity
+
+### 3.1 Vector support
+Make onepaint a real tool for both vector and raster work, not only a
+painter with path layers.
+- [x] Vector path layers with anchor/handle editing and path ops (parity)
+- [x] Text and path layers stay vector under Move
+- [ ] Scope it: write a spec for the vector model and tools
+- [ ] Vector shapes and objects as first-class layer content
+- [ ] Resolution-independent rendering at any zoom
+- [ ] Boolean operations, node tools, alignment and distribution
+- [ ] Vector strokes styled from brushes
+- [ ] SVG and PDF import and export

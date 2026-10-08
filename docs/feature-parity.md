@@ -52,7 +52,7 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] Smudge and mixer brushes
 - [x] Kubelka–Munk pigment mixing (mixer reservoir and deposit, and the `pigment` blend mode)
 - [x] Brush studio: an editor with live preview and a try-it pad (spec 27; Wet/Oil, Load/Pigment, Mix, Blender, Fluid and Paper controls; plus dual brush, colour tip, Space·J, Hue→Shift, Tip col and grain Movement, spec 37)
-- [x] Import `.abr`, Procreate `.brush` and `.brushset`, and `.happybrush`; export `.happybrush` (spec 23; an ABR dual brush and wet edges are kept as `maskTip` and `settle` but not painted yet, see divergence 7)
+- [x] Import `.abr`, Procreate `.brush` and `.brushset`, and `.happybrush`; export `.happybrush` (spec 23)
 
 ## Layers
 - [x] Add, delete, reorder, duplicate and merge
@@ -86,8 +86,8 @@ The exception is fill layers, which only work as layers.
 All 48 kinds have CPU references (specs 10 and 18) and are in the sectioned
 adjustments menu. The colour kinds work destructively with a live preview,
 are selection-aware, and work as live adjustment layers. The spatial kinds
-work as destructive filters only; as layers they are kept but not rendered
-yet. The generators render into a new layer as one undo step. Fill layers and
+work as destructive filters and as live adjustment layers (rendered over the
+whole document before compositing). The generators render into a new layer as one undo step. Fill layers and
 screentone are added as live layers.
 
 - [x] brightness-contrast, hue-saturation, black-white, invert, threshold, posterize, levels, curves, color-balance, gradient-map
