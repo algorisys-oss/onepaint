@@ -40,3 +40,4 @@ The happypaint references are relative to `../happypaint/frontend/src/`.
 | 25 | [Export dialog](25-export.md) | formats, engine, app |
 | 26 | [Recording, replay, timelapse](26-recording.md) | engine, app |
 | 29 | [Distort and mesh warp](29-distort-warp.md) | engine, app |
+| 30 | [Comic panels](30-panels.md) | panel, compose, engine, app |

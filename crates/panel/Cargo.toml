@@ -1,0 +1,15 @@
+[package]
+name = "onepaint-panel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+onepaint-doc = { workspace = true }
+onepaint-raster = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
