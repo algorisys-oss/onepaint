@@ -59,6 +59,15 @@ pub struct ColorDynamics {
     pub val: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pressure_darken: Option<f64>,
+    /// Hue drift across the stroke, a fraction of the wheel (−1..1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hue_shift: Option<f64>,
+    /// What drives the hue shift and the two-colour load: `fade` (default) or `pressure`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hue_shift_source: Option<String>,
+    /// Two-colour load: the paint fades toward this sRGB colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_color: Option<[f64; 3]>,
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
@@ -227,6 +236,27 @@ impl BrushPreset {
     /// Live wet media (`fluid`): the brush paints through the simulation.
     pub fn fluid(&self) -> Option<crate::fluid::Fluid> {
         serde_json::from_value(self.extra.get("fluid")?.clone()).ok()
+    }
+
+    /// Dual brush: a second image tip multiplied into each dab (`maskTip`).
+    pub fn mask_tip(&self) -> Option<(String, f64)> {
+        let m = self.extra.get("maskTip")?;
+        let id = m.get("id")?.as_str()?.to_string();
+        let strength = m.get("strength").and_then(|v| v.as_f64()).unwrap_or(0.0).clamp(0.0, 1.0);
+        (strength > 0.0).then_some((id, strength))
+    }
+
+    /// A colour tip paints its own colours instead of tinting the brush colour.
+    pub fn use_tip_color(&self) -> bool {
+        self.extra.get("useTipColor").and_then(|v| v.as_bool()).unwrap_or(false)
+    }
+
+    /// Colour-tip recolour (hue shift in turns, saturation and value gains).
+    pub fn tip_recolor(&self) -> Option<[f64; 3]> {
+        let r = self.extra.get("tipRecolor")?;
+        let f = |k: &str, d: f64| r.get(k).and_then(|v| v.as_f64()).unwrap_or(d);
+        let v = [f("hue", 0.0), f("sat", 1.0), f("val", 1.0)];
+        (v != [0.0, 1.0, 1.0]).then_some(v)
     }
 
     /// Impasto depth (`impasto.depth`, 0 = flat).

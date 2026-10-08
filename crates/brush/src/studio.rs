@@ -55,6 +55,18 @@ pub enum Param {
     FluidWater,
     /// Live fluid pigment per dab.
     FluidPigment,
+    /// Random spacing variation (`spacingJitter`).
+    SpacingJitter,
+    /// Hue drift across the stroke (`color.hueShift`, −1..1 of the wheel).
+    HueShift,
+    /// How far the grain rolls with the brush (`grain.move`).
+    GrainMove,
+    /// Dual brush: how much the second tip carves (`maskTip.strength`).
+    MaskStrength,
+    /// Colour-tip recolour: hue (degrees), saturation and brightness gains.
+    TipHue,
+    TipSat,
+    TipVal,
 }
 
 /// How a slider value reads.
@@ -91,8 +103,10 @@ pub const SECTIONS: &[(&str, &[Param])] = {
         ("Stroke", &[Spacing, Smoothing, StabilizerAmount, EvenBuild, Airbrush, TaperIn, TaperOut]),
         ("Shape", &[Hardness, Flow, Tilt, Pressure, Squash, Spin, SpeedSize, SpeedFlow]),
         ("Pressure", &[SizePressure, FlowPressure]),
-        ("Jitter", &[Scatter, SizeJitter, AngleJitter, HueJitter, SatJitter, ValJitter, PressureDarken]),
-        ("Grain", &[GrainAmount, GrainScale, PaperResponse]),
+        ("Jitter", &[Scatter, SizeJitter, AngleJitter, SpacingJitter, HueJitter, SatJitter, ValJitter, PressureDarken, HueShift]),
+        ("Grain", &[GrainAmount, GrainScale, GrainMove, PaperResponse]),
+        ("Dual brush", &[MaskStrength]),
+        ("Colour tip", &[TipHue, TipSat, TipVal]),
         ("Wet", &[Wetness, Load, Mix]),
         ("Fluid", &[FluidWater, FluidPigment]),
     ]
@@ -137,7 +151,8 @@ fn color_get(b: &BrushPreset, f: impl Fn(&ColorDynamics) -> Option<f64>) -> f64 
 fn tidy_color(b: &mut BrushPreset) {
     if let Some(d) = b.dynamics.as_mut()
         && let Some(c) = &d.color
-        && [c.hue, c.sat, c.val, c.pressure_darken].iter().all(|v| v.unwrap_or(0.0) == 0.0)
+        && [c.hue, c.sat, c.val, c.pressure_darken, c.hue_shift].iter().all(|v| v.unwrap_or(0.0) == 0.0)
+        && c.to_color.is_none()
         && c.extra.is_empty()
     {
         d.color = None;
@@ -203,6 +218,13 @@ impl Param {
             Mix => info("Mix", 0.0, 1.0, Percent),
             FluidWater => info("Water", 0.05, 2.0, Percent),
             FluidPigment => info("Pigment", 0.0, 1.0, Percent),
+            SpacingJitter => info("Space·J", 0.0, 1.0, Percent),
+            HueShift => info("Hue→Shift", -1.0, 1.0, Percent),
+            GrainMove => info("Movement", 0.0, 1.0, Percent),
+            MaskStrength => info("Strength", 0.0, 1.0, Percent),
+            TipHue => info("Tip hue", -180.0, 180.0, Degrees),
+            TipSat => info("Tip sat", 0.0, 2.0, Percent),
+            TipVal => info("Tip bright", 0.0, 2.0, Percent),
         }
     }
 
@@ -237,6 +259,9 @@ impl Param {
             Param::Load => wet_num(b, "wetness", 0.0) > 0.0 || b.impasto_depth() > 0.0,
             Param::Mix => !is_blender(b) && wet_num(b, "wetness", 0.0) > 0.0,
             Param::FluidWater | Param::FluidPigment => b.fluid().is_some_and(|f| f.water > 0.0 || f.blow > 0.0),
+            Param::GrainMove => b.grain.is_some(),
+            Param::MaskStrength => b.extra.contains_key("maskTip"),
+            Param::TipHue | Param::TipSat | Param::TipVal => crate::color_tip_for(&b.tip_id).is_some(),
             _ => true,
         }
     }
@@ -281,6 +306,13 @@ impl Param {
             Mix => wet_num(b, "mix", 0.5),
             FluidWater => b.fluid().map_or(0.0, |f| f.water),
             FluidPigment => b.fluid().map_or(0.0, |f| f.pigment),
+            SpacingJitter => b.spacing_jitter.unwrap_or(0.0),
+            HueShift => color_get(b, |c| c.hue_shift),
+            GrainMove => b.grain.as_ref().and_then(|g| g.moves).unwrap_or(0.0),
+            MaskStrength => b.extra.get("maskTip").and_then(|m| m.get("strength")).and_then(|v| v.as_f64()).unwrap_or(0.7),
+            TipHue => recolor_get(b, "hue", 0.0) * 360.0,
+            TipSat => recolor_get(b, "sat", 1.0),
+            TipVal => recolor_get(b, "val", 1.0),
         }
     }
 
@@ -426,6 +458,28 @@ impl Param {
             Mix => set_wet(b, "mix", clamp01(v)),
             FluidWater => set_fluid(b, "water", v.clamp(0.0, 2.0)),
             FluidPigment => set_fluid(b, "pigment", clamp01(v)),
+            SpacingJitter => {
+                let v = clamp01(v);
+                b.spacing_jitter = (v > 0.0).then_some(v);
+            }
+            HueShift => {
+                color_dyn(b).hue_shift = Some(v.clamp(-1.0, 1.0));
+                tidy_color(b);
+            }
+            GrainMove => {
+                if let Some(g) = &mut b.grain {
+                    let v = clamp01(v);
+                    g.moves = (v > 0.0).then_some(v);
+                }
+            }
+            MaskStrength => {
+                if let Some(o) = b.extra.get_mut("maskTip").and_then(|m| m.as_object_mut()) {
+                    o.insert("strength".into(), serde_json::json!(clamp01(v)));
+                }
+            }
+            TipHue => recolor_set(b, "hue", (v / 360.0).clamp(-0.5, 0.5)),
+            TipSat => recolor_set(b, "sat", v.clamp(0.0, 2.0)),
+            TipVal => recolor_set(b, "val", v.clamp(0.0, 2.0)),
         }
         if let Some(d) = &b.dynamics
             && *d == Dynamics::default()
@@ -433,6 +487,49 @@ impl Param {
             b.dynamics = None;
         }
     }
+}
+
+fn recolor_get(b: &BrushPreset, key: &str, default: f64) -> f64 {
+    b.extra.get("tipRecolor").and_then(|r| r.get(key)).and_then(|v| v.as_f64()).unwrap_or(default)
+}
+
+/// Colour-tip recolour; dropped when back to neutral (`brush-store.ts:968-971`).
+fn recolor_set(b: &mut BrushPreset, key: &str, v: f64) {
+    let r = b.extra.entry("tipRecolor").or_insert_with(|| serde_json::json!({"hue": 0.0, "sat": 1.0, "val": 1.0}));
+    if let Some(o) = r.as_object_mut() {
+        o.insert(key.into(), serde_json::json!(v));
+    }
+    if b.tip_recolor().is_none() {
+        b.extra.remove("tipRecolor");
+    }
+}
+
+/// Dual brush: pick the second tip (`None` removes it); new masks start at 70%.
+pub fn set_mask_tip(b: &mut BrushPreset, id: Option<&str>) {
+    match id {
+        Some(id) => {
+            let strength = b.extra.get("maskTip").and_then(|m| m.get("strength")).and_then(|v| v.as_f64()).unwrap_or(0.7);
+            b.extra.insert("maskTip".into(), serde_json::json!({"id": id, "strength": strength}));
+        }
+        None => {
+            b.extra.remove("maskTip");
+        }
+    }
+}
+
+/// Colour tips: paint the tip's own colours (on) or tint the brush colour.
+pub fn set_use_tip_color(b: &mut BrushPreset, on: bool) {
+    if on {
+        b.extra.insert("useTipColor".into(), serde_json::json!(true));
+    } else {
+        b.extra.remove("useTipColor");
+    }
+}
+
+/// Two-colour load ("Tip col"): the paint fades toward this sRGB colour.
+pub fn set_to_color(b: &mut BrushPreset, c: Option<[f64; 3]>) {
+    color_dyn(b).to_color = c;
+    tidy_color(b);
 }
 
 fn wet_num(b: &BrushPreset, key: &str, default: f64) -> f64 {
@@ -761,8 +858,13 @@ mod tests {
             for &p in *params {
                 let i = p.info();
                 // Fluid sliders only apply to live-fluid brushes.
-                let mut b = if matches!(p, Param::FluidWater | Param::FluidPigment) { preset("watercolor-live").unwrap() } else { hard() };
+                let mut b = match p {
+                    Param::FluidWater | Param::FluidPigment => preset("watercolor-live").unwrap(),
+                    Param::TipHue | Param::TipSat | Param::TipVal => preset("rgba-oil").unwrap(),
+                    _ => hard(),
+                };
                 set_grain(&mut b, Some("paper"));
+                set_mask_tip(&mut b, Some("bristle"));
                 set_stabilizer(&mut b, true);
                 let v = i.min + (i.max - i.min) * 0.37;
                 p.set(&mut b, v);

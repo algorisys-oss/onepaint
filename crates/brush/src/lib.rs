@@ -15,7 +15,7 @@ pub mod symmetry;
 mod tips;
 mod user;
 
-pub use tips::{GrainSampler, Mask as TipMask, Tip, grain_for, grain_names, tip_for, tip_ids};
+pub use tips::{ColorTip, GrainSampler, Mask as TipMask, Tip, color_tip_for, grain_for, grain_names, tip_for, tip_ids};
 pub use user::{
     CUSTOM_CATEGORY, CUSTOM_ID_PREFIX, IMPORTED_CATEGORY, USER_GRAIN_PREFIX, USER_TIP_PREFIX, UserGrain, UserLibrary, add_custom_brush,
     add_user_brushes, is_user_preset, remove_user_brush, rename_user_brush, set_user_library, update_user_brush, user_library,
@@ -26,6 +26,7 @@ pub use preset::*;
 
 use onepaint_raster::{Rect, Surface, TILE};
 use onepaint_stroke::{Mulberry32, Sampler, SensorState, Smoother, Stabilizer, StrokePoint, eval_bindings};
+use std::sync::Arc;
 
 fn clamp01(v: f64) -> f64 {
     v.clamp(0.0, 1.0)
@@ -91,6 +92,8 @@ pub struct Dab {
     pub aspect: f64,
     pub hardness: f64,
     pub color: [f32; 3],
+    /// Grain offset (doc px) when the grain moves with the brush (`grain.move`).
+    pub grain_off: [f64; 2],
 }
 
 const SPEED_REF: f64 = 5.0;
@@ -119,6 +122,44 @@ pub struct StrokeEngine {
     air: Option<(f64, f64)>,
     /// Symmetry copies every dab is replicated through (empty = none).
     transforms: Vec<symmetry::SymTransform>,
+    /// Grain movement (0..1) and the first dab's position it moves from.
+    grain_move: f64,
+    grain_origin: Option<(f64, f64)>,
+    /// Dual brush and colour-tip rendering.
+    mask_tip: Option<(Arc<TipMask>, f32)>,
+    color_tip: Option<ColorTipMode>,
+}
+
+/// How a colour (RGBA) tip colours its dabs (`stamp-renderer.ts:138-148, 247-268`).
+pub struct ColorTipMode {
+    pub tip: Arc<ColorTip>,
+    /// Paint the tip's own colours (`useTipColor`), else tint the brush colour.
+    pub baked: bool,
+    /// HSV recolour: hue shift (turns), saturation and value gains.
+    pub recolor: Option<[f32; 3]>,
+}
+
+/// Extra per-dab shaping beyond tip, grain and paper.
+#[derive(Default, Clone, Copy)]
+pub struct TipExtras<'a> {
+    pub mask: Option<(&'a TipMask, f32)>,
+    pub color: Option<&'a ColorTipMode>,
+}
+
+impl TipExtras<'_> {
+    fn any(&self) -> bool {
+        self.mask.is_some() || self.color.is_some()
+    }
+}
+
+/// Spacing jitter: `gap · max(0.15, 1 + (r·2 − 1)·sj)`, one draw per call
+/// (`brush-engine.ts:220-227`).
+fn jittered_gap(b: &BrushPreset, s: &StrokePoint, rng: &mut Mulberry32) -> f64 {
+    let gap = spacing_gap(b, s);
+    match b.spacing_jitter.filter(|sj| *sj > 0.0) {
+        Some(sj) => gap * (1.0 + (rng.next_f64() * 2.0 - 1.0) * sj.min(1.0)).max(0.15),
+        None => gap,
+    }
 }
 
 impl StrokeEngine {
@@ -143,8 +184,29 @@ impl StrokeEngine {
             last_input: None,
             air: None,
             transforms: Vec::new(),
+            grain_move: 0.0,
+            grain_origin: None,
+            mask_tip: None,
+            color_tip: None,
         }
         .with_tip_and_grain()
+        .with_extras()
+    }
+
+    /// The dual-brush mask and colour-tip mode for this brush's tip.
+    fn with_extras(mut self) -> Self {
+        if let Some((id, strength)) = self.brush.mask_tip()
+            && let Tip::Image(m) = tip_for(&id)
+        {
+            self.mask_tip = Some((m, strength as f32));
+        }
+        if matches!(self.tip, Tip::Image(_))
+            && let Some(tip) = color_tip_for(&self.brush.tip_id)
+        {
+            let recolor = self.brush.tip_recolor().map(|r| r.map(|v| v as f32));
+            self.color_tip = Some(ColorTipMode { tip, baked: self.brush.use_tip_color(), recolor });
+        }
+        self
     }
 
     /// Resolve the tip and grain; grain-random draws come first, like happypaint.
@@ -159,6 +221,9 @@ impl StrokeEngine {
                 ([0.0, 0.0], 0.0)
             };
             self.grain = GrainSampler::new(&g, off, rot);
+            if self.grain.is_some() && g.strength > 0.0 {
+                self.grain_move = g.moves.unwrap_or(0.0).clamp(0.0, 1.0);
+            }
         }
         self
     }
@@ -192,7 +257,11 @@ impl StrokeEngine {
 
     /// Rasterise one of this stroke's dabs with its tip and grain.
     pub fn rasterize(&self, s: &mut Surface, d: &Dab, clip: Option<&onepaint_selection::Mask>) -> Rect {
-        rasterize_dab_tip(s, d, &self.tip, clip, self.brush.wash, self.grain.as_ref())
+        rasterize_dab_full(s, d, &self.tip, clip, self.brush.wash, self.grain.as_ref(), None, self.extras())
+    }
+
+    fn extras(&self) -> TipExtras<'_> {
+        TipExtras { mask: self.mask_tip.as_ref().map(|(m, k)| (&**m, *k)), color: self.color_tip.as_ref() }
     }
 
     /// [`StrokeEngine::rasterize`] on the document paper.
@@ -203,7 +272,7 @@ impl StrokeEngine {
         clip: Option<&onepaint_selection::Mask>,
         paper: Option<&paper::PaperTooth>,
     ) -> Rect {
-        rasterize_dab_paper(s, d, &self.tip, clip, self.brush.wash, self.grain.as_ref(), paper)
+        rasterize_dab_full(s, d, &self.tip, clip, self.brush.wash, self.grain.as_ref(), paper, self.extras())
     }
 
     /// Airbrush: spray `rate` dabs per second at the last input point while held.
@@ -239,7 +308,8 @@ impl StrokeEngine {
         let Some(pt) = pts else { return Vec::new() };
         let sp = self.smoother.next(pt);
         let b = self.brush.clone();
-        let stamps = self.sampler.add(sp, &mut |s, _| spacing_gap(&b, s));
+        let rng = &mut self.rng;
+        let stamps = self.sampler.add(sp, &mut |s, _| jittered_gap(&b, s, rng));
         let d = self.emit(&stamps);
         self.replicate(d)
     }
@@ -248,7 +318,8 @@ impl StrokeEngine {
         let mut out = Vec::new();
         if let Some(fin) = self.stabilizer.as_mut().and_then(Stabilizer::finish) {
             let b = self.brush.clone();
-            let stamps = self.sampler.add(fin, &mut |s, _| spacing_gap(&b, s));
+            let rng = &mut self.rng;
+            let stamps = self.sampler.add(fin, &mut |s, _| jittered_gap(&b, s, rng));
             out.extend(self.emit(&stamps));
         }
         if !self.pending.is_empty() {
@@ -365,16 +436,31 @@ impl StrokeEngine {
             }
             let mut color = self.color;
             if let Some(cd) = dynamics.and_then(|d| d.color.as_ref()) {
-                let srgb = color.map(onepaint_color::linear_to_srgb);
+                let mut srgb = color.map(onepaint_color::linear_to_srgb);
+                // Two-colour load and hue shift follow fade (dab count) or pressure.
+                let drive = if cd.hue_shift_source.as_deref() == Some("pressure") { state.pressure } else { state.fade };
+                if let Some(to) = cd.to_color {
+                    srgb = std::array::from_fn(|k| srgb[k] + (to[k] as f32 - srgb[k]) * drive as f32);
+                }
                 let (mut h, mut sat, mut val) = onepaint_color::Rgba::new(srgb[0], srgb[1], srgb[2], 1.0).to_hsv();
                 h += ((self.rng.next_f64() * 2.0 - 1.0) * cd.hue.unwrap_or(0.0) * 360.0) as f32;
+                if let Some(shift) = cd.hue_shift.filter(|v| *v != 0.0) {
+                    h += (shift * 360.0 * drive) as f32;
+                }
                 sat = (sat + ((self.rng.next_f64() * 2.0 - 1.0) * cd.sat.unwrap_or(0.0)) as f32).clamp(0.0, 1.0);
                 val = (val + ((self.rng.next_f64() * 2.0 - 1.0) * cd.val.unwrap_or(0.0)) as f32).clamp(0.0, 1.0);
                 val *= (1.0 - cd.pressure_darken.unwrap_or(0.0) * state.pressure) as f32;
                 let c = onepaint_color::Rgba::from_hsv(h, sat, val, 1.0);
                 color = [c.r, c.g, c.b].map(onepaint_color::srgb_to_linear);
             }
-            made.push((self.cum_dist, Dab { x, y, radius, alpha, rotation, aspect, hardness, color }));
+            // The grain rolls with the brush from the first dab (pre-scatter).
+            let grain_off = if self.grain_move > 0.0 {
+                let o = *self.grain_origin.get_or_insert((s.x, s.y));
+                [(s.x - o.0) * self.grain_move, (s.y - o.1) * self.grain_move]
+            } else {
+                [0.0; 2]
+            };
+            made.push((self.cum_dist, Dab { x, y, radius, alpha, rotation, aspect, hardness, color, grain_off }));
         }
         let (entry, exit) = self.taper();
         if exit > 0.0 {
@@ -442,15 +528,12 @@ pub fn rasterize_dab_paper(
     grain: Option<&GrainSampler>,
     paper: Option<&paper::PaperTooth>,
 ) -> Rect {
-    // Monomorphised so the common paperless path carries no tooth checks.
-    match paper {
-        Some(_) => rasterize_impl::<true>(s, d, tip, clip, wash, grain, paper),
-        None => rasterize_impl::<false>(s, d, tip, clip, wash, grain, None),
-    }
+    rasterize_dab_full(s, d, tip, clip, wash, grain, paper, TipExtras::default())
 }
 
-#[inline(always)]
-fn rasterize_impl<const PAPER: bool>(
+/// The full stamp: tip, dual-brush mask, colour tip, grain, paper and selection.
+#[allow(clippy::too_many_arguments)]
+pub fn rasterize_dab_full(
     s: &mut Surface,
     d: &Dab,
     tip: &Tip,
@@ -458,6 +541,51 @@ fn rasterize_impl<const PAPER: bool>(
     wash: bool,
     grain: Option<&GrainSampler>,
     paper: Option<&paper::PaperTooth>,
+    extras: TipExtras,
+) -> Rect {
+    // Monomorphised so the common path carries no tooth or extras checks.
+    match (paper.is_some(), extras.any()) {
+        (false, false) => rasterize_impl::<false, false>(s, d, tip, clip, wash, grain, None, extras),
+        (true, false) => rasterize_impl::<true, false>(s, d, tip, clip, wash, grain, paper, extras),
+        (false, true) => rasterize_impl::<false, true>(s, d, tip, clip, wash, grain, None, extras),
+        (true, true) => rasterize_impl::<true, true>(s, d, tip, clip, wash, grain, paper, extras),
+    }
+}
+
+/// A colour tip's colour for one pixel (sRGB in, linear out): baked tips
+/// paint their own colour, others tint the brush colour by the tip's
+/// relative luma and chroma (`stamp-renderer.ts:247-268`).
+#[inline]
+fn color_tip_rgb(mode: &ColorTipMode, u: f64, v: f64, brush_srgb: [f32; 3], brush_sat: f32) -> [f32; 3] {
+    let mut t = mode.tip.sample(u, v);
+    if let Some([hue, sat, val]) = mode.recolor {
+        let (h, s, vv) = onepaint_color::Rgba::new(t[0], t[1], t[2], 1.0).to_hsv();
+        let c = onepaint_color::Rgba::from_hsv(h + hue * 360.0, (s * sat).clamp(0.0, 1.0), (vv * val).clamp(0.0, 1.0), 1.0);
+        t = [c.r, c.g, c.b];
+    }
+    const VARIATION: f32 = 0.85;
+    let base = if mode.baked {
+        t
+    } else {
+        let l = 0.299 * t[0] + 0.587 * t[1] + 0.114 * t[2];
+        let rel: f32 = (l / mode.tip.lum.max(0.05)).clamp(0.0, 2.0);
+        let chroma = VARIATION * 0.5 * (0.25 + 0.75 * brush_sat);
+        std::array::from_fn(|k| (brush_srgb[k] * (1.0 + (rel - 1.0) * VARIATION) + (t[k] - l) * chroma).clamp(0.0, 1.0))
+    };
+    base.map(onepaint_color::fast_srgb_to_linear)
+}
+
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn rasterize_impl<const PAPER: bool, const EXTRA: bool>(
+    s: &mut Surface,
+    d: &Dab,
+    tip: &Tip,
+    clip: Option<&onepaint_selection::Mask>,
+    wash: bool,
+    grain: Option<&GrainSampler>,
+    paper: Option<&paper::PaperTooth>,
+    extras: TipExtras,
 ) -> Rect {
     let bounds = dab_bounds(d);
     if d.alpha <= 0.0 || d.radius <= 0.0 {
@@ -468,6 +596,14 @@ fn rasterize_impl<const PAPER: bool>(
     let aa = (1.2 / (d.radius * sc).max(1.0)).clamp(0.0, 0.5);
     let inner = d.hardness.min(1.0 - aa);
     let (c, sn) = (d.rotation.cos(), d.rotation.sin());
+    // The brush colour as the colour-tip formula sees it (sRGB, and its saturation).
+    let (brush_srgb, brush_sat) = if EXTRA && extras.color.is_some() {
+        let v = d.color.map(onepaint_color::fast_linear_to_srgb);
+        let (mx, mn) = (v[0].max(v[1]).max(v[2]), v[0].min(v[1]).min(v[2]));
+        (v, (mx - mn) / mx.max(1e-4))
+    } else {
+        ([0.0; 3], 0.0)
+    };
     for (tx, ty) in bounds.tiles() {
         let tr = Rect::from_tile(tx, ty);
         let Some(ix) = bounds.intersect(&tr) else {
@@ -507,8 +643,13 @@ fn rasterize_impl<const PAPER: bool>(
                     continue;
                 }
                 let mut a = (m * d.alpha) as f32;
+                // Dual brush: the second tip carves the dab in the same frame.
+                if EXTRA && let Some((mt, k)) = extras.mask {
+                    let md = if lx.abs() >= 1.0 || ly.abs() >= 1.0 { 0.0 } else { mt.sample(lx * 0.5 + 0.5, ly * 0.5 + 0.5) };
+                    a *= 1.0 + (md - 1.0) * k;
+                }
                 if let Some(g) = grain {
-                    a *= g.factor(x as f64 + 0.5, y as f64 + 0.5);
+                    a *= g.factor(x as f64 + 0.5 - d.grain_off[0], y as f64 + 0.5 - d.grain_off[1]);
                 }
                 if PAPER && let (Some(p), Some(t)) = (paper, &tooth) {
                     a *= p.factor(t, x, y, (x - tx * TILE) as usize, (y - ty * TILE) as usize);
@@ -521,7 +662,11 @@ fn rasterize_impl<const PAPER: bool>(
                 }
                 let (lxi, lyi) = ((x - tx * TILE) as usize, (y - ty * TILE) as usize);
                 let dst = tile.get(lxi, lyi);
-                let src = [d.color[0] * a, d.color[1] * a, d.color[2] * a, a];
+                let col = match extras.color.filter(|_| EXTRA) {
+                    Some(mode) => color_tip_rgb(mode, lx * 0.5 + 0.5, ly * 0.5 + 0.5, brush_srgb, brush_sat),
+                    None => d.color,
+                };
+                let src = [col[0] * a, col[1] * a, col[2] * a, a];
                 let out = if wash {
                     [dst[0].max(src[0]), dst[1].max(src[1]), dst[2].max(src[2]), dst[3].max(src[3])]
                 } else {

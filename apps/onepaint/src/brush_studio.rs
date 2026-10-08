@@ -105,7 +105,8 @@ fn tip_thumb(ctx: &egui::Context, cache: &mut HashMap<String, TextureHandle>, id
     let n = TIP_THUMB;
     let mut s = Surface::new();
     let c = n as f64 / 2.0;
-    let d = Dab { x: c, y: c, radius: c - 3.0, alpha: 1.0, rotation: 0.0, aspect: 1.0, hardness: 0.8, color: [1.0; 3] };
+    let d =
+        Dab { x: c, y: c, radius: c - 3.0, alpha: 1.0, rotation: 0.0, aspect: 1.0, hardness: 0.8, color: [1.0; 3], grain_off: [0.0; 2] };
     let tip: Tip = onepaint_brush::tip_for(id);
     onepaint_brush::rasterize_dab_tip(&mut s, &d, &tip, None, false, None);
     let a = s.read_rect(PxRect::new(0, 0, n as i32, n as i32));
@@ -369,6 +370,9 @@ fn extra_labels(section: &str) -> &'static [&'static str] {
         "Grain" => &["Random", "texture", "paper"],
         "Wet" => &["Blender", "Oil", "Pigment", "mixer"],
         "Fluid" => &["live", "watercolor", "watercolour"],
+        "Dual brush" => &["mask", "second tip", "texture"],
+        "Colour tip" => &["Tip colour", "rgba", "daub"],
+        "Jitter" => &["Tip col", "two-colour", "fade"],
         _ => &[],
     }
 }
@@ -473,6 +477,37 @@ fn section(app: &mut App, ui: &mut Ui, name: &str, params: &[Param], b: &mut Bru
                 studio::set_blender(b, on);
             }
         }
+        "Dual brush" => {
+            // A second image tip carves every dab (happypaint's mask tip).
+            let cur = b.extra.get("maskTip").and_then(|m| m.get("id")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let mut ids: Vec<String> =
+                onepaint_brush::tip_ids().into_iter().filter(|id| !["round", "soft", "square"].contains(id)).map(String::from).collect();
+            ids.extend(onepaint_brush::user_library().tips.keys().cloned());
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+                if chip(ui, "None", cur.is_empty()).clicked() {
+                    studio::set_mask_tip(b, None);
+                }
+                for id in ids {
+                    let label = id.rsplit(':').next().unwrap_or(&id).to_string();
+                    if chip(ui, &label, cur == id).clicked() {
+                        studio::set_mask_tip(b, Some(&id));
+                    }
+                }
+            });
+        }
+        "Colour tip" if !Param::TipHue.visible(b) => {
+            ui.label(RichText::new("Colour tips only (Oil daub, Impasto daub).").color(t.fg_faint));
+        }
+        "Colour tip" => {
+            let mut on = b.use_tip_color();
+            if widgets::toggle(ui, &mut on, "Tip colour")
+                .on_hover_text("Paint the tip's own colours instead of tinting your colour")
+                .changed()
+            {
+                studio::set_use_tip_color(b, on);
+            }
+        }
         "Fluid" if !Param::FluidWater.visible(b) => {
             ui.label(RichText::new("Live watercolour and oil brushes only.").color(t.fg_faint));
         }
@@ -515,6 +550,26 @@ fn section(app: &mut App, ui: &mut Ui, name: &str, params: &[Param], b: &mut Bru
             for ch in CurveChannel::ALL {
                 curve(ui, ch, b);
             }
+        }
+        "Jitter" => {
+            // Two-colour load: the paint fades from your colour to this one.
+            let to = b.dynamics.as_ref().and_then(|d| d.color.as_ref()).and_then(|c| c.to_color);
+            ui.horizontal(|ui| {
+                let mut on = to.is_some();
+                if widgets::toggle(ui, &mut on, "Tip col")
+                    .on_hover_text("The paint fades toward a second colour along the stroke")
+                    .changed()
+                {
+                    studio::set_to_color(b, on.then_some([1.0, 42.0 / 255.0, 0.0]));
+                }
+                if let Some(c) = to {
+                    let rgba = onepaint_color::Rgba::new(c[0] as f32, c[1] as f32, c[2] as f32, 1.0);
+                    if widgets::swatch(ui, rgba, 22.0, false).on_hover_text("Use the current paint colour").clicked() {
+                        let p = app.session.color();
+                        studio::set_to_color(b, Some([p.r as f64, p.g as f64, p.b as f64]));
+                    }
+                }
+            });
         }
         "Grain" if b.grain.is_some() => {
             let mut rnd = b.grain.as_ref().and_then(|g| g.random).unwrap_or(0.0) > 0.0;
@@ -608,7 +663,8 @@ mod tests {
         h.get_by_role_and_label(Role::Slider, "Hardness").click();
         h.run();
         assert!((h.state().session.current_brush().hardness - 0.5).abs() < 0.05);
-        h.state_mut().studio.search.clear();
+        // Only the General section's tip grid (the dual-brush chips share tip names).
+        h.state_mut().studio.search = "blend".into();
         h.run();
         h.get_by_label("chalk").click();
         h.run();

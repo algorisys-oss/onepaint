@@ -10,7 +10,17 @@ use onepaint_stroke::StrokePoint;
 
 fn dabs(c: &mut Criterion) {
     for r in [6.0, 30.0, 120.0] {
-        let d = Dab { x: 300.0, y: 300.0, radius: r, alpha: 0.5, rotation: 0.3, aspect: 0.8, hardness: 0.6, color: [0.2, 0.4, 0.8] };
+        let d = Dab {
+            x: 300.0,
+            y: 300.0,
+            radius: r,
+            alpha: 0.5,
+            rotation: 0.3,
+            aspect: 0.8,
+            hardness: 0.6,
+            color: [0.2, 0.4, 0.8],
+            grain_off: [0.0; 2],
+        };
         c.bench_function(&format!("rasterize_dab r{r}"), |b| {
             let mut s = Surface::new();
             b.iter(|| rasterize_dab(&mut s, black_box(&d), false, None))

@@ -59,7 +59,17 @@ fn g9_linearize_alpha() {
 #[test]
 fn hard_dab_covers_center_not_outside() {
     let mut s = Surface::new();
-    let d = Dab { x: 50.0, y: 50.0, radius: 10.0, alpha: 1.0, rotation: 0.0, aspect: 1.0, hardness: 0.95, color: [1.0, 0.0, 0.0] };
+    let d = Dab {
+        x: 50.0,
+        y: 50.0,
+        radius: 10.0,
+        alpha: 1.0,
+        rotation: 0.0,
+        aspect: 1.0,
+        hardness: 0.95,
+        color: [1.0, 0.0, 0.0],
+        grain_off: [0.0; 2],
+    };
     let r = rasterize_dab(&mut s, &d, false, None);
     assert!(r.x <= 40 && r.right() >= 60);
     assert!((s.get(50, 50)[3] - 1.0).abs() < 1e-3);
@@ -76,7 +86,17 @@ fn hard_dab_covers_center_not_outside() {
 
 #[test]
 fn dabs_accumulate_over_and_wash_caps() {
-    let d = Dab { x: 10.0, y: 10.0, radius: 6.0, alpha: 0.5, rotation: 0.0, aspect: 1.0, hardness: 0.95, color: [0.0, 0.0, 1.0] };
+    let d = Dab {
+        x: 10.0,
+        y: 10.0,
+        radius: 6.0,
+        alpha: 0.5,
+        rotation: 0.0,
+        aspect: 1.0,
+        hardness: 0.95,
+        color: [0.0, 0.0, 1.0],
+        grain_off: [0.0; 2],
+    };
     let mut over = Surface::new();
     rasterize_dab(&mut over, &d, false, None);
     rasterize_dab(&mut over, &d, false, None);
@@ -146,7 +166,7 @@ fn the_whole_happypaint_library_loads() {
 
 fn coverage(tip: &str, hardness: f64) -> (f32, f32, f32) {
     let mut s = Surface::new();
-    let d = Dab { x: 50.0, y: 50.0, radius: 20.0, alpha: 1.0, rotation: 0.0, aspect: 1.0, hardness, color: [1.0; 3] };
+    let d = Dab { x: 50.0, y: 50.0, radius: 20.0, alpha: 1.0, rotation: 0.0, aspect: 1.0, hardness, color: [1.0; 3], grain_off: [0.0; 2] };
     rasterize_dab_tip(&mut s, &d, &tip_for(tip), None, false, None);
     (s.get(50, 50)[3], s.get(65, 50)[3], s.get(67, 67)[3])
 }
@@ -161,7 +181,8 @@ fn tip_shapes() {
     assert!(c > 0.99 && mid < 0.5 && mid > 0.0, "gaussian falloff {mid}");
     // Image tips follow their mask: chalk is broken, not solid.
     let mut s = Surface::new();
-    let d = Dab { x: 64.0, y: 64.0, radius: 40.0, alpha: 1.0, rotation: 0.0, aspect: 1.0, hardness: 0.9, color: [1.0; 3] };
+    let d =
+        Dab { x: 64.0, y: 64.0, radius: 40.0, alpha: 1.0, rotation: 0.0, aspect: 1.0, hardness: 0.9, color: [1.0; 3], grain_off: [0.0; 2] };
     rasterize_dab_tip(&mut s, &d, &tip_for("chalk"), None, false, None);
     let vals: Vec<f32> = (40..88).map(|x| s.get(x, 64)[3]).collect();
     assert!(vals.iter().any(|v| *v > 0.3) && vals.iter().any(|v| *v < 0.95));
@@ -171,7 +192,17 @@ fn tip_shapes() {
 fn grain_breaks_up_coverage() {
     let g = Grain { id: "paper".into(), scale: 60.0, strength: 0.6, ..Default::default() };
     let mut s = Surface::new();
-    let d = Dab { x: 100.0, y: 100.0, radius: 60.0, alpha: 1.0, rotation: 0.0, aspect: 1.0, hardness: 0.98, color: [1.0; 3] };
+    let d = Dab {
+        x: 100.0,
+        y: 100.0,
+        radius: 60.0,
+        alpha: 1.0,
+        rotation: 0.0,
+        aspect: 1.0,
+        hardness: 0.98,
+        color: [1.0; 3],
+        grain_off: [0.0; 2],
+    };
     rasterize_dab_tip(&mut s, &d, &Tip::Circle, None, false, Some(&GrainSampler::new(&g, [0.0, 0.0], 0.0).unwrap()));
     let vals: Vec<f32> = (60..140).map(|x| s.get(x, 100)[3]).collect();
     let min = vals.iter().cloned().fold(1.0, f32::min);

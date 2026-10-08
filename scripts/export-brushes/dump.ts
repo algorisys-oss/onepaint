@@ -10,6 +10,11 @@ for (const id of ids) {
   const m = t.generate();
   await Bun.write(out + '/tip-' + id + '.bin', m.data);
   meta.tips[id] = { size: m.size, color: !!m.rgb };
+  // Colour (RGBA) tips: straight sRGB rgb and its coverage-weighted luma.
+  if (m.rgb) {
+    await Bun.write(out + '/tip-' + id + '.rgb.bin', m.rgb);
+    meta.tips[id].lum = m.lum ?? 0.5;
+  }
 }
 const grainIds = new Set([...BRUSH_GRAINS.map((g) => g.id), ...BRUSH_PRESETS.map((p) => p.grain?.id).filter(Boolean)]);
 for (const id of grainIds) {

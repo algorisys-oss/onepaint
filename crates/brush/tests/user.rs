@@ -85,7 +85,8 @@ fn image_tip_paints_its_shape() {
     b.size = 60.0;
     let eng = StrokeEngine::new(b, [1.0; 3], 1);
     let mut s = onepaint_raster::Surface::new();
-    let d = Dab { x: 50.0, y: 50.0, radius: 30.0, alpha: 1.0, rotation: 0.0, aspect: 1.0, hardness: 1.0, color: [1.0; 3] };
+    let d =
+        Dab { x: 50.0, y: 50.0, radius: 30.0, alpha: 1.0, rotation: 0.0, aspect: 1.0, hardness: 1.0, color: [1.0; 3], grain_off: [0.0; 2] };
     eng.rasterize(&mut s, &d, None);
     assert!(s.get(50, 50)[3] < 0.05, "hole in the middle: {:?}", s.get(50, 50));
     assert!(s.get(50 + 23, 50)[3] > 0.5, "ring: {:?}", s.get(73, 50));

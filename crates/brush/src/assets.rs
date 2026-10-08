@@ -49,6 +49,12 @@ pub static TIPS: &[(&str, u32, &[u8])] = &[
     ("star", 128, include_bytes!("../assets/tips/star.png")),
 ];
 
+/// Colour tips: straight sRGB pixels and their coverage-weighted luma.
+pub static COLOR_TIPS: &[(&str, f32, &[u8])] = &[
+    ("impasto-daub", 0.47295, include_bytes!("../assets/tips/impasto-daub.rgb.png")),
+    ("oil-daub", 0.614325, include_bytes!("../assets/tips/oil-daub.rgb.png")),
+];
+
 pub static GRAINS: &[(&str, &str, u32, &[u8])] = &[
     ("canvas", "Canvas", 256, include_bytes!("../assets/grains/canvas.png")),
     ("concrete", "Concrete", 256, include_bytes!("../assets/grains/concrete.png")),

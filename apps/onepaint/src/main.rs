@@ -1343,6 +1343,23 @@ mod tests {
     }
 
     #[test]
+    fn the_studio_adds_a_dual_brush() {
+        let mut h = harness();
+        h.run();
+        h.state_mut().popover = Some(Popover::BrushStudio);
+        for _ in 0..4 {
+            h.step();
+        }
+        h.state_mut().studio.search = "dual".into();
+        h.run();
+        h.get_by_label("bristle").click();
+        h.run();
+        let b = h.state().session.current_brush().clone();
+        assert_eq!(b.mask_tip(), Some(("bristle".into(), 0.7)));
+        assert!(h.query_by_role_and_label(egui::accesskit::Role::Slider, "Strength").is_some());
+    }
+
+    #[test]
     fn wet_paint_stays_wet_until_dried() {
         let mut h = harness();
         h.run();

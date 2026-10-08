@@ -1,7 +1,7 @@
 //! Brush tips and paper grain. Image tips and grains are happypaint's own
 //! generators, baked to PNG by `scripts/export-brushes`.
 
-use crate::assets::{GRAINS, TIPS};
+use crate::assets::{COLOR_TIPS, GRAINS, TIPS};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -96,6 +96,53 @@ pub fn tip_for(id: &str) -> Tip {
         _ if id.starts_with(crate::USER_TIP_PREFIX) => crate::user::user_tip(id).map_or(Tip::Circle, Tip::Image),
         _ => cached(format!("tip:{id}"), || TIPS.iter().find(|t| t.0 == id).map(|t| t.2)).map_or(Tip::Circle, Tip::Image),
     }
+}
+
+/// A colour (RGBA) tip's pixels: straight sRGB, plus the coverage-weighted
+/// mean luma the tint formula is relative to (`brush-tips.ts:369-373`).
+#[derive(Debug, PartialEq)]
+pub struct ColorTip {
+    pub size: usize,
+    pub rgb: Vec<[f32; 3]>,
+    pub lum: f32,
+}
+
+impl ColorTip {
+    /// Bilinear, clamp-to-edge sample at uv in 0..1 (as `Mask::sample`).
+    pub fn sample(&self, u: f64, v: f64) -> [f32; 3] {
+        let n = self.size;
+        let x = (u * n as f64 - 0.5).clamp(0.0, (n - 1) as f64);
+        let y = (v * n as f64 - 0.5).clamp(0.0, (n - 1) as f64);
+        let (x0, y0) = (x as usize, y as usize);
+        let (x1, y1) = ((x0 + 1).min(n - 1), (y0 + 1).min(n - 1));
+        let (fx, fy) = ((x - x0 as f64) as f32, (y - y0 as f64) as f32);
+        let at = |xx: usize, yy: usize| self.rgb[yy * n + xx];
+        std::array::from_fn(|k| {
+            let top = at(x0, y0)[k] + (at(x1, y0)[k] - at(x0, y0)[k]) * fx;
+            let bot = at(x0, y1)[k] + (at(x1, y1)[k] - at(x0, y1)[k]) * fx;
+            top + (bot - top) * fy
+        })
+    }
+}
+
+/// The colour data of a built-in colour tip (`oil-daub`, `impasto-daub`).
+pub fn color_tip_for(id: &str) -> Option<Arc<ColorTip>> {
+    static C: OnceLock<Mutex<HashMap<String, Arc<ColorTip>>>> = OnceLock::new();
+    let cache = C.get_or_init(Default::default);
+    if let Some(t) = cache.lock().ok()?.get(id) {
+        return Some(t.clone());
+    }
+    let (_, lum, bytes) = COLOR_TIPS.iter().find(|t| t.0 == id)?;
+    let mut dec = png::Decoder::new(std::io::Cursor::new(*bytes));
+    dec.set_transformations(png::Transformations::normalize_to_color8());
+    let mut r = dec.read_info().ok()?;
+    let mut buf = vec![0; r.output_buffer_size()?];
+    let info = r.next_frame(&mut buf).ok()?;
+    let ch = info.color_type.samples();
+    let rgb = buf[..info.buffer_size()].chunks(ch).map(|p| [p[0], p[1], p[2]].map(|v| v as f32 / 255.0)).collect();
+    let t = Arc::new(ColorTip { size: info.width as usize, rgb, lum: *lum });
+    cache.lock().ok()?.insert(id.to_string(), t.clone());
+    Some(t)
 }
 
 /// A tileable grayscale paper grain, built in or from the user library.
