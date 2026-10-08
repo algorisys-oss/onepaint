@@ -73,6 +73,13 @@ The sources are `state/settings-store.ts` and
 - **Help:** the help popover lists any changed shortcuts under "Your
   shortcuts".
 
+## Timeline metric
+- **Readout:** the timeline counts in frames (`frame/frames · slot n/total`)
+  or seconds (`0.50s / 1.00s` at the document fps), as in
+  `animation-bar.tsx:287-293`.
+- **Switching:** click the readout. The choice is saved as
+  `timelineMetric`, and unknown values read as frames.
+
 ## Not yet
-- Following pen tilt and the stroke direction on the cursor, the timeline
-  metric, and hold-E to erase then spring back to the previous tool.
+- Following pen tilt and the stroke direction on the cursor, and hold-E to
+  erase then spring back to the previous tool.

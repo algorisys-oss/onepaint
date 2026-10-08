@@ -2,6 +2,7 @@
 //! and the frame strip, plus the playback clock.
 
 use crate::App;
+use crate::settings::TimelineMetric;
 use egui::{Align2, Area, Id, Order, RichText, pos2};
 use onepaint_engine::Command;
 use onepaint_engine::anim::{AnimSettings, LoopMode, step_slot};
@@ -143,11 +144,26 @@ pub fn show(app: &mut App, ctx: &egui::Context, screen: egui::Rect) {
                             let _ = app.session.execute(Command::SetAnimation { settings: Box::new(x) });
                         }
                     });
-                    ui.label(
-                        RichText::new(format!("{} / {}", app.session.anim_slot() + 1, app.session.anim_total_slots().max(1)))
-                            .font(theme::mono(11.5))
-                            .color(t.fg_muted),
-                    );
+                    // Frames or seconds (Settings' timeline metric); click to switch.
+                    let slot = app.session.anim_slot();
+                    let frames = app.session.anim_frames();
+                    let ordinal = frames.iter().position(|f| slot >= f.start && slot < f.start + f.hold).map_or(0, |i| i + 1);
+                    let metric = app.settings.timeline_metric;
+                    let text =
+                        readout(metric, slot, app.session.anim_total_slots(), ordinal, frames.len(), app.session.anim_settings().fps);
+                    let r = ui
+                        .add(egui::Button::new(RichText::new(text).font(theme::mono(11.5)).color(t.fg_muted)).frame(false))
+                        .on_hover_text("Count in frames or seconds");
+                    r.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Timeline metric: {metric:?}").to_lowercase())
+                    });
+                    if r.clicked() {
+                        app.settings.timeline_metric = match metric {
+                            TimelineMetric::Frames => TimelineMetric::Seconds,
+                            TimelineMetric::Seconds => TimelineMetric::Frames,
+                        };
+                        app.settings.save();
+                    }
                 });
                 ui.add_space(4.0);
                 egui::ScrollArea::horizontal().id_salt("frames").max_width(ui.available_width()).show(ui, |ui| {
@@ -238,5 +254,30 @@ fn frames_strip(app: &mut App, ui: &mut egui::Ui) {
                 ui.close();
             }
         });
+    }
+}
+
+/// The timeline readout (`animation-bar.tsx:287-293`): `frame/frames ·
+/// slot n/total`, or the time and length in seconds at the document fps.
+pub fn readout(metric: TimelineMetric, slot: usize, total: usize, ordinal: usize, frames: usize, fps: f64) -> String {
+    let total = total.max(1);
+    match metric {
+        TimelineMetric::Seconds => {
+            let fps = fps.max(1.0);
+            format!("{:.2}s / {:.2}s · slot {}/{}", slot as f64 / fps, total as f64 / fps, slot + 1, total)
+        }
+        TimelineMetric::Frames => format!("{ordinal}/{frames} · slot {}/{}", slot + 1, total),
+    }
+}
+
+#[cfg(test)]
+mod readout_tests {
+    use super::*;
+
+    #[test]
+    fn frames_or_seconds() {
+        assert_eq!(readout(TimelineMetric::Frames, 4, 12, 2, 6, 12.0), "2/6 · slot 5/12");
+        assert_eq!(readout(TimelineMetric::Seconds, 6, 12, 3, 6, 12.0), "0.50s / 1.00s · slot 7/12");
+        assert_eq!(readout(TimelineMetric::Seconds, 0, 0, 0, 0, 0.0), "0.00s / 1.00s · slot 1/1");
     }
 }

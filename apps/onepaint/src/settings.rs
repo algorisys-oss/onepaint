@@ -25,6 +25,17 @@ pub enum SizeScaling {
     Screen,
 }
 
+/// How the timeline counts (`timelineMetric`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TimelineMetric {
+    Seconds,
+    /// Also anything unrecognised (`settings-store.ts:183`).
+    #[default]
+    #[serde(other)]
+    Frames,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum CursorStyle {
@@ -50,6 +61,7 @@ pub struct Settings {
     /// Trace the brush tip's shape (image tips; round and square are exact already).
     pub cursor_tip_shape: bool,
     pub max_history_steps: usize,
+    pub timeline_metric: TimelineMetric,
     /// Shortcut overrides: action id → combo (`keymap.rs`).
     pub keybindings: crate::keymap::Overrides,
     #[serde(skip)]
@@ -71,6 +83,7 @@ impl Default for Settings {
             cursor_tip_shape: true,
             max_history_steps: DEFAULT_HISTORY_STEPS,
             keybindings: Default::default(),
+            timeline_metric: TimelineMetric::Frames,
             path: None,
         }
     }
@@ -281,10 +294,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("onepaint-settings-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("settings.json");
-        std::fs::write(&p, r#"{"maxBrushSize": 99999, "maxOpenTabs": 1, "cursorThickness": 9, "brushCursor": "dot", "bogus": 1}"#).unwrap();
+        std::fs::write(&p, r#"{"maxBrushSize": 99999, "maxOpenTabs": 1, "cursorThickness": 9, "brushCursor": "dot", "timelineMetric": "minutes", "bogus": 1}"#).unwrap();
         let s = Settings::load(Some(p.clone()));
         assert_eq!((s.max_brush_size, s.max_open_tabs, s.cursor_thickness), (10000.0, 2, 4));
-        assert_eq!(s.brush_cursor, CursorStyle::Dot);
+        assert_eq!((s.brush_cursor, s.timeline_metric), (CursorStyle::Dot, TimelineMetric::Frames));
         assert!(s.document_tabs, "absent keys keep their defaults");
         let mut t = s.clone();
         t.force_size_pressure = true;

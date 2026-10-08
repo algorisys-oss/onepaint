@@ -179,4 +179,4 @@ screentone are added as live layers.
   - history: undo steps (5–1000)
 - [x] Cursor traced from the tip shape (`cursorTipShape`), square cursor for square tips
 - [x] Keyboard shortcut rebinding (spec 34)
-- [ ] Timeline metric (frames/seconds)
+- [x] Timeline metric: frames or seconds (spec 34)

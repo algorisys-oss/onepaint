@@ -2081,6 +2081,11 @@ mod tests {
         h.get_by_label("Pause").click();
         h.run_steps(2);
         assert!(!h.state().playback.playing);
+        // The readout switches between frames and seconds.
+        h.get_by_label("timeline metric: frames").click();
+        h.run();
+        assert_eq!(h.state().settings.timeline_metric, settings::TimelineMetric::Seconds);
+        assert!(h.query_by_label("timeline metric: seconds").is_some());
     }
 
     #[test]
