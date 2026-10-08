@@ -4,6 +4,7 @@
 //! `stamp-renderer.ts`; see `docs/specs/03-brush-stroke.md`.
 
 mod assets;
+pub mod fluid;
 pub mod height;
 mod preset;
 pub mod settle;

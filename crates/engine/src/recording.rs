@@ -6,12 +6,33 @@ use super::*;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "lowercase")]
 pub enum RecEvent {
-    Cmd { t: f64, cmd: Box<Command> },
-    Begin { t: f64, p: StrokePoint },
-    Extend { t: f64, pts: Vec<StrokePoint> },
-    End { t: f64 },
-    Cancel { t: f64 },
-    Tick { t: f64, now: f64 },
+    Cmd {
+        t: f64,
+        cmd: Box<Command>,
+    },
+    Begin {
+        t: f64,
+        p: StrokePoint,
+    },
+    Extend {
+        t: f64,
+        pts: Vec<StrokePoint>,
+    },
+    End {
+        t: f64,
+    },
+    Cancel {
+        t: f64,
+    },
+    Tick {
+        t: f64,
+        now: f64,
+    },
+    /// Wet simulation steps run this frame (spec 35 B).
+    WetSteps {
+        t: f64,
+        steps: usize,
+    },
 }
 
 /// Session state outside the document that a replay must start from.
@@ -29,7 +50,7 @@ pub struct StartState {
     pub selection: Option<String>,
 }
 
-/// Every layer's pixel and mask tiles as raw f16 bits, deflated: the
+/// Every layer's pixel, mask and height tiles as raw f16 bits, deflated: the
 /// `.happypaint` snapshot quantises pixels, and a replay must be exact.
 fn dump_tiles(doc: &Document) -> Vec<u8> {
     use std::io::Write;
@@ -49,6 +70,9 @@ fn dump_tiles(doc: &Document) -> Vec<u8> {
             put(&id, 0, &l.pixels);
             if let Some(m) = &l.mask {
                 put(&id, 1, m);
+            }
+            if let Some(h) = &l.height {
+                put(&id, 2, h);
             }
         }
     }
@@ -70,6 +94,7 @@ fn load_tiles(doc: &mut Document, bytes: &[u8]) -> Result<(), EngineError> {
             if let Some(m) = l.mask.as_mut() {
                 *m = Surface::new();
             }
+            l.height = None;
         }
     }
     let mut p = 0;
@@ -84,7 +109,11 @@ fn load_tiles(doc: &mut Document, bytes: &[u8]) -> Result<(), EngineError> {
         p += 9 + n;
         let tile = Tile { data: data.chunks_exact(2).map(|b| half::f16::from_bits(u16::from_le_bytes([b[0], b[1]]))).collect() };
         if let Some(l) = doc.layer_mut(&id) {
-            let target = if kind == 1 { l.mask.get_or_insert_with(Surface::new) } else { &mut l.pixels };
+            let target = match kind {
+                1 => l.mask.get_or_insert_with(Surface::new),
+                2 => l.height.get_or_insert_with(Surface::new),
+                _ => &mut l.pixels,
+            };
             target.set_tile(tx, ty, Some(Arc::new(tile)));
         }
     }
@@ -201,6 +230,7 @@ impl Session {
             RecEvent::End { .. } => self.stroke_end(),
             RecEvent::Cancel { .. } => self.stroke_cancel(),
             RecEvent::Tick { now, .. } => self.stroke_tick(*now),
+            RecEvent::WetSteps { steps, .. } => self.wet_steps(*steps),
         }
     }
 }

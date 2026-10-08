@@ -12,6 +12,7 @@ impl Session {
         self.commit_transform();
         self.ensure_raster();
         self.stroke_cancel();
+        self.dry_wet();
         let Some(l) = self.doc.layer(&self.active).filter(|l| l.visible && !l.locked && l.adjustment.is_none()) else { return };
         let mode = if l.alpha_lock { StrokeMode::AlphaLock(BlendMode::Normal) } else { StrokeMode::Paint(BlendMode::Normal) };
         let brush = self.current_brush().clone();

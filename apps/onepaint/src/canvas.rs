@@ -1118,6 +1118,11 @@ impl Canvas {
             session.stroke_tick(time_ms);
             ui.ctx().request_repaint();
         }
+        // Wet paint runs on its own clock until it dries.
+        if session.wet_active() {
+            session.wet_tick(time_ms);
+            ui.ctx().request_repaint();
+        }
         // Quick-shape: hold still for 600 ms while painting to straighten the stroke.
         if matches!(self.drag, Drag::Paint) && self.hold.enabled && !self.hold.fired {
             if time_ms - self.hold.since >= 600.0 {

@@ -224,6 +224,11 @@ impl BrushPreset {
         s.is_active().then_some(s)
     }
 
+    /// Live wet media (`fluid`): the brush paints through the simulation.
+    pub fn fluid(&self) -> Option<crate::fluid::Fluid> {
+        serde_json::from_value(self.extra.get("fluid")?.clone()).ok()
+    }
+
     /// Impasto depth (`impasto.depth`, 0 = flat).
     pub fn impasto_depth(&self) -> f64 {
         self.extra.get("impasto").and_then(|w| w.get("depth")).and_then(|v| v.as_f64()).unwrap_or(0.0).max(0.0)

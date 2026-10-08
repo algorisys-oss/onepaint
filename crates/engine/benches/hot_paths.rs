@@ -61,5 +61,25 @@ fn stroke(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, dabs, composite, stroke);
+fn wet(c: &mut Criterion) {
+    // One live-watercolour wash (~600 × 60 px), then the cost of one 16 ms sim step.
+    let mut s = Session::new(1024, 1024, None);
+    let _ = s.execute(Command::SetBrushPreset { preset: Box::new(onepaint_brush::preset("watercolor-live").expect("built-in preset")) });
+    let _ = s.execute(Command::SetBrushSize { size: 40.0 });
+    s.stroke_begin(StrokePoint::at(200.0, 500.0, 0.6, 0.0));
+    for i in 1..=100 {
+        s.stroke_extend(&[StrokePoint::at(200.0 + i as f64 * 6.0, 500.0, 0.6, i as f64 * 8.0)]);
+    }
+    s.stroke_end();
+    let mut now = 0.0;
+    s.wet_tick(now);
+    c.bench_function("wet sim step, 600px wash", |b| {
+        b.iter(|| {
+            now += 16.0;
+            s.wet_tick(black_box(now))
+        })
+    });
+}
+
+criterion_group!(benches, dabs, composite, stroke, wet);
 criterion_main!(benches);

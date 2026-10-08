@@ -151,6 +151,13 @@ fn top_bar(app: &mut App, ctx: &egui::Context) {
                         app.request(crate::Pending::CloseTab, ui.ctx());
                     }
                 }
+                // Wet paint keeps moving until it dries; Dry settles it now.
+                if app.session.wet_active() {
+                    widgets::vline(ui, 24.0);
+                    if icons::button(ui, "droplet", 32.0, false, "Dry the wet paint").clicked() {
+                        let _ = app.session.execute(Command::DryWet);
+                    }
+                }
                 ui.add_space(4.0);
             });
         });

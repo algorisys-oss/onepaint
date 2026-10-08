@@ -731,6 +731,8 @@ impl App {
 
     /// Export in the dialog's format (PSD keeps layers; the rest are flat).
     pub fn export_with(&mut self, opts: onepaint_formats::export::ExportOptions, psd: bool, now: f64) {
+        // Wet paint is shown with a damp veil; export what it dries to.
+        let _ = self.session.execute(Command::DryWet);
         if psd {
             return self.export_psd(now);
         }
@@ -1273,6 +1275,21 @@ mod tests {
         h.get_by_label("Eraser (E)").click();
         h.run();
         assert_eq!(h.state().session.tool(), Tool::Eraser);
+    }
+
+    #[test]
+    fn wet_paint_stays_wet_until_dried() {
+        let mut h = harness();
+        h.run();
+        let wc = onepaint_brush::preset("watercolor-live").unwrap();
+        let _ = h.state_mut().session.execute(Command::SetBrushPreset { preset: Box::new(wc) });
+        drag_stroke(&mut h, pos2(560.0, 420.0), pos2(720.0, 440.0));
+        assert!(h.state().session.wet_active(), "the wash keeps moving after the pen lifts");
+        h.get_by_label("Dry the wet paint").click();
+        h.run();
+        let s = &h.state().session;
+        assert!(!s.wet_active() && s.can_undo(), "dried into one undo step");
+        assert!(h.query_by_label("Dry the wet paint").is_none());
     }
 
     #[test]

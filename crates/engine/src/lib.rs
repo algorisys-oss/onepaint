@@ -7,8 +7,10 @@
 pub mod anim;
 mod canvas_ops;
 mod clipboard;
+mod command;
 mod filter_ops;
 pub mod guides;
+pub use command::Command;
 mod height_ops;
 mod liquify_ops;
 mod mask_ops;
@@ -22,6 +24,7 @@ pub mod smart_filter_ops;
 mod smudge_ops;
 mod text_ops;
 pub mod transform;
+mod wet_ops;
 pub use guides::Guides;
 pub use onepaint_brush::symmetry::{Symmetry, SymmetryMode};
 pub use saved_selection_ops::SavedSelection;
@@ -109,334 +112,6 @@ impl LayerProps {
         }
         k
     }
-}
-
-/// Everything the UI can ask the engine to do (serialisable for replay).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum Command {
-    AddLayer,
-    AddGroup,
-    DeleteLayer {
-        id: NodeId,
-    },
-    DuplicateLayer {
-        id: NodeId,
-    },
-    MoveLayer {
-        id: NodeId,
-        parent: Option<NodeId>,
-        index: usize,
-    },
-    SetActiveLayer {
-        id: NodeId,
-    },
-    SetLayerProps {
-        id: NodeId,
-        props: LayerProps,
-    },
-    MergeDown {
-        id: NodeId,
-    },
-    ClearLayer {
-        id: NodeId,
-    },
-    /// Bevel & Emboss: relief derived from the layer's alpha (spec 35).
-    BevelFromAlpha {
-        id: NodeId,
-        depth: f64,
-        softness: f64,
-    },
-    /// Drop the layer's relief (`clearBevel`).
-    ClearBevel {
-        id: NodeId,
-    },
-    SetTool {
-        tool: Tool,
-    },
-    SetSymmetry {
-        symmetry: Symmetry,
-    },
-    /// Replace the drawing guides (grid, symmetry, perspective…).
-    SetGuides {
-        guides: Box<Guides>,
-    },
-    /// Change the guide lines live; `CommitGuideLines` makes it one undo step.
-    EditGuideLines {
-        lines: Vec<guides::GuideLine>,
-    },
-    CommitGuideLines,
-    SaveSelection {
-        name: String,
-    },
-    DeleteSavedSelection {
-        id: String,
-    },
-    LoadSelection {
-        id: String,
-        #[serde(default)]
-        mode: onepaint_selection::Mode,
-    },
-    CreatePathLayer {
-        spec: Box<onepaint_stroke::bezier::PathSpec>,
-    },
-    AddPathObject {
-        id: NodeId,
-        spec: Box<onepaint_stroke::bezier::PathSpec>,
-    },
-    /// Replace one path object (`None` removes it); live edits coalesce.
-    UpdatePathObject {
-        id: NodeId,
-        index: usize,
-        spec: Option<Box<onepaint_stroke::bezier::PathSpec>>,
-    },
-    RasterizePath {
-        id: NodeId,
-    },
-    SelectFromPath {
-        #[serde(default)]
-        mode: onepaint_selection::Mode,
-    },
-    FillPath,
-    /// End live-edit coalescing: the next edit is a new undo step.
-    SealHistory,
-    /// Brush fill mode: fill a freehand silhouette (doc px) at `opacity`.
-    FillShape {
-        points: Vec<[f64; 2]>,
-        opacity: f32,
-    },
-    /// Switch the transform in progress to 4-corner distort.
-    BeginDistort,
-    /// Switch the transform in progress to mesh warp.
-    BeginWarp,
-    SetWarp {
-        warp: transform::WarpMode,
-    },
-    /// Replace a layer's smart-filter stack (live edits coalesce; seal to end).
-    SetSmartFilters {
-        id: NodeId,
-        filters: Vec<smart_filter_ops::SmartFilter>,
-    },
-    AddSmartFilter {
-        id: NodeId,
-        kind: String,
-        params: onepaint_filters::Params,
-    },
-    BakeSmartFilters {
-        id: NodeId,
-    },
-    SetAnimation {
-        settings: Box<anim::AnimSettings>,
-    },
-    SetAnimSlot {
-        slot: usize,
-    },
-    SetAnimPlaying {
-        playing: bool,
-    },
-    AddFrame,
-    SetFrameHold {
-        id: NodeId,
-        hold: u32,
-    },
-    /// `background`, `foreground`, or `None` for a normal frame.
-    SetFrameRole {
-        id: NodeId,
-        role: Option<String>,
-    },
-    StrokePath {
-        tool: path_ops::StrokePathTool,
-        simulate_pressure: bool,
-    },
-    MaskFromPath,
-    SetSmudgeStrength {
-        strength: f64,
-    },
-    SetMixer {
-        mixer: MixerSettings,
-    },
-    CleanMixer,
-    SetLiquify {
-        mode: onepaint_filters::liquify::LiquifyMode,
-        strength: f64,
-    },
-    SetBrush {
-        preset_id: String,
-    },
-    /// Replace the whole current preset (the brush studio's live edit);
-    /// an eraser preset goes to the eraser tool, like `SetBrush`.
-    SetBrushPreset {
-        preset: Box<BrushPreset>,
-    },
-    SetBrushSize {
-        size: f64,
-    },
-    SetBrushOpacity {
-        opacity: f64,
-    },
-    SetBrushFlow {
-        flow: f64,
-    },
-    SetColor {
-        rgba: Rgba,
-    },
-    Undo,
-    Redo,
-    /// Select the union of closed contours (doc px), combined by `mode`.
-    SelectShape {
-        contours: Vec<Vec<[f64; 2]>>,
-        mode: onepaint_selection::Mode,
-    },
-    /// Magic wand.
-    SelectByColor {
-        x: i32,
-        y: i32,
-        tolerance: f32,
-        mode: onepaint_selection::Mode,
-        contiguous: bool,
-        sample_all: bool,
-    },
-    SelectAll,
-    Deselect,
-    InvertSelection,
-    /// Grow (positive) or shrink (negative) by whole pixels.
-    GrowSelection {
-        delta: i32,
-    },
-    SmoothSelection {
-        px: f32,
-    },
-    /// Live, non-destructive feather of the clip mask (not undoable).
-    SetFeather {
-        radius: f32,
-    },
-    /// Paint bucket on the active layer.
-    Fill {
-        x: i32,
-        y: i32,
-        tolerance: f32,
-        grow: u32,
-    },
-    /// Fill the selection with the current colour.
-    FillSelection,
-    /// Clear the active layer inside the selection (or entirely, with none).
-    ClearSelected,
-    /// Lift the active layer (or its selected part) for moving/transforming.
-    BeginTransform,
-    /// Set the transform matrix (doc px → doc px) of the lifted content.
-    SetTransform {
-        matrix: transform::Affine,
-    },
-    CommitTransform,
-    CancelTransform,
-    /// Selection to a new layer (Ctrl+J), or cut to a new layer (Ctrl+Shift+J).
-    LayerViaCopy {
-        cut: bool,
-    },
-    /// Crop/extend the canvas; content moves by (dx, dy).
-    ResizeCanvas {
-        width: u32,
-        height: u32,
-        dx: i32,
-        dy: i32,
-    },
-    /// Resample the whole image to a new size.
-    ScaleImage {
-        width: u32,
-        height: u32,
-    },
-    /// Start a destructive filter on the active layer (live preview).
-    BeginFilter {
-        kind: String,
-    },
-    UpdateFilter {
-        params: onepaint_filters::Params,
-    },
-    CommitFilter,
-    CancelFilter,
-    AddAdjustmentLayer {
-        kind: String,
-        params: onepaint_filters::Params,
-    },
-    SetAdjustment {
-        id: NodeId,
-        params: onepaint_filters::Params,
-    },
-    /// Add a mask to the active layer: white, or the selection's coverage.
-    AddMask,
-    DeleteMask {
-        id: NodeId,
-    },
-    /// Bake the mask into the pixels, then remove it.
-    ApplyMask {
-        id: NodeId,
-    },
-    SetMaskEnabled {
-        id: NodeId,
-        enabled: bool,
-    },
-    /// Paint into the active layer's mask (true) or its pixels (false).
-    SetMaskTarget {
-        on: bool,
-    },
-    /// Organisational colour label (red, orange, yellow, green, blue, violet, gray) or none.
-    SetColorLabel {
-        id: NodeId,
-        label: Option<String>,
-    },
-    /// Add a text object to the active text layer (or a new "Text" layer).
-    AddText {
-        spec: onepaint_text::TextSpec,
-    },
-    UpdateText {
-        id: NodeId,
-        index: usize,
-        spec: onepaint_text::TextSpec,
-    },
-    DeleteText {
-        id: NodeId,
-        index: usize,
-    },
-    /// Turn a text layer into plain pixels.
-    RasterizeText {
-        id: NodeId,
-    },
-    /// Lay out a page of `rows × cols` panels (spec 30).
-    CreatePanelGrid {
-        rows: u32,
-        cols: u32,
-        gutter: f64,
-        margin: f64,
-        border: f64,
-    },
-    /// One panel from a drag rectangle (doc px).
-    CreatePanel {
-        a: [f64; 2],
-        b: [f64; 2],
-        gutter: f64,
-        border: f64,
-    },
-    /// Cut panel `id` along the line a→b.
-    SplitPanel {
-        id: NodeId,
-        a: [f64; 2],
-        b: [f64; 2],
-    },
-    /// Replace a panel's frame; live edits coalesce until `SealHistory`.
-    SetPanelOutline {
-        id: NodeId,
-        outline: Vec<[f64; 2]>,
-    },
-    /// Gutter and/or border width of one panel, or every panel (`id: None`);
-    /// live edits coalesce until `SealHistory`.
-    SetPanelStyle {
-        #[serde(default)]
-        id: Option<NodeId>,
-        #[serde(default)]
-        gutter: Option<f64>,
-        #[serde(default)]
-        border: Option<f64>,
-    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -640,6 +315,10 @@ pub struct Session {
     rec_depth: u32,
     smudge: Option<smudge_ops::ActiveSmudge>,
     liquify: Option<liquify_ops::ActiveLiquify>,
+    /// Live wet media: the drying session and the fluid stroke feeding it.
+    wet: Option<wet_ops::WetSession>,
+    wet_stroke: Option<wet_ops::WetStroke>,
+    wet_tilt: [f32; 2],
     /// The Mixer's kept reservoir, keyed by the colour it was loaded with.
     mixer_held: Option<(String, onepaint_brush::smudge::Reservoir)>,
 }
@@ -690,6 +369,9 @@ impl Session {
             rec_depth: 0,
             smudge: None,
             liquify: None,
+            wet: None,
+            wet_stroke: None,
+            wet_tilt: [0.0; 2],
             mixer_held: None,
         };
         s.load_saved_selections();
@@ -779,7 +461,7 @@ impl Session {
     }
 
     pub fn is_stroking(&self) -> bool {
-        self.stroke.is_some() || self.smudge.is_some() || self.liquify.is_some()
+        self.stroke.is_some() || self.smudge.is_some() || self.liquify.is_some() || self.wet_stroke.is_some()
     }
 
     pub fn drain_events(&mut self) -> Vec<Event> {
@@ -820,7 +502,9 @@ impl Session {
 
     /// Composite the given tiles, including any stroke in progress.
     pub fn composite(&self, keys: &[(i32, i32)]) -> Vec<((i32, i32), Tile)> {
-        onepaint_compose::composite_tiles(&self.display_doc(), keys, self.overlay().as_ref())
+        // Wet paint shows on screen while it dries (its preview has the damp veil, so it stays out of exports).
+        let ov = self.overlay().or_else(|| self.wet_overlay());
+        onepaint_compose::composite_tiles(&self.display_doc(), keys, ov.as_ref())
     }
 
     /// Flattened canvas as premultiplied linear f32.
@@ -894,6 +578,7 @@ impl Session {
     /// The document as an 8-bit RGB PSD with layers, groups, masks and a merged composite.
     pub fn export_psd(&mut self) -> Result<Vec<u8>, EngineError> {
         self.commit_transform();
+        self.dry_wet();
         let flat = self.flatten();
         Ok(onepaint_formats::psd::write_psd(&self.doc, &flat)?)
     }
@@ -906,6 +591,7 @@ impl Session {
     /// Serialise the document as `.happypaint` v9 with a JPEG thumbnail.
     pub fn save_happypaint(&mut self) -> Result<Vec<u8>, EngineError> {
         self.commit_transform();
+        self.dry_wet();
         if self.guides.configured() {
             self.doc.extra.insert("guides".into(), serde_json::to_value(&self.guides).unwrap_or_default());
         } else {
@@ -949,6 +635,12 @@ impl Session {
             self.ensure_raster();
         }
         self.stroke_cancel();
+        // Fluid brushes feed the live wet simulation; any other stroke dries it first.
+        if self.wet_brush() {
+            self.wet_begin(p);
+            return;
+        }
+        self.dry_wet();
         // Wet presets paint through the mixer path (paint-canvas.tsx:5706-5758).
         let wet_brush = self.tool == Tool::Brush && !self.mask_target() && self.brush.wet().is_some();
         if matches!(self.tool, Tool::Smudge | Tool::Mixer) || wet_brush {
@@ -1018,6 +710,10 @@ impl Session {
             let v = pts.to_vec();
             self.rec(|t| recording::RecEvent::Extend { t, pts: v });
         }
+        if self.wet_stroke.is_some() {
+            self.wet_extend(pts);
+            return;
+        }
         if self.smudge.is_some() {
             self.smudge_extend(pts);
             return;
@@ -1074,6 +770,8 @@ impl Session {
         if self.is_stroking() {
             self.rec(|t| recording::RecEvent::Cancel { t });
         }
+        // A cancelled fluid stroke keeps what it laid down: the paint is wet.
+        self.wet_end();
         self.smudge_cancel();
         self.liquify_cancel();
         if let Some(st) = self.stroke.take() {
@@ -1091,6 +789,7 @@ impl Session {
         if self.is_stroking() {
             self.rec(|t| recording::RecEvent::End { t });
         }
+        self.wet_end();
         self.smudge_end();
         self.liquify_end();
         let Some(tail) = self.stroke.as_mut().map(|st| st.engine.end()) else {
@@ -1180,6 +879,28 @@ impl Session {
     }
 
     fn execute_inner(&mut self, cmd: Command) -> Result<(), EngineError> {
+        // Wet paint dries before anything that edits or replaces the document
+        // (happypaint's dryWet() call sites); brush and colour choices keep it wet.
+        if self.wet.is_some()
+            && !matches!(
+                cmd,
+                Command::SetColor { .. }
+                    | Command::SetTool { .. }
+                    | Command::SetBrush { .. }
+                    | Command::SetBrushPreset { .. }
+                    | Command::SetBrushSize { .. }
+                    | Command::SetBrushOpacity { .. }
+                    | Command::SetBrushFlow { .. }
+                    | Command::SetSymmetry { .. }
+                    | Command::SetGuides { .. }
+                    | Command::SetSmudgeStrength { .. }
+                    | Command::SetMixer { .. }
+                    | Command::SetLiquify { .. }
+                    | Command::SetWetTilt { .. }
+            )
+        {
+            self.dry_wet();
+        }
         if self.filter.is_some() {
             match &cmd {
                 Command::UpdateFilter { .. } | Command::CommitFilter | Command::CancelFilter => {}
@@ -1310,6 +1031,14 @@ impl Session {
                 self.bevel_from_alpha(&id, o).map(|_| ())
             }
             Command::ClearBevel { id } => self.clear_height(&id).map(|_| ()),
+            Command::DryWet => {
+                self.dry_wet();
+                Ok(())
+            }
+            Command::SetWetTilt { x, y } => {
+                self.set_wet_tilt(x, y);
+                Ok(())
+            }
             Command::SetTool { tool } => {
                 self.tool = tool;
                 Ok(())

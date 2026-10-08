@@ -13,7 +13,7 @@ height field):
 | A | `wet {wetness, load, mix, pigment, tip, blend}` | Stroke-synchronous mixer: pickup, reservoir, contamination | **done** |
 | C | `impasto {depth}` | A per-layer height field, lit as relief at composite time; bevel from alpha | **done** |
 | D | `settle {edgeDarken, granulate}` | A flatten-time pass on dry watercolour strokes | **done** |
-| B | `fluid {water, pigment, rewet, blow, oil}` | A live, time-stepped wet simulation | next |
+| B | `fluid {water, pigment, rewet, blow, oil}` | A live, time-stepped wet simulation | **done** (CPU) |
 
 ## A. Wet presets (`brush::WetMedia`, `engine` stroke routing)
 - **Accessor:** `BrushPreset::wet()` reads the `wet` block, which stays
@@ -116,3 +116,68 @@ height field):
   - `na *= 1 + granulate · .55 · (2g − 1)`
 - **Result:** `na` is clamped to `[.45·a, 1]`. Premultiplied RGB scales by
   `na/a`, so the hue is unchanged.
+
+## B. Live fluid (`brush::fluid`, `engine` wet ops)
+- **Routing:** a Brush-tool stroke with a `fluid` block feeds the
+  simulation (PC:5683). Opacity scales `pigment` and `rewet`. Layer masks,
+  alpha-locked, locked, hidden and adjustment layers take no wet paint.
+- **Dabs** (`wet-dab.ts`, all ported with its tests):
+  - Spacing is `max(1.5, size·0.06)` with smoothing 0.35.
+  - The reservoir empties with travel:
+    `0.25 + 0.75·exp(−travel/(size·20·(0.5 + water)))`. Oils always stay
+    full.
+  - Water, pigment and re-wet per dab follow `dabAmounts`.
+  - Each batch shoves the paint along the brush:
+    `min(10·(1 + 2·blow), len·0.6·(1 + 4·blow))` px. Symmetry mirrors the
+    shove.
+  - Live oils stamp relief `impasto·0.12·(0.4 + 0.6p)` per dab.
+- **Deposit**, in order:
+  1. **Drag:** from a snapshot of the batch region; the last dab wins.
+  2. **Re-wet lift:** `col += layer·L·cov`, then `layer ×= 1 − L·cov`.
+  3. **Water:** MAX into the water channel.
+  4. **Pigment:** KM pre-mix against the paint under the batch, then
+     premultiplied source-over.
+- **Step** (16 ms, at most 4 per tick; a stall drops the backlog): settle
+  the old state into the layer, then update the water, pigment and
+  velocity, both from the old state. The constants and maths follow
+  `SETTLE_RATE_GLSL` and `UPDATE_FRAG` exactly:
+  - KM is folded neighbour by neighbour.
+  - Advection adopts the fastest wet neighbour.
+  - The slope force has a dead zone.
+  - Fingering noise and vorticity confinement are included.
+  - Oils use their own viscous constants.
+- **Drying:**
+  - `WetClock` drops the water level by 0.003 per step, then runs a
+    90-step tail, then dries.
+  - Oils never dry on their own.
+  - Drying settles everything with the force rim and commits the whole
+    session (first deposit to dry) as one undo step, relief included.
+- **What dries the session:** the Dry button, any document-editing
+  command (undo, layers, transform, filters…), a non-fluid stroke, the
+  gradient, saving and exporting. A fluid stroke on another layer, or in
+  the other medium, dries the old session first. Blow alone needs wet paint
+  on the active layer.
+- **Display:**
+  - The canvas shows the suspended paint over the layer as a live overlay.
+  - The damp veil is `(0, .08, .33)·a` with `a = 0.24·smoothstep(.02, .5,
+    water)`, or 0 for oils.
+  - The veil is display only and never in an export.
+- **Replay:** `RecEvent::WetSteps` records step counts, and `SetWetTilt` and
+  `DryWet` are commands, so a recording replays the drying exactly.
+  Recordings now also snapshot height tiles.
+- **Performance** (CPU, release, 12 threads; 600 px wash, about 8 ms per
+  step):
+  - Work is limited to 16-px blocks holding state and their neighbours.
+  - Rows run in parallel.
+  - KM runs only where colours differ by more than 1/512.
+  - The rim-gate rings stop once the pixel is fully wet.
+  - The fingering noise is cached.
+  - The allocation pads only new area (happypaint re-pads the whole union,
+    which compounds).
+- **Not yet:**
+  - Paper texture (the dry-brush gate, absorption, resistance and
+    granulation all wait for document paper; this is happypaint's smooth
+    paper).
+  - The tilt pad UI (the command exists).
+  - Fluid controls in the brush studio.
+  - A GPU compute path for large washes.
