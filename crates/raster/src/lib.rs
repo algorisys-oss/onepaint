@@ -125,6 +125,10 @@ impl Rect {
         self.w <= 0 || self.h <= 0
     }
 
+    pub fn contains(&self, x: i32, y: i32) -> bool {
+        x >= self.x && y >= self.y && x < self.right() && y < self.bottom()
+    }
+
     pub fn intersect(&self, o: &Rect) -> Option<Rect> {
         let x0 = self.x.max(o.x);
         let y0 = self.y.max(o.y);

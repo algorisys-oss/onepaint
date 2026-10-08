@@ -58,7 +58,7 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] Layer masks (add, which can come from the selection; paint, enable, apply, delete)
 - [x] Clipping masks (clip families)
 - [x] Alpha lock
-- [ ] Off-canvas pixel overflow
+- [x] Off-canvas pixel overflow (transforms keep off-canvas content; saved as the `overflow` chunk)
 - [~] Text layers: multiple rich-text objects and balloons, vector until baked (rich runs render; balloons are kept in files but not drawn; no rich-text editing UI yet)
 - [x] Vector path layers, plus path ops
 - [x] Adjustment layers and fill layers (colour, fill and spatial kinds all composite live)

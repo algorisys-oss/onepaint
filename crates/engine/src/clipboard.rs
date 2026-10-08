@@ -104,7 +104,7 @@ impl Session {
                 clamp_edges: false,
                 warp: None,
             };
-            f.render(self.doc.bounds());
+            f.render(self.transform_clip());
             f.preview
         };
         self.insert_layer_with("Image", surface);

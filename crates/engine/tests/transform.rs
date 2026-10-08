@@ -244,3 +244,38 @@ mod distort_and_warp {
         assert!(a(&s, 66, 21) < 0.01, "but not at the corner");
     }
 }
+
+mod overflow {
+    use onepaint_color::Rgba;
+    use onepaint_engine::transform::Affine;
+    use onepaint_engine::*;
+    use onepaint_selection::{Mode, rect_polygon};
+
+    #[test]
+    fn content_moved_off_canvas_comes_back_and_survives_saving() {
+        let mut s = Session::new(100, 80, None);
+        s.execute(Command::SelectShape { contours: vec![rect_polygon([10.0, 10.0], [40.0, 40.0])], mode: Mode::Replace }).unwrap();
+        s.execute(Command::SetColor { rgba: Rgba::new(1.0, 0.0, 0.0, 1.0) }).unwrap();
+        s.execute(Command::FillSelection).unwrap();
+        s.execute(Command::Deselect).unwrap();
+        let id = s.active().to_string();
+        // Push it mostly off the left edge.
+        s.execute(Command::BeginTransform).unwrap();
+        s.execute(Command::SetTransform { matrix: Affine::translate(-30.0, 0.0) }).unwrap();
+        s.execute(Command::CommitTransform).unwrap();
+        assert!(s.doc().layer(&id).unwrap().pixels.get(-10, 20)[3] > 0.99, "kept off-canvas");
+        // Save and reopen: the overflow travels in the file.
+        let bytes = s.save_happypaint().unwrap();
+        let mut t = Session::new(4, 4, None);
+        t.open_happypaint(&bytes).unwrap();
+        assert!(t.doc().layer(&id).unwrap().pixels.get(-15, 20)[3] > 0.99, "overflow read back");
+        assert!(t.doc().layer(&id).unwrap().pixels.get(5, 20)[3] > 0.99, "on-canvas part intact");
+        // Move it back: the whole square returns.
+        t.execute(Command::BeginTransform).unwrap();
+        t.execute(Command::SetTransform { matrix: Affine::translate(30.0, 0.0) }).unwrap();
+        t.execute(Command::CommitTransform).unwrap();
+        let l = t.doc().layer(&id).unwrap();
+        assert!(l.pixels.get(12, 20)[3] > 0.99 && l.pixels.get(38, 38)[3] > 0.99);
+        assert_eq!(l.pixels.get(5, 20)[3], 0.0);
+    }
+}

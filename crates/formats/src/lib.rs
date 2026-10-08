@@ -164,6 +164,36 @@ fn paste_color(s: &mut Surface, x: i32, y: i32, w: u32, h: u32, rgba: &[u8], cli
     s.write_rect(ix, &data);
 }
 
+/// The layer's pixels outside the canvas as a trimmed straight-sRGB PNG (zero
+/// inside the canvas), or `None` when everything is on the canvas.
+fn overflow_png(s: &Surface, doc: Rect) -> Result<Option<(Rect, Vec<u8>)>, FormatError> {
+    let Some(cb) = s.content_bounds() else { return Ok(None) };
+    if cb.x >= doc.x && cb.y >= doc.y && cb.right() <= doc.right() && cb.bottom() <= doc.bottom() {
+        return Ok(None);
+    }
+    let px = s.read_rect(cb);
+    let (mut x0, mut y0, mut x1, mut y1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+    for yy in 0..cb.h {
+        for xx in 0..cb.w {
+            let (x, y) = (cb.x + xx, cb.y + yy);
+            if !doc.contains(x, y) && px[((yy * cb.w + xx) * 4 + 3) as usize] > 0.0 {
+                (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+            }
+        }
+    }
+    if x1 < x0 {
+        return Ok(None);
+    }
+    let r = Rect::new(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+    let data = s.read_rect(r);
+    let mut rgba = Vec::with_capacity(data.len());
+    for (i, p) in data.chunks_exact(4).enumerate() {
+        let (x, y) = (r.x + (i as i32 % r.w), r.y + (i as i32 / r.w));
+        rgba.extend_from_slice(&if doc.contains(x, y) { [0; 4] } else { premul_linear_to_srgb8([p[0], p[1], p[2], p[3]]) });
+    }
+    Ok(Some((r, encode_png_rgba8(r.w as u32, r.h as u32, &rgba)?)))
+}
+
 /// Masks store raw coverage in R (no transfer curve).
 fn paste_mask(s: &mut Surface, x: i32, y: i32, w: u32, h: u32, rgba: &[u8], clip: Rect) {
     let r = Rect::new(x, y, w as i32, h as i32);
@@ -246,9 +276,24 @@ fn read_node(v: &Value, chunks: &[u8], doc: Rect) -> Result<Node, FormatError> {
         l.chunks.insert("height".into(), chunk(chunks, c)?.to_vec());
     }
     if let Some(ov) = o.get("overflow") {
+        // Off-canvas pixels (layer-overflow.ts): a trimmed rect, zero inside the canvas.
         let c = ov.get("chunk").ok_or_else(|| corrupt("overflow without chunk"))?;
-        l.chunks.insert("overflow".into(), chunk(chunks, c)?.to_vec());
-        l.extra.insert("__overflowRect".into(), ov.get("rect").cloned().unwrap_or(Value::Null));
+        let r = ov.get("rect").cloned().unwrap_or(Value::Null);
+        let n = |k: &str| r.get(k).and_then(Value::as_i64).unwrap_or(0) as i32;
+        let (w, h, rgba) = decode_png_rgba8(chunk(chunks, c)?)?;
+        let (x0, y0) = (n("x"), n("y"));
+        for yy in 0..h as i32 {
+            for xx in 0..w as i32 {
+                let (x, y) = (x0 + xx, y0 + yy);
+                if doc.contains(x, y) {
+                    continue;
+                }
+                let i = ((yy as u32 * w + xx as u32) * 4) as usize;
+                if rgba[i + 3] > 0 {
+                    l.pixels.set(x, y, srgb8_to_premul_linear([rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3]]));
+                }
+            }
+        }
     }
     Ok(Node::Layer(l))
 }
@@ -357,7 +402,6 @@ impl Writer {
                 o.insert("alphaLock".into(), json!(l.alpha_lock));
                 // Preserved extras keep their relative order, ahead of maskEnabled and pixels (F:274-294).
                 let mut extra = l.extra.clone();
-                let overflow_rect = extra.remove("__overflowRect");
                 let metallic = extra.remove("metallic");
                 if let Some(m) = metallic {
                     o.insert("metallic".into(), m);
@@ -386,9 +430,11 @@ impl Writer {
                     let r = self.push(h);
                     o.insert("height".into(), r);
                 }
-                if let (Some(c), Some(rect)) = (l.chunks.get("overflow"), overflow_rect) {
-                    let r = self.push(c);
-                    o.insert("overflow".into(), json!({"rect": rect, "chunk": r}));
+                if l.adjustment.is_none()
+                    && let Some((rect, png)) = overflow_png(&l.pixels, doc)?
+                {
+                    let r = self.push(&png);
+                    o.insert("overflow".into(), json!({"rect": {"x": rect.x, "y": rect.y, "width": rect.w, "height": rect.h}, "chunk": r}));
                 }
             }
         }

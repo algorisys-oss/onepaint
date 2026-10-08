@@ -239,6 +239,14 @@ impl Floating {
 }
 
 impl Session {
+    /// Transforms keep content that leaves the canvas (layer overflow): they
+    /// render into a generous margin around it instead of clipping.
+    pub(crate) fn transform_clip(&self) -> Rect {
+        let m = 8192;
+        let d = self.doc.bounds();
+        Rect::new(d.x - m, d.y - m, d.w + 2 * m, d.h + 2 * m)
+    }
+
     pub fn transform_active(&self) -> bool {
         self.transform.is_some()
     }
@@ -311,7 +319,7 @@ impl Session {
             clamp_edges: false,
             warp: None,
         };
-        f.render(self.doc.bounds());
+        f.render(self.transform_clip());
         let lifted_selection = f.saved_selection.is_some();
         self.transform = Some(f);
         if lifted_selection {
@@ -330,7 +338,7 @@ impl Session {
     /// Switch to 4-corner distort or mesh warp, seeded from the current affine
     /// so the content doesn't jump.
     pub(crate) fn begin_warp(&mut self, mesh: bool) {
-        let doc = self.doc.bounds();
+        let doc = self.transform_clip();
         let Some(f) = self.transform.as_mut() else { return };
         let b = f.bounds;
         let m = f.matrix;
@@ -348,7 +356,7 @@ impl Session {
     }
 
     pub(crate) fn set_warp(&mut self, w: WarpMode) {
-        let doc = self.doc.bounds();
+        let doc = self.transform_clip();
         let Some(f) = self.transform.as_mut() else { return };
         let ok = match (&f.warp, &w) {
             (Some(WarpMode::Quad(_)), WarpMode::Quad(_)) => true,
@@ -366,7 +374,7 @@ impl Session {
     }
 
     pub(crate) fn set_transform(&mut self, m: Affine) {
-        let doc = self.doc.bounds();
+        let doc = self.transform_clip();
         let Some(f) = self.transform.as_mut() else {
             return;
         };
