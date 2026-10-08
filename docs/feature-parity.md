@@ -103,7 +103,7 @@ screentone are added as live layers.
 - [x] Feather, grow and smooth
 - [x] Saved selections (save, load with replace/add/subtract, delete; kept in the file; follow canvas/image size)
 - [x] Marching-ants overlay
-- [~] Fill, stroke and adjust within a selection, auto-rasterizing vector layers first (fill, clear and painting are clipped; adjustments and vector layers come later)
+- [x] Fill, stroke and adjust within a selection, auto-rasterizing vector layers first (paint, smudge, liquify, fill, gradient, clear and filters rasterize text/path layers; Move keeps them vector)
 
 ## Canvas and guides
 - [~] Pan, zoom and rotate at 60fps or better on large documents (pan, zoom and rotate all work; not yet measured on 8k documents)

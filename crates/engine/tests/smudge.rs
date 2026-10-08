@@ -103,3 +103,16 @@ fn liquify_push_is_one_undo_step_and_cancel_restores() {
     s.stroke_cancel();
     assert_eq!(s.doc().layer(s.active()).unwrap().pixels.read_rect(s.doc().bounds()), before);
 }
+
+#[test]
+fn smudge_and_liquify_rasterise_a_text_layer_first() {
+    for tool in [Tool::Smudge, Tool::Liquify] {
+        let mut s = Session::new(200, 100, Some(Rgba::WHITE));
+        let spec = onepaint_text::TextSpec { text: "Hi".into(), x: 20.0, y: 20.0, font_size_px: 50.0, ..Default::default() };
+        s.execute(Command::AddText { spec }).unwrap();
+        let id = s.active().to_string();
+        s.execute(Command::SetTool { tool }).unwrap();
+        drag(&mut s, 25.0, 90.0, 45.0);
+        assert!(!s.is_text_layer(&id), "{tool:?} edits pixels, so the layer is raster now");
+    }
+}
