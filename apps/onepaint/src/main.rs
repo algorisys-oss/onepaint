@@ -20,6 +20,7 @@ mod settings;
 mod text_ui;
 mod thumbs;
 mod timeline;
+mod track_grid;
 
 use canvas::Canvas;
 use egui::{Key, KeyboardShortcut, Modifiers};
@@ -2156,6 +2157,60 @@ mod tests {
         h.get_by_label("Clear range").click();
         h.run();
         assert!(!h.state().session.anim_settings().has_mark_range());
+    }
+
+    #[test]
+    fn the_track_grid_converts_retimes_and_adds() {
+        use onepaint_engine::anim::tracks_of;
+        let mut h = harness();
+        h.run();
+        h.get_by_label("Animation").click();
+        h.run();
+        for _ in 0..2 {
+            h.get_by_label("Add frame").click();
+            h.run();
+        }
+        h.get_by_label("Convert to tracks").click();
+        h.run();
+        let starts = |h: &Harness<'_, App>| {
+            tracks_of(&h.state().session.doc().root).iter().filter_map(|t| t.sheets.clone()).flatten().map(|f| f.start).collect::<Vec<_>>()
+        };
+        let before = starts(&h);
+        let n = before.len();
+        assert!(n >= 3, "{before:?}");
+        // Drag the last sheet two columns right: one undo step.
+        let cell = h.get_by_label(&format!("Sheet {n} of Track 1")).rect();
+        let col = h.get_by_label("Timeline ruler").rect().width();
+        let per = (col - 132.0) / h.state().session.anim_total_slots() as f32;
+        let from = cell.center();
+        h.event(egui::Event::PointerMoved(from));
+        h.step();
+        press(&mut h, from, true);
+        for i in 1..=6 {
+            h.event(egui::Event::PointerMoved(from + egui::vec2(per * 2.0 * i as f32 / 6.0, 0.0)));
+            h.step();
+        }
+        press(&mut h, from + egui::vec2(per * 2.0, 0.0), false);
+        let after = starts(&h);
+        assert_eq!(after[n - 1], before[n - 1] + 2, "{after:?}");
+        let _ = h.state_mut().session.execute(Command::Undo);
+        assert_eq!(starts(&h), before, "the drag undoes in one step");
+        // A gap takes a new drawing; + Track adds a row.
+        let _ = h.state_mut().session.execute(Command::Redo);
+        h.run();
+        let gap = h.get_by_label(&format!("Track 1 column {}", before[n - 1] + 1)).rect().center();
+        h.event(egui::Event::PointerMoved(gap));
+        h.step();
+        // A gap click moves the playhead there; + Drawing fills it.
+        press(&mut h, gap, true);
+        press(&mut h, gap, false);
+        assert_eq!(h.state().session.anim_slot(), before[n - 1]);
+        h.get_by_label("+ Drawing").click();
+        h.run();
+        assert_eq!(starts(&h).len(), n + 1);
+        h.get_by_label("+ Track").click();
+        h.run();
+        assert_eq!(tracks_of(&h.state().session.doc().root).iter().filter(|t| t.sheets.is_some()).count(), 2);
     }
 
     #[test]

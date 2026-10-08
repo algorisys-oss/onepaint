@@ -178,6 +178,7 @@ pub fn show(app: &mut App, ctx: &egui::Context, screen: egui::Rect) {
                     }
                 });
                 markers_row(app, ui);
+                crate::track_grid::show(app, ui);
                 ui.add_space(4.0);
                 egui::ScrollArea::horizontal().id_salt("frames").max_width(ui.available_width()).show(ui, |ui| {
                     ui.horizontal(|ui| frames_strip(app, ui));

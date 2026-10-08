@@ -116,3 +116,35 @@ built yet (see divergences).
   - "Clear range" removes it.
 - **Export:** "Export marked range (GIF / PNG .zip)" exports just the range.
 - **Not yet:** renaming and recolouring markers.
+
+## Exposure-sheet grid (`track_grid.rs`; happypaint `track-grid.tsx`, `animation-store.ts:398-520`)
+- **When it shows:** tracks documents (any top-level group with
+  `animTrack`) show the grid above the strip. A flipbook offers "Convert to
+  tracks".
+- **Conversion:** the layer frames become one track, keeping their starts
+  and holds. Role frames stay as static tracks. It needs two or more frames
+  and no group frames.
+- **Ruler:**
+  - Click or drag to scrub.
+  - The playhead tick is filled, and ticks outside the play range are
+    shaded.
+  - Markers show as a coloured bar.
+  - Numbers appear every 5 columns, or on every column up to 12.
+- **Rows:**
+  - One row per track, top-first, with name, up/down and delete. The last
+    sheet track can't be deleted.
+  - Static tracks read "every frame".
+  - Columns stretch to fit, at least 14 px wide.
+- **Sheets:**
+  - Click to select a sheet and jump to it.
+  - Drag to retime (`Command::MoveSheet`). The sheet is clamped between its
+    neighbours and never crosses them.
+  - The column width is frozen at the press, so the sheet keeps up with the
+    pointer while the timeline grows.
+- **Gaps:** click moves the playhead and picks the track; double-click adds
+  a drawing there.
+- **Buttons:**
+  - "+ Drawing" adds a drawing at the playhead on the active track
+    (`AddSheet`), and is refused where a sheet already shows.
+  - "+ Track" adds a track on top with one blank sheet.
+- **Undo:** each edit is one undo step, and a whole drag is one.

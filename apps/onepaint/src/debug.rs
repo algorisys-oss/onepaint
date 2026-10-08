@@ -9,7 +9,8 @@
 //! - `ONEPAINT_SMUDGE=1` smudges and mixes across the demo, plus a radial-symmetry stroke.
 //! - `ONEPAINT_GUIDES=1` turns on the grid, 2-point perspective and H/V snap.
 //! - `ONEPAINT_PEN=1` adds a curved, filled path layer and selects the pen.
-//! - `ONEPAINT_ANIM=1` turns the demo layers into frames (background role) with onion skins.
+//! - `ONEPAINT_ANIM=1` turns the demo layers into frames (background role) with onion skins;
+//!   `ONEPAINT_ANIM=tracks` also converts them to exposure-sheet tracks with markers and a range.
 //! - `ONEPAINT_IMPASTO=1` paints thick, wet-impasto and oil strokes, blends one, and bevels a shape.
 //! - `ONEPAINT_EXIT=1` closes the app after the screenshot.
 
@@ -32,6 +33,7 @@ pub struct Debug {
     guides: bool,
     pen: bool,
     anim: bool,
+    tracks: bool,
     impasto: bool,
 }
 
@@ -82,6 +84,7 @@ impl Debug {
             guides: var("ONEPAINT_GUIDES").is_some(),
             pen: var("ONEPAINT_PEN").is_some(),
             anim: var("ONEPAINT_ANIM").is_some(),
+            tracks: var("ONEPAINT_ANIM").is_some_and(|v| v == "tracks"),
             impasto: var("ONEPAINT_IMPASTO").is_some(),
         }
     }
@@ -266,6 +269,20 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
         let _ = app.session.execute(Command::SetFrameRole { id: bg, role: Some("background".into()) });
         crate::timeline::toggle(app);
         let _ = app.session.execute(Command::SetAnimSlot { slot: 1 });
+        if app.debug.tracks {
+            let _ = app.session.execute(Command::ConvertToTracks);
+            let _ = app.session.execute(Command::AddTrack);
+            let t = onepaint_engine::anim::tracks_of(&app.session.doc().root);
+            if let Some(tr) = t.iter().find(|t| t.sheets.as_ref().is_some_and(|s| s.len() > 1)) {
+                let last = tr.sheets.as_ref().and_then(|s| s.last()).map(|f| f.id.clone()).unwrap_or_default();
+                let _ = app.session.execute(Command::MoveSheet { id: last, column: 6 });
+            }
+            let mut a = app.session.anim_settings().clone();
+            a.add_marker(2);
+            (a.mark_in, a.mark_out) = (Some(1), Some(5));
+            let _ = app.session.execute(Command::SetAnimation { settings: Box::new(a) });
+            let _ = app.session.execute(Command::SetAnimSlot { slot: 3 });
+        }
     }
     if frame == 3 && app.debug.transform {
         app.set_tool(onepaint_engine::Tool::Move);

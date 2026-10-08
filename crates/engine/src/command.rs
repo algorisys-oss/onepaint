@@ -138,6 +138,24 @@ pub enum Command {
         playing: bool,
     },
     AddFrame,
+    /// Exposure sheet (spec 24): flipbook → one track; retime and add sheets; tracks.
+    ConvertToTracks,
+    MoveSheet {
+        id: NodeId,
+        column: i64,
+    },
+    AddSheet {
+        track: NodeId,
+        column: usize,
+    },
+    AddTrack,
+    DeleteTrack {
+        id: NodeId,
+    },
+    MoveTrack {
+        id: NodeId,
+        delta: i32,
+    },
     SetFrameHold {
         id: NodeId,
         hold: u32,

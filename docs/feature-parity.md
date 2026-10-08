@@ -142,7 +142,7 @@ screentone are added as live layers.
 - [~] Export a timelapse as video (animated GIF; no MP4)
 
 ## Animation
-- [~] Animation Assist: flipbook frames, holds, background/foreground, onion skins (tint, front, muted), playback (loop/ping-pong/once), timeline strip; exposure-sheet tracks composite and onion per track, timeline markers and a play range (playback and range export); the track grid UI and out-of-pegs are not built
+- [~] Animation Assist: flipbook frames, holds, background/foreground, onion skins (tint, front, muted), playback (loop/ping-pong/once), timeline strip; exposure-sheet tracks composite and onion per track, timeline markers and a play range (playback and range export), the exposure-sheet grid (convert, retime, add sheets and tracks); out-of-pegs and batch timing ops are not built
 - [x] Frame export (animated GIF, PNG sequence zip)
 
 ## Color

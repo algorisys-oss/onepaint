@@ -23,6 +23,7 @@ mod selection_ops;
 pub mod smart_filter_ops;
 mod smudge_ops;
 mod text_ops;
+mod track_ops;
 pub mod transform;
 mod wet_ops;
 pub use guides::Guides;
@@ -1034,6 +1035,12 @@ impl Session {
             Command::SetFrameHold { id, hold } => {
                 self.set_frame_meta(&id, "holdFrames", (hold != 1).then(|| serde_json::json!(hold.clamp(1, 99))))
             }
+            Command::ConvertToTracks => self.convert_to_tracks(),
+            Command::MoveSheet { id, column } => self.move_sheet(&id, column),
+            Command::AddSheet { track, column } => self.add_sheet(&track, column),
+            Command::AddTrack => self.add_track(),
+            Command::DeleteTrack { id } => self.delete_track(&id),
+            Command::MoveTrack { id, delta } => self.move_track(&id, delta),
             Command::SetFrameRole { id, role } => self.set_frame_meta(&id, "animRole", role.map(serde_json::Value::String)),
             Command::SetLayerProps { id, props } => self.set_props(&id, props),
             Command::MergeDown { id } => self.merge_down(&id),
