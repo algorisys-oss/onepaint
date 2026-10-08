@@ -282,8 +282,8 @@ fn generic(ui: &mut Ui, kind: Kind, p: &mut Params, colour: onepaint_color::Rgba
             }
             Control::Color { key, label, default } => {
                 let rgb = m.get(key).and_then(|v| serde_json::from_value::<[f32; 3]>(v.clone()).ok()).unwrap_or(default);
-                if colour_row(ui, label, rgb) {
-                    m.insert(key.into(), serde_json::json!([colour.r, colour.g, colour.b]));
+                if let Some(c) = colour_row(ui, label, rgb, SampleTarget { key, slot: None }, colour) {
+                    m.insert(key.into(), serde_json::json!(c));
                     ch = true;
                 }
             }
@@ -302,16 +302,81 @@ fn generic(ui: &mut Ui, kind: Kind, p: &mut Params, colour: onepaint_color::Rgba
     ch
 }
 
-/// A labelled swatch; clicking it asks for the current colour.
-fn colour_row(ui: &mut Ui, label: &str, rgb: [f32; 3]) -> bool {
+/// A labelled swatch (click: use the current colour) with a pipette that arms
+/// the canvas eyedropper for this target (happypaint `adjustmentsState.sampling`).
+/// Returns the new colour, from either.
+fn colour_row(ui: &mut Ui, label: &str, rgb: [f32; 3], target: SampleTarget, colour: onepaint_color::Rgba) -> Option<[f32; 3]> {
     let t = Tokens::get(ui.ctx());
+    if let Some(c) = take_sample(ui.ctx(), &target) {
+        return Some(c);
+    }
     ui.horizontal(|ui| {
         let c = onepaint_color::Rgba::new(rgb[0], rgb[1], rgb[2], 1.0);
         let hit = widgets::swatch(ui, c, 22.0, false).on_hover_text("Click to use the current colour").clicked();
+        let armed = sampling(ui.ctx()).as_ref() == Some(&target);
+        let (r, resp) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::click());
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Sample {label}")));
+        if armed || resp.hovered() {
+            ui.painter().rect_filled(r, 5.0, if armed { t.accent } else { t.hover });
+        }
+        onepaint_ui_kit::icons::paint(ui, r.shrink(3.0), "pipette", 16.0, if armed { t.on_accent } else { t.fg_muted });
+        if resp.on_hover_text("Pick from the canvas").clicked() {
+            set_sampling(ui.ctx(), (!armed).then_some(target));
+        }
         ui.label(RichText::new(label).color(t.fg_muted));
-        hit
+        hit.then_some([colour.r, colour.g, colour.b])
     })
     .inner
+}
+
+/// Which colour param the canvas eyedropper feeds: a key, and the row of a
+/// Selective Colour stack.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SampleTarget {
+    pub key: &'static str,
+    pub slot: Option<usize>,
+}
+
+fn sampling_id() -> egui::Id {
+    egui::Id::new("adjust-sampling")
+}
+
+fn sampled_id() -> egui::Id {
+    egui::Id::new("adjust-sampled")
+}
+
+/// The armed eyedropper target, if any (the canvas checks this on press).
+pub fn sampling(ctx: &egui::Context) -> Option<SampleTarget> {
+    ctx.data(|d| d.get_temp::<Option<SampleTarget>>(sampling_id())).flatten()
+}
+
+pub fn set_sampling(ctx: &egui::Context, t: Option<SampleTarget>) {
+    ctx.data_mut(|d| d.insert_temp(sampling_id(), t));
+}
+
+/// The canvas sampled `rgb` for the armed target: disarm and hand it to the panel.
+pub fn deliver_sample(ctx: &egui::Context, rgb: [f32; 3]) {
+    if let Some(t) = sampling(ctx) {
+        set_sampling(ctx, None);
+        ctx.data_mut(|d| d.insert_temp(sampled_id(), Some((t, rgb))));
+    }
+}
+
+/// The eyedropper is armed or has a sample on its way to the panel: a canvas
+/// press then must not dismiss the panel.
+pub fn eyedropper_busy(ctx: &egui::Context) -> bool {
+    sampling(ctx).is_some() || ctx.data(|d| d.get_temp::<Option<(SampleTarget, [f32; 3])>>(sampled_id())).flatten().is_some()
+}
+
+fn take_sample(ctx: &egui::Context, target: &SampleTarget) -> Option<[f32; 3]> {
+    let got = ctx.data(|d| d.get_temp::<Option<(SampleTarget, [f32; 3])>>(sampled_id())).flatten();
+    match got {
+        Some((t, rgb)) if &t == target => {
+            ctx.data_mut(|d| d.insert_temp::<Option<(SampleTarget, [f32; 3])>>(sampled_id(), None));
+            Some(rgb)
+        }
+        _ => None,
+    }
 }
 
 /// One slider over a plain `f32` field (display = stored / scale).
@@ -324,23 +389,47 @@ fn field_slider(ui: &mut Ui, label: &str, v: &mut f32, range: std::ops::RangeInc
     changed
 }
 
-/// Selective Colour+: the first sampled range (target, reach, softness and the H/S/V shift).
+/// Selective Colour+: every sampled range (target, reach, softness and the
+/// H/S/V shift), plus add and remove.
 fn selective_ui(ui: &mut Ui, p: &mut Params, colour: onepaint_color::Rgba) -> bool {
+    let t = Tokens::get(ui.ctx());
     let mut samples = p.color_samples.clone().unwrap_or_default();
     if samples.is_empty() {
         samples = default_params(Kind::SelectiveColor).color_samples.unwrap_or_default();
     }
     let mut ch = false;
-    let s: &mut ColorSample = &mut samples[0];
-    if colour_row(ui, "Sampled colour", s.target) {
-        s.target = [colour.r, colour.g, colour.b];
+    let mut drop = None;
+    let n = samples.len();
+    for (i, s) in samples.iter_mut().enumerate() {
+        let s: &mut ColorSample = s;
+        if n > 1 {
+            ui.label(RichText::new(format!("Range {}", i + 1)).font(onepaint_ui_kit::theme::semibold(11.5)).color(t.fg));
+        }
+        if let Some(c) = colour_row(ui, "Sampled colour", s.target, SampleTarget { key: "colorSamples", slot: Some(i) }, colour) {
+            s.target = c;
+            ch = true;
+        }
+        ch |= field_slider(ui, "Range", &mut s.reach, 0.0..=100.0, 0.01, "%");
+        ch |= field_slider(ui, "Softness", &mut s.falloff, 0.0..=100.0, 0.01, "%");
+        ch |= field_slider(ui, "Hue", &mut s.dh, -180.0..=180.0, 1.0, "°");
+        ch |= field_slider(ui, "Saturation", &mut s.ds, -100.0..=100.0, 0.01, "");
+        ch |= field_slider(ui, "Value", &mut s.dv, -100.0..=100.0, 0.01, "");
+        if n > 1 && widgets::secondary_button(ui, "Remove range", 120.0).clicked() {
+            drop = Some(i);
+        }
+        widgets::hairline(ui);
+    }
+    if let Some(i) = drop {
+        samples.remove(i);
         ch = true;
     }
-    ch |= field_slider(ui, "Range", &mut s.reach, 0.0..=100.0, 0.01, "%");
-    ch |= field_slider(ui, "Softness", &mut s.falloff, 0.0..=100.0, 0.01, "%");
-    ch |= field_slider(ui, "Hue", &mut s.dh, -180.0..=180.0, 1.0, "°");
-    ch |= field_slider(ui, "Saturation", &mut s.ds, -100.0..=100.0, 0.01, "");
-    ch |= field_slider(ui, "Value", &mut s.dv, -100.0..=100.0, 0.01, "");
+    if widgets::secondary_button(ui, "Add range", 120.0).clicked() {
+        let mut fresh =
+            default_params(Kind::SelectiveColor).color_samples.unwrap_or_default().into_iter().next().unwrap_or_else(|| samples[0].clone());
+        fresh.target = [colour.r, colour.g, colour.b];
+        samples.push(fresh);
+        ch = true;
+    }
     let mut show = p.show_range.unwrap_or(false);
     if widgets::toggle(ui, &mut show, "Show range").changed() {
         p.show_range = Some(show);

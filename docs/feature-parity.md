@@ -89,7 +89,7 @@ screentone are added as live layers.
 
 - [x] brightness-contrast, hue-saturation, black-white, invert, threshold, posterize, levels, curves, color-balance, gradient-map
 - [x] gaussian-blur, motion-blur, sharpen, noise
-- [~] color-to-alpha, replace-color, selective-color (no canvas eyedropper for the target yet; the panel edits the first selective-colour sample only)
+- [x] color-to-alpha, replace-color, selective-color (pipette samples the target from the canvas; Selective Colour+ ranges can be added and removed)
 - [~] radial-blur, tilt-shift, iris-blur, field-blur, spin-blur (no on-canvas handles; centres and pins are sliders)
 - [~] **Distort:** twirl, pinch, ripple, polar-coordinates (no on-canvas handles)
 - [x] **Stylize:** bloom, chromatic-aberration, halftone, tone, glitch, mosaic, crystallize, emboss, oil-paint, wind, line-art (Sobel/XDoG)

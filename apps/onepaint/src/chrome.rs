@@ -57,6 +57,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             && !rect.contains(p)
             && p.y > M + BAR_H + 4.0
             && !matches!(app.popover, Some(Popover::Confirm | Popover::Filter | Popover::BrushStudio))
+            && !crate::adjust::eyedropper_busy(ctx)
         {
             app.popover = None;
         }

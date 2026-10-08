@@ -820,6 +820,15 @@ impl Canvas {
         for ev in &events {
             match ev {
                 Event::PointerButton { pressed: true, .. } if suppress => {}
+                Event::PointerButton { pos, pressed: true, .. }
+                    if resp.hovered() && matches!(self.drag, Drag::None) && crate::adjust::sampling(ui.ctx()).is_some() =>
+                {
+                    // An adjustment's eyedropper is armed: this press samples the canvas.
+                    let d = self.doc_pt(local(*pos));
+                    if let Some(c) = session.sample_color(d[0].floor() as i32, d[1].floor() as i32) {
+                        crate::adjust::deliver_sample(ui.ctx(), [c.r, c.g, c.b]);
+                    }
+                }
                 Event::PointerButton { pos, button, pressed: true, modifiers: m } if resp.hovered() && matches!(self.drag, Drag::None) => {
                     let p = local(*pos);
                     self.drag = self.press(session, p, *button, *m, time_ms, space_held, r_held);

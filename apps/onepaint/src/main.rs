@@ -1866,6 +1866,28 @@ mod tests {
     }
 
     #[test]
+    fn the_adjustment_eyedropper_samples_the_canvas() {
+        let mut h = harness();
+        h.run();
+        let red = onepaint_color::Rgba { r: 1.0, g: 0.0, b: 0.0, a: 1.0 };
+        let _ = h.state_mut().session.execute(Command::SetColor { rgba: red });
+        drag_stroke(&mut h, pos2(560.0, 420.0), pos2(720.0, 420.0));
+        let _ = h.state_mut().session.execute(Command::SetColor { rgba: onepaint_color::Rgba::BLACK });
+        let _ = h.state_mut().session.execute(Command::BeginFilter { kind: "color-to-alpha".into() });
+        h.state_mut().popover = Some(Popover::Filter);
+        h.run();
+        h.get_by_label("Sample Colour").click();
+        h.run();
+        click(&mut h, pos2(640.0, 420.0));
+        h.run();
+        let target = h.state().session.filter_state().unwrap().1.to_json().get("target").cloned().unwrap();
+        let t: [f32; 3] = serde_json::from_value(target).unwrap();
+        assert!(t[0] > 0.9 && t[1] < 0.1 && t[2] < 0.1, "sampled red: {t:?}");
+        assert_eq!(h.state().popover, Some(Popover::Filter));
+        assert!(h.state().session.filter_active(), "sampling doesn't end the session");
+    }
+
+    #[test]
     fn a_filter_becomes_a_smart_filter_and_bakes() {
         let mut h = harness();
         h.run();
