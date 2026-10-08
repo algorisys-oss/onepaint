@@ -128,6 +128,34 @@ fn style_at_reports_the_common_style() {
 }
 
 #[test]
+fn whole_object_edits_set_the_object_style() {
+    let s = apply_style(&spec("Hello world"), 6..11, &StyleEdit::Bold);
+    // Mixed → on, at object level; the run overrides go.
+    let b = apply_to_object(&s, &StyleEdit::Bold);
+    assert!(b.bold);
+    assert_eq!(b.runs, None);
+    assert!(!apply_to_object(&b, &StyleEdit::Bold).bold);
+    // Colour and size reach the object and keep other run styling.
+    let c = apply_style(&s, 0..2, &StyleEdit::Color("#ff0000".into()));
+    let c = apply_to_object(&c, &StyleEdit::Color("#00ff00".into()));
+    assert_eq!(c.color, "#00ff00");
+    assert_eq!(texts(&c), ["Hello ", "world"]);
+    let big = apply_to_object(&apply_style(&s, 0..1, &StyleEdit::ScaleSize(2.0)), &StyleEdit::ScaleSize(1.1));
+    assert_eq!(big.font_size_px, 44.0);
+    assert_eq!(big.runs.unwrap()[0].font_size_px, Some(88.0), "ratios kept");
+    // Underline everything → the object flag; again → off.
+    let u = apply_to_object(&spec("abc"), &StyleEdit::Underline);
+    assert_eq!((u.underline, u.runs.is_none()), (Some(true), true));
+    assert_eq!(apply_to_object(&u, &StyleEdit::Underline).underline, None);
+    // Strikethrough has no object field, so it is a run over everything.
+    let st = apply_to_object(&spec("abc"), &StyleEdit::Strikethrough);
+    assert_eq!(st.runs.unwrap()[0].strikethrough, Some(true));
+    // With no text yet, underline still toggles the object flag.
+    assert_eq!(apply_to_object(&spec(""), &StyleEdit::Underline).underline, Some(true));
+    assert!(apply_to_object(&spec(""), &StyleEdit::Bold).bold);
+}
+
+#[test]
 fn rich_runs_round_trip_json() {
     let s = apply_style(&apply_style(&spec("Hello world"), 0..5, &StyleEdit::Italic), 6..11, &StyleEdit::ScaleSize(1.1));
     let v = serde_json::to_value(&s).unwrap();

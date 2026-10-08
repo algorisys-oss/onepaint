@@ -224,6 +224,19 @@ fn strokes_match_happypaint_goldens() {
 }
 
 #[test]
+fn cloud_stroke_outlines_only_the_union() {
+    let s = Renderer::new().render(&[golden_spec(stroked(BalloonShape::Cloud))], 400, 240);
+    // The right lobe is centred on the ellipse at block (222, 40) with r ≈ 23.6:
+    // its inner arc lies inside the body and stays fill, its outer arc is stroked.
+    for x in 256..=260 {
+        let p = ours(&s, x, 100);
+        assert!(p[0] > 0.9 && p[2] < 0.1, "inner arc at {x}: {p:?}");
+    }
+    let outer = (300..=310).map(|x| ours(&s, x, 100)).any(|p| p[2] > 0.9 && p[0] < 0.1);
+    assert!(outer, "outer arc stroked");
+}
+
+#[test]
 fn tail_reaches_its_tip_and_leaves_no_wedge() {
     let b = Balloon { tail: tail(300.0, 130.0, Some(30.0)), ..red(BalloonShape::Oval) };
     let (w, h, g) = golden("oval_tail");
@@ -297,6 +310,18 @@ fn tail_grows_the_quad_and_rotates() {
     assert!((q[2][0] - (50.0 + 260.0)).abs() < 1e-6 && (q[2][1] - (50.0 + 160.0)).abs() < 1e-6, "{q:?}");
     let px = r.render(std::slice::from_ref(&s), 400, 400);
     assert!(px.get(253, 174)[3] > 0.5, "tail drawn towards its tip");
+}
+
+#[test]
+fn tail_angle_control() {
+    let t = tail_from_angle(40.0, 90.0);
+    assert!(t.x.abs() < 1e-9 && (t.y - 88.0).abs() < 1e-9 && t.width == Some(20.0), "{t:?}");
+    assert!((tail_angle(Some(&t)) - 90.0).abs() < 1e-9);
+    assert!((tail_angle(Some(&tail_from_angle(10.0, 315.0))) - 315.0).abs() < 1e-9);
+    assert_eq!(tail_from_angle(10.0, 0.0).width, Some(8.0), "8 px minimum");
+    assert_eq!(tail_angle(None), 90.0);
+    let d = default_balloon(BalloonShape::Cloud);
+    assert_eq!((d.fill.as_str(), d.stroke.as_deref(), d.stroke_width, d.tail), ("#ffffff", Some("#000000"), Some(3.0), None));
 }
 
 #[test]

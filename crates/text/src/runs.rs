@@ -137,13 +137,67 @@ pub fn normalize(spec: &mut TextSpec, runs: Vec<TextRun>) {
         .collect();
     let runs = merge(runs);
     spec.text = runs.iter().map(|r| r.text.as_str()).collect();
-    if runs.iter().any(has_style) {
+    // Underlined throughout and otherwise plain: that is the object underline.
+    let all_underlined = !runs.is_empty() && runs.iter().all(|r| r.underline == Some(true));
+    if runs.is_empty() {
+        spec.runs = None; // no text: the object style stands
+    } else if all_underlined && !runs.iter().any(|r| has_style(&TextRun { underline: None, ..r.clone() })) {
+        spec.runs = None;
+        spec.underline = Some(true);
+    } else if runs.iter().any(has_style) {
         spec.runs = Some(runs);
         spec.underline = None; // runs decide (rich-text spec rule 2)
     } else {
         spec.runs = None;
         spec.underline = None;
     }
+}
+
+/// Apply a toolbar command to the whole object (nothing selected): the object
+/// field changes and the matching run overrides are dropped. Toggles turn off
+/// only when every char already has the attribute.
+pub fn apply_to_object(spec: &TextSpec, edit: &StyleEdit) -> TextSpec {
+    let all = style_at(spec, 0..usize::MAX);
+    let mut out = spec.clone();
+    // No text yet: underline is the object flag; strikethrough has none.
+    if spec.text.is_empty() && matches!(edit, StyleEdit::Underline | StyleEdit::Strikethrough) {
+        if *edit == StyleEdit::Underline {
+            out.underline = (!all.underline).then_some(true);
+        }
+        return out;
+    }
+    let mut runs = spec_runs(spec);
+    match edit {
+        StyleEdit::Bold => {
+            out.bold = !all.bold;
+            runs.iter_mut().for_each(|r| r.bold = None);
+        }
+        StyleEdit::Italic => {
+            out.italic = !all.italic;
+            runs.iter_mut().for_each(|r| r.italic = None);
+        }
+        StyleEdit::Underline => runs.iter_mut().for_each(|r| r.underline = (!all.underline).then_some(true)),
+        StyleEdit::Strikethrough => runs.iter_mut().for_each(|r| r.strikethrough = (!all.strikethrough).then_some(true)),
+        StyleEdit::Color(c) => {
+            out.color = normalize_color(c);
+            runs.iter_mut().for_each(|r| r.color = None);
+        }
+        StyleEdit::Font(f) => {
+            out.font_family = f.clone();
+            runs.iter_mut().for_each(|r| r.font_family = None);
+        }
+        StyleEdit::ScaleSize(k) => {
+            out.font_size_px = step_size(spec.font_size_px, *k);
+            runs.iter_mut().for_each(|r| r.font_size_px = r.font_size_px.map(|s| step_size(s, *k)));
+        }
+    }
+    normalize(&mut out, runs);
+    out
+}
+
+/// One A−/A+ step: `size·k`, rounded to 0.01 px, at least 2 px (PC:377-420).
+fn step_size(size: f64, k: f64) -> f64 {
+    ((size * k * 100.0).round() / 100.0).max(2.0)
 }
 
 fn clamp_range(spec_runs: &[TextRun], r: Range<usize>) -> Range<usize> {
@@ -188,7 +242,7 @@ pub fn apply_style(spec: &TextSpec, range: Range<usize>, edit: &StyleEdit) -> Te
             StyleEdit::Font(f) => r.font_family = Some(f.clone()),
             StyleEdit::ScaleSize(f) => {
                 let size = r.font_size_px.unwrap_or(spec.font_size_px);
-                r.font_size_px = Some(((size * f * 100.0).round() / 100.0).max(2.0));
+                r.font_size_px = Some(step_size(size, *f));
             }
         }
     }

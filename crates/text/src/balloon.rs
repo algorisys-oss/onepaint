@@ -67,6 +67,27 @@ impl Balloon {
     }
 }
 
+/// Tail reach as a multiple of the font size (TP:85).
+pub const TAIL_REACH: f64 = 2.2;
+
+/// A tail aimed at `deg` (0 = right, 90 = down) from the block origin, at a
+/// readable fixed reach (TP:91-97).
+pub fn tail_from_angle(font_size: f64, deg: f64) -> Tail {
+    let r = deg.to_radians();
+    let reach = font_size * TAIL_REACH;
+    Tail { x: r.cos() * reach, y: r.sin() * reach, width: Some((font_size * 0.5).max(8.0)) }
+}
+
+/// The tail's direction in degrees [0, 360); 90 when there is none (TP:86-90).
+pub fn tail_angle(tail: Option<&Tail>) -> f64 {
+    tail.map_or(90.0, |t| (t.y.atan2(t.x).to_degrees() + 360.0) % 360.0)
+}
+
+/// The balloon a shape pick creates when there is none yet (TS:138-139).
+pub fn default_balloon(shape: BalloonShape) -> Balloon {
+    Balloon { shape, fill: white(), stroke: Some("#000000".into()), stroke_width: Some(3.0), pad: None, tail: None }
+}
+
 /// Float AABB in document space.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Aabb {
@@ -249,10 +270,12 @@ pub(crate) fn coverage(paths: &[Vec<[f64; 2]>], stroke_w: f64, w: usize, h: usiz
         let py = y as f64 + 0.5 - oy;
         for x in 0..w {
             let p = [x as f64 + 0.5 - ox, py];
-            // Union SDF = min over sub-paths; a box farther than the best can't lower it.
+            // Union SDF = min over sub-paths. Outside a sub-path's box its SDF is
+            // at least the box distance, so a box farther than the best can't lower it.
             let mut best = f64::INFINITY;
             for poly in &polys {
-                if poly.box_dist(p) >= best {
+                let d = poly.box_dist(p);
+                if d > 0.0 && d >= best {
                     continue;
                 }
                 best = best.min(poly.sdf(p));
