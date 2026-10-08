@@ -134,8 +134,15 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
             outline_width: Some(6.0),
             outline_color: Some("#1d1d1f".into()),
             rotation: -0.12,
+            balloon: Some(onepaint_text::balloon::Balloon {
+                tail: Some(onepaint_text::balloon::tail_from_angle(120.0, 120.0)),
+                ..onepaint_text::balloon::default_balloon(onepaint_text::balloon::BalloonShape::Oval)
+            }),
             ..Default::default()
         };
+        // A rich run: "text" in red italics.
+        let spec = onepaint_text::runs::apply_style(&spec, 9..13, &onepaint_text::runs::StyleEdit::Color("#e5484d".into()));
+        let spec = onepaint_text::runs::apply_style(&spec, 9..13, &onepaint_text::runs::StyleEdit::Italic);
         let _ = app.session.execute(Command::AddText { spec: spec.clone() });
         app.set_tool(onepaint_engine::Tool::Text);
         let id = app.session.active().to_string();

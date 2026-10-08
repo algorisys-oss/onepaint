@@ -40,4 +40,5 @@ The happypaint references are relative to `../happypaint/frontend/src/`.
 | 25 | [Export dialog](25-export.md) | formats, engine, app |
 | 26 | [Recording, replay, timelapse](26-recording.md) | engine, app |
 | 27 | [Brush studio](27-brush-studio.md) | brush, engine, app |
+| 28 | [Speech balloons and rich-text editing](28-balloons-rich-text.md) | text, engine, app |
 | 29 | [Distort and mesh warp](29-distort-warp.md) | engine, app |

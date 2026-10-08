@@ -10,6 +10,11 @@ use onepaint_raster::{Rect, Surface};
 use serde::{Deserialize, Serialize};
 use std::sync::{Mutex, OnceLock};
 
+pub mod balloon;
+pub mod runs;
+
+use balloon::{Balloon, balloon_extra_local_points, balloon_pad, balloon_paths, spec_font_size};
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Align {
@@ -53,7 +58,7 @@ fn d_line() -> f64 {
     1.2
 }
 
-/// happypaint `TextSpec` (TR:62-108); unknown fields (balloons…) are kept.
+/// happypaint `TextSpec` (TR:62-108); unknown fields are kept in `extra`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TextSpec {
@@ -68,6 +73,9 @@ pub struct TextSpec {
     pub color: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bg_color: Option<String>,
+    /// Speech balloon behind the block (spec 28).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub balloon: Option<Balloon>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outline_width: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -105,6 +113,7 @@ impl Default for TextSpec {
             font_size_px: d_size(),
             color: d_color(),
             bg_color: None,
+            balloon: None,
             outline_width: None,
             outline_color: None,
             underline: None,
@@ -172,7 +181,7 @@ fn to_family(name: &str) -> Family<'_> {
 }
 
 fn hex(c: &str) -> Rgba {
-    Rgba::from_hex(c).unwrap_or(Rgba::BLACK)
+    Rgba::from_hex(&runs::normalize_color(c)).unwrap_or(Rgba::BLACK)
 }
 
 fn lin(c: Rgba) -> [f32; 3] {
@@ -216,6 +225,38 @@ impl Local {
     }
 }
 
+/// A laid-out spec: its local canvas, where the block origin sits on it, and
+/// the block size (doc px).
+struct Laid {
+    local: Local,
+    ox: f64,
+    oy: f64,
+    block_w: f64,
+    block_h: f64,
+}
+
+/// A block-space rect `[x0, x1) × [y0, y1)`.
+#[derive(Clone, Copy)]
+struct Bar {
+    x0: f32,
+    x1: f32,
+    y0: f32,
+    y1: f32,
+}
+
+/// Fill a decoration bar into the glyph layer and its coverage.
+fn deco_rect(fill: &mut Local, cover: &mut [f32], (ox, oy): (i64, i64), b: Bar, c: [f32; 3]) {
+    for yy in b.y0.floor() as i64..b.y1.ceil() as i64 {
+        for xx in b.x0.floor() as i64..b.x1.ceil() as i64 {
+            let (px, py) = (xx + ox, yy + oy);
+            fill.over(px, py, c, 1.0);
+            if px >= 0 && py >= 0 && (px as usize) < fill.w && (py as usize) < fill.h {
+                cover[py as usize * fill.w + px as usize] = 1.0;
+            }
+        }
+    }
+}
+
 /// Shared text renderer (system fonts are loaded once per process).
 #[derive(Clone, Copy, Default)]
 pub struct Renderer;
@@ -230,11 +271,11 @@ impl Renderer {
         let mut out = Surface::new();
         let doc = Rect::new(0, 0, w as i32, h as i32);
         for s in specs {
-            let Some((local, pad)) = self.layout(s) else { continue };
+            let Some(Laid { local, ox, oy, .. }) = self.layout(s) else { continue };
             let (c, sn) = (s.rotation.cos(), s.rotation.sin());
             // Doc-space bounds of the rotated local canvas.
             let corners = [[0.0, 0.0], [local.w as f64, 0.0], [0.0, local.h as f64], [local.w as f64, local.h as f64]].map(|p| {
-                let (lx, ly) = (p[0] - pad, p[1] - pad);
+                let (lx, ly) = (p[0] - ox, p[1] - oy);
                 [s.x + lx * c - ly * sn, s.y + lx * sn + ly * c]
             });
             let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
@@ -246,7 +287,7 @@ impl Renderer {
             for yy in 0..r.h {
                 for xx in 0..r.w {
                     let (dx, dy) = ((r.x + xx) as f64 + 0.5 - s.x, (r.y + yy) as f64 + 0.5 - s.y);
-                    let (lx, ly) = (dx * c + dy * sn + pad, -dx * sn + dy * c + pad);
+                    let (lx, ly) = (dx * c + dy * sn + ox, -dx * sn + dy * c + oy);
                     let p = local.sample(lx, ly);
                     if p[3] <= 0.0 {
                         continue;
@@ -264,8 +305,9 @@ impl Renderer {
         out
     }
 
-    /// Lay out and draw one spec into its local canvas; returns it and its padding.
-    fn layout(&self, s: &TextSpec) -> Option<(Local, f64)> {
+    /// Lay out and draw one spec into its local canvas.
+    fn layout(&self, s: &TextSpec) -> Option<Laid> {
+        let rich = s.runs.as_ref().is_some_and(|r| !r.is_empty());
         let runs: Vec<TextRun> = match &s.runs {
             Some(r) if !r.is_empty() => r.clone(),
             _ => vec![TextRun { text: s.text.clone(), ..Default::default() }],
@@ -315,21 +357,41 @@ impl Renderer {
         let mut block_w: f32 = 0.0;
         let mut block_h: f32 = 0.0;
         let mut lines = Vec::new();
+        // Per-run decoration spans: (x0, x1, baseline, run index).
+        let mut frags: Vec<(f32, f32, f32, usize)> = Vec::new();
         for run in buffer.layout_runs() {
             block_w = block_w.max(run.line_w);
             block_h = block_h.max(run.line_top + run.line_height);
             let x0 = run.glyphs.first().map_or(0.0, |g| g.x);
             lines.push((run.line_top, run.line_height, x0, run.line_w));
+            for g in run.glyphs {
+                match frags.last_mut() {
+                    Some(f) if f.3 == g.metadata && f.2 == run.line_y && (g.x - f.1).abs() < 0.5 => f.1 = g.x + g.w,
+                    _ => frags.push((g.x, g.x + g.w, run.line_y, g.metadata)),
+                }
+            }
         }
         if let Some(bw) = s.box_width.filter(|w| *w > 0.0) {
             block_w = bw as f32;
         }
+        let (bw, bh) = (block_w as f64, block_h as f64);
+        let max_size = spec_font_size(s);
         let outline = s.outline_width.unwrap_or(0.0).max(0.0);
-        let pad = (outline.max(s.font_size_px * 0.18) + 2.0).ceil();
-        let (w, h) = ((block_w as f64 + 2.0 * pad).ceil() as usize + 1, (block_h as f64 + 2.0 * pad).ceil() as usize + 1);
+        let pad = (outline.max(max_size * 0.18) + 2.0).ceil();
+        // Local extent in block coordinates: the padded block plus the balloon.
+        let (mut lo, mut hi) = ([-pad, -pad], [bw + pad, bh + pad]);
+        let paths = balloon_paths(s, bw, bh);
+        let stroke_w = s.balloon.as_ref().map_or(0.0, Balloon::stroke_px);
+        for p in paths.iter().flatten() {
+            let m = stroke_w / 2.0 + 2.0;
+            lo = [lo[0].min(p[0] - m), lo[1].min(p[1] - m)];
+            hi = [hi[0].max(p[0] + m), hi[1].max(p[1] + m)];
+        }
+        let (ox, oy) = ((-lo[0]).ceil(), (-lo[1]).ceil());
+        let (w, h) = ((ox + hi[0]).ceil() as usize + 1, (oy + hi[1]).ceil() as usize + 1);
         let mut fill = Local { w, h, px: vec![[0.0; 4]; w * h] };
         let mut cover = vec![0.0f32; w * h];
-        let p = pad as i64;
+        let off = (ox as i64, oy as i64);
         buffer.draw(system, cache, Color::rgb(0, 0, 0), |x, y, gw, gh, color| {
             let a = color.a() as f32 / 255.0;
             if a <= 0.0 {
@@ -338,7 +400,7 @@ impl Renderer {
             let c = lin(Rgba::new(color.r() as f32 / 255.0, color.g() as f32 / 255.0, color.b() as f32 / 255.0, 1.0));
             for yy in 0..gh as i64 {
                 for xx in 0..gw as i64 {
-                    let (px, py) = (x as i64 + xx + p, y as i64 + yy + p);
+                    let (px, py) = (x as i64 + xx + off.0, y as i64 + yy + off.1);
                     fill.over(px, py, c, a);
                     if px >= 0 && py >= 0 && (px as usize) < w && (py as usize) < h {
                         let i = py as usize * w + px as usize;
@@ -347,35 +409,53 @@ impl Renderer {
                 }
             }
         });
-        // Underline (object-level; runs' underline handled the same way when set).
-        let underline = s.underline.unwrap_or(false) || runs.iter().any(|r| r.underline == Some(true));
-        if underline {
+        if rich {
+            // Per-fragment decorations in the run's colour (TR:319-323).
+            for &(x0, x1, base, i) in &frags {
+                let Some(r) = runs.get(i) else { continue };
+                let rs = r.font_size_px.unwrap_or(s.font_size_px).max(1.0) as f32;
+                let th = (rs * 0.06).max(1.0);
+                let c = lin(hex(r.color.as_deref().unwrap_or(&s.color)));
+                if r.underline == Some(true) {
+                    let y0 = base + rs * 0.10;
+                    deco_rect(&mut fill, &mut cover, off, Bar { x0, x1, y0, y1: y0 + th }, c);
+                }
+                if r.strikethrough == Some(true) {
+                    let y0 = base - rs * 0.28;
+                    deco_rect(&mut fill, &mut cover, off, Bar { x0, x1, y0, y1: y0 + th }, c);
+                }
+            }
+        } else if s.underline.unwrap_or(false) {
             let fc = lin(hex(&s.color));
             for &(top, lh, x0, lw) in &lines {
                 let half = (lh - size) / 2.0;
-                let uy = top + half + size * 0.92;
+                let y0 = top + half + size * 0.92;
                 let th = (size * 0.06).max(1.0);
-                for yy in uy as i64..(uy + th).ceil() as i64 {
-                    for xx in x0 as i64..(x0 + lw).ceil() as i64 {
-                        fill.over(xx + p, yy + p, fc, 1.0);
-                        let (px, py) = (xx + p, yy + p);
-                        if px >= 0 && py >= 0 && (px as usize) < w && (py as usize) < h {
-                            cover[py as usize * w + px as usize] = 1.0;
-                        }
-                    }
-                }
+                deco_rect(&mut fill, &mut cover, off, Bar { x0, x1: x0 + lw, y0, y1: y0 + th }, fc);
             }
         }
-        // Compose: background, then the outline under the fill.
+        // Compose: background, balloon, then the outline under the fill.
         let mut local = Local { w, h, px: vec![[0.0; 4]; w * h] };
         if let Some(bg) = s.bg_color.as_deref() {
             let c = lin(hex(bg));
-            let bp = s.font_size_px * 0.18;
-            let (bx0, by0) = ((pad - bp).floor() as i64, (pad - bp).floor() as i64);
-            let (bx1, by1) = ((pad + block_w as f64 + bp).ceil() as i64, (pad + block_h as f64 + bp).ceil() as i64);
+            let bp = max_size * 0.18;
+            let (bx0, by0) = ((ox - bp).floor() as i64, (oy - bp).floor() as i64);
+            let (bx1, by1) = ((ox + bw + bp).ceil() as i64, (oy + bh + bp).ceil() as i64);
             for yy in by0..by1 {
                 for xx in bx0..bx1 {
                     local.over(xx, yy, c, 1.0);
+                }
+            }
+        }
+        if let Some(b) = &s.balloon {
+            let cov = balloon::coverage(&paths, stroke_w, w, h, ox, oy);
+            let fc = lin(hex(&b.fill));
+            let sc = b.stroke.as_deref().map(|c| lin(hex(c)));
+            for i in 0..w * h {
+                let (x, y) = ((i % w) as i64, (i / w) as i64);
+                local.over(x, y, fc, cov.fill[i]);
+                if let Some(sc) = sc {
+                    local.over(x, y, sc, cov.stroke[i]);
                 }
             }
         }
@@ -412,16 +492,28 @@ impl Renderer {
                 *d = [f[0] + d[0] * k, f[1] + d[1] * k, f[2] + d[2] * k, f[3] + d[3] * k];
             }
         }
-        Some((local, pad))
+        Some(Laid { local, ox, oy, block_w: bw, block_h: bh })
     }
 
-    /// The rotated block (doc px) a spec occupies, for hit-testing and handles:
-    /// corners TL, TR, BR, BL.
+    /// The rotated box (doc px) a spec occupies, for hit-testing and handles:
+    /// corners TL, TR, BR, BL. With a balloon it grows to the balloon pad and
+    /// the tail (TR:681-725); otherwise it hugs the block, even with `bgColor`.
     pub fn quad(&self, s: &TextSpec) -> Option<[[f64; 2]; 4]> {
-        let (local, pad) = self.layout(s)?;
-        let (bw, bh) = (local.w as f64 - 2.0 * pad - 1.0, local.h as f64 - 2.0 * pad - 1.0);
+        let Laid { block_w: bw, block_h: bh, .. } = self.layout(s)?;
+        let (mut lo, mut hi) = ([0.0, 0.0], [bw, bh]);
+        if s.balloon.is_some() {
+            let pad = balloon_pad(s, spec_font_size(s));
+            (lo, hi) = ([-pad, -pad], [bw + pad, bh + pad]);
+            for p in balloon_extra_local_points(s) {
+                lo = [lo[0].min(p[0]), lo[1].min(p[1])];
+                hi = [hi[0].max(p[0]), hi[1].max(p[1])];
+            }
+        }
         let (c, sn) = (s.rotation.cos(), s.rotation.sin());
-        Some([[0.0, 0.0], [bw, 0.0], [bw, bh], [0.0, bh]].map(|p| [s.x + p[0] * c - p[1] * sn, s.y + p[0] * sn + p[1] * c]))
+        Some(
+            [[lo[0], lo[1]], [hi[0], lo[1]], [hi[0], hi[1]], [lo[0], hi[1]]]
+                .map(|p| [s.x + p[0] * c - p[1] * sn, s.y + p[0] * sn + p[1] * c]),
+        )
     }
 }
 

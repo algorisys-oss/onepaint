@@ -1515,6 +1515,49 @@ mod tests {
     }
 
     #[test]
+    fn text_editor_styles_a_selection_and_adds_a_balloon() {
+        let mut h = harness();
+        h.run();
+        key(&mut h, egui::Key::T, egui::Modifiers::NONE);
+        click(&mut h, pos2(500.0, 300.0));
+        h.run();
+        h.event(Event::Text("Hello world".into()));
+        h.run();
+        // Select "world" with Shift+Left and bold just that.
+        for _ in 0..5 {
+            key(&mut h, egui::Key::ArrowLeft, egui::Modifiers::SHIFT);
+        }
+        h.get_by_label("B").click();
+        h.run();
+        let id = h.state().session.active().to_string();
+        let spec = h.state().session.texts(&id)[0].clone();
+        let runs = spec.runs.clone().expect("rich runs");
+        assert_eq!(runs.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(), ["Hello ", "world"]);
+        assert_eq!(runs[1].bold, Some(true));
+        assert!(!spec.bold, "only the selection");
+        // Typing keeps the runs in step.
+        key(&mut h, egui::Key::End, egui::Modifiers::NONE);
+        h.event(Event::Text("!".into()));
+        h.run();
+        assert_eq!(h.state().session.texts(&id)[0].runs.clone().unwrap()[1].text, "world!");
+        // A speech balloon with a tail.
+        h.get_by_label("Balloon").click();
+        h.run();
+        h.get_by_label("Speech").click();
+        h.run();
+        let b = h.state().session.texts(&id)[0].balloon.clone().expect("balloon");
+        assert_eq!(b.shape, onepaint_text::balloon::BalloonShape::Oval);
+        assert_eq!((b.fill.as_str(), b.stroke.as_deref(), b.stroke_width), ("#ffffff", Some("#000000"), Some(3.0)));
+        assert!(b.tail.is_none(), "no tail until it is aimed");
+        // Back to none.
+        h.get_by_label("Balloon").click();
+        h.run();
+        h.get_by_label("None").click();
+        h.run();
+        assert!(h.state().session.texts(&id)[0].balloon.is_none());
+    }
+
+    #[test]
     fn symmetry_mirrors_strokes_and_s_picks_smudge() {
         let mut h = harness();
         h.run();
