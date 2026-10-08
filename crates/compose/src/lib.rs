@@ -4,6 +4,7 @@
 //! groups, clip families, masks, inherit alpha). See `docs/specs/02-compositor.md`.
 
 pub mod blend;
+pub mod relief;
 
 use blend::{blend_px, blend_px_alpha_lock, clip_over};
 use onepaint_doc::{BlendMode, Document, Layer, Node};
@@ -56,7 +57,7 @@ fn zeros() -> Buf {
 }
 
 /// A layer's pixels on one tile, with any live stroke applied and its mask multiplied in.
-fn layer_content(l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeOverlay>) -> Option<Buf> {
+fn layer_content(l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, frame: Frame) -> Option<Buf> {
     let base = l.pixels.tile(tx, ty);
     let on_layer = ov.filter(|o| o.layer_id == l.id);
     let stroke = on_layer.filter(|o| !o.mask).and_then(|o| o.stroke.tile(tx, ty).map(|t| (o, t)));
@@ -71,6 +72,10 @@ fn layer_content(l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeOverlay>) -> Opt
             let r = apply_stroke_px(px(&buf, i), px(&s, i), o.opacity, o.mode);
             buf[i..i + 4].copy_from_slice(&r);
         }
+    }
+    // Relief lights the paint before the mask, opacity and blend (C:1330).
+    if let Some(h) = &l.height {
+        relief::shade(&mut buf, h, tx, ty, Rect::new(0, 0, frame.doc_w as i32, frame.doc_h as i32));
     }
     if l.mask_enabled
         && let Some(mask) = &l.mask
@@ -136,13 +141,13 @@ fn riders(nodes: &[Node], i: usize) -> usize {
     j
 }
 
-fn draw_clipped(fam: &mut [f32], riders: &[Node], tx: i32, ty: i32, ov: Option<&StrokeOverlay>) {
+fn draw_clipped(fam: &mut [f32], riders: &[Node], tx: i32, ty: i32, ov: Option<&StrokeOverlay>, frame: Frame) {
     for r in riders {
         let Node::Layer(c) = r else { continue };
         if !c.visible || c.opacity <= 0.0 {
             continue;
         }
-        if let Some(cb) = layer_content(c, tx, ty, ov) {
+        if let Some(cb) = layer_content(c, tx, ty, ov, frame) {
             // A clipped layer's own blend mode is ignored (happypaint behaviour).
             clip_into(fam, &cb, c.opacity);
         }
@@ -173,7 +178,7 @@ fn composite_nodes(nodes: &[Node], tx: i32, ty: i32, target: &mut Buf, ov: Optio
                             p.iter_mut().for_each(|v| *v *= k);
                         }
                     }
-                    draw_clipped(&mut buf, &nodes[i + 1..j], tx, ty, ov);
+                    draw_clipped(&mut buf, &nodes[i + 1..j], tx, ty, ov, frame);
                     ghost_tint(&mut buf, g);
                     blend_into(target, &buf, g.blend_mode, g.opacity);
                 }
@@ -182,10 +187,10 @@ fn composite_nodes(nodes: &[Node], tx: i32, ty: i32, target: &mut Buf, ov: Optio
                 if l.visible && l.opacity > 0.0 {
                     let family = &nodes[i + 1..j];
                     if family.is_empty() {
-                        draw_layer(target, l, tx, ty, ov);
+                        draw_layer(target, l, tx, ty, ov, frame);
                     } else {
-                        let mut fam = layer_content(l, tx, ty, ov).unwrap_or_else(zeros);
-                        draw_clipped(&mut fam, family, tx, ty, ov);
+                        let mut fam = layer_content(l, tx, ty, ov, frame).unwrap_or_else(zeros);
+                        draw_clipped(&mut fam, family, tx, ty, ov, frame);
                         if l.inherit_alpha {
                             clip_into(target, &fam, l.opacity);
                         } else {
@@ -247,8 +252,8 @@ fn draw_adjustment(target: &mut Buf, l: &Layer, adj: &onepaint_doc::Adjustment, 
     blend_into(target, &out, l.blend_mode, l.opacity);
 }
 
-fn draw_layer(target: &mut Buf, l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeOverlay>) {
-    let Some(mut c) = layer_content(l, tx, ty, ov) else {
+fn draw_layer(target: &mut Buf, l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, frame: Frame) {
+    let Some(mut c) = layer_content(l, tx, ty, ov, frame) else {
         return;
     };
     if l.inherit_alpha {

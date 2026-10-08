@@ -10,7 +10,18 @@ fn pt(x: f64, y: f64) -> StrokePoint {
 }
 
 fn params(strength: f64, wet: Option<WetParams>) -> SmudgeParams {
-    SmudgeParams { size: 20.0, strength, hardness: 0.35, tip: Tip::Circle, size_pressure: 0.0, flow_pressure: 0.0, spacing: None, wet }
+    SmudgeParams {
+        size: 20.0,
+        strength,
+        hardness: 0.35,
+        tip: Tip::Circle,
+        size_pressure: 0.0,
+        flow_pressure: 0.0,
+        spacing: None,
+        wet,
+        impasto: 0.0,
+        blend: 0.0,
+    }
 }
 
 const DOC: Rect = Rect { x: 0, y: 0, w: 200, h: 100 };

@@ -173,8 +173,10 @@ pub struct Layer {
     pub mask: Option<Surface>,
     pub mask_enabled: bool,
     pub pixels: Surface,
+    /// Impasto paint height (spec 35), in every channel; `None` = flat.
+    pub height: Option<Surface>,
     pub extra: Extra,
-    /// Opaque file chunks onepaint doesn't interpret yet (`height`, `overflow`), re-emitted on save.
+    /// Opaque file chunks onepaint doesn't interpret yet (`overflow`), re-emitted on save.
     pub chunks: std::collections::BTreeMap<String, Vec<u8>>,
     /// Set for adjustment and fill layers (they have no pixels of their own).
     pub adjustment: Option<Box<Adjustment>>,
@@ -195,6 +197,7 @@ impl Layer {
             mask: None,
             mask_enabled: true,
             pixels: Surface::new(),
+            height: None,
             extra: Extra::new(),
             chunks: Default::default(),
             adjustment: None,

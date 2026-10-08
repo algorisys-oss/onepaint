@@ -10,6 +10,7 @@
 //! - `ONEPAINT_GUIDES=1` turns on the grid, 2-point perspective and H/V snap.
 //! - `ONEPAINT_PEN=1` adds a curved, filled path layer and selects the pen.
 //! - `ONEPAINT_ANIM=1` turns the demo layers into frames (background role) with onion skins.
+//! - `ONEPAINT_IMPASTO=1` paints thick, wet-impasto and oil strokes, blends one, and bevels a shape.
 //! - `ONEPAINT_EXIT=1` closes the app after the screenshot.
 
 use crate::{App, Popover};
@@ -31,6 +32,7 @@ pub struct Debug {
     guides: bool,
     pen: bool,
     anim: bool,
+    impasto: bool,
 }
 
 impl Debug {
@@ -46,6 +48,7 @@ impl Debug {
             || self.guides
             || self.pen
             || self.anim
+            || self.impasto
     }
 
     pub fn from_env() -> Self {
@@ -79,6 +82,7 @@ impl Debug {
             guides: var("ONEPAINT_GUIDES").is_some(),
             pen: var("ONEPAINT_PEN").is_some(),
             anim: var("ONEPAINT_ANIM").is_some(),
+            impasto: var("ONEPAINT_IMPASTO").is_some(),
         }
     }
 }
@@ -196,6 +200,33 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
             }
         }
         app.session.stroke_end();
+    }
+    if frame == 3 && app.debug.impasto {
+        let (w, h) = (app.session.doc().width as f64, app.session.doc().height as f64);
+        let hex = |s: &str| Rgba::from_hex(s).unwrap_or_default();
+        let _ = app.session.execute(Command::AddLayer);
+        wave(app, h * 0.2, 50.0, hex("#c8553d"), "thick-paint", 70.0);
+        wave(app, h * 0.38, 40.0, hex("#2f6690"), "impasto", 80.0);
+        wave(app, h * 0.56, 30.0, hex("#e8c547"), "oil-paint", 90.0);
+        let _ = app.session.execute(Command::SetBrush { preset_id: "oil-blender".into() });
+        let _ = app.session.execute(Command::SetBrushSize { size: 120.0 });
+        for i in 0..=40 {
+            let p = StrokePoint::at(w * 0.7, h * 0.12 + i as f64 * h * 0.012, 1.0, i as f64 * 16.0);
+            if i == 0 {
+                app.session.stroke_begin(p);
+            } else {
+                app.session.stroke_extend(&[p]);
+            }
+        }
+        app.session.stroke_end();
+        let _ = app.session.execute(Command::AddLayer);
+        let contour = onepaint_selection::ellipse_polygon([w * 0.3, h * 0.68], [w * 0.7, h * 0.92]);
+        let _ = app.session.execute(Command::SelectShape { contours: vec![contour], mode: onepaint_selection::Mode::Replace });
+        app.set_color(hex("#7a9e7e"));
+        let _ = app.session.execute(Command::FillSelection);
+        let _ = app.session.execute(Command::Deselect);
+        let id = app.session.active().to_string();
+        let _ = app.session.execute(Command::BevelFromAlpha { id, depth: 0.6, softness: 0.25 });
     }
     if frame == 3 && app.debug.guides {
         let mut g = app.session.guides().clone();

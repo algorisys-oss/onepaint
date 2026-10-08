@@ -274,7 +274,14 @@ fn read_node(v: &Value, chunks: &[u8], doc: Rect) -> Result<Node, FormatError> {
         l.mask = Some(m);
     }
     if let Some(c) = o.get("height") {
-        l.chunks.insert("height".into(), chunk(chunks, c)?.to_vec());
+        let bytes = chunk(chunks, c)?;
+        // A height PNG we can't read is kept verbatim and re-emitted.
+        match decode_height_png(bytes, doc) {
+            Ok(h) => l.height = (h.tile_count() > 0).then_some(h),
+            Err(_) => {
+                l.chunks.insert("height".into(), bytes.to_vec());
+            }
+        }
     }
     if let Some(ov) = o.get("overflow") {
         // Off-canvas pixels (layer-overflow.ts): a trimmed rect, zero inside the canvas.
@@ -427,7 +434,10 @@ impl Writer {
                     let mt = self.tiles(m, doc, true)?;
                     o.insert("maskTiles".into(), Value::Array(mt));
                 }
-                if let Some(h) = l.chunks.get("height") {
+                if let Some(png) = l.height.as_ref().map(|h| encode_height_png(h, doc)).transpose()?.flatten() {
+                    let r = self.push(&png);
+                    o.insert("height".into(), r);
+                } else if let Some(h) = l.chunks.get("height") {
                     let r = self.push(h);
                     o.insert("height".into(), r);
                 }
@@ -476,3 +486,55 @@ pub fn write_happypaint(doc: &Document, thumbnail_jpeg: Option<&[u8]>, app_versi
     out.extend_from_slice(&w.chunks);
     Ok(out)
 }
+
+/// Impasto height as a full-canvas PNG (`height-codec.ts`): `q = h/16 · 65535`,
+/// R = high byte, G = low byte. `None` when the field is flat.
+pub fn encode_height_png(field: &Surface, doc: Rect) -> Result<Option<Vec<u8>>, FormatError> {
+    if field.tile_count() == 0 || doc.is_empty() {
+        return Ok(None);
+    }
+    let (w, h) = (doc.w as usize, doc.h as usize);
+    let data = field.read_rect(doc);
+    let mut rgb = vec![0u8; w * h * 3];
+    let mut any = false;
+    for (i, px) in rgb.chunks_exact_mut(3).enumerate() {
+        let v = data[i * 4];
+        any |= v > 0.0;
+        let q = ((v / HEIGHT_STORE_MAX).clamp(0.0, 1.0) * 65535.0) as u32;
+        px[0] = (q >> 8) as u8;
+        px[1] = (q & 0xff) as u8;
+    }
+    if !any {
+        return Ok(None);
+    }
+    let err = |e: png::EncodingError| FormatError::Image(e.to_string());
+    let mut out = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut out, doc.w as u32, doc.h as u32);
+        enc.set_color(png::ColorType::Rgb);
+        enc.set_depth(png::BitDepth::Eight);
+        enc.set_compression(png::Compression::Fast);
+        let mut wr = enc.write_header().map_err(err)?;
+        wr.write_image_data(&rgb).map_err(err)?;
+    }
+    Ok(Some(out))
+}
+
+/// The inverse of [`encode_height_png`]; pixels outside the document are dropped.
+pub fn decode_height_png(bytes: &[u8], doc: Rect) -> Result<Surface, FormatError> {
+    let (w, h, rgba) = decode_png_rgba8(bytes)?;
+    let mut s = Surface::new();
+    for y in 0..(h as i32).min(doc.h) {
+        for x in 0..(w as i32).min(doc.w) {
+            let i = ((y as u32 * w + x as u32) * 4) as usize;
+            let q = ((rgba[i] as u32) << 8) | rgba[i + 1] as u32;
+            if q > 0 {
+                let v = q as f32 / 65535.0 * HEIGHT_STORE_MAX;
+                s.set(doc.x + x, doc.y + y, [v; 4]);
+            }
+        }
+    }
+    Ok(s)
+}
+
+const HEIGHT_STORE_MAX: f32 = 16.0;

@@ -25,6 +25,8 @@ impl Session {
             noop: false,
             clip: None,
             mask: false,
+            impasto: 0.0,
+            height: None,
         });
     }
 

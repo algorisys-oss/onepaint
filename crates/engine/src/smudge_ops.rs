@@ -42,6 +42,7 @@ pub(crate) struct ActiveSmudge {
     before: Surface,
     dirty: Rect,
     key: Option<String>,
+    height: Option<crate::height_ops::HeightEdit>,
 }
 
 impl Session {
@@ -79,6 +80,8 @@ impl Session {
                     flow_pressure: fb.flow_pressure,
                     spacing: None,
                     wet: Some(WetParams { mix: w.mix, load: w.load, wetness: w.wetness, pigment: w.pigment }),
+                    impasto: onepaint_brush::height::pigment_body(b.impasto_depth(), w.load),
+                    blend: w.blend.clamp(0.0, 1.0),
                 }
             }
             _ => SmudgeParams {
@@ -90,6 +93,8 @@ impl Session {
                 flow_pressure: b.flow_pressure,
                 spacing: Some(b.spacing),
                 wet: mixer.then_some(WetParams { mix: m.mix, load: m.load, wetness: m.wet, pigment: true }),
+                impasto: if mixer { onepaint_brush::height::pigment_body(b.impasto_depth(), m.load) } else { 0.0 },
+                blend: 0.0,
             },
         };
         let paints = params.wet.is_some();
@@ -102,8 +107,12 @@ impl Session {
         };
         let target = if to_mask { layer.mask.clone().unwrap_or_default() } else { layer.pixels.clone() };
         let alpha_lock = layer.alpha_lock && !to_mask;
+        // Relief: impasto builds a field; a blender only levels an existing one.
+        let relief = !to_mask && (params.impasto > 0.0 || (params.blend > 0.0 && layer.height.is_some()));
+        let height = if relief { self.height_begin(&self.active) } else { None };
         let engine = Smudge::new(params, color, held, self.symmetry_transforms(), self.doc.bounds(), alpha_lock, p);
-        self.smudge = Some(ActiveSmudge { layer: self.active.clone(), mask: to_mask, engine, before: target, dirty: Rect::default(), key });
+        self.smudge =
+            Some(ActiveSmudge { layer: self.active.clone(), mask: to_mask, engine, before: target, dirty: Rect::default(), key, height });
     }
 
     fn smudge_target(&mut self, id: &str, mask: bool) -> Option<&mut Surface> {
@@ -122,6 +131,11 @@ impl Session {
             sm.dirty = sm.dirty.union(&r);
             self.mark_dirty(r);
         }
+        let (build, level) = sm.engine.take_height();
+        if sm.height.is_some() {
+            self.height_stamp(&sm.layer, &build);
+            self.height_smooth(&sm.layer, &level, sm.engine.blend_flatten());
+        }
         self.smudge = Some(sm);
     }
 
@@ -132,27 +146,12 @@ impl Session {
         } else {
             self.mixer_held = None;
         }
+        let mut sm = sm;
+        let relief = sm.height.take().and_then(|h| self.height_end(h));
         let Some(target) = self.smudge_target(&sm.layer, sm.mask) else { return };
-        let mut changes: Vec<TileChange> = Vec::new();
-        let mut bytes = 0;
-        for (tx, ty) in sm.dirty.tiles() {
-            let before = sm.before.tile(tx, ty).cloned();
-            let after = target.tile(tx, ty).cloned();
-            let same = match (&before, &after) {
-                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-                (None, None) => true,
-                _ => false,
-            };
-            if !same {
-                bytes += tile_bytes(&before) + tile_bytes(&after);
-                changes.push(((tx, ty), before, after));
-            }
-        }
-        if !changes.is_empty() {
-            self.history.push(Change::Tiles { layer: sm.layer, mask: sm.mask, tiles: changes }, bytes);
-            self.doc.touch();
-            self.history_changed();
-        }
+        let (tiles, bytes) = tile_diff(&sm.before, target, sm.dirty.tiles());
+        let paint = (!tiles.is_empty()).then(|| (Change::Tiles { layer: sm.layer.clone(), plane: Plane::of(sm.mask), tiles }, bytes));
+        self.push_with_height(paint, relief);
     }
 
     pub(crate) fn smudge_cancel(&mut self) {
@@ -161,6 +160,9 @@ impl Session {
             *target = sm.before;
         }
         self.mark_dirty(sm.dirty);
+        if let Some(h) = sm.height {
+            self.height_cancel(h);
+        }
     }
 
     /// Mixer "Clean": the next stroke loads fresh paint.

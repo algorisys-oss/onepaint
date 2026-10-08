@@ -175,3 +175,32 @@ fn happypaint_samples_open_and_match_previews() {
     }
     assert!(n > 0, "no samples read");
 }
+
+#[test]
+fn impasto_height_round_trips_as_a_16_bit_png() {
+    let doc = onepaint_raster::Rect::new(0, 0, 40, 30);
+    let mut h = Surface::new();
+    h.set(3, 4, [1.25; 4]);
+    h.set(39, 29, [15.5; 4]);
+    h.set(20, 10, [40.0; 4]); // over the store max: clamped to 16
+    let png = encode_height_png(&h, doc).unwrap().unwrap();
+    let back = decode_height_png(&png, doc).unwrap();
+    for (x, y, v) in [(3, 4, 1.25), (39, 29, 15.5), (20, 10, 16.0), (0, 0, 0.0)] {
+        assert!((back.get(x, y)[0] - v).abs() < 0.01, "({x},{y}): {:?}", back.get(x, y));
+    }
+    // happypaint's bytes: q = h/16·65535, R = high, G = low (height-codec.ts).
+    let (_, _, rgba) = decode_png_rgba8(&png).unwrap();
+    let i = (4 * 40 + 3) * 4;
+    let q = ((rgba[i] as u32) << 8) | rgba[i + 1] as u32;
+    assert_eq!(q, (1.25 / 16.0 * 65535.0) as u32);
+    assert!(encode_height_png(&Surface::new(), doc).unwrap().is_none(), "flat fields are omitted");
+
+    // Through the file: the layer gets its field back.
+    let mut d = Document::new(40, 30, None);
+    let mut l = Layer::new("Thick");
+    l.height = Some(h);
+    d.root.push(Node::Layer(l));
+    let r = read_happypaint(&write_happypaint(&d, None, "test").unwrap()).unwrap();
+    let got = r.root.iter().filter_map(|n| n.as_layer()).find(|l| l.name == "Thick").unwrap().height.as_ref().unwrap();
+    assert!((got.get(3, 4)[0] - 1.25).abs() < 0.01);
+}

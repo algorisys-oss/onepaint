@@ -159,6 +159,8 @@ pub struct App {
     pub recent: Vec<Rgba>,
     pub palettes: palettes::Palettes,
     pub settings: settings::Settings,
+    /// Layer panel Bevel / Soften sliders (not saved, as in happypaint).
+    pub bevel: [f32; 2],
     pub playback: timeline::Playback,
     pub reference: reference::ReferenceState,
     pub gallery: gallery::Gallery,
@@ -230,6 +232,7 @@ impl App {
             hex: "#000000".into(),
             recent: Vec::new(),
             palettes,
+            bevel: [0.0, 0.25],
             settings: settings::Settings::load(if cfg!(test) || debug.scripted() { None } else { settings::default_path() }),
             playback: Default::default(),
             reference: Default::default(),
@@ -1273,6 +1276,20 @@ mod tests {
     }
 
     #[test]
+    fn layer_bevel_slider_embosses_the_paint() {
+        let mut h = harness();
+        h.run();
+        drag_stroke(&mut h, pos2(560.0, 420.0), pos2(720.0, 440.0));
+        h.get_by_label("Layers").click();
+        h.run();
+        h.get_by_role_and_label(egui::accesskit::Role::Slider, "Bevel").click();
+        h.run();
+        let s = &h.state().session;
+        assert!(h.state().bevel[0] > 0.0);
+        assert!(s.doc().layer(s.active()).unwrap().height.is_some(), "relief derived from the stroke");
+    }
+
+    #[test]
     fn new_drawings_open_in_tabs_and_closing_asks() {
         let mut h = harness();
         h.run();
@@ -1895,7 +1912,7 @@ mod tests {
         h.get_by_label("JPEG").click();
         h.run();
         assert_eq!(h.state().export_opts.format, onepaint_formats::export::ExportFormat::Jpeg);
-        assert!(h.query_by_label("Quality").is_some());
+        assert!(h.query_by_role_and_label(egui::accesskit::Role::Slider, "Quality").is_some());
         h.get_by_label("PSD").click();
         h.run();
         assert!(h.state().export_psd);

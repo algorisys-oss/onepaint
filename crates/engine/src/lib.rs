@@ -9,6 +9,7 @@ mod canvas_ops;
 mod clipboard;
 mod filter_ops;
 pub mod guides;
+mod height_ops;
 mod liquify_ops;
 mod mask_ops;
 mod paint_ops;
@@ -138,6 +139,16 @@ pub enum Command {
         id: NodeId,
     },
     ClearLayer {
+        id: NodeId,
+    },
+    /// Bevel & Emboss: relief derived from the layer's alpha (spec 35).
+    BevelFromAlpha {
+        id: NodeId,
+        depth: f64,
+        softness: f64,
+    },
+    /// Drop the layer's relief (`clearBevel`).
+    ClearBevel {
         id: NodeId,
     },
     SetTool {
@@ -473,8 +484,43 @@ pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub(crate) type TileChange = ((i32, i32), Option<Arc<Tile>>, Option<Arc<Tile>>);
 
+/// Which surface of a layer a tile change belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Plane {
+    Pixels,
+    Mask,
+    /// The impasto height field (spec 35).
+    Height,
+}
+
+impl Plane {
+    pub(crate) fn of(mask: bool) -> Self {
+        if mask { Plane::Mask } else { Plane::Pixels }
+    }
+}
+
+/// Tile changes between a snapshot and the current surface, over `keys`
+/// (unchanged tiles share their `Arc` and are skipped). Returns them and their bytes.
+pub(crate) fn tile_diff(before: &Surface, after: &Surface, keys: impl IntoIterator<Item = (i32, i32)>) -> (Vec<TileChange>, usize) {
+    let mut out = Vec::new();
+    let mut bytes = 0;
+    for (tx, ty) in keys {
+        let (b, a) = (before.tile(tx, ty).cloned(), after.tile(tx, ty).cloned());
+        let same = match (&b, &a) {
+            (Some(x), Some(y)) => Arc::ptr_eq(x, y),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same {
+            bytes += tile_bytes(&b) + tile_bytes(&a);
+            out.push(((tx, ty), b, a));
+        }
+    }
+    (out, bytes)
+}
+
 pub(crate) enum Change {
-    Tiles { layer: NodeId, mask: bool, tiles: Vec<TileChange> },
+    Tiles { layer: NodeId, plane: Plane, tiles: Vec<TileChange> },
     Tree { before: Vec<Node>, after: Vec<Node>, active_before: NodeId, active_after: NodeId, key: Option<String> },
     Selection { before: Option<Arc<onepaint_selection::Mask>>, after: Option<Arc<onepaint_selection::Mask>> },
     Document { before: Box<canvas_ops::DocShape>, after: Box<canvas_ops::DocShape> },
@@ -494,6 +540,10 @@ struct ActiveStroke {
     clip: Option<Arc<onepaint_selection::Mask>>,
     /// Painting into the layer mask.
     mask: bool,
+    /// Relief per unit of dab alpha (`pigmentBody`; 0 = flat paint).
+    impasto: f64,
+    /// The layer's height field, when this stroke builds or carves it.
+    height: Option<height_ops::HeightEdit>,
 }
 
 /// App preferences the engine honours (happypaint `settings-store.ts`); not
@@ -937,7 +987,13 @@ impl Session {
             self.color.to_linear_premul()
         };
         self.seed = self.seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-        let opacity = brush.opacity as f32;
+        // Pigment thins a paint stroke to a glaze (`pigmentOpacity`, PE:825).
+        let paint = !erase && !to_mask;
+        let opacity =
+            if paint { brush.opacity * onepaint_brush::height::pigment_opacity(brush.pigment_load()) } else { brush.opacity } as f32;
+        let impasto = if paint { brush.impasto_body() } else { 0.0 };
+        let carves = erase && !noop && !to_mask && layer.height.is_some();
+        let height = if impasto > 0.0 || carves { self.height_begin(&self.active) } else { None };
         let mut engine = StrokeEngine::new(brush, [lin[0], lin[1], lin[2]], self.seed);
         engine.set_symmetry(self.symmetry_transforms());
         let mut st = ActiveStroke {
@@ -949,6 +1005,8 @@ impl Session {
             noop,
             clip: self.clip.clone(),
             mask: to_mask,
+            impasto,
+            height,
         };
         let dabs = st.engine.begin(p);
         self.stroke = Some(st);
@@ -989,7 +1047,12 @@ impl Session {
         for d in &dabs {
             r = r.union(&st.engine.rasterize(&mut st.buffer, d, st.clip.as_deref()));
         }
+        let relief = height_ops::dry_height_dabs(st.impasto, &dabs);
+        let layer = (!relief.is_empty()).then(|| st.layer.clone());
         self.mark_dirty(r);
+        if let Some(layer) = layer {
+            self.height_stamp(&layer, &relief);
+        }
     }
 
     /// Advance time-based brush effects (airbrush) while a stroke is held.
@@ -1017,6 +1080,9 @@ impl Session {
             for (tx, ty) in st.buffer.tile_keys() {
                 self.mark_dirty(Rect::from_tile(tx, ty));
             }
+            if let Some(h) = st.height {
+                self.height_cancel(h);
+            }
         }
     }
 
@@ -1027,20 +1093,20 @@ impl Session {
         }
         self.smudge_end();
         self.liquify_end();
+        let Some(tail) = self.stroke.as_mut().map(|st| st.engine.end()) else {
+            return;
+        };
+        self.draw_dabs(tail);
         let Some(mut st) = self.stroke.take() else {
             return;
         };
-        let tail = st.engine.end();
-        if !st.noop {
-            let mut r = Rect::default();
-            for d in &tail {
-                r = r.union(&st.engine.rasterize(&mut st.buffer, d, st.clip.as_deref()));
-            }
-            self.mark_dirty(r);
-        }
         if st.noop {
             return;
         }
+        if st.mode == StrokeMode::Erase && st.height.is_some() {
+            self.height_carve(&st.layer, &st.buffer, st.opacity);
+        }
+        let relief = st.height.take().and_then(|h| self.height_end(h));
         let Some(layer) = self.doc.layer_mut(&st.layer) else {
             return;
         };
@@ -1076,11 +1142,9 @@ impl Session {
             bytes += tile_bytes(&before) + tile_bytes(&after);
             changes.push(((tx, ty), before, after));
         }
-        if !changes.is_empty() {
-            self.history.push(Change::Tiles { layer: st.layer, mask: st.mask, tiles: changes }, bytes);
-            self.doc.touch();
-            self.history_changed();
-        }
+        let paint =
+            (!changes.is_empty()).then(|| (Change::Tiles { layer: st.layer.clone(), plane: Plane::of(st.mask), tiles: changes }, bytes));
+        self.push_with_height(paint, relief);
     }
 
     fn history_changed(&mut self) {
@@ -1226,6 +1290,11 @@ impl Session {
             Command::SetLayerProps { id, props } => self.set_props(&id, props),
             Command::MergeDown { id } => self.merge_down(&id),
             Command::ClearLayer { id } => self.clear_layer(&id),
+            Command::BevelFromAlpha { id, depth, softness } => {
+                let o = onepaint_brush::height::BevelOptions { depth, softness, ..Default::default() };
+                self.bevel_from_alpha(&id, o).map(|_| ())
+            }
+            Command::ClearBevel { id } => self.clear_height(&id).map(|_| ()),
             Command::SetTool { tool } => {
                 self.tool = tool;
                 Ok(())
@@ -1598,6 +1667,26 @@ impl Session {
         if let Node::Layer(l) = &mut upper {
             l.clipped = false;
         }
+        // Relief stays a height field: merge the paint unlit, then add the
+        // upper layer's relief onto the lower one's when it shows (PE:7062).
+        let height = match &upper {
+            Node::Layer(l) if l.visible && l.opacity > 0.0 => {
+                let mut h = below.height.clone().unwrap_or_default();
+                if let Some(up) = &l.height {
+                    onepaint_brush::height::add_into(&mut h, up);
+                }
+                (h.tile_count() > 0).then_some(h)
+            }
+            _ => below.height.clone(),
+        };
+        fn unlit(n: &mut Node) {
+            match n {
+                Node::Layer(l) => l.height = None,
+                Node::Group(g) => g.children.iter_mut().for_each(unlit),
+            }
+        }
+        base.height = None;
+        unlit(&mut upper);
         let mut tmp = Document::new(self.doc.width, self.doc.height, None);
         tmp.root = vec![Node::Layer(base), upper];
         let mut keys: BTreeSet<(i32, i32)> = below.pixels.tile_keys().into_iter().collect();
@@ -1616,6 +1705,7 @@ impl Session {
                 for ((tx, ty), t) in merged {
                     l.pixels.set_tile(tx, ty, (!t.is_empty()).then(|| Arc::new(t)));
                 }
+                l.height = height;
             }
             s.doc.remove(id);
             s.active = below_id;
@@ -1627,27 +1717,37 @@ impl Session {
         let l = self.doc.layer(id).ok_or_else(|| EngineError::NoSuchLayer(id.into()))?;
         let tiles: Vec<TileChange> = l.pixels.tiles().map(|(k, t)| (k, Some(t.clone()), None)).collect();
         let bytes = tiles.iter().map(|(_, b, _)| tile_bytes(b)).sum();
+        // Clearing paint clears its relief too (PE clearLayer).
+        let relief = self.height_begin(id);
         if let Some(l) = self.doc.layer_mut(id) {
             l.pixels.clear();
+            l.height = None;
         }
-        self.history.push(Change::Tiles { layer: id.to_string(), mask: false, tiles }, bytes);
+        let relief = relief.and_then(|h| self.height_end(h));
+        self.push_with_height(Some((Change::Tiles { layer: id.to_string(), plane: Plane::Pixels, tiles }, bytes)), relief);
         self.mark_all_dirty();
-        self.history_changed();
         Ok(())
     }
 
     fn apply(&mut self, undo: bool, entries: Vec<ChangeRef>) {
         for c in entries {
             match c {
-                ChangeRef::Tiles { layer, mask, tiles } => {
+                ChangeRef::Tiles { layer, plane, tiles } => {
                     if let Some(l) = self.doc.layer_mut(&layer) {
                         for (k, before, after) in &tiles {
                             let t = if undo { before.clone() } else { after.clone() };
-                            match (mask, l.mask.as_mut()) {
-                                (true, Some(m)) => m.set_tile(k.0, k.1, t),
-                                (true, None) => {}
-                                (false, _) => l.pixels.set_tile(k.0, k.1, t),
+                            match plane {
+                                Plane::Mask => {
+                                    if let Some(m) = l.mask.as_mut() {
+                                        m.set_tile(k.0, k.1, t);
+                                    }
+                                }
+                                Plane::Pixels => l.pixels.set_tile(k.0, k.1, t),
+                                Plane::Height => l.height.get_or_insert_default().set_tile(k.0, k.1, t),
                             }
+                        }
+                        if l.height.as_ref().is_some_and(|h| h.tile_count() == 0) {
+                            l.height = None;
                         }
                     }
                     for (k, _, _) in tiles {
@@ -1675,7 +1775,7 @@ impl Session {
 
     fn snapshot(c: &Change, undo: bool) -> ChangeRef {
         match c {
-            Change::Tiles { layer, mask, tiles } => ChangeRef::Tiles { layer: layer.clone(), mask: *mask, tiles: tiles.clone() },
+            Change::Tiles { layer, plane, tiles } => ChangeRef::Tiles { layer: layer.clone(), plane: *plane, tiles: tiles.clone() },
             Change::Tree { before, after, active_before, active_after, .. } => ChangeRef::Tree {
                 root: if undo { before.clone() } else { after.clone() },
                 active: if undo { active_before.clone() } else { active_after.clone() },
@@ -1707,7 +1807,7 @@ impl Session {
 }
 
 enum ChangeRef {
-    Tiles { layer: NodeId, mask: bool, tiles: Vec<TileChange> },
+    Tiles { layer: NodeId, plane: Plane, tiles: Vec<TileChange> },
     Tree { root: Vec<Node>, active: NodeId },
     Selection(Option<Arc<onepaint_selection::Mask>>),
     Document(Box<canvas_ops::DocShape>),

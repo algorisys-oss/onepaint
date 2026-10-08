@@ -60,6 +60,7 @@ impl Session {
         let new = Rect::new(0, 0, width as i32, height as i32);
         map_layers(&mut self.doc.root, &mut |l| {
             l.pixels = l.pixels.translated(dx, dy);
+            l.height = l.height.as_ref().map(|h| h.translated(dx, dy));
             if let Some(m) = &l.mask {
                 let mut m2 = m.translated(dx, dy);
                 for y in 0..new.h {
@@ -105,6 +106,8 @@ impl Session {
         };
         map_layers(&mut self.doc.root, &mut |l| {
             l.pixels = resample(&l.pixels);
+            // Relief keeps its height; only its footprint is resampled.
+            l.height = l.height.as_ref().map(&resample);
             if let Some(m) = &l.mask {
                 l.mask = Some(resample(m));
             }

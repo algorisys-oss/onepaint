@@ -212,6 +212,21 @@ impl BrushPreset {
         let w: WetMedia = serde_json::from_value(self.extra.get("wet")?.clone()).ok()?;
         (w.wetness > 0.0).then_some(w)
     }
+
+    /// Pigment ("Load"), which thins opacity and body even on dry brushes (default 1).
+    pub fn pigment_load(&self) -> f64 {
+        self.extra.get("wet").and_then(|w| w.get("load")).and_then(|v| v.as_f64()).unwrap_or(1.0)
+    }
+
+    /// Impasto depth (`impasto.depth`, 0 = flat).
+    pub fn impasto_depth(&self) -> f64 {
+        self.extra.get("impasto").and_then(|w| w.get("depth")).and_then(|v| v.as_f64()).unwrap_or(0.0).max(0.0)
+    }
+
+    /// The relief each unit of dab alpha builds (`pigmentBody(depth, load)`).
+    pub fn impasto_body(&self) -> f64 {
+        crate::height::pigment_body(self.impasto_depth(), self.pigment_load())
+    }
 }
 
 /// A built-in preset, or an imported one from the user library.

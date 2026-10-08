@@ -1110,6 +1110,9 @@ fn layers(app: &mut App, ui: &mut Ui) {
                 });
             }
         });
+        if l.adjustment.is_none() {
+            bevel_controls(app, ui, &active);
+        }
     }
     ui.horizontal(|ui| {
         ui.label(RichText::new("Label").color(t.fg_muted));
@@ -2072,4 +2075,23 @@ fn label_color(name: &str, dark: bool) -> Option<egui::Color32> {
         _ => return None,
     };
     Some(egui::Color32::from_rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8))
+}
+
+/// Bevel & Emboss (layer-panel.tsx:1964-1995): relief derived from the
+/// layer's paint, re-derived when a slider is released. Bevel 0 clears it.
+fn bevel_controls(app: &mut App, ui: &mut Ui, active: &str) {
+    let [mut depth, mut soft] = app.bevel;
+    let a = widgets::slider_row(ui, "Bevel", &mut depth, 0.0..=1.5, |v| format!("{:.0}%", v * 100.0));
+    let b = widgets::slider_row(ui, "Soften", &mut soft, 0.0..=1.0, |v| format!("{:.0}%", v * 100.0));
+    app.bevel = [depth, soft];
+    let commit = |r: &egui::Response| r.drag_stopped() || (r.changed() && !r.dragged());
+    if commit(&a) || commit(&b) {
+        let id = active.to_string();
+        let cmd = if depth > 0.0 {
+            Command::BevelFromAlpha { id, depth: depth as f64, softness: soft as f64 }
+        } else {
+            Command::ClearBevel { id }
+        };
+        let _ = app.session.execute(cmd);
+    }
 }

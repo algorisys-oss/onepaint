@@ -1,6 +1,7 @@
 //! Smudge and mixer (wet) strokes on the CPU: a port of happypaint's
 //! `smudge-renderer.ts` shaders and `paint-engine.ts` smudge loop (spec 16).
 
+use crate::height::{HeightDab, WET_RATE};
 use crate::symmetry::SymTransform;
 use crate::tips::Tip;
 use onepaint_color::{fast_linear_to_srgb as l2s, fast_srgb_to_linear as s2l, pigment::pigment_mix};
@@ -36,6 +37,10 @@ pub struct SmudgeParams {
     pub flow_pressure: f64,
     pub spacing: Option<f64>,
     pub wet: Option<WetParams>,
+    /// Relief per dab at full deposit (`pigmentBody`; 0 = flat).
+    pub impasto: f64,
+    /// Blender: level the relief under each dab instead (`wet.blend`).
+    pub blend: f64,
 }
 
 /// Straight linear reservoir colour plus how much paint it carries.
@@ -56,6 +61,9 @@ pub struct Smudge {
     alpha_lock: bool,
     /// Last pickup (for contamination): its rect and premultiplied pixels.
     last_pickup: Option<(f64, f64, f64, Rect, Vec<f32>)>,
+    /// Height and blender dabs since the last [`Smudge::take_height`].
+    height_dabs: Vec<HeightDab>,
+    blend_dabs: Vec<HeightDab>,
 }
 
 fn smoothstep(e0: f64, e1: f64, x: f64) -> f64 {
@@ -133,6 +141,8 @@ impl Smudge {
             doc,
             alpha_lock,
             last_pickup: None,
+            height_dabs: Vec::new(),
+            blend_dabs: Vec::new(),
         }
     }
 
@@ -154,9 +164,11 @@ impl Smudge {
                 let tf = self.transforms[i];
                 let (a, b) = (tf.apply(self.prev.x, self.prev.y), tf.apply(s.x, s.y));
                 dirty = dirty.union(&self.smear(layer, a, b, deposit, radius, strength, clip));
+                self.relief_dab(b, radius, deposit, strength);
             }
             if self.transforms.is_empty() {
                 dirty = dirty.union(&self.smear(layer, (self.prev.x, self.prev.y), (s.x, s.y), deposit, radius, strength, clip));
+                self.relief_dab((s.x, s.y), radius, deposit, strength);
             }
             if self.contam > 0.0 {
                 self.contaminate();
@@ -167,6 +179,27 @@ impl Smudge {
             self.prev = s;
         }
         dirty
+    }
+
+    /// Impasto builds `impasto · 0.14 · deposit` per dab; a blender levels
+    /// instead, by the dab's strength (PE:3010-3031).
+    fn relief_dab(&mut self, at: (f64, f64), radius: f64, deposit: f64, strength: f64) {
+        let d = HeightDab { x: at.0, y: at.1, radius, amount: 0.0 };
+        if self.p.impasto > 0.0 && self.p.blend <= 0.0 {
+            self.height_dabs.push(HeightDab { amount: self.p.impasto * WET_RATE * deposit, ..d });
+        } else if self.p.blend > 0.0 {
+            self.blend_dabs.push(HeightDab { amount: strength, ..d });
+        }
+    }
+
+    /// Relief dabs (to stamp) and blender dabs (to smooth) since the last call.
+    pub fn take_height(&mut self) -> (Vec<HeightDab>, Vec<HeightDab>) {
+        (std::mem::take(&mut self.height_dabs), std::mem::take(&mut self.blend_dabs))
+    }
+
+    /// How much of the relief a blender dab takes off at full coverage.
+    pub fn blend_flatten(&self) -> f64 {
+        self.p.blend * crate::height::BLEND_FLATTEN
     }
 
     fn mixer(&self, a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {

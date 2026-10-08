@@ -139,7 +139,11 @@ pub fn slider_row(
             ui.label(egui::RichText::new(fmt(*value)).font(theme::mono(12.0)).color(t.fg));
         });
     });
-    slider(ui, value, range, None)
+    let r = slider(ui, value, range, None);
+    // The row's label names the slider for screen readers (and UI tests).
+    let v = *value as f64;
+    r.widget_info(|| egui::WidgetInfo::slider(true, v, label));
+    r
 }
 
 /// iOS-style toggle switch with a label.

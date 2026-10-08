@@ -121,6 +121,11 @@ impl Rect {
         self.y + self.h
     }
 
+    /// Grown by `n` px on every side (an empty rect stays empty).
+    pub fn inflate(&self, n: i32) -> Rect {
+        if self.is_empty() { *self } else { Rect::new(self.x - n, self.y - n, self.w + 2 * n, self.h + 2 * n) }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.w <= 0 || self.h <= 0
     }

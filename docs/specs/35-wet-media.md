@@ -11,8 +11,8 @@ height field):
 | | Preset field | What it is | Status |
 |---|---|---|---|
 | A | `wet {wetness, load, mix, pigment, tip, blend}` | Stroke-synchronous mixer: pickup, reservoir, contamination | **done** |
-| C | `impasto {depth}` | A per-layer height field, lit as relief at composite time; bevel from alpha | next |
-| D | `settle {edgeDarken, granulate}` | A flatten-time pass on dry watercolour strokes | after C |
+| C | `impasto {depth}` | A per-layer height field, lit as relief at composite time; bevel from alpha | **done** |
+| D | `settle {edgeDarken, granulate}` | A flatten-time pass on dry watercolour strokes | next |
 | B | `fluid {water, pigment, rewet, blow, oil}` | A live, time-stepped wet simulation | last |
 
 ## A. Wet presets (`brush::WetMedia`, `engine` stroke routing)
@@ -33,3 +33,63 @@ height field):
 - **Layer masks:** a wet brush painting a layer mask uses the dry stamp,
   because mask paint is luminance coverage, not pigment.
 - **Not yet:** the brush-studio preview still draws wet presets dry.
+
+## C. Impasto (`brush::height`, `compose::relief`, `engine` height ops)
+- **Field:** `Layer.height: Option<Surface>`. The height sits in every
+  channel, so empty tiles prune and undo reuses the tile machinery. `None`
+  means flat.
+- **Pigment** (`paint-medium.ts`):
+  - A paint stroke's opacity is capped at `opacity · (0.05 + 0.95·load)`.
+  - Its body is `depth · load`.
+  - `load` is `wet.load`, default 1, read even when `wetness` is 0.
+  - The cap never applies to the eraser or to a layer mask.
+- **Building relief:**
+  - Each dry dab stamps `body · 0.1 · alpha`, symmetry copies included.
+  - Each wet-mixer dab stamps `body · 0.14 · deposit`.
+  - A stamp is an additive dome, `(1 − smoothstep(.5, 1, d)) · amount`.
+  - Relief is not clipped by the selection; the alpha gate hides it outside
+    the paint.
+- **Blender** (`wet.blend > 0`):
+  - Each dab moves the field toward its 5-tap average, less
+    `blend · 0.12`, weighted by `(1 − smoothstep(.35, 1, d)) · strength`.
+  - It only levels an existing field and never creates one.
+  - Blend wins over impasto.
+- **Eraser:** carves `h *= 1 − alpha · opacity` at stroke end.
+- **Undo:** paint and relief land in one undo step. Cancel puts the field
+  back. Clear layer clears it too.
+- **Lighting:** the compositor shades the layer before its mask, opacity and
+  blend mode, using the formula from `compositor.ts:149-165` in doc space:
+  - `amt = smoothstep(.02, .25, max(hl, hr, hu, hd))`
+  - `n = normalize((hl − hr)·9, (hu − hd)·9, 1)`
+  - The light is `normalize(−.45, −.6, .66)`.
+  - `rgb *= mix(1, .62 + .62·diff, amt)`
+  - `rgb += spec²² · .3 · amt · a`
+  - Taps clamp at the document edge. Transparent pixels are never shaded.
+  - Export includes relief; merge-down does not.
+- **Merge down:** paint merges unlit. The upper layer's height adds onto
+  the lower one's when the upper layer shows; otherwise the lower field is
+  kept.
+- **Canvas size and image size:** the field is translated or resampled with
+  the pixels.
+- **File** (`height-codec.ts`):
+  - `node.height` is a full-canvas PNG with `q = clamp(h/16)·65535`,
+    R = high byte, G = low byte.
+  - A flat field is omitted.
+  - An unreadable chunk is kept verbatim.
+- **Bevel & Emboss:**
+  - `Command::BevelFromAlpha {depth, softness}` replaces the field with
+    happypaint's chamfer distance transform, then a dome, then three box
+    blurs. The blur radius is `round(min(w,h)·0.01·(1 + 6·softness))`, and
+    the alpha threshold is 8/255.
+  - `ClearBevel` drops the field.
+  - A large shape's dome is tall (R = inscribed radius × depth, often far
+    over the 16 the file stores). The ×9 normal saturates, so the lit and
+    shaded halves meet in a crease along the medial axis. Same maths as
+    happypaint; kept.
+  - Layer panel ▸ Bevel 0–150% and Soften 0–100% apply on release (not
+    saved, as in happypaint). Bevel 0 clears.
+- **Not yet:**
+  - Free transform, liquify, flip and filters leave the field where it was.
+  - Metallic layers.
+  - The dry-stamp paper tooth fill (`fill = max(alpha·.55, smoothstep(.02,
+    .25, h))`) waits for paper texture.
