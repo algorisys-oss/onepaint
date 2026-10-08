@@ -1512,4 +1512,22 @@ mod tests {
         assert!(q2[2][1] > q[2][1] + 50.0, "corner moved: {q:?} -> {q2:?}");
         assert_eq!(q2[0], q[0], "other corners stay");
     }
+
+    #[test]
+    fn gradient_can_make_a_fill_layer() {
+        let mut h = harness();
+        h.run();
+        h.state_mut().set_tool(Tool::Gradient);
+        h.state_mut().canvas.options.gradient_layer = true;
+        let layers = h.state().session.doc().root.len();
+        drag_stroke(&mut h, pos2(400.0, 300.0), pos2(800.0, 300.0));
+        let app = h.state();
+        assert_eq!(app.session.doc().root.len(), layers + 1);
+        let l = app.session.doc().layer(app.session.active()).unwrap();
+        let adj = l.adjustment.as_ref().unwrap();
+        assert_eq!(adj.kind, "gradient-fill");
+        let a = app.canvas.view.screen_to_doc([400.0, 300.0]);
+        assert!((adj.params.grad_ax.unwrap() as f64 - a[0] / 2048.0).abs() < 0.01);
+        assert!(adj.params.grad_bx.unwrap() > adj.params.grad_ax.unwrap());
+    }
 }

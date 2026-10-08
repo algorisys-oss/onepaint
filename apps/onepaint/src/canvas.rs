@@ -89,6 +89,8 @@ pub struct ToolOptions {
     pub background: onepaint_color::Rgba,
     /// Pen: closed paths get a fill in the current colour.
     pub pen_fill: bool,
+    /// Gradient: add a live gradient-fill layer instead of painting pixels.
+    pub gradient_layer: bool,
     pub stroke_path_tool: onepaint_engine::path_ops::StrokePathTool,
     pub stroke_path_pressure: bool,
 }
@@ -110,6 +112,7 @@ impl Default for ToolOptions {
             shape_fill: false,
             background: onepaint_color::Rgba::WHITE,
             pen_fill: false,
+            gradient_layer: false,
             stroke_path_tool: Default::default(),
             stroke_path_pressure: true,
         }
@@ -922,6 +925,13 @@ impl Canvas {
                         Drag::PenEdit { .. } => {
                             let _ = session.execute(Command::SealHistory);
                         }
+                        Drag::Gradient { start } if self.options.gradient_layer => {
+                            session.stroke_cancel();
+                            let end = self.last_pos.map(|p| self.doc_pt(p)).unwrap_or(start);
+                            let stops = self.gradient_stops(session);
+                            let params = gradient_fill_params(start, end, self.options.gradient_shape, &stops, self.doc_size);
+                            let _ = session.execute(Command::AddAdjustmentLayer { kind: "gradient-fill".into(), params });
+                        }
                         Drag::Gradient { .. } => session.gradient_end(),
                         Drag::ShapeTool { shape, .. } => {
                             session.stroke_cancel();
@@ -1394,5 +1404,44 @@ fn warp_points(w: &onepaint_engine::transform::WarpMode) -> Vec<Pt> {
     match w {
         onepaint_engine::transform::WarpMode::Quad(q) => q.to_vec(),
         onepaint_engine::transform::WarpMode::Mesh(m) => m.clone(),
+    }
+}
+
+/// A gradient drag as live gradient-fill layer params (endpoints as document fractions).
+fn gradient_fill_params(
+    a: Pt,
+    b: Pt,
+    shape: GShape,
+    stops: &[onepaint_filters::gradient::GradStop],
+    doc: [u32; 2],
+) -> onepaint_filters::Params {
+    use onepaint_filters::gradient::Shape;
+    let (w, h) = (doc[0] as f64, doc[1] as f64);
+    let name = match shape {
+        Shape::Linear => "linear",
+        Shape::Radial => "radial",
+        Shape::Angle => "angle",
+        Shape::Reflected => "reflected",
+        Shape::Diamond => "diamond",
+    };
+    onepaint_filters::Params {
+        grad_shape: Some(name.into()),
+        fill_stops: Some(
+            stops
+                .iter()
+                .map(|s| onepaint_filters::FillStop {
+                    pos: s.pos as f32,
+                    color: s.color.map(|c| c as f32),
+                    opacity: s.opacity as f32,
+                    mid: s.mid.map(|m| m as f32),
+                })
+                .collect(),
+        ),
+        grad_ax: Some((a[0] / w) as f32),
+        grad_ay: Some((a[1] / h) as f32),
+        grad_bx: Some((b[0] / w) as f32),
+        grad_by: Some((b[1] / h) as f32),
+        grad_reverse: Some(false),
+        ..Default::default()
     }
 }

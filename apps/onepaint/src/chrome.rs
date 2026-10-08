@@ -1418,6 +1418,7 @@ fn gradient_options(app: &mut App, ui: &mut Ui) {
     }
     ui.horizontal(|ui| {
         widgets::toggle(ui, &mut app.canvas.options.gradient_reverse, "Reverse");
+        widgets::toggle(ui, &mut app.canvas.options.gradient_layer, "As a gradient fill layer (editable)");
         ui.label(RichText::new("BG").color(t.fg_muted));
         let bg = app.canvas.options.background;
         if widgets::swatch(ui, bg, 26.0, false).on_hover_text("Click to use the current colour as the background").clicked() {

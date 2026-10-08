@@ -24,7 +24,7 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] pan (space-drag, middle-drag, two-finger scroll)
 - [x] smudge
 - [x] mixer (Wet/Load/Mix, the 12 Photoshop combinations, Keep colour, Clean; no Alt-click patch load yet)
-- [~] gradient, with output to pixels or a fill layer (5 shapes, colour→clear or →BG, reverse, selection-aware; fill-layer output not done)
+- [x] gradient, with output to pixels or a fill layer (5 shapes, colour→clear or →BG, reverse, selection-aware)
 - [x] liquify (push, twirl left/right, pinch, expand, reconstruct)
 - [x] text (create, edit, move, style, wrap, outline, background, rasterise)
 - [~] pen: path layers (stroke/fill), anchor/handle editing, path menu (selection, fill, stroke with simulated pressure, mask, rasterize); no free-transform path or speed lines yet

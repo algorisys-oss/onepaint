@@ -1,0 +1,11 @@
+- generic [active] [ref=f5e1]:
+  - heading "Directory listing for /?2" [level=1] [ref=f5e2]
+  - separator [ref=f5e3]
+  - list [ref=f5e4]:
+    - listitem [ref=f5e5]:
+      - link "out_test.txt" [ref=f5e6] [cursor=pointer]:
+        - /url: out_test.txt
+    - listitem [ref=f5e7]:
+      - link "tr.js" [ref=f5e8] [cursor=pointer]:
+        - /url: tr.js
+  - separator [ref=f5e9]
