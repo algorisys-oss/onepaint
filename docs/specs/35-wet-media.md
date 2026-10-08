@@ -176,7 +176,10 @@ height field):
     which compounds).
 - **Paper:** the dry-brush gate, absorption, resistance and granulation
   follow the document paper (spec 36).
+- **App:** while paint is wet, a tilt pad and the Dry button sit beside
+  the document tabs. Drag the pad to tilt, double-click it to level.
+- **Brush studio:** the Wet section (Blender, Wet/Oil, Load/Pigment, Mix)
+  and the Fluid section (Water 5–200%, Pigment) follow happypaint's
+  toolbar. Paper response is in the Grain section.
 - **Not yet:**
-  - The tilt pad UI (the command exists).
-  - Fluid controls in the brush studio.
   - A GPU compute path for large washes.

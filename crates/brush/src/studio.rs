@@ -43,6 +43,18 @@ pub enum Param {
     PressureDarken,
     GrainAmount,
     GrainScale,
+    /// How hard the document paper's tooth bites (`paperResponse`).
+    PaperResponse,
+    /// Wet / Oil: how much canvas paint the brush drags.
+    Wetness,
+    /// Load / Pigment: paint on the brush (opacity and impasto body).
+    Load,
+    /// Mix: canvas vs brush colour.
+    Mix,
+    /// Live fluid water (bloom distance and drying time).
+    FluidWater,
+    /// Live fluid pigment per dab.
+    FluidPigment,
 }
 
 /// How a slider value reads.
@@ -80,7 +92,9 @@ pub const SECTIONS: &[(&str, &[Param])] = {
         ("Shape", &[Hardness, Flow, Tilt, Pressure, Squash, Spin, SpeedSize, SpeedFlow]),
         ("Pressure", &[SizePressure, FlowPressure]),
         ("Jitter", &[Scatter, SizeJitter, AngleJitter, HueJitter, SatJitter, ValJitter, PressureDarken]),
-        ("Grain", &[GrainAmount, GrainScale]),
+        ("Grain", &[GrainAmount, GrainScale, PaperResponse]),
+        ("Wet", &[Wetness, Load, Mix]),
+        ("Fluid", &[FluidWater, FluidPigment]),
     ]
 };
 
@@ -183,6 +197,21 @@ impl Param {
             PressureDarken => info("Press→Dark", 0.0, 1.0, Percent),
             GrainAmount => info("Amount", 0.0, 1.0, Percent),
             GrainScale => info("Scale", 16.0, 400.0, Px),
+            PaperResponse => info("Paper", 0.0, 1.0, Percent),
+            Wetness => info("Wet", 0.0, 1.0, Percent),
+            Load => info("Load", 0.0, 1.0, Percent),
+            Mix => info("Mix", 0.0, 1.0, Percent),
+            FluidWater => info("Water", 0.05, 2.0, Percent),
+            FluidPigment => info("Pigment", 0.0, 1.0, Percent),
+        }
+    }
+
+    /// The label for this brush: oil and body paint read Oil / Pigment.
+    pub fn label_for(self, b: &BrushPreset) -> &'static str {
+        match self {
+            Param::Wetness if oil_paint(b) => "Oil",
+            Param::Load if oil_paint(b) => "Pigment",
+            _ => self.info().label,
         }
     }
 
@@ -203,6 +232,11 @@ impl Param {
         match self {
             Param::StabilizerAmount => b.stabilizer.as_ref().is_some_and(|s| s.enabled),
             Param::GrainAmount | Param::GrainScale => b.grain.is_some(),
+            // Pigment belongs to the paint, so body paint shows it even dry;
+            // Mix is derived while blending and moot until the brush is wet.
+            Param::Load => wet_num(b, "wetness", 0.0) > 0.0 || b.impasto_depth() > 0.0,
+            Param::Mix => !is_blender(b) && wet_num(b, "wetness", 0.0) > 0.0,
+            Param::FluidWater | Param::FluidPigment => b.fluid().is_some_and(|f| f.water > 0.0 || f.blow > 0.0),
             _ => true,
         }
     }
@@ -241,6 +275,12 @@ impl Param {
             PressureDarken => color_get(b, |c| c.pressure_darken),
             GrainAmount => b.grain.as_ref().map_or(0.0, |g| g.strength),
             GrainScale => b.grain.as_ref().map_or(160.0, |g| g.scale),
+            PaperResponse => b.paper_response.unwrap_or(1.0),
+            Wetness => wet_num(b, "wetness", 0.0),
+            Load => wet_num(b, "load", 1.0),
+            Mix => wet_num(b, "mix", 0.5),
+            FluidWater => b.fluid().map_or(0.0, |f| f.water),
+            FluidPigment => b.fluid().map_or(0.0, |f| f.pigment),
         }
     }
 
@@ -366,11 +406,94 @@ impl Param {
                     g.scale = v.clamp(16.0, 600.0).round();
                 }
             }
+            PaperResponse => b.paper_response = Some(clamp01(v)),
+            Wetness => {
+                let v = clamp01(v);
+                set_wet(b, "wetness", v);
+                // A blender levels relief by as much oil as it carries.
+                if is_blender(b) {
+                    set_wet(b, "blend", v);
+                }
+            }
+            Load => {
+                let v = clamp01(v);
+                set_wet(b, "load", v);
+                // Blending takes the rest of its colour from the canvas.
+                if is_blender(b) {
+                    set_wet(b, "mix", 1.0 - v);
+                }
+            }
+            Mix => set_wet(b, "mix", clamp01(v)),
+            FluidWater => set_fluid(b, "water", v.clamp(0.0, 2.0)),
+            FluidPigment => set_fluid(b, "pigment", clamp01(v)),
         }
         if let Some(d) = &b.dynamics
             && *d == Dynamics::default()
         {
             b.dynamics = None;
+        }
+    }
+}
+
+fn wet_num(b: &BrushPreset, key: &str, default: f64) -> f64 {
+    b.extra.get("wet").and_then(|w| w.get(key)).and_then(|v| v.as_f64()).unwrap_or(default)
+}
+
+fn set_wet(b: &mut BrushPreset, key: &str, v: f64) {
+    let w = b.extra.entry("wet").or_insert_with(|| serde_json::json!({"wetness": 0.0, "load": 1.0, "mix": 0.5}));
+    if let Some(o) = w.as_object_mut() {
+        o.insert(key.into(), serde_json::json!(v));
+    }
+}
+
+fn set_fluid(b: &mut BrushPreset, key: &str, v: f64) {
+    if let Some(o) = b.extra.get_mut("fluid").and_then(|f| f.as_object_mut()) {
+        o.insert(key.into(), serde_json::json!(v));
+    }
+}
+
+/// A blender: the brush levels relief and takes its colour from the canvas.
+pub fn is_blender(b: &BrushPreset) -> bool {
+    wet_num(b, "blend", 0.0) > 0.0
+}
+
+/// Oil / Pigment naming: a blender, or any brush that lays down body paint.
+pub fn oil_paint(b: &BrushPreset) -> bool {
+    is_blender(b) || b.impasto_depth() > 0.0
+}
+
+/// Marks a dry brush that was wetted only to blend, so it dries again after.
+const BLEND_WETTED: &str = "onepaint:blendWetted";
+
+/// Turn the brush into a blender and back (`brush-store.ts:751-761`). A dry
+/// brush gets usable blending defaults (Oil 100%, Pigment 20%) and goes back
+/// dry; turning it off restores the preset's own tip and mix.
+pub fn set_blender(b: &mut BrushPreset, on: bool) {
+    if on == is_blender(b) {
+        return;
+    }
+    if on {
+        if wet_num(b, "wetness", 0.0) <= 0.0 {
+            set_wet(b, "wetness", 1.0);
+            set_wet(b, "load", 0.2);
+            b.extra.insert(BLEND_WETTED.into(), serde_json::json!(true));
+        }
+        let (wet, load) = (wet_num(b, "wetness", 0.0), wet_num(b, "load", 1.0));
+        set_wet(b, "blend", wet);
+        set_wet(b, "mix", 1.0 - load);
+        if let Some(o) = b.extra.get_mut("wet").and_then(|w| w.as_object_mut()) {
+            o.insert("tip".into(), serde_json::json!(true));
+        }
+    } else {
+        let base = crate::preset(&b.id);
+        let base_wet = |k: &str| base.as_ref().and_then(|p| p.extra.get("wet")).and_then(|w| w.get(k)).cloned();
+        if let Some(o) = b.extra.get_mut("wet").and_then(|w| w.as_object_mut()) {
+            o.insert("blend".into(), serde_json::json!(0.0));
+            o.insert("tip".into(), base_wet("tip").unwrap_or(serde_json::json!(false)));
+            o.insert("mix".into(), base_wet("mix").unwrap_or(serde_json::json!(0.5)));
+        }
+        if b.extra.remove(BLEND_WETTED).is_some() {
+            set_wet(b, "wetness", 0.0);
         }
     }
 }
@@ -637,7 +760,8 @@ mod tests {
         for (_, params) in SECTIONS {
             for &p in *params {
                 let i = p.info();
-                let mut b = hard();
+                // Fluid sliders only apply to live-fluid brushes.
+                let mut b = if matches!(p, Param::FluidWater | Param::FluidPigment) { preset("watercolor-live").unwrap() } else { hard() };
                 set_grain(&mut b, Some("paper"));
                 set_stabilizer(&mut b, true);
                 let v = i.min + (i.max - i.min) * 0.37;
@@ -753,5 +877,47 @@ mod tests {
         assert_eq!(b.blend_mode(), onepaint_doc::BlendMode::Multiply);
         set_blend_mode(&mut b, onepaint_doc::BlendMode::Normal);
         assert!(!b.extra.contains_key("blendMode"));
+    }
+
+    #[test]
+    fn media_sliders_follow_happypaint() {
+        // A wet brush: Wet / Load / Mix edit the wet block and route the stroke.
+        let mut b = crate::preset("hard-round").unwrap();
+        assert!(!Param::Load.visible(&b) && !Param::Mix.visible(&b));
+        Param::Wetness.set(&mut b, 0.6);
+        assert!(Param::Load.visible(&b) && Param::Mix.visible(&b));
+        Param::Mix.set(&mut b, 0.3);
+        let w = b.wet().unwrap();
+        assert_eq!((w.wetness, w.load, w.mix), (0.6, 1.0, 0.3));
+        assert_eq!(Param::Wetness.label_for(&b), "Wet");
+
+        // Blender on a dry brush: Oil 100%, Pigment 20%, mix 80%, textured;
+        // Pigment then drives mix; off dries it again.
+        let mut d = crate::preset("hard-round").unwrap();
+        set_blender(&mut d, true);
+        let w = d.wet().unwrap();
+        assert_eq!((w.wetness, w.load, w.blend, w.tip), (1.0, 0.2, 1.0, true));
+        assert!((w.mix - 0.8).abs() < 1e-9 && !Param::Mix.visible(&d));
+        assert_eq!((Param::Wetness.label_for(&d), Param::Load.label_for(&d)), ("Oil", "Pigment"));
+        Param::Load.set(&mut d, 0.4);
+        Param::Wetness.set(&mut d, 0.5);
+        let w = d.wet().unwrap();
+        assert!((w.mix - 0.6).abs() < 1e-9 && w.blend == 0.5);
+        set_blender(&mut d, false);
+        assert!(d.wet().is_none() && !is_blender(&d), "back to a dry brush");
+
+        // Body paint shows Pigment even dry; Paper and Fluid read their fields.
+        let thick = crate::preset("thick-paint").unwrap();
+        assert!(Param::Load.visible(&thick) && Param::Load.label_for(&thick) == "Pigment");
+        let mut ink = crate::preset("ink").unwrap();
+        assert_eq!(Param::PaperResponse.get(&ink), 0.0);
+        Param::PaperResponse.set(&mut ink, 0.7);
+        assert_eq!(ink.paper_response, Some(0.7));
+        let mut live = crate::preset("watercolor-live").unwrap();
+        assert!(Param::FluidWater.visible(&live) && !Param::FluidWater.visible(&ink));
+        Param::FluidWater.set(&mut live, 1.6);
+        Param::FluidPigment.set(&mut live, 0.3);
+        let f = live.fluid().unwrap();
+        assert_eq!((f.water, f.pigment), (1.6, 0.3));
     }
 }

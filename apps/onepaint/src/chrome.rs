@@ -155,6 +155,13 @@ fn top_bar(app: &mut App, ctx: &egui::Context) {
                 // Wet paint keeps moving until it dries; Dry settles it now.
                 if app.session.wet_active() {
                     widgets::vline(ui, 24.0);
+                    // Canvas tilt: wet paint runs downhill; double-click levels it.
+                    let mut tilt = app.session.wet_tilt();
+                    let r = widgets::tilt_pad(ui, &mut tilt, 28.0, "Canvas tilt")
+                        .on_hover_text("Canvas tilt: drag to make wet paint run downhill; double-click to level");
+                    if r.changed() {
+                        let _ = app.session.execute(Command::SetWetTilt { x: tilt[0], y: tilt[1] });
+                    }
                     if icons::button(ui, "droplet", 32.0, false, "Dry the wet paint").clicked() {
                         let _ = app.session.execute(Command::DryWet);
                     }

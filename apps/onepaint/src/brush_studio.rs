@@ -125,9 +125,10 @@ fn chip(ui: &mut Ui, label: &str, sel: bool) -> egui::Response {
 /// `slider_row` with an accessible slider (role Slider, named by `label`).
 fn slider(ui: &mut Ui, p: Param, b: &mut BrushPreset) -> bool {
     let i = p.info();
+    let label = p.label_for(b);
     let mut v = p.get(b) as f32;
-    let resp = widgets::slider_row(ui, i.label, &mut v, i.min as f32..=i.max as f32, |v| p.format(v as f64));
-    resp.widget_info(|| egui::WidgetInfo::slider(true, v as f64, i.label));
+    let resp = widgets::slider_row(ui, label, &mut v, i.min as f32..=i.max as f32, |v| p.format(v as f64));
+    resp.widget_info(|| egui::WidgetInfo::slider(true, v as f64, label));
     if resp.changed() {
         p.set(b, v as f64);
         return true;
@@ -366,6 +367,8 @@ fn extra_labels(section: &str) -> &'static [&'static str] {
         "Stroke" => &["Stabilizer"],
         "Pressure" => &["Size ← Pressure", "Flow ← Pressure", "Hardness ← Pressure", "curve"],
         "Grain" => &["Random", "texture", "paper"],
+        "Wet" => &["Blender", "Oil", "Pigment", "mixer"],
+        "Fluid" => &["live", "watercolor", "watercolour"],
         _ => &[],
     }
 }
@@ -464,6 +467,15 @@ fn section(app: &mut App, ui: &mut Ui, name: &str, params: &[Param], b: &mut Bru
             ui.add_space(4.0);
         }
         "Stroke" => {}
+        "Wet" => {
+            let mut on = studio::is_blender(b);
+            if widgets::toggle(ui, &mut on, "Blender").on_hover_text("Blend instead of painting: the brush keeps its tip, takes its colour from the canvas and softens the impasto it crosses").changed() {
+                studio::set_blender(b, on);
+            }
+        }
+        "Fluid" if !Param::FluidWater.visible(b) => {
+            ui.label(RichText::new("Live watercolour and oil brushes only.").color(t.fg_faint));
+        }
         "Grain" => {
             let mut grains: Vec<(String, String)> = vec![("".into(), "None".into())];
             grains.extend(onepaint_brush::grain_names().into_iter().map(|(id, n)| (id.to_string(), n.to_string())));

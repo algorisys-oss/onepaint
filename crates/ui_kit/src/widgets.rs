@@ -146,6 +146,40 @@ pub fn slider_row(
     r
 }
 
+/// A round 2D pad: drag sets a direction × strength in the unit disc,
+/// double-click centres it (happypaint's wet tilt pad). `label` names it.
+pub fn tilt_pad(ui: &mut Ui, v: &mut [f32; 2], size: f32, label: &str) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let (rect, mut resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click_and_drag());
+    let c = rect.center();
+    let r = size / 2.0;
+    if resp.double_clicked() {
+        *v = [0.0, 0.0];
+        resp.mark_changed();
+    } else if let Some(p) = resp.interact_pointer_pos().filter(|_| resp.dragged() || resp.clicked()) {
+        let (mut dx, mut dy) = ((p.x - c.x) / r, (p.y - c.y) / r);
+        let m = dx.hypot(dy);
+        if m > 1.0 {
+            (dx, dy) = (dx / m, dy / m);
+        }
+        if [dx, dy] != *v {
+            *v = [dx, dy];
+            resp.mark_changed();
+        }
+    }
+    let painter = ui.painter();
+    let fill = if resp.hovered() { t.hover } else { t.field };
+    painter.circle_filled(c, r - 1.0, fill);
+    painter.circle_stroke(c, r - 1.0, Stroke::new(1.0, t.border));
+    painter.circle_stroke(c, 2.0, Stroke::new(1.0, t.fg_faint));
+    let level = v[0] == 0.0 && v[1] == 0.0;
+    let dot = c + vec2(v[0], v[1]) * (r * 0.72);
+    painter.circle_filled(dot, 4.0, if level { t.fg_muted } else { t.accent });
+    let (x, y) = (v[0], v[1]);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, format!("{label} {x:.2}, {y:.2}")));
+    resp
+}
+
 /// iOS-style toggle switch with a label.
 pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     let t = Tokens::get(ui.ctx());

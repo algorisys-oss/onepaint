@@ -1325,6 +1325,24 @@ mod tests {
     }
 
     #[test]
+    fn the_studio_turns_a_brush_into_a_blender() {
+        let mut h = harness();
+        h.run();
+        h.state_mut().popover = Some(Popover::BrushStudio);
+        for _ in 0..4 {
+            h.step();
+        }
+        h.state_mut().studio.search = "blender".into();
+        h.run();
+        h.get_by_label("Blender").click();
+        h.run();
+        let b = h.state().session.current_brush().clone();
+        assert!(onepaint_brush::studio::is_blender(&b), "the current brush blends");
+        assert!(h.query_by_role_and_label(egui::accesskit::Role::Slider, "Oil").is_some());
+        assert!(h.query_by_role_and_label(egui::accesskit::Role::Slider, "Pigment").is_some());
+    }
+
+    #[test]
     fn wet_paint_stays_wet_until_dried() {
         let mut h = harness();
         h.run();
@@ -1332,6 +1350,16 @@ mod tests {
         let _ = h.state_mut().session.execute(Command::SetBrushPreset { preset: Box::new(wc) });
         drag_stroke(&mut h, pos2(560.0, 420.0), pos2(720.0, 440.0));
         assert!(h.state().session.wet_active(), "the wash keeps moving after the pen lifts");
+        // The tilt pad sits beside Dry: press its right edge to tilt right.
+        let pad = h.get_by_label_contains("Canvas tilt").rect();
+        let at = egui::pos2(pad.right() - 2.0, pad.center().y);
+        h.event(Event::PointerMoved(at));
+        h.step();
+        press(&mut h, at, true);
+        press(&mut h, at, false);
+        h.step();
+        let tilt = h.state().session.wet_tilt();
+        assert!(tilt[0] > 0.8 && tilt[1].abs() < 0.1, "tilted right: {tilt:?}");
         h.get_by_label("Dry the wet paint").click();
         h.run();
         let s = &h.state().session;
