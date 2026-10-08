@@ -272,6 +272,9 @@ pub struct Canvas {
     pub gestures: crate::gestures::Gestures,
     /// Recognised gestures for the app to act on (undo, redo, UI, clipboard).
     pub gesture_out: Vec<crate::gestures::Gesture>,
+    gesture_queue: Vec<crate::gestures::Gesture>,
+    /// The touch-and-hold eyedropper's loupe (screen position).
+    loupe: Option<Pos2>,
 }
 
 impl Canvas {
@@ -303,7 +306,14 @@ impl Canvas {
             pen: Default::default(),
             gestures: Default::default(),
             gesture_out: Vec::new(),
+            gesture_queue: Vec::new(),
+            loupe: None,
         }
+    }
+
+    /// The touch-and-hold eyedropper is showing its loupe.
+    pub fn gestures_holding(&self) -> bool {
+        self.loupe.is_some()
     }
 
     pub fn view_modes(&self) -> onepaint_color::cmyk::ViewModes {
@@ -756,26 +766,44 @@ impl Canvas {
                 let (pen, p) = (force.is_some(), [pos.x, pos.y]);
                 let out = match phase {
                     TouchPhase::Start => self.gestures.start(id.0, p, time_ms, pen),
-                    TouchPhase::Move => {
-                        self.gestures.moved(id.0, p, time_ms);
-                        Vec::new()
-                    }
+                    TouchPhase::Move => self.gestures.moved(id.0, p, time_ms),
                     TouchPhase::End | TouchPhase::Cancel => {
                         self.last_pen_force = None;
                         self.gestures.end(id.0, time_ms)
                     }
                 };
-                for g in out {
-                    if g == crate::gestures::Gesture::MultiTouchStarted {
-                        // The first finger's emulated stroke was really the start of a gesture.
-                        if matches!(self.drag, Drag::Paint | Drag::PerspLine { .. } | Drag::FillShape { .. }) {
-                            session.stroke_cancel();
-                        }
-                        self.drag = Drag::None;
-                    } else {
-                        self.gesture_out.push(g);
-                    }
+                self.gesture_queue.extend(out);
+            }
+        }
+        if self.gestures.active() {
+            let ticked = self.gestures.tick(time_ms);
+            self.gesture_queue.extend(ticked);
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
+        }
+        for g in std::mem::take(&mut self.gesture_queue) {
+            use crate::gestures::Gesture as G;
+            if let G::HoldBegin(p) | G::HoldMove(p) = g {
+                // Touch-and-hold eyedropper: the tiny stroke was a pick.
+                if matches!(g, G::HoldBegin(_)) && matches!(self.drag, Drag::Paint | Drag::PerspLine { .. } | Drag::FillShape { .. }) {
+                    session.stroke_cancel();
                 }
+                self.drag = Drag::None;
+                self.pick(session, pos2(p[0] - rect.left(), p[1] - rect.top()));
+                self.loupe = Some(pos2(p[0], p[1]));
+                continue;
+            }
+            if g == G::HoldEnd {
+                self.loupe = None;
+                continue;
+            }
+            if g == G::MultiTouchStarted {
+                // The first finger's emulated stroke was really the start of a gesture.
+                if matches!(self.drag, Drag::Paint | Drag::PerspLine { .. } | Drag::FillShape { .. }) {
+                    session.stroke_cancel();
+                }
+                self.drag = Drag::None;
+            } else {
+                self.gesture_out.push(g);
             }
         }
         let suppress = self.gestures.suppress_pointer();
@@ -1117,6 +1145,15 @@ impl Canvas {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
         }
         self.draw_overlays(ui, rect, session, hover, space_held, r_held, &resp);
+        if let Some(p) = self.loupe {
+            // The eyedropper loupe: the picked colour in a ring above the finger.
+            let fill = onepaint_ui_kit::widgets::to_color32(onepaint_color::Rgba { a: 1.0, ..session.color() });
+            let at = pos2(p.x, p.y - 70.0);
+            let painter = ui.painter_at(rect);
+            painter.circle_filled(at, 30.0, fill);
+            painter.circle_stroke(at, 30.0, Stroke::new(4.0, Color32::WHITE));
+            painter.circle_stroke(at, 32.0, Stroke::new(1.0, Color32::from_black_alpha(90)));
+        }
     }
 
     /// Composite pending tiles within the frame budget, visible ones first.

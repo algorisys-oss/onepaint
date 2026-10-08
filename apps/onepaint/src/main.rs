@@ -2100,4 +2100,30 @@ mod tests {
         }
         assert_eq!(h.state().session.history_len(), painted);
     }
+
+    #[test]
+    fn touch_and_hold_picks_the_colour_under_the_finger() {
+        let mut h = Harness::builder()
+            .with_size(vec2(1200.0, 800.0))
+            .with_max_steps(400)
+            .with_step_dt(1.0 / 60.0)
+            .build_eframe(|cc| App::new(cc, None));
+        h.run();
+        let red = onepaint_color::Rgba { r: 1.0, g: 0.0, b: 0.0, a: 1.0 };
+        let _ = h.state_mut().session.execute(Command::SetColor { rgba: red });
+        drag_stroke(&mut h, pos2(560.0, 420.0), pos2(720.0, 420.0));
+        let blue = onepaint_color::Rgba { r: 0.0, g: 0.0, b: 1.0, a: 1.0 };
+        let _ = h.state_mut().session.execute(Command::SetColor { rgba: blue });
+        let steps = h.state().session.history_len();
+        touch(&mut h, 1, egui::TouchPhase::Start, pos2(640.0, 420.0));
+        for _ in 0..30 {
+            h.step();
+        }
+        assert!(h.state().canvas.gestures_holding(), "half a second still is a hold");
+        touch(&mut h, 1, egui::TouchPhase::End, pos2(640.0, 420.0));
+        h.step();
+        let c = h.state().session.color();
+        assert!(c.r > 0.9 && c.b < 0.1, "picked red: {c:?}");
+        assert_eq!(h.state().session.history_len(), steps, "the hold leaves no stroke");
+    }
 }

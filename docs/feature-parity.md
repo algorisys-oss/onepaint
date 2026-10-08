@@ -124,10 +124,10 @@ screentone are added as live layers.
   - [ ] X11
   - [ ] Wayland
 - [ ] Coalesced (high-rate) pen samples
-- [~] Multi-touch gestures with Procreate's vocabulary (all but touch-and-hold eyedropper):
+- [x] Multi-touch gestures with Procreate's vocabulary:
   - pinch to zoom and rotate, two-finger pan
-  - two-finger tap to undo, three-finger tap to redo
-  - touch-and-hold for the eyedropper
+  - two-finger tap to undo (hold two fingers to repeat), three-finger tap to redo
+  - touch-and-hold for the eyedropper (400 ms, with a loupe)
   - three-finger swipe down for the copy/paste menu
   - four-finger tap to toggle the UI
 - [x] Palm rejection while a pen is active (fingers ignored for 1.5 s after pen input)
