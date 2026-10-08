@@ -13,6 +13,16 @@ pub struct Mask {
 }
 
 impl Mask {
+    /// A square mask from 8-bit coverage (255 = full).
+    pub fn from_u8(size: usize, data: &[u8]) -> Self {
+        Self { size, data: data.iter().map(|&v| v as f32 / 255.0).collect() }
+    }
+
+    /// 8-bit coverage, rounded.
+    pub fn to_u8(&self) -> Vec<u8> {
+        self.data.iter().map(|&v| (v.clamp(0.0, 1.0) * 255.0).round() as u8).collect()
+    }
+
     /// Bilinear, clamp-to-edge sample at uv in 0..1.
     pub fn sample(&self, u: f64, v: f64) -> f32 {
         let n = self.size;
@@ -76,18 +86,23 @@ pub enum Tip {
     Image(Arc<Mask>),
 }
 
-/// Unknown ids fall back to round, like happypaint's `getTip`.
+/// Unknown ids fall back to round, like happypaint's `getTip`. User tips
+/// (`custom:…`) come from the user library.
 pub fn tip_for(id: &str) -> Tip {
     match id {
         "round" => Tip::Circle,
         "soft" => Tip::Gauss,
         "square" => Tip::Square,
+        _ if id.starts_with(crate::USER_TIP_PREFIX) => crate::user::user_tip(id).map_or(Tip::Circle, Tip::Image),
         _ => cached(format!("tip:{id}"), || TIPS.iter().find(|t| t.0 == id).map(|t| t.2)).map_or(Tip::Circle, Tip::Image),
     }
 }
 
-/// A tileable grayscale paper grain.
+/// A tileable grayscale paper grain, built in or from the user library.
 pub fn grain_for(id: &str) -> Option<Arc<Mask>> {
+    if id.starts_with(crate::USER_GRAIN_PREFIX) {
+        return crate::user::user_grain(id);
+    }
     cached(format!("grain:{id}"), || GRAINS.iter().find(|g| g.0 == id).map(|g| g.3))
 }
 

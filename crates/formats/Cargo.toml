@@ -13,6 +13,9 @@ onepaint-filters = { workspace = true }
 onepaint-raster = { workspace = true }
 onepaint-doc = { workspace = true }
 onepaint-color = { workspace = true }
+onepaint-brush = { workspace = true }
+onepaint-stroke = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 flate2 = { workspace = true }

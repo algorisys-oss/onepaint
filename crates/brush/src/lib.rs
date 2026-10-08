@@ -8,8 +8,13 @@ mod preset;
 pub mod smudge;
 pub mod symmetry;
 mod tips;
+mod user;
 
 pub use tips::{GrainSampler, Mask as TipMask, Tip, grain_for, grain_names, tip_for};
+pub use user::{
+    IMPORTED_CATEGORY, USER_GRAIN_PREFIX, USER_TIP_PREFIX, UserGrain, UserLibrary, add_user_brushes, remove_user_brush, set_user_library,
+    user_library, user_presets,
+};
 
 pub use preset::*;
 
