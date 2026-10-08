@@ -102,6 +102,7 @@ impl Session {
                 preview_bounds: bounds,
                 saved_selection: None,
                 clamp_edges: false,
+                warp: None,
             };
             f.render(self.doc.bounds());
             f.preview

@@ -25,6 +25,7 @@ pub use onepaint_brush::symmetry::{Symmetry, SymmetryMode};
 pub use saved_selection_ops::SavedSelection;
 pub use smudge_ops::{MixerSettings, PaintSettings};
 pub mod view;
+pub mod warp;
 
 pub use clipboard::Region;
 pub use onepaint_selection::{Mask, Mode as SelectMode};
@@ -183,6 +184,13 @@ pub enum Command {
     FillPath,
     /// End live-edit coalescing: the next edit is a new undo step.
     SealHistory,
+    /// Switch the transform in progress to 4-corner distort.
+    BeginDistort,
+    /// Switch the transform in progress to mesh warp.
+    BeginWarp,
+    SetWarp {
+        warp: transform::WarpMode,
+    },
     /// Replace a layer's smart-filter stack (live edits coalesce; seal to end).
     SetSmartFilters {
         id: NodeId,
@@ -970,7 +978,12 @@ impl Session {
         }
         if self.transform.is_some() {
             match &cmd {
-                Command::SetTransform { .. } | Command::CommitTransform | Command::CancelTransform => {}
+                Command::SetTransform { .. }
+                | Command::CommitTransform
+                | Command::CancelTransform
+                | Command::BeginDistort
+                | Command::BeginWarp
+                | Command::SetWarp { .. } => {}
                 Command::SetColor { .. }
                 | Command::SetTool { .. }
                 | Command::SetBrush { .. }
@@ -1103,6 +1116,18 @@ impl Session {
             Command::SetSmartFilters { id, filters } => self.set_smart_filters(&id, filters),
             Command::AddSmartFilter { id, kind, params } => self.add_smart_filter(&id, &kind, params),
             Command::BakeSmartFilters { id } => self.bake_smart_filters(&id),
+            Command::BeginDistort => {
+                self.begin_warp(false);
+                Ok(())
+            }
+            Command::BeginWarp => {
+                self.begin_warp(true);
+                Ok(())
+            }
+            Command::SetWarp { warp } => {
+                self.set_warp(warp);
+                Ok(())
+            }
             Command::SealHistory => {
                 self.history_sealed = true;
                 Ok(())

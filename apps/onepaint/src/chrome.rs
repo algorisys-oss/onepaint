@@ -37,6 +37,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             Popover::Guides => popover_at(ctx, "guides", anchor, Align2::RIGHT_TOP, |ui| guides(app, ui)),
             Popover::LiquifyOptions => popover_at(ctx, "liquify", anchor, Align2::RIGHT_TOP, |ui| liquify_options(app, ui)),
             Popover::PenOptions => popover_at(ctx, "pen", anchor, Align2::RIGHT_TOP, |ui| pen_options(app, ui)),
+            Popover::MoveOptions => popover_at(ctx, "move", anchor, Align2::RIGHT_TOP, |ui| move_options(app, ui)),
             Popover::SmartFilters => popover_at(ctx, "smart", anchor, Align2::RIGHT_TOP, |ui| crate::adjust::smart_panel(app, ui)),
             Popover::Export => popover_at(ctx, "export", screen.center(), Align2::CENTER_CENTER, |ui| export_dialog(app, ui)),
             Popover::Recover => popover_at(ctx, "recover", screen.center(), Align2::CENTER_CENTER, |ui| recover(app, ui)),
@@ -140,6 +141,9 @@ fn top_bar(app: &mut App, ctx: &egui::Context) {
                 ui.horizontal_centered(|ui| {
                     let tool = app.session.tool();
                     if icons::button(ui, "move", 32.0, tool == Tool::Move, "Move / transform (V)").clicked() {
+                        if tool == Tool::Move {
+                            toggle_popover(app, Popover::MoveOptions);
+                        }
                         app.set_tool(Tool::Move);
                     }
                     let selecting = is_select_tool(tool);
@@ -1587,6 +1591,40 @@ fn export_dialog(app: &mut App, ui: &mut Ui) {
             app.popover = None;
         }
     });
+}
+
+fn move_options(app: &mut App, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    ui.set_width(260.0);
+    widgets::section_label(ui, "Transform");
+    let active = app.session.transform_active();
+    let mode = match app.session.transform_warp() {
+        None => 0,
+        Some(onepaint_engine::transform::WarpMode::Quad(_)) => 1,
+        Some(onepaint_engine::transform::WarpMode::Mesh(_)) => 2,
+    };
+    ui.add_enabled_ui(active, |ui| {
+        if let Some(i) = segmented(ui, &["Free", "Distort", "Warp"], mode)
+            && i != mode
+            && i > 0
+        {
+            let _ = app.session.execute(if i == 1 { Command::BeginDistort } else { Command::BeginWarp });
+        }
+        ui.horizontal(|ui| {
+            if widgets::primary_button(ui, "Apply", 90.0).clicked() {
+                app.commit_transform();
+            }
+            if widgets::secondary_button(ui, "Cancel", 90.0).clicked() {
+                app.cancel_transform();
+            }
+        });
+    });
+    let hint = match mode {
+        1 => "Drag a corner for perspective; drag inside to move the whole quad.",
+        2 => "Drag the lattice points to bend the content.",
+        _ => "Drag handles to scale and rotate. Distort and Warp start from the current box.",
+    };
+    ui.label(RichText::new(hint).font(theme::medium(10.5)).color(t.fg_faint));
 }
 
 fn pen_options(app: &mut App, ui: &mut Ui) {

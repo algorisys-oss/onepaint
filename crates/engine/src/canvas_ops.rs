@@ -97,6 +97,7 @@ impl Session {
                 preview_bounds: src_bounds,
                 saved_selection: None,
                 clamp_edges: true,
+                warp: None,
             };
             f.render(dst);
             f.preview

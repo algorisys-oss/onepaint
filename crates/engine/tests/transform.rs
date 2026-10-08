@@ -187,3 +187,60 @@ mod drag {
         assert_eq!(p0.hit(DOC, BOX, [5.0, 5.0], 3.0, 10.0), Handle::Body);
     }
 }
+
+mod distort_and_warp {
+    use onepaint_color::Rgba;
+    use onepaint_engine::transform::{Affine, WarpMode};
+    use onepaint_engine::*;
+    use onepaint_selection::{Mode, rect_polygon};
+
+    /// A 40×40 red square at (20, 20) on a transparent layer.
+    fn square() -> Session {
+        let mut s = Session::new(120, 100, None);
+        s.execute(Command::SelectShape { contours: vec![rect_polygon([20.0, 20.0], [60.0, 60.0])], mode: Mode::Replace }).unwrap();
+        s.execute(Command::SetColor { rgba: Rgba::new(1.0, 0.0, 0.0, 1.0) }).unwrap();
+        s.execute(Command::FillSelection).unwrap();
+        s.execute(Command::Deselect).unwrap();
+        s
+    }
+
+    fn a(s: &Session, x: i32, y: i32) -> f32 {
+        s.doc().layer(s.active()).unwrap().pixels.get(x, y)[3]
+    }
+
+    #[test]
+    fn distort_seeds_from_the_affine_and_commits_a_trapezoid() {
+        let mut s = square();
+        s.execute(Command::BeginTransform).unwrap();
+        s.execute(Command::SetTransform { matrix: Affine::translate(10.0, 0.0) }).unwrap();
+        s.execute(Command::BeginDistort).unwrap();
+        match s.transform_warp().unwrap() {
+            WarpMode::Quad(q) => assert_eq!(q[0], [30.0, 20.0], "seeded from the moved box"),
+            _ => panic!(),
+        }
+        // Pinch the top edge inward: a trapezoid.
+        s.execute(Command::SetWarp { warp: WarpMode::Quad([[45.0, 20.0], [55.0, 20.0], [70.0, 60.0], [30.0, 60.0]]) }).unwrap();
+        s.execute(Command::CommitTransform).unwrap();
+        assert!(a(&s, 50, 22) > 0.9, "top centre covered");
+        assert!(a(&s, 33, 22) < 0.01, "top corners pulled in");
+        assert!(a(&s, 32, 57) > 0.9, "bottom stays wide");
+        s.execute(Command::Undo).unwrap();
+        assert!(a(&s, 22, 22) > 0.9 && a(&s, 65, 22) < 0.01);
+    }
+
+    #[test]
+    fn mesh_warp_bends_the_middle() {
+        let mut s = square();
+        s.execute(Command::BeginTransform).unwrap();
+        s.execute(Command::BeginWarp).unwrap();
+        let WarpMode::Mesh(mut pts) = s.transform_warp().unwrap().clone() else { panic!() };
+        assert_eq!(pts.len(), 16);
+        // Pull the two middle-right lattice points out by 15 px.
+        pts[7][0] += 15.0;
+        pts[11][0] += 15.0;
+        s.execute(Command::SetWarp { warp: WarpMode::Mesh(pts) }).unwrap();
+        s.execute(Command::CommitTransform).unwrap();
+        assert!(a(&s, 66, 40) > 0.5, "the right edge bulges out in the middle");
+        assert!(a(&s, 66, 21) < 0.01, "but not at the corner");
+    }
+}

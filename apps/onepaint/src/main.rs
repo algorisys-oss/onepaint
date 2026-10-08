@@ -60,6 +60,7 @@ pub enum Popover {
     PenOptions,
     Export,
     SmartFilters,
+    MoveOptions,
 }
 
 /// What a file opens as.
@@ -1480,5 +1481,35 @@ mod tests {
         }
         assert!(h.state().replaying.is_none());
         assert_eq!(h.state().session.flatten(), want);
+    }
+
+    #[test]
+    fn distort_from_the_move_popover() {
+        let mut h = harness();
+        h.run();
+        drag_stroke(&mut h, pos2(500.0, 420.0), pos2(700.0, 420.0));
+        key(&mut h, egui::Key::V, egui::Modifiers::NONE);
+        h.run();
+        assert!(h.state().session.transform_active());
+        h.get_by_label("Move / transform (V)").click();
+        h.run();
+        assert_eq!(h.state().popover, Some(Popover::MoveOptions));
+        h.get_by_label("Distort").click();
+        h.run();
+        let q = match h.state().session.transform_warp() {
+            Some(onepaint_engine::transform::WarpMode::Quad(q)) => *q,
+            _ => panic!("distort mode"),
+        };
+        h.state_mut().popover = None;
+        h.run();
+        // Drag the bottom-right corner down 80 px.
+        let br = h.state().canvas.view.doc_to_screen(q[2]);
+        drag_stroke(&mut h, pos2(br[0] as f32, br[1] as f32), pos2(br[0] as f32, br[1] as f32 + 80.0));
+        let q2 = match h.state().session.transform_warp() {
+            Some(onepaint_engine::transform::WarpMode::Quad(q)) => *q,
+            _ => panic!(),
+        };
+        assert!(q2[2][1] > q[2][1] + 50.0, "corner moved: {q:?} -> {q2:?}");
+        assert_eq!(q2[0], q[0], "other corners stay");
     }
 }

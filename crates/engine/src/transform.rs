@@ -100,6 +100,15 @@ pub(crate) struct Floating {
     pub saved_selection: Option<Arc<onepaint_selection::Mask>>,
     /// Clamp samples to the source edge instead of fading to transparent (image resize).
     pub clamp_edges: bool,
+    /// Distort or mesh warp, replacing `matrix` while set.
+    pub warp: Option<WarpMode>,
+}
+
+/// Free 4-corner distort (TL, TR, BR, BL) or a WARP_N² mesh lattice, doc px.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum WarpMode {
+    Quad([[f64; 2]; 4]),
+    Mesh(Vec<[f64; 2]>),
 }
 
 impl Floating {
@@ -129,8 +138,72 @@ impl Floating {
         o
     }
 
-    /// Resample the lifted pixels through `matrix` into `preview`, clipped to `clip`.
+    /// Map each destination cell back to its source uv rect (perspective-correct).
+    fn render_cells(&mut self, clip: Rect, cells: &[([[f64; 2]; 4], [f64; 4])]) {
+        use crate::warp::{invert, quad_homography};
+        self.preview = Surface::new();
+        let pts = cells.iter().flat_map(|c| c.0);
+        let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+        for p in pts {
+            (x0, y0, x1, y1) = (x0.min(p[0]), y0.min(p[1]), x1.max(p[0]), y1.max(p[1]));
+        }
+        let Some(target) = Rect::covering(x0 as f32, y0 as f32, x1 as f32, y1 as f32).intersect(&clip) else {
+            self.preview_bounds = Rect::default();
+            return;
+        };
+        self.preview_bounds = target;
+        let (tw, th) = (target.w as usize, target.h as usize);
+        let mut buf = vec![0.0f32; tw * th * 4];
+        let mut filled = vec![false; tw * th];
+        let b = self.bounds;
+        for (quad, uv) in cells {
+            let Some(inv) = invert(&quad_homography(quad)) else { continue };
+            let (mut cx0, mut cy0, mut cx1, mut cy1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+            for p in quad {
+                (cx0, cy0, cx1, cy1) = (cx0.min(p[0]), cy0.min(p[1]), cx1.max(p[0]), cy1.max(p[1]));
+            }
+            let Some(cr) = Rect::covering(cx0 as f32, cy0 as f32, cx1 as f32, cy1 as f32).intersect(&target) else { continue };
+            for y in cr.y..cr.bottom() {
+                for x in cr.x..cr.right() {
+                    let k = ((y - target.y) as usize) * tw + (x - target.x) as usize;
+                    if filled[k] {
+                        continue;
+                    }
+                    let [u, v] = crate::warp::apply(&inv, x as f64 + 0.5, y as f64 + 0.5);
+                    if !(-1e-6..=1.0 + 1e-6).contains(&u) || !(-1e-6..=1.0 + 1e-6).contains(&v) {
+                        continue;
+                    }
+                    let (su, sv) = (uv[0] + (uv[2] - uv[0]) * u, uv[1] + (uv[3] - uv[1]) * v);
+                    let p = self.sample(b.x as f64 + su * b.w as f64, b.y as f64 + sv * b.h as f64);
+                    filled[k] = true;
+                    buf[k * 4..k * 4 + 4].copy_from_slice(&p);
+                }
+            }
+        }
+        self.preview.write_rect(target, &buf);
+        self.preview.prune_empty();
+    }
+
+    /// Resample the lifted pixels into `preview`, clipped to `clip`.
     pub(crate) fn render(&mut self, clip: Rect) {
+        match self.warp.clone() {
+            Some(WarpMode::Quad(q)) => return self.render_cells(clip, &[(q, [0.0, 0.0, 1.0, 1.0])]),
+            Some(WarpMode::Mesh(pts)) => {
+                use crate::warp::{WARP_GRID, sample_warp};
+                let g = WARP_GRID as f64;
+                let mut cells = Vec::with_capacity(WARP_GRID * WARP_GRID);
+                for gy in 0..WARP_GRID {
+                    for gx in 0..WARP_GRID {
+                        let (u0, u1, v0, v1) = (gx as f64 / g, (gx + 1) as f64 / g, gy as f64 / g, (gy + 1) as f64 / g);
+                        let q =
+                            [sample_warp(&pts, u0, v0), sample_warp(&pts, u1, v0), sample_warp(&pts, u1, v1), sample_warp(&pts, u0, v1)];
+                        cells.push((q, [u0, v0, u1, v1]));
+                    }
+                }
+                return self.render_cells(clip, &cells);
+            }
+            None => {}
+        }
         let inv = self.matrix.inverse();
         let target = self.matrix.map_rect(self.bounds).intersect(&clip);
         self.preview = Surface::new();
@@ -236,6 +309,7 @@ impl Session {
             preview_bounds: bounds,
             saved_selection,
             clamp_edges: false,
+            warp: None,
         };
         f.render(self.doc.bounds());
         let lifted_selection = f.saved_selection.is_some();
@@ -246,6 +320,49 @@ impl Session {
         }
         self.mark_dirty(bounds);
         Ok(())
+    }
+
+    /// The distort or warp in progress, if any.
+    pub fn transform_warp(&self) -> Option<&WarpMode> {
+        self.transform.as_ref().and_then(|f| f.warp.as_ref())
+    }
+
+    /// Switch to 4-corner distort or mesh warp, seeded from the current affine
+    /// so the content doesn't jump.
+    pub(crate) fn begin_warp(&mut self, mesh: bool) {
+        let doc = self.doc.bounds();
+        let Some(f) = self.transform.as_mut() else { return };
+        let b = f.bounds;
+        let m = f.matrix;
+        let (x, y, w, h) = (b.x as f64, b.y as f64, b.w as f64, b.h as f64);
+        f.warp = Some(if mesh {
+            WarpMode::Mesh(crate::warp::lattice(x, y, w, h).into_iter().map(|p| m.apply(p)).collect())
+        } else {
+            WarpMode::Quad([m.apply([x, y]), m.apply([x + w, y]), m.apply([x + w, y + h]), m.apply([x, y + h])])
+        });
+        f.matrix = Affine::IDENTITY;
+        let old = f.preview_bounds;
+        f.render(doc);
+        let new = f.preview_bounds;
+        self.mark_dirty(old.union(&new));
+    }
+
+    pub(crate) fn set_warp(&mut self, w: WarpMode) {
+        let doc = self.doc.bounds();
+        let Some(f) = self.transform.as_mut() else { return };
+        let ok = match (&f.warp, &w) {
+            (Some(WarpMode::Quad(_)), WarpMode::Quad(_)) => true,
+            (Some(WarpMode::Mesh(_)), WarpMode::Mesh(p)) => p.len() == crate::warp::WARP_N * crate::warp::WARP_N,
+            _ => false,
+        };
+        if !ok {
+            return;
+        }
+        let old = f.preview_bounds;
+        f.warp = Some(w);
+        f.render(doc);
+        let new = f.preview_bounds;
+        self.mark_dirty(old.union(&new));
     }
 
     pub(crate) fn set_transform(&mut self, m: Affine) {

@@ -185,6 +185,12 @@ enum Drag {
     Measure {
         start: Pt,
     },
+    /// Dragging a distort corner or warp lattice point (`None` = the whole set).
+    WarpPoint {
+        index: Option<usize>,
+        grab: Pt,
+        start: onepaint_engine::transform::WarpMode,
+    },
     /// Pen: pulling the handle of the anchor just placed.
     PenNew {
         index: usize,
@@ -515,6 +521,23 @@ impl Canvas {
         }
         let d = self.doc_pt(p);
         let mode = SelectMode::from_modifiers(m.shift, m.alt, self.options.select_mode);
+        if tool == Tool::Move
+            && let Some(w) = session.transform_warp()
+        {
+            let pts = warp_points(w);
+            // The nearest point within 12 px (corners of a thin box can both be in reach).
+            let index = pts
+                .iter()
+                .enumerate()
+                .map(|(i, q)| {
+                    let s = self.view.doc_to_screen(*q);
+                    (i, pos2(s[0] as f32, s[1] as f32).distance(p))
+                })
+                .filter(|(_, dist)| *dist <= 12.0)
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(i, _)| i);
+            return Drag::WarpPoint { index, grab: d, start: w.clone() };
+        }
         if tool == Tool::Move {
             let Some((_, b)) = session.transform_state() else {
                 return Drag::None;
@@ -725,6 +748,30 @@ impl Canvas {
                             }
                         }
                         Drag::SymAxis => Self::move_symmetry_centre(session, d, self.doc_size),
+                        Drag::WarpPoint { index, grab, start } => {
+                            use onepaint_engine::transform::WarpMode;
+                            let (dx, dy) = (d[0] - grab[0], d[1] - grab[1]);
+                            let index = *index;
+                            let mv = |pts: &mut [[f64; 2]]| match index {
+                                Some(i) => {
+                                    if let Some(p) = pts.get_mut(i) {
+                                        (p[0], p[1]) = (p[0] + dx, p[1] + dy);
+                                    }
+                                }
+                                None => pts.iter_mut().for_each(|p| (p[0], p[1]) = (p[0] + dx, p[1] + dy)),
+                            };
+                            let next = match start.clone() {
+                                WarpMode::Quad(mut q) => {
+                                    mv(&mut q);
+                                    WarpMode::Quad(q)
+                                }
+                                WarpMode::Mesh(mut m) => {
+                                    mv(&mut m);
+                                    WarpMode::Mesh(m)
+                                }
+                            };
+                            let _ = session.execute(Command::SetWarp { warp: next });
+                        }
                         Drag::GuideMove { index, offset, .. } => {
                             let (index, offset) = (*index, *offset);
                             let mut lines = session.guides().lines.clone();
@@ -1250,7 +1297,29 @@ impl Canvas {
                 self.outline(ui, rect, &q, true);
             }
         }
-        if let Some((_, b)) = session.transform_state() {
+        if let Some(w) = session.transform_warp() {
+            use onepaint_engine::transform::WarpMode;
+            let accent = onepaint_ui_kit::Tokens::get(ui.ctx()).accent;
+            let line = |pts: Vec<Pt>| {
+                let sp: Vec<Pos2> = pts.into_iter().map(|q| self.to_screen(rect, q)).collect();
+                ui.painter().add(egui::Shape::line(sp, Stroke::new(1.0, accent)));
+            };
+            match w {
+                WarpMode::Quad(q) => self.outline(ui, rect, q, true),
+                WarpMode::Mesh(m) => {
+                    use onepaint_engine::warp::sample_warp;
+                    for k in 0..4 {
+                        let t = k as f64 / 3.0;
+                        line((0..=24).map(|i| sample_warp(m, i as f64 / 24.0, t)).collect());
+                        line((0..=24).map(|i| sample_warp(m, t, i as f64 / 24.0)).collect());
+                    }
+                }
+            }
+            for q in warp_points(w) {
+                let s = self.to_screen(rect, q);
+                ui.painter().circle(s, 5.0, Color32::WHITE, Stroke::new(1.0, Color32::from_black_alpha(160)));
+            }
+        } else if let Some((_, b)) = session.transform_state() {
             let h = self.xform.handles(self.doc_f(), b);
             self.outline(ui, rect, &h.corners, true);
             let knob = self.xform.rotate_knob(self.doc_f(), b, 28.0 / self.view.scale);
@@ -1317,5 +1386,13 @@ impl Canvas {
         if let Some(c) = session.sample_color(d[0].floor() as i32, d[1].floor() as i32) {
             let _ = session.execute(Command::SetColor { rgba: c });
         }
+    }
+}
+
+/// The draggable points of a distort or warp.
+fn warp_points(w: &onepaint_engine::transform::WarpMode) -> Vec<Pt> {
+    match w {
+        onepaint_engine::transform::WarpMode::Quad(q) => q.to_vec(),
+        onepaint_engine::transform::WarpMode::Mesh(m) => m.clone(),
     }
 }

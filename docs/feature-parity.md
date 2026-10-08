@@ -20,7 +20,7 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] eraser
 - [x] fill (flood fill) (tolerance, grow, confined to the selection, alpha lock)
 - [x] eyedropper (the tool, Alt-click and Alt-drag sample the composite; touch-and-hold comes with gestures)
-- [~] move/transform (scale, rotate, warp, quad homography) (move, scale, rotate, flip and selection lift are done; distort and warp are not)
+- [x] move/transform (scale, rotate, warp, quad homography)
 - [x] pan (space-drag, middle-drag, two-finger scroll)
 - [x] smudge
 - [x] mixer (Wet/Load/Mix, the 12 Photoshop combinations, Keep colour, Clean; no Alt-click patch load yet)
