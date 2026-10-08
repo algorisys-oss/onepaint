@@ -227,6 +227,8 @@ impl Session {
                     // The backdrop: everything below inside this (isolated) container.
                     let mut d = self.doc.clone_shallow();
                     d.root = nodes[..i].to_vec();
+                    // Filter sources are unshaded paint (no paper tooth).
+                    d.set_paper(None);
                     let flat = onepaint_compose::flatten(&d, None);
                     let mut backdrop = Surface::new();
                     backdrop.write_rect(self.doc.bounds(), &flat);

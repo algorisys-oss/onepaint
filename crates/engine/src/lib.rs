@@ -219,6 +219,8 @@ struct ActiveStroke {
     impasto: f64,
     /// The layer's height field, when this stroke builds or carves it.
     height: Option<height_ops::HeightEdit>,
+    /// Document paper and the brush's response to it (paint strokes only).
+    paper: Option<(onepaint_doc::Paper, f64)>,
 }
 
 /// App preferences the engine honours (happypaint `settings-store.ts`); not
@@ -686,6 +688,8 @@ impl Session {
         let impasto = if paint { brush.impasto_body() } else { 0.0 };
         let carves = erase && !noop && !to_mask && layer.height.is_some();
         let height = if impasto > 0.0 || carves { self.height_begin(&self.active) } else { None };
+        // The paper bites paint going on, never an erase or a mask (PE:805).
+        let paper = self.doc.paper().filter(|_| paint).map(|p| (p, brush.paper_response.unwrap_or(1.0)));
         let mut engine = StrokeEngine::new(brush, [lin[0], lin[1], lin[2]], self.seed);
         engine.set_symmetry(self.symmetry_transforms());
         let mut st = ActiveStroke {
@@ -699,6 +703,7 @@ impl Session {
             mask: to_mask,
             impasto,
             height,
+            paper,
         };
         let dabs = st.engine.begin(p);
         self.stroke = Some(st);
@@ -739,10 +744,16 @@ impl Session {
         if st.noop || dabs.is_empty() {
             return;
         }
+        // The tooth bites bare paper; paint and relief already on the layer fill it.
+        let tooth = st.paper.as_ref().and_then(|(p, response)| {
+            let layer = self.doc.layer(&st.layer);
+            onepaint_brush::paper::PaperTooth::new(p, *response, layer.map(|l| &l.pixels), layer.and_then(|l| l.height.as_ref()))
+        });
         let mut r = Rect::default();
         for d in &dabs {
-            r = r.union(&st.engine.rasterize(&mut st.buffer, d, st.clip.as_deref()));
+            r = r.union(&st.engine.rasterize_on_paper(&mut st.buffer, d, st.clip.as_deref(), tooth.as_ref()));
         }
+        drop(tooth);
         let relief = height_ops::dry_height_dabs(st.impasto, &dabs);
         let layer = (!relief.is_empty()).then(|| st.layer.clone());
         self.mark_dirty(r);
@@ -897,6 +908,7 @@ impl Session {
                     | Command::SetMixer { .. }
                     | Command::SetLiquify { .. }
                     | Command::SetWetTilt { .. }
+                    | Command::SetPaper { .. }
             )
         {
             self.dry_wet();
@@ -1033,6 +1045,10 @@ impl Session {
             Command::ClearBevel { id } => self.clear_height(&id).map(|_| ()),
             Command::DryWet => {
                 self.dry_wet();
+                Ok(())
+            }
+            Command::SetPaper { paper } => {
+                self.set_paper(paper);
                 Ok(())
             }
             Command::SetWetTilt { x, y } => {

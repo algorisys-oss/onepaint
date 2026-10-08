@@ -2667,6 +2667,7 @@ dependencies = [
 name = "onepaint-compose"
 version = "0.1.0"
 dependencies = [
+ "onepaint-brush",
  "onepaint-color",
  "onepaint-doc",
  "onepaint-filters",

@@ -21,10 +21,26 @@ const FINGER_AMP: f32 = 0.65;
 const FINGER_CELL: f32 = 9.0;
 const DAMP: f32 = 0.93;
 const VORT_EPS: f32 = 0.5;
+const PAPER_ABSORB: f32 = 1.6;
+const PAPER_RESIST: f32 = 0.5;
+const GRAN_SWING: f32 = 1.2;
 
 /// Settle rate and wet-front strength at (u, v) (sim px). The settle and
 /// update passes must agree, or mass would not be conserved.
-fn settle_rate(sim: &Field, w: f32, u: f32, v: f32, oil: f32) -> (f32, f32) {
+/// The paper under a sample point: (height, strength); strength 0 = smooth.
+#[derive(Clone, Copy)]
+pub(crate) struct PaperTap<'a> {
+    sim: &'a FluidSim,
+}
+
+impl PaperTap<'_> {
+    #[inline]
+    fn at(&self, u: f32, v: f32) -> f32 {
+        self.sim.paper_at(u, v)
+    }
+}
+
+fn settle_rate(sim: &Field, w: f32, u: f32, v: f32, oil: f32, paper: (PaperTap, f32)) -> (f32, f32) {
     let wl = sim.sample(u - 1.0, v)[0];
     let wr = sim.sample(u + 1.0, v)[0];
     let wu = sim.sample(u, v - 1.0)[0];
@@ -47,6 +63,10 @@ fn settle_rate(sim: &Field, w: f32, u: f32, v: f32, oil: f32) -> (f32, f32) {
     let mut dc = SETTLE_DRY + (SETTLE_WET - SETTLE_DRY) * wet;
     dc *= 1.0 - oil;
     dc *= 1.0 + EDGE_SETTLE * front * (1.0 - wet);
+    // Granulation: valleys collect pigment, ridges shed it.
+    if paper.1 > 0.0 {
+        dc *= 1.0 + paper.1 * GRAN_SWING * (paper.0.at(u, v) * 2.0 - 1.0);
+    }
     (dc.clamp(0.0, 1.0), front)
 }
 
@@ -106,6 +126,7 @@ impl FluidSim {
         }
         {
             let (fs, fc) = self.field();
+            let paper = (PaperTap { sim: self }, self.paper_strength());
             let src = &*layer;
             let out: Vec<_> = per_tile
                 .into_par_iter()
@@ -120,8 +141,13 @@ impl FluidSim {
                                 if col[3] <= 0.0002 {
                                     continue;
                                 }
-                                let (dc, front) = settle_rate(&fs, fs.texel(lx, ly)[0], lx as f32 + 0.5, ly as f32 + 0.5, oil);
-                                let k = (1.0 + force_f * FORCE_RIM * front) * dc.max(force_f);
+                                let (u, v) = (lx as f32 + 0.5, ly as f32 + 0.5);
+                                let (dc, front) = settle_rate(&fs, fs.texel(lx, ly)[0], u, v, oil, paper);
+                                let mut k = (1.0 + force_f * FORCE_RIM * front) * dc.max(force_f);
+                                // Force-dry recreates the granulation it bypasses, once.
+                                if paper.1 > 0.0 {
+                                    k *= 1.0 + force_f * paper.1 * GRAN_SWING * (paper.0.at(u, v) * 2.0 - 1.0);
+                                }
                                 let mut s = col.map(|c| (c * k).clamp(0.0, 1.0));
                                 for c in 0..3 {
                                     s[c] = s[c].min(s[3]);
@@ -158,6 +184,7 @@ impl FluidSim {
         let stale = std::mem::take(&mut self.occ_next);
         let (fs, fc) = self.field();
         let finger = &self.finger;
+        let paper = (PaperTap { sim: self }, self.paper_strength());
         // One task per pixel row (a wash may span only a few block rows).
         let row_flags: Vec<Vec<bool>> = sim_next
             .par_chunks_mut(w as usize)
@@ -173,7 +200,7 @@ impl FluidSim {
                     if active[b] {
                         for x in x0..x1 {
                             let f = finger[(y * w + x) as usize];
-                            let (sv, cv) = update_px(&fs, &fc, x, y, oil, tilt, f);
+                            let (sv, cv) = update_px(&fs, &fc, x, y, oil, tilt, f, paper);
                             *flag |= sv[0] != 0.0 || sv[2] != 0.0 || sv[3] != 0.0 || cv[3] != 0.0;
                             srow[x as usize] = sv;
                             crow[x as usize] = cv;
@@ -212,7 +239,17 @@ impl FluidSim {
 }
 
 /// UPDATE_FRAG for one sim pixel (x, y).
-fn update_px(fs: &Field, fc: &Field, x: i32, y: i32, oil: f32, tilt: [f32; 2], finger: f32) -> ([f32; 4], [f32; 4]) {
+#[allow(clippy::too_many_arguments)]
+fn update_px(
+    fs: &Field,
+    fc: &Field,
+    x: i32,
+    y: i32,
+    oil: f32,
+    tilt: [f32; 2],
+    finger: f32,
+    paper: (PaperTap, f32),
+) -> ([f32; 4], [f32; 4]) {
     let (u, v) = (x as f32 + 0.5, y as f32 + 0.5);
     // Advect along the velocity, adopting the fastest wet neighbour heading here.
     let here = fs.texel(x, y);
@@ -262,14 +299,19 @@ fn update_px(fs: &Field, fc: &Field, x: i32, y: i32, oil: f32, tilt: [f32; 2], f
     }
     w_avg *= 0.125;
 
-    let w_new = (w + DIFF_W * (1.0 + (0.06 - 1.0) * oil) * (w_avg - w) - EVAP as f32 * (1.0 - oil)).clamp(0.0, WATER_MAX as f32);
+    // Textured paper drinks water (uneven drying) and resists its flow.
+    let ph = if paper.1 > 0.0 { paper.0.at(u, v) } else { 0.5 };
+    let soak = 1.0 + paper.1 * PAPER_ABSORB * ph;
+    let resist = 1.0 - paper.1 * PAPER_RESIST * ph;
+    let w_new =
+        (w + DIFF_W * resist * (1.0 + (0.06 - 1.0) * oil) * (w_avg - w) - EVAP as f32 * soak * (1.0 - oil)).clamp(0.0, WATER_MAX as f32);
     let mut col_new = if a_new <= 0.0005 {
         [0.0; 4]
     } else {
         let lin = c.map(s2l);
         [lin[0] * a_new, lin[1] * a_new, lin[2] * a_new, a_new]
     };
-    let (dc, _) = settle_rate(fs, w, ou, ov, oil);
+    let (dc, _) = settle_rate(fs, w, ou, ov, oil, paper);
     col_new = col_new.map(|v| (v * (1.0 - dc)).clamp(0.0, 1.0));
     for k in 0..3 {
         col_new[k] = col_new[k].min(col_new[3]);

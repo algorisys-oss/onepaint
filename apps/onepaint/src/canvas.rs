@@ -1552,7 +1552,9 @@ impl Canvas {
             ui.painter().circle_stroke(f, 5.0, Stroke::new(1.5, Color32::WHITE));
         }
         self.rulers_and_measure(ui, rect, session);
-        let Some(hp) = hover else { return };
+        // Toolbars and popovers float over the canvas: there the pointer is
+        // theirs (plain arrow, no brush ring) unless a stroke is under way.
+        let Some(hp) = hover.filter(|_| resp.hovered() || resp.dragged()) else { return };
         if space {
             ui.ctx().set_cursor_icon(if matches!(self.drag, Drag::Pan) { CursorIcon::Grabbing } else { CursorIcon::Grab });
             return;
@@ -1561,7 +1563,6 @@ impl Canvas {
             ui.ctx().set_cursor_icon(CursorIcon::Alias);
             return;
         }
-        let _ = resp;
         ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
         if matches!(session.tool(), Tool::Brush | Tool::Eraser | Tool::Smudge | Tool::Mixer | Tool::Liquify) {
             let size = session.preferences().stroke_brush(session.current_brush()).size;

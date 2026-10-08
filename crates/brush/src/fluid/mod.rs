@@ -8,10 +8,9 @@
 //! - `sim`: water, vorticity ω, velocity (px/step).
 //! - `col`: premultiplied linear suspended pigment.
 //!
-//! Deterministic: no RNG, no clock; the engine records step counts. Paper
-//! texture is not modelled yet (onepaint has no document paper), which is
-//! happypaint's smooth-paper case: the dry-brush gate, absorption and
-//! granulation terms are all off.
+//! Deterministic: no RNG, no clock; the engine records step counts. The
+//! document paper (spec 36) drives the dry-brush gate, absorption, flow
+//! resistance and granulation.
 
 pub mod dab;
 mod step;
@@ -46,6 +45,9 @@ pub struct WetDab {
     pub vy: f64,
     /// Re-wet lift fraction (0 = plain dab).
     pub rewet: f64,
+    /// Dry-brush strength (0 = off) and the paper height it must reach.
+    pub dry: f64,
+    pub grain_thr: f64,
 }
 
 /// Colours this close mix to themselves within 8-bit precision: skip KM.
@@ -132,6 +134,8 @@ pub struct FluidSim {
     pub oil: bool,
     /// Canvas tilt (direction × strength, |t| ≤ 1): wet paint runs downhill.
     tilt: [f32; 2],
+    /// The document paper and its strength (none = smooth).
+    pub(crate) paper: Option<(crate::paper::PaperTexture, f32)>,
 }
 
 impl FluidSim {
@@ -152,6 +156,7 @@ impl FluidSim {
             finger: step::finger_field(rect),
             oil,
             tilt: [0.0; 2],
+            paper: None,
         }
     }
 
@@ -164,6 +169,34 @@ impl FluidSim {
         let m = x.hypot(y);
         let k = if m > 1.0 { 1.0 / m } else { 1.0 };
         self.tilt = [x * k, y * k];
+    }
+
+    /// Textured paper: absorption, flow resistance, granulation, and the
+    /// dry-brush gate (`wet-renderer.ts` PAPER_*).
+    pub fn set_paper(&mut self, paper: Option<&onepaint_doc::Paper>) {
+        self.paper = paper.and_then(|p| Some((crate::paper::PaperTexture::new(p)?, p.strength() as f32))).filter(|(_, s)| *s > 0.0);
+    }
+
+    /// Paper height at sim-local position (u, v), or 0.5 on smooth paper.
+    #[inline]
+    pub(crate) fn paper_at(&self, u: f32, v: f32) -> f32 {
+        self.paper.as_ref().map_or(0.5, |(t, _)| t.height((u + self.rect.x as f32) as f64, (v + self.rect.y as f32) as f64))
+    }
+
+    pub(crate) fn paper_strength(&self) -> f32 {
+        self.paper.as_ref().map_or(0.0, |p| p.1)
+    }
+
+    /// Dry brush: an emptying brush only touches the paper's ridges.
+    #[inline]
+    fn dry_gate(&self, x: i32, y: i32, d: &WetDab) -> f32 {
+        let s = self.paper_strength();
+        if d.dry <= 0.0 || s <= 0.0 {
+            return 1.0;
+        }
+        let h = self.paper_at(x as f32 + 0.5, y as f32 + 0.5);
+        let thr = d.grain_thr as f32 - 0.6 * (1.0 - d.dry as f32 * s);
+        smoothstep(thr - 0.08, thr + 0.08, h)
     }
 
     pub(crate) fn tilt(&self) -> [f32; 2] {
@@ -338,7 +371,7 @@ impl FluidSim {
             for y in y0..y1 {
                 for x in x0..x1 {
                     let (lx, ly) = ((x as f64 + 0.5 - cx) / d.radius, (y as f64 + 0.5 - cy) / d.radius);
-                    let cov = (1.0 - smoothstep(0.55, 1.0, lx.hypot(ly) as f32)) * d.water as f32;
+                    let cov = (1.0 - smoothstep(0.55, 1.0, lx.hypot(ly) as f32)) * d.water as f32 * self.dry_gate(x, y, d);
                     let s = &mut self.sim[(y * w + x) as usize];
                     s[0] = s[0].max(cov);
                 }
@@ -359,7 +392,7 @@ impl FluidSim {
             for y in y0..y1 {
                 for x in x0..x1 {
                     let (lx, ly) = ((x as f64 + 0.5 - cx) / d.radius, (y as f64 + 0.5 - cy) / d.radius);
-                    let cov = (1.0 - smoothstep(0.45, 1.0, lx.hypot(ly) as f32)) * d.pigment as f32;
+                    let cov = (1.0 - smoothstep(0.45, 1.0, lx.hypot(ly) as f32)) * d.pigment as f32 * self.dry_gate(x, y, d);
                     if cov <= 0.0 {
                         continue;
                     }

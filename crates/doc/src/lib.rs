@@ -7,6 +7,9 @@ use onepaint_color::Rgba;
 use onepaint_raster::{Rect, Surface};
 use serde::{Deserialize, Serialize};
 
+pub mod paper;
+pub use paper::{PAPER_PRESETS, Paper, PaperPreset, paper_preset_id};
+
 pub type NodeId = String;
 pub type Extra = serde_json::Map<String, serde_json::Value>;
 

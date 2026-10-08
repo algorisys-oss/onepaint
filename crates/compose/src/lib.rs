@@ -276,6 +276,12 @@ fn doc_frame(doc: &Document) -> Frame {
 pub fn composite_tile(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverlay>) -> Buf {
     let mut buf = zeros();
     composite_nodes(&doc.root, tx, ty, &mut buf, ov, doc_frame(doc));
+    // The paper's visible tooth shades the finished composite (C:214-233).
+    if let Some(p) = doc.paper()
+        && let Some(tex) = onepaint_brush::paper::PaperTexture::new(&p)
+    {
+        onepaint_brush::paper::shade_tile(&mut buf, &tex, p.strength(), tx, ty);
+    }
     buf
 }
 

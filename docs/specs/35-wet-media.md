@@ -174,10 +174,9 @@ height field):
   - The fingering noise is cached.
   - The allocation pads only new area (happypaint re-pads the whole union,
     which compounds).
+- **Paper:** the dry-brush gate, absorption, resistance and granulation
+  follow the document paper (spec 36).
 - **Not yet:**
-  - Paper texture (the dry-brush gate, absorption, resistance and
-    granulation all wait for document paper; this is happypaint's smooth
-    paper).
   - The tilt pad UI (the command exists).
   - Fluid controls in the brush studio.
   - A GPU compute path for large washes.

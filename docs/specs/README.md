@@ -46,3 +46,4 @@ The happypaint references are relative to `../happypaint/frontend/src/`.
 | 32 | [CMYK soft-proof, value check, CMYK TIFF](32-cmyk-proof.md) | color, formats, app |
 | 34 | [Settings](34-settings.md) | engine, app |
 | 35 | [Wet and oil media](35-wet-media.md) | brush, compose, formats, engine, app |
+| 36 | [Document paper](36-paper.md) | doc, brush, compose, engine, app |

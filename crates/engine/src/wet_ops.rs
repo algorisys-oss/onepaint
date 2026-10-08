@@ -73,6 +73,17 @@ impl Session {
         }
     }
 
+    /// Change the document paper (no undo step, as in happypaint): new
+    /// strokes and the live wet paint use it, and the canvas shows it.
+    pub(crate) fn set_paper(&mut self, paper: Option<onepaint_doc::Paper>) {
+        if let Some(s) = self.wet.as_mut() {
+            s.sim.set_paper(paper.as_ref());
+        }
+        self.doc.set_paper(paper);
+        self.doc.touch();
+        self.mark_all_dirty();
+    }
+
     /// The wet preview as a live-stroke overlay on its layer (display only).
     pub(crate) fn wet_overlay(&self) -> Option<StrokeOverlay<'_>> {
         let s = self.wet.as_ref()?;
@@ -111,6 +122,7 @@ impl Session {
             let seed = Rect::covering((first.x - r) as f32, (first.y - r) as f32, (first.x + r) as f32, (first.y + r) as f32);
             let mut sim = FluidSim::new(doc, seed, fl.oil);
             sim.set_tilt(self.wet_tilt[0], self.wet_tilt[1]);
+            sim.set_paper(self.doc.paper().as_ref());
             let before = self.doc.layer(&self.active).map(|l| l.pixels.clone()).unwrap_or_default();
             self.wet = Some(WetSession {
                 layer: self.active.clone(),
@@ -197,6 +209,7 @@ impl Session {
             ws.travel += dl;
             let res = if ws.fluid.oil { 1.0 } else { fluid::reservoir(ws.travel, ws.size, ws.fluid.water) };
             let a = fluid::dab_amounts(&ws.fluid, pressure, res);
+            let (dry, grain_thr) = (fluid::dry_brush(res), fluid::dry_grain_threshold(pressure, ws.fluid.water));
             max_water = max_water.max(a.water);
             if dl > 1e-3 {
                 (dir_x, dir_y) = (dx / dl, dy / dl);
@@ -204,7 +217,19 @@ impl Session {
             (px, py) = (p.x, p.y);
             let (vx, vy) = (dir_x * speed, dir_y * speed);
             let mut push = |x: f64, y: f64, vx: f64, vy: f64| {
-                dabs.push(WetDab { x, y, radius, water: a.water, pigment: a.pigment, color: ws.color, vx, vy, rewet: a.rewet });
+                dabs.push(WetDab {
+                    x,
+                    y,
+                    radius,
+                    water: a.water,
+                    pigment: a.pigment,
+                    color: ws.color,
+                    vx,
+                    vy,
+                    rewet: a.rewet,
+                    dry,
+                    grain_thr,
+                });
                 if ws.impasto > 0.0 {
                     relief.push(HeightDab { x, y, radius, amount: ws.impasto * 0.12 * (0.4 + 0.6 * pressure) });
                 }

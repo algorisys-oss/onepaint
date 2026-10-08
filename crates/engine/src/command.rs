@@ -45,6 +45,10 @@ pub enum Command {
     },
     /// Settle all wet paint now and commit it (the Dry button).
     DryWet,
+    /// The document paper (`None` = smooth).
+    SetPaper {
+        paper: Option<onepaint_doc::Paper>,
+    },
     /// Canvas tilt for wet paint (direction × strength, each -1..1).
     SetWetTilt {
         x: f32,

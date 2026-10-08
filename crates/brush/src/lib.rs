@@ -6,6 +6,7 @@
 mod assets;
 pub mod fluid;
 pub mod height;
+pub mod paper;
 mod preset;
 pub mod settle;
 pub mod smudge;
@@ -192,6 +193,17 @@ impl StrokeEngine {
     /// Rasterise one of this stroke's dabs with its tip and grain.
     pub fn rasterize(&self, s: &mut Surface, d: &Dab, clip: Option<&onepaint_selection::Mask>) -> Rect {
         rasterize_dab_tip(s, d, &self.tip, clip, self.brush.wash, self.grain.as_ref())
+    }
+
+    /// [`StrokeEngine::rasterize`] on the document paper.
+    pub fn rasterize_on_paper(
+        &self,
+        s: &mut Surface,
+        d: &Dab,
+        clip: Option<&onepaint_selection::Mask>,
+        paper: Option<&paper::PaperTooth>,
+    ) -> Rect {
+        rasterize_dab_paper(s, d, &self.tip, clip, self.brush.wash, self.grain.as_ref(), paper)
     }
 
     /// Airbrush: spray `rate` dabs per second at the last input point while held.
@@ -417,6 +429,36 @@ pub fn rasterize_dab_tip(
     wash: bool,
     grain: Option<&GrainSampler>,
 ) -> Rect {
+    rasterize_dab_paper(s, d, tip, clip, wash, grain, None)
+}
+
+/// [`rasterize_dab_tip`] on the document paper: the tooth bites after the grain.
+pub fn rasterize_dab_paper(
+    s: &mut Surface,
+    d: &Dab,
+    tip: &Tip,
+    clip: Option<&onepaint_selection::Mask>,
+    wash: bool,
+    grain: Option<&GrainSampler>,
+    paper: Option<&paper::PaperTooth>,
+) -> Rect {
+    // Monomorphised so the common paperless path carries no tooth checks.
+    match paper {
+        Some(_) => rasterize_impl::<true>(s, d, tip, clip, wash, grain, paper),
+        None => rasterize_impl::<false>(s, d, tip, clip, wash, grain, None),
+    }
+}
+
+#[inline(always)]
+fn rasterize_impl<const PAPER: bool>(
+    s: &mut Surface,
+    d: &Dab,
+    tip: &Tip,
+    clip: Option<&onepaint_selection::Mask>,
+    wash: bool,
+    grain: Option<&GrainSampler>,
+    paper: Option<&paper::PaperTooth>,
+) -> Rect {
     let bounds = dab_bounds(d);
     if d.alpha <= 0.0 || d.radius <= 0.0 {
         return bounds;
@@ -432,6 +474,7 @@ pub fn rasterize_dab_tip(
             continue;
         };
         let tile = s.tile_mut(tx, ty);
+        let tooth = if PAPER { paper.map(|p| p.tile(tx, ty)) } else { None };
         for y in ix.y..ix.bottom() {
             let py = y as f64 + 0.5 - d.y;
             for x in ix.x..ix.right() {
@@ -466,6 +509,9 @@ pub fn rasterize_dab_tip(
                 let mut a = (m * d.alpha) as f32;
                 if let Some(g) = grain {
                     a *= g.factor(x as f64 + 0.5, y as f64 + 0.5);
+                }
+                if PAPER && let (Some(p), Some(t)) = (paper, &tooth) {
+                    a *= p.factor(t, x, y, (x - tx * TILE) as usize, (y - ty * TILE) as usize);
                 }
                 if let Some(m) = clip {
                     a *= m.coverage(x, y);

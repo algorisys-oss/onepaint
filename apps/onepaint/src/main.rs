@@ -71,6 +71,7 @@ pub enum Popover {
     Help,
     Gallery,
     Settings,
+    Paper,
     /// Three-finger swipe down: copy, cut, paste.
     ClipboardMenu,
     BrushStudio,
@@ -161,6 +162,8 @@ pub struct App {
     pub settings: settings::Settings,
     /// Layer panel Bevel / Soften sliders (not saved, as in happypaint).
     pub bevel: [f32; 2],
+    /// The New canvas dialog's paper preset (index into `PAPER_PRESETS`).
+    pub new_paper: usize,
     pub playback: timeline::Playback,
     pub reference: reference::ReferenceState,
     pub gallery: gallery::Gallery,
@@ -233,6 +236,7 @@ impl App {
             recent: Vec::new(),
             palettes,
             bevel: [0.0, 0.25],
+            new_paper: 0,
             settings: settings::Settings::load(if cfg!(test) || debug.scripted() { None } else { settings::default_path() }),
             playback: Default::default(),
             reference: Default::default(),
@@ -305,7 +309,9 @@ impl App {
     pub fn new_document(&mut self, w: u32, h: u32) {
         let id = self.session.doc().id.clone();
         self.autosave.clear(&id);
-        self.session.replace_document(onepaint_doc::Document::new(w, h, Some(Rgba::WHITE)));
+        let mut doc = onepaint_doc::Document::new(w, h, Some(Rgba::WHITE));
+        doc.set_paper(onepaint_doc::PAPER_PRESETS.get(self.new_paper).and_then(|p| p.paper()));
+        self.session.replace_document(doc);
         self.canvas.reset_for([w, h]);
         self.path = None;
         self.saved_history_len = Some(0);
@@ -1233,6 +1239,21 @@ mod tests {
     }
 
     #[test]
+    fn toolbars_keep_the_plain_cursor_and_the_canvas_gets_the_crosshair() {
+        let mut h = harness();
+        h.run();
+        let cursor = |h: &mut Harness<'_, App>, at: egui::Pos2| {
+            h.event(Event::PointerMoved(at));
+            h.step();
+            h.step();
+            h.output().platform_output.cursor_icon
+        };
+        assert_eq!(cursor(&mut h, pos2(640.0, 420.0)), egui::CursorIcon::Crosshair);
+        let over_bar = h.get_by_label("Layers").rect().center();
+        assert_ne!(cursor(&mut h, over_bar), egui::CursorIcon::Crosshair, "a toolbar over the canvas keeps its own cursor");
+    }
+
+    #[test]
     fn dragging_on_the_canvas_paints_and_undo_removes_it() {
         let mut h = harness();
         h.run();
@@ -1275,6 +1296,32 @@ mod tests {
         h.get_by_label("Eraser (E)").click();
         h.run();
         assert_eq!(h.state().session.tool(), Tool::Eraser);
+    }
+
+    #[test]
+    fn paper_is_chosen_from_the_menu_and_for_new_canvases() {
+        let mut h = harness();
+        h.run();
+        h.state_mut().popover = Some(Popover::Menu);
+        h.run();
+        h.get_by_label("Paper…").click();
+        h.run();
+        assert_eq!(h.state().popover, Some(Popover::Paper));
+        for _ in 0..5 {
+            h.step();
+        }
+        h.get_by_label("Rough").click();
+        h.run();
+        let p = h.state().session.doc().paper().unwrap();
+        assert_eq!(p.grain_id, "rough-tooth");
+        assert!(h.query_by_role_and_label(egui::accesskit::Role::Slider, "Texture scale").is_some());
+        h.get_by_label("Smooth").click();
+        h.run();
+        assert!(h.state().session.doc().paper().is_none());
+        // New canvases take the dialog's paper.
+        h.state_mut().new_paper = 3;
+        h.state_mut().new_document(640, 480);
+        assert_eq!(h.state().session.doc().paper().unwrap().grain_id, "canvas");
     }
 
     #[test]

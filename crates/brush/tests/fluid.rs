@@ -6,7 +6,7 @@ use onepaint_raster::{Rect, Surface};
 const DOC: Rect = Rect::new(0, 0, 400, 300);
 
 fn dab(x: f64, y: f64, water: f64, pigment: f64, color: [f32; 3]) -> WetDab {
-    WetDab { x, y, radius: 20.0, water, pigment, color, vx: 0.0, vy: 0.0, rewet: 0.0 }
+    WetDab { x, y, radius: 20.0, water, pigment, color, vx: 0.0, vy: 0.0, rewet: 0.0, dry: 0.0, grain_thr: 0.0 }
 }
 
 fn stroke(sim: &mut FluidSim, y: f64, water: f64, pigment: f64, color: [f32; 3]) {

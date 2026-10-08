@@ -43,6 +43,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             Popover::Gallery => popover_at(ctx, "gallery", screen.center(), Align2::CENTER_CENTER, |ui| crate::gallery::show(app, ui)),
             Popover::Help => popover_at(ctx, "help", screen.center(), Align2::CENTER_CENTER, help),
             Popover::Settings => popover_at(ctx, "settings", screen.center(), Align2::CENTER_CENTER, |ui| crate::settings::dialog(app, ui)),
+            Popover::Paper => popover_at(ctx, "paper", screen.center(), Align2::CENTER_CENTER, |ui| paper_dialog(app, ui)),
             Popover::MoveOptions => popover_at(ctx, "move", anchor, Align2::RIGHT_TOP, |ui| move_options(app, ui)),
             Popover::SmartFilters => popover_at(ctx, "smart", anchor, Align2::RIGHT_TOP, |ui| crate::adjust::smart_panel(app, ui)),
             Popover::Export => popover_at(ctx, "export", screen.center(), Align2::CENTER_CENTER, |ui| export_dialog(app, ui)),
@@ -471,6 +472,10 @@ fn menu(app: &mut App, ui: &mut Ui) {
         app.popover = Some(Popover::ImageSize);
         return;
     }
+    if widgets::menu_item(ui, Some("layers"), "Paper…", "").clicked() {
+        app.popover = Some(Popover::Paper);
+        return;
+    }
     widgets::hairline(ui);
     if widgets::menu_item(ui, Some("maximize-2"), "Fit to screen", "Ctrl+0").clicked() {
         app.canvas.view.fit();
@@ -515,6 +520,12 @@ fn new_doc(app: &mut App, ui: &mut Ui) {
         ui.label("×");
         ui.add(egui::DragValue::new(&mut app.new_doc[1]).range(16..=16384).suffix(" px"));
     });
+    ui.add_space(8.0);
+    ui.label(RichText::new("Paper").color(t.fg_muted));
+    let labels: Vec<&str> = onepaint_doc::PAPER_PRESETS.iter().map(|p| p.label).collect();
+    if let Some(i) = segmented(ui, &labels, app.new_paper) {
+        app.new_paper = i;
+    }
     ui.add_space(12.0);
     ui.horizontal(|ui| {
         if widgets::primary_button(ui, "Create", 120.0).clicked() {
@@ -2100,5 +2111,36 @@ fn bevel_controls(app: &mut App, ui: &mut Ui, active: &str) {
             Command::ClearBevel { id }
         };
         let _ = app.session.execute(cmd);
+    }
+}
+
+/// The document paper (happypaint's document properties): a preset, and the
+/// texture scale for textured papers. Applies live; not an undo step.
+fn paper_dialog(app: &mut App, ui: &mut Ui) {
+    use onepaint_doc::{PAPER_PRESETS, paper::PAPER_SCALE_MAX, paper::PAPER_SCALE_MIN, paper_preset_id};
+    let t = Tokens::get(ui.ctx());
+    ui.set_width(340.0);
+    ui.label(RichText::new("Paper").font(theme::semibold(16.0)).color(t.fg));
+    ui.label(RichText::new("Dry brushes catch its tooth; wet paint soaks into it.").font(theme::medium(11.0)).color(t.fg_faint));
+    ui.add_space(8.0);
+    let paper = app.session.doc().paper();
+    let cur = PAPER_PRESETS.iter().position(|p| p.id == paper_preset_id(paper.as_ref())).unwrap_or(0);
+    let labels: Vec<&str> = PAPER_PRESETS.iter().map(|p| p.label).collect();
+    if let Some(i) = segmented(ui, &labels, cur) {
+        let _ = app.session.execute(Command::SetPaper { paper: PAPER_PRESETS[i].paper() });
+    }
+    if let Some(p) = paper {
+        ui.add_space(6.0);
+        let mut pct = (p.scale() * 100.0) as f32;
+        let range = (PAPER_SCALE_MIN * 100.0) as f32..=(PAPER_SCALE_MAX * 100.0) as f32;
+        let r = widgets::slider_row(ui, "Texture scale", &mut pct, range, |v| format!("{v:.0}%"));
+        if r.drag_stopped() || (r.changed() && !r.dragged()) {
+            let scale = ((pct / 5.0).round() * 5.0 / 100.0) as f64;
+            let _ = app.session.execute(Command::SetPaper { paper: Some(onepaint_doc::Paper { scale: Some(scale), ..p }) });
+        }
+    }
+    ui.add_space(10.0);
+    if widgets::primary_button(ui, "Done", 90.0).clicked() {
+        app.popover = None;
     }
 }
