@@ -377,3 +377,32 @@ fn tip_transform_rotates_squashes_and_flips() {
     assert_eq!((w, h), (4, 1));
     assert!(out[3] > out[0], "flipped: {out:?}");
 }
+
+#[test]
+fn custom_brush_saves_and_reloads() {
+    // Spec 27: a studio-made brush (with an imported tip) persists.
+    let dir = std::env::temp_dir().join(format!("onepaint-custombrush-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut lib = brushes::import_brush_file("one.brush", &fixture("one.brush")).unwrap().library;
+    let mut edited = lib.presets[0].clone();
+    edited.size = 77.0;
+    edited.spacing = 0.33;
+    let custom = lib.add_custom(&edited, "Studio brush");
+    brushes::save_user_library(&dir, &lib).unwrap();
+    let back = brushes::load_user_library(&dir);
+    assert_eq!(back, lib);
+    let p = back.preset(&custom.id).unwrap();
+    assert_eq!((p.name.as_str(), p.size, p.spacing), ("Studio brush", 77.0, 0.33));
+    assert_eq!(p.category, onepaint_brush::CUSTOM_CATEGORY);
+    assert!(back.tips.contains_key(&p.tip_id), "the shared tip is kept");
+    // Rename and save over, then reload again.
+    lib.rename(&custom.id, "Renamed");
+    let mut again = lib.preset(&custom.id).unwrap().clone();
+    again.hardness = 0.1;
+    lib.update(&again);
+    brushes::save_user_library(&dir, &lib).unwrap();
+    let back = brushes::load_user_library(&dir);
+    assert_eq!(back.preset(&custom.id).unwrap().name, "Renamed");
+    assert_eq!(back.preset(&custom.id).unwrap().hardness, 0.1);
+    let _ = std::fs::remove_dir_all(&dir);
+}

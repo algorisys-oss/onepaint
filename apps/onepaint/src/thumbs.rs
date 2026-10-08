@@ -47,6 +47,11 @@ impl Thumbs {
         self.masks.clear();
     }
 
+    /// Drop a brush's cached stroke (after the studio saves over it).
+    pub fn forget_brush(&mut self, id: &str) {
+        self.brushes.remove(id);
+    }
+
     pub fn invalidate_active(&mut self, id: &str) {
         self.layers.remove(id);
         self.masks.remove(id);

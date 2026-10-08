@@ -1,7 +1,8 @@
-//! Imported brushes (spec 23): import from `.abr`, `.brush`, `.brushset` and
+//! The user brush library (specs 23, 27): custom brushes from the studio,
+//! and imports from `.abr`, `.brush`, `.brushset` and
 //! `.happybrush`, export as `.happybrush`, persisted in the app data folder.
 
-use onepaint_brush::{set_user_library, user_library};
+use onepaint_brush::{BrushPreset, set_user_library, user_library};
 use onepaint_formats::brushes::{self, BrushImport};
 use std::path::PathBuf;
 
@@ -41,6 +42,30 @@ impl BrushLibrary {
         onepaint_brush::add_user_brushes(imp.library.clone());
         self.save()?;
         Ok(imp)
+    }
+
+    /// Save `base` as a new custom brush (spec 27) and persist it.
+    pub fn save_custom(&self, base: &BrushPreset, name: &str) -> Result<BrushPreset, String> {
+        let p = onepaint_brush::add_custom_brush(base, name);
+        self.save()?;
+        Ok(p)
+    }
+
+    /// Write an edited user brush back over its stored version.
+    pub fn update(&self, p: &BrushPreset) -> Result<bool, String> {
+        let ok = onepaint_brush::update_user_brush(p);
+        if ok {
+            self.save()?;
+        }
+        Ok(ok)
+    }
+
+    pub fn rename(&self, id: &str, name: &str) -> Result<bool, String> {
+        let ok = onepaint_brush::rename_user_brush(id, name);
+        if ok {
+            self.save()?;
+        }
+        Ok(ok)
     }
 
     pub fn remove(&self, id: &str) -> Result<bool, String> {

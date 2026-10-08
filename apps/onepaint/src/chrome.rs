@@ -47,13 +47,14 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             Popover::Fill => popover_at(ctx, "fill", anchor, Align2::RIGHT_TOP, |ui| fill_options(app, ui)),
             Popover::NewDoc => popover_at(ctx, "newdoc", screen.center(), Align2::CENTER_CENTER, |ui| new_doc(app, ui)),
             Popover::Confirm => popover_at(ctx, "confirm", screen.center(), Align2::CENTER_CENTER, |ui| confirm(app, ui)),
+            Popover::BrushStudio => crate::brush_studio::show(app, ctx, screen),
         };
         // Click outside closes the popover (the top bar handles its own toggles).
         let pressed = ctx.input(|i| i.pointer.any_pressed().then(|| i.pointer.interact_pos()).flatten());
         if let Some(p) = pressed
             && !rect.contains(p)
             && p.y > M + BAR_H + 4.0
-            && !matches!(app.popover, Some(Popover::Confirm | Popover::Filter))
+            && !matches!(app.popover, Some(Popover::Confirm | Popover::Filter | Popover::BrushStudio))
         {
             app.popover = None;
         }
@@ -512,8 +513,11 @@ fn brushes(app: &mut App, ui: &mut Ui) {
     if !eraser {
         // Category chips; the list shows one category at a time (124 presets).
         let mut cats: Vec<String> = onepaint_brush::categories().into_iter().filter(|c| c != "Eraser").collect();
-        if !onepaint_brush::user_presets().is_empty() {
-            cats.push(onepaint_brush::IMPORTED_CATEGORY.into());
+        let user = onepaint_brush::user_presets();
+        for c in [onepaint_brush::IMPORTED_CATEGORY, onepaint_brush::CUSTOM_CATEGORY] {
+            if user.iter().any(|p| p.category == c) {
+                cats.push(c.into());
+            }
         }
         if app.brush_category.is_empty() || !cats.contains(&app.brush_category) {
             app.brush_category = app.session.current_brush().category.clone();
@@ -534,11 +538,18 @@ fn brushes(app: &mut App, ui: &mut Ui) {
         ui.add_space(4.0);
     }
     let category = app.brush_category.clone();
-    let imported = !eraser && category == onepaint_brush::IMPORTED_CATEGORY;
-    let list = if imported { onepaint_brush::user_presets() } else { onepaint_brush::presets() };
+    // Imported and custom brushes (and custom erasers) live in the user library.
+    let user_cat = category == onepaint_brush::IMPORTED_CATEGORY || category == onepaint_brush::CUSTOM_CATEGORY;
+    let list: Vec<_> = if eraser {
+        onepaint_brush::presets().into_iter().chain(onepaint_brush::user_presets()).collect()
+    } else if user_cat {
+        onepaint_brush::user_presets()
+    } else {
+        onepaint_brush::presets()
+    };
     let mut delete = None;
     // Fit the list below the top bar so the popover never overlaps it.
-    let room = (ui.ctx().content_rect().height() - ui.cursor().top() - 260.0).clamp(120.0, 360.0);
+    let room = (ui.ctx().content_rect().height() - ui.cursor().top() - 300.0).clamp(120.0, 360.0);
     egui::ScrollArea::vertical().max_height(room).show(ui, |ui| {
         for p in list.into_iter().filter(|p| if eraser { p.is_eraser() } else { p.category == category }) {
             let sel = p.id == current;
@@ -563,7 +574,7 @@ fn brushes(app: &mut App, ui: &mut Ui) {
             if resp.clicked() {
                 let _ = app.session.execute(Command::SetBrush { preset_id: p.id.clone() });
             }
-            if imported {
+            if onepaint_brush::is_user_preset(&p.id) {
                 resp.context_menu(|ui| {
                     if ui.button("Delete brush").clicked() {
                         delete = Some(p.clone());
@@ -596,6 +607,11 @@ fn brushes(app: &mut App, ui: &mut Ui) {
     let mut flow = b.flow as f32;
     if widgets::slider_row(ui, "Flow", &mut flow, 0.01..=1.0, |v| format!("{:.0}%", v * 100.0)).changed() {
         let _ = app.session.execute(Command::SetBrushFlow { flow: flow as f64 });
+    }
+    ui.add_space(6.0);
+    if widgets::secondary_button(ui, "Brush studio…", ui.available_width()).on_hover_text("Edit every setting and try the brush").clicked()
+    {
+        app.popover = Some(Popover::BrushStudio);
     }
 }
 
