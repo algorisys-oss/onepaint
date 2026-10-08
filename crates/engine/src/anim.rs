@@ -565,9 +565,24 @@ impl Session {
     /// Every timeline slot as RGBA8 (holds expanded); with `range_only`, just
     /// the marked play range when one is set (`buildFrameSource`).
     pub fn render_all_slots(&self, background: Option<Rgba>, range_only: bool) -> Vec<Vec<u8>> {
+        self.export_slots(range_only).map(|s| self.render_slot_rgba8(s, background)).collect()
+    }
+
+    /// Every slot, or the marked play range.
+    fn export_slots(&self, range_only: bool) -> std::ops::RangeInclusive<usize> {
         let total = self.anim_total_slots().max(1);
         let (lo, hi) = if range_only && self.anim.has_mark_range() { self.anim.play_range(total) } else { (0, total - 1) };
-        (lo..=hi).map(|s| self.render_slot_rgba8(s, background)).collect()
+        lo..=hi
+    }
+
+    /// An H.264 MP4 at the animation's fps. Video has no alpha, so frames go
+    /// on white unless `background` is given.
+    pub fn export_mp4(&self, background: Option<Rgba>, range_only: bool) -> Result<Vec<u8>, EngineError> {
+        let mut video = onepaint_formats::video::Mp4Writer::new(self.doc.width, self.doc.height, self.anim.fps)?;
+        for s in self.export_slots(range_only) {
+            video.push(&self.render_slot_rgba8(s, Some(background.unwrap_or(Rgba::WHITE))))?;
+        }
+        Ok(video.finish()?)
     }
 
     pub fn export_gif(&self, background: Option<Rgba>, range_only: bool) -> Result<Vec<u8>, EngineError> {

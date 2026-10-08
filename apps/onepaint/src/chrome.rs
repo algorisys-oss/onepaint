@@ -459,23 +459,21 @@ fn menu(app: &mut App, ui: &mut Ui) {
         app.export_timelapse(now);
     }
     if app.session.anim_settings().enabled {
-        if widgets::menu_item(ui, Some("film"), "Export animated GIF…", "").clicked() {
-            app.popover = None;
-            app.export_animation(true, now);
-        }
-        if widgets::menu_item(ui, Some("film"), "Export PNG sequence (.zip)…", "").clicked() {
-            app.popover = None;
-            app.export_animation(false, now);
+        use crate::AnimFormat as F;
+        let items = [(F::Mp4, "MP4 video"), (F::Gif, "animated GIF"), (F::PngZip, "PNG sequence (.zip)")];
+        for (f, what) in items {
+            if widgets::menu_item(ui, Some("film"), &format!("Export {what}…"), "").clicked() {
+                app.popover = None;
+                app.export_animation(f, false, now);
+            }
         }
         // What you marked to review is what you hand over (`buildFrameSource`).
         if app.session.anim_settings().has_mark_range() {
-            if widgets::menu_item(ui, Some("film"), "Export marked range (GIF)…", "").clicked() {
-                app.popover = None;
-                app.export_animation_range(true, now);
-            }
-            if widgets::menu_item(ui, Some("film"), "Export marked range (PNG .zip)…", "").clicked() {
-                app.popover = None;
-                app.export_animation_range(false, now);
+            for (f, what) in [(F::Mp4, "MP4"), (F::Gif, "GIF"), (F::PngZip, "PNG .zip")] {
+                if widgets::menu_item(ui, Some("film"), &format!("Export marked range ({what})…"), "").clicked() {
+                    app.popover = None;
+                    app.export_animation(f, true, now);
+                }
             }
         }
     }

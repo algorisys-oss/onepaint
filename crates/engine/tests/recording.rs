@@ -59,6 +59,18 @@ fn replay_reproduces_the_session_exactly() {
 }
 
 #[test]
+fn a_video_timelapse_spans_three_seconds_at_least() {
+    let (_, rec) = session_recorded();
+    let mp4 = Replay::new(&rec).unwrap().timelapse_mp4().unwrap();
+    let at = |kind: &[u8; 4], off: usize| {
+        let i = mp4.windows(4).position(|w| w == kind).unwrap() + off;
+        u32::from_be_bytes(mp4[i..i + 4].try_into().unwrap())
+    };
+    assert_eq!(at(b"stsz", 12), 90, "3 s at 30 fps (a quick session)");
+    assert_eq!((at(b"tkhd", 80) >> 16, at(b"tkhd", 84) >> 16), (128, 96));
+}
+
+#[test]
 fn recordings_round_trip_and_make_a_timelapse() {
     let (s, rec) = session_recorded();
     let back = Recording::from_bytes(&rec.to_bytes().unwrap()).unwrap();

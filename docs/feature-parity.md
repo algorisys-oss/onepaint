@@ -139,7 +139,7 @@ screentone are added as live layers.
 ## History and recording
 - [x] Undo and redo with tile snapshots and pixel deltas (copy-on-write tile snapshots)
 - [x] Record a session as a command log, then replay it (own `.onepaint-rec`; exact replay)
-- [~] Export a timelapse as video (animated GIF; no MP4)
+- [x] Export a timelapse as video (MP4 or animated GIF)
 
 ## Animation
 - [~] Animation Assist: flipbook frames, holds, background/foreground, onion skins (tint, front, muted), playback (loop/ping-pong/once), timeline strip; exposure-sheet tracks composite and onion per track, timeline markers and a play range (playback and range export), the exposure-sheet grid (convert, retime, add sheets and tracks); out-of-pegs and batch timing ops are not built
@@ -160,7 +160,7 @@ screentone are added as live layers.
 - [ ] `.happypaint-rec`
 - [~] PSD: read and write layers, groups, masks, blend modes, clipping, DPI and simple adjustments (8/16-bit RGB/grey read, PSB read; text exported as pixels)
 - [x] PNG, JPEG, WebP, TIFF and Netpbm, keeping ICC profiles and DPI (import all, converting embedded RGB profiles; export PNG/JPEG/TIFF/PPM with scale, DPI and ICC tags)
-- [~] GIF, MP4, WebM and PNG-zip export (GIF and PNG-zip; no MP4/WebM)
+- [x] GIF, MP4, WebM and PNG-zip export (GIF, MP4 and PNG-zip; WebM is covered by MP4, divergence 20)
 - [x] Clipboard: copy and paste images (in-place paste, the system clipboard, layer via copy/cut)
 - [ ] Camera and screen capture as a reference or import
 

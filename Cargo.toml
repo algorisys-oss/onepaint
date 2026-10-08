@@ -10,6 +10,7 @@ publish = false
 rust-version = "1.95"
 
 [workspace.dependencies]
+openh264 = "0.9"
 onepaint-raster = { path = "crates/raster" }
 onepaint-color = { path = "crates/color" }
 onepaint-doc = { path = "crates/doc" }

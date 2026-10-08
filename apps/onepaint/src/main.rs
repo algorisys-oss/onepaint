@@ -1,6 +1,14 @@
 //! onepaint desktop app: a thin egui shell over `onepaint_engine::Session`.
 
 mod adjust;
+
+/// The animation export formats (happypaint `AnimFormat`, less WebM).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AnimFormat {
+    Gif,
+    Mp4,
+    PngZip,
+}
 mod autosave;
 mod brush_library;
 mod brush_studio;
@@ -686,11 +694,17 @@ impl App {
 
     pub fn export_timelapse(&mut self, now: f64) {
         let Some(rec) = self.pick_recording(now) else { return };
-        let Some(path) = rfd::FileDialog::new().add_filter("Animated GIF", &["gif"]).set_file_name("timelapse.gif").save_file() else {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("MP4 video", &["mp4"])
+            .add_filter("Animated GIF", &["gif"])
+            .set_file_name("timelapse.mp4")
+            .save_file()
+        else {
             return;
         };
-        let gif = onepaint_engine::recording::Replay::new(&rec).and_then(|r| r.timelapse_gif());
-        match gif.map_err(|e| e.to_string()).and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string())) {
+        let gif = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("gif"));
+        let bytes = onepaint_engine::recording::Replay::new(&rec).and_then(|r| if gif { r.timelapse_gif() } else { r.timelapse_mp4() });
+        match bytes.map_err(|e| e.to_string()).and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string())) {
             Ok(()) => self.notify(format!("Exported {}", path.display()), now),
             Err(e) => self.notify(format!("Export failed: {e}"), now),
         }
@@ -733,24 +747,23 @@ impl App {
         }
     }
 
-    /// Animated GIF or a zip of PNG frames (white behind GIF frames).
-    pub fn export_animation(&mut self, gif: bool, now: f64) {
-        self.export_animation_impl(gif, false, now);
-    }
-
-    /// Export only the marked play range.
-    pub fn export_animation_range(&mut self, gif: bool, now: f64) {
-        self.export_animation_impl(gif, true, now);
-    }
-
-    fn export_animation_impl(&mut self, gif: bool, range_only: bool, now: f64) {
+    /// An animated GIF, an MP4 or a zip of PNG frames (white behind GIF and
+    /// video frames); `range_only` exports just the marked play range.
+    pub fn export_animation(&mut self, format: AnimFormat, range_only: bool, now: f64) {
         let name = self.session.doc().name.clone();
-        let (filter, ext) = if gif { ("Animated GIF", "gif") } else { ("PNG sequence", "zip") };
+        let (filter, ext) = match format {
+            AnimFormat::Gif => ("Animated GIF", "gif"),
+            AnimFormat::Mp4 => ("MP4 video", "mp4"),
+            AnimFormat::PngZip => ("PNG sequence", "zip"),
+        };
         let Some(path) = rfd::FileDialog::new().add_filter(filter, &[ext]).set_file_name(format!("{name}.{ext}")).save_file() else {
             return;
         };
-        let bytes =
-            if gif { self.session.export_gif(Some(Rgba::WHITE), range_only) } else { self.session.export_png_sequence(None, range_only) };
+        let bytes = match format {
+            AnimFormat::Gif => self.session.export_gif(Some(Rgba::WHITE), range_only),
+            AnimFormat::Mp4 => self.session.export_mp4(None, range_only),
+            AnimFormat::PngZip => self.session.export_png_sequence(None, range_only),
+        };
         match bytes.map_err(|e| e.to_string()).and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string())) {
             Ok(()) => self.notify(format!("Exported {}", path.display()), now),
             Err(e) => self.notify(format!("Export failed: {e}"), now),

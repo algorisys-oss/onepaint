@@ -34,12 +34,19 @@ Only top-level calls are recorded. Commands that run strokes internally
 - Up to 240 frames, sampled evenly across the events. Each frame is a flat
   composite scaled to fit 720 px.
 - Exported as a GIF at 12 fps, with the final frame held for one second.
+- **MP4 (as happypaint's video timelapse):**
+  - 30 fps, with the long side fitted in 1280 px and even sizes.
+  - Length: the recording's span up to its last event, rounded to whole
+    seconds and clamped to 3–20 s.
+  - Frame f shows every event up to `f/(frames−1)` of that span. The last
+    frame is the finished picture.
 
 ## App
 - File ▸ Start recording, or Stop recording (save `.onepaint-rec`…).
 - File ▸ Replay recording… plays it on the canvas, about 4 seconds for the
   whole log, then leaves the result open.
-- File ▸ Export timelapse… (pick a recording, save a GIF).
+- File ▸ Export timelapse… (pick a recording, then save an MP4 or a GIF,
+  chosen by the file type).
 
 ## Acceptance
 - Recording strokes, commands, undo and a Stroke Path, then replaying,
@@ -47,3 +54,4 @@ Only top-level calls are recorded. Commands that run strokes internally
 - The file round-trips.
 - A timelapse of N events has `min(N, 240) + hold` frames, decodes as a GIF,
   and its last frame equals the final composite (scaled).
+- A short session's MP4 timelapse has 90 samples (3 s at 30 fps).

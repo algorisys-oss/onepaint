@@ -9,6 +9,7 @@ mod image;
 pub mod palette;
 pub mod psd;
 pub mod tiff_cmyk;
+pub mod video;
 pub mod zip;
 
 pub use image::*;

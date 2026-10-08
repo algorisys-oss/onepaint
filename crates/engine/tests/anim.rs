@@ -157,6 +157,11 @@ fn settings_round_trip_and_export() {
     assert_eq!(n / d, 130, "round(100/8) cs");
     assert!(frames[0].buffer().get_pixel(2, 2)[0] > 250);
     assert_eq!(t.render_all_slots(None, true).len(), 2, "range export: the marked slots only");
+    let mp4 = t.export_mp4(None, false).unwrap();
+    let stsz = mp4.windows(4).position(|w| w == b"stsz").unwrap() + 12;
+    assert_eq!(u32::from_be_bytes(mp4[stsz..stsz + 4].try_into().unwrap()), 4, "one sample per slot");
+    let mp4 = t.export_mp4(None, true).unwrap();
+    assert_eq!(u32::from_be_bytes(mp4[stsz..stsz + 4].try_into().unwrap()), 2, "the marked range");
     let zip = t.export_png_sequence(None, false).unwrap();
     let files = onepaint_formats::zip::read_zip(&zip).unwrap();
     assert_eq!(

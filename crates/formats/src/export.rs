@@ -78,6 +78,39 @@ fn resample(src: &[[f32; 4]], w: u32, h: u32, nw: u32, nh: u32) -> Vec<[f32; 4]>
     out
 }
 
+/// Straight 8-bit RGBA at exactly `nw`×`nh` (bilinear) from a flattened
+/// canvas; `opaque` flattens onto white (video frames, JPEG).
+pub fn flat_to_rgba8(px: &[f32], w: u32, h: u32, nw: u32, nh: u32, opaque: bool) -> Vec<u8> {
+    to_rgba8(px, (w, h), (nw, nh), opaque, false)
+}
+
+fn to_rgba8(px: &[f32], (w, h): (u32, u32), (nw, nh): (u32, u32), opaque: bool, p3: bool) -> Vec<u8> {
+    let src: Vec<[f32; 4]> = px
+        .chunks_exact(4)
+        .map(|p| {
+            let q = if p3 { std::array::from_fn(|i| SRGB_TO_P3[i].iter().zip(p).map(|(m, v)| m * v).sum()) } else { [p[0], p[1], p[2]] };
+            let c = premul_linear_to_srgb8([q[0], q[1], q[2], p[3]]);
+            let a = c[3] as f32 / 255.0;
+            [c[0] as f32 * a, c[1] as f32 * a, c[2] as f32 * a, c[3] as f32]
+        })
+        .collect();
+    resample(&src, w, h, nw, nh)
+        .iter()
+        .flat_map(|p| {
+            let a = p[3] / 255.0;
+            let b = |v: f32| v.round().clamp(0.0, 255.0) as u8;
+            if opaque {
+                // Flatten onto white.
+                [b(p[0] + 255.0 * (1.0 - a)), b(p[1] + 255.0 * (1.0 - a)), b(p[2] + 255.0 * (1.0 - a)), 255]
+            } else if a > 0.0 {
+                [b(p[0] / a), b(p[1] / a), b(p[2] / a), b(p[3])]
+            } else {
+                [0, 0, 0, 0]
+            }
+        })
+        .collect()
+}
+
 /// Linear sRGB → linear Display P3 (happypaint `srgb2displayP3`).
 const SRGB_TO_P3: [[f32; 3]; 3] = [[0.822_462_1, 0.177_538, 0.0], [0.033_194_1, 0.966_805_8, 0.0], [0.017_082_7, 0.072_397_4, 0.910_519_9]];
 
@@ -93,32 +126,8 @@ pub fn export_flat_with(px: &[f32], w: u32, h: u32, o: &ExportOptions, press: &P
     // Print separation works from sRGB whatever the document's space.
     let p3 = o.display_p3 && !(o.format == ExportFormat::Tiff && o.cmyk);
     let space = if p3 { RgbSpace::DisplayP3 } else { RgbSpace::Srgb };
-    let src: Vec<[f32; 4]> = px
-        .chunks_exact(4)
-        .map(|p| {
-            let q = if p3 { std::array::from_fn(|i| SRGB_TO_P3[i].iter().zip(p).map(|(m, v)| m * v).sum()) } else { [p[0], p[1], p[2]] };
-            let c = premul_linear_to_srgb8([q[0], q[1], q[2], p[3]]);
-            let a = c[3] as f32 / 255.0;
-            [c[0] as f32 * a, c[1] as f32 * a, c[2] as f32 * a, c[3] as f32]
-        })
-        .collect();
-    let scaled = resample(&src, w, h, nw, nh);
     let opaque = matches!(o.format, ExportFormat::Jpeg | ExportFormat::Ppm) || (o.format == ExportFormat::Tiff && o.cmyk);
-    let rgba: Vec<u8> = scaled
-        .iter()
-        .flat_map(|p| {
-            let a = p[3] / 255.0;
-            let b = |v: f32| v.round().clamp(0.0, 255.0) as u8;
-            if opaque {
-                // Flatten onto white.
-                [b(p[0] + 255.0 * (1.0 - a)), b(p[1] + 255.0 * (1.0 - a)), b(p[2] + 255.0 * (1.0 - a)), 255]
-            } else if a > 0.0 {
-                [b(p[0] / a), b(p[1] / a), b(p[2] / a), b(p[3])]
-            } else {
-                [0, 0, 0, 0]
-            }
-        })
-        .collect();
+    let rgba = to_rgba8(px, (w, h), (nw, nh), opaque, p3);
     let bytes = match o.format {
         ExportFormat::Png => {
             let err = |e: png::EncodingError| FormatError::Image(e.to_string());

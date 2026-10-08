@@ -22,6 +22,8 @@ flate2 = { workspace = true }
 png = { workspace = true }
 image = { workspace = true }
 jpeg-encoder = { workspace = true }
+openh264 = { workspace = true }
 
 [dev-dependencies]
+openh264 = { workspace = true }
 onepaint-compose = { workspace = true }

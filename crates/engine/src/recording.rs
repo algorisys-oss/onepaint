@@ -35,6 +35,21 @@ pub enum RecEvent {
     },
 }
 
+impl RecEvent {
+    /// Milliseconds since the recording started.
+    pub fn t(&self) -> f64 {
+        match self {
+            RecEvent::Cmd { t, .. }
+            | RecEvent::Begin { t, .. }
+            | RecEvent::Extend { t, .. }
+            | RecEvent::End { t }
+            | RecEvent::Cancel { t }
+            | RecEvent::Tick { t, .. }
+            | RecEvent::WetSteps { t, .. } => *t,
+        }
+    }
+}
+
 /// Session state outside the document that a replay must start from.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StartState {
@@ -313,15 +328,37 @@ impl Replay {
     }
 }
 
+impl Replay {
+    /// A timelapse MP4 (happypaint's video timelapse): 30 fps, fitted in
+    /// 1280 px (even sizes), 3–20 s mapped onto the time up to the last
+    /// event, then the finished picture.
+    pub fn timelapse_mp4(mut self) -> Result<Vec<u8>, EngineError> {
+        const FPS: usize = 30;
+        let d = self.session.doc();
+        let (w, h) = (d.width, d.height);
+        let k = (1280.0 / w.max(h) as f64).min(1.0);
+        let even = |n: u32| ((n as f64 * k / 2.0).round() as u32 * 2).max(2);
+        let (ow, oh) = (even(w), even(h));
+        let span = self.events.last().map_or(0.0, RecEvent::t);
+        let secs = ((span / 1000.0).round() as usize).clamp(3, 20);
+        let total = (secs * FPS).max(2);
+        let mut video = onepaint_formats::video::Mp4Writer::new(ow, oh, FPS as f64)?;
+        for f in 0..total {
+            let t = f as f64 / (total - 1) as f64 * span;
+            let upto = if f + 1 == total {
+                self.events.len()
+            } else {
+                self.events[self.pos..].iter().take_while(|e| e.t() <= t).count() + self.pos
+            };
+            self.step(upto - self.pos);
+            let d = self.session.doc();
+            video.push(&scaled_rgba(&self.session.flatten(), d.width, d.height, ow, oh))?;
+        }
+        Ok(video.finish()?)
+    }
+}
+
 /// Straight sRGB RGBA8 at (w, h), from premultiplied linear (white behind).
 fn scaled_rgba(flat: &[f32], sw: u32, sh: u32, w: u32, h: u32) -> Vec<u8> {
-    let o = onepaint_formats::export::ExportOptions {
-        format: onepaint_formats::export::ExportFormat::Ppm,
-        scale: w as f64 / sw as f64,
-        ..Default::default()
-    };
-    let (ppm, pw, ph) = onepaint_formats::export::export_flat(flat, sw, sh, &o).unwrap_or_default();
-    let header = format!("P6\n{pw} {ph}\n255\n").len();
-    let _ = h;
-    ppm[header.min(ppm.len())..].chunks_exact(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect()
+    onepaint_formats::export::flat_to_rgba8(flat, sw, sh, w, h, true)
 }

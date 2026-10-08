@@ -66,9 +66,14 @@ Selecting a layer moves the playhead to its frame (`syncPlayheadToActive`).
 Each frame is composited without ghosts and repeated `hold` times at `fps`.
 - **GIF:** palette-quantised, delay `round(100/fps)` cs, infinite loop.
 - **PNG sequence:** `frame_0001.png…` in a stored zip.
+- **MP4:** H.264 (OpenH264, Constrained Baseline, 12 Mbit/s buffer-based
+  rate control, a key frame every second). The timescale is fps × 1000, so
+  any fps is exact. The `moov` box comes first (fast start). Odd sizes are
+  padded to even by repeating the edge. Frames go on white, because video
+  has no alpha. The muxer is `formats::video`.
 
-The background is transparent, white or a hex colour. MP4/WebM are not
-built yet (see divergences).
+The background is transparent, white or a hex colour. WebM is not offered
+(divergence 20).
 
 ## Timeline (app)
 - The film button toggles animation mode. A bottom bar appears with:
@@ -114,7 +119,7 @@ built yet (see divergences).
   - Playback steps inside it. Play from outside it, or at the end of a
     play-once, starts at the in-point.
   - "Clear range" removes it.
-- **Export:** "Export marked range (GIF / PNG .zip)" exports just the range.
+- **Export:** "Export marked range (MP4 / GIF / PNG .zip)" exports just the range.
 - **Not yet:** renaming and recolouring markers.
 
 ## Exposure-sheet grid (`track_grid.rs`; happypaint `track-grid.tsx`, `animation-store.ts:398-520`)
