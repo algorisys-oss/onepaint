@@ -149,3 +149,38 @@ fn fill_shape_fills_the_silhouette_with_symmetry() {
     s.execute(Command::Undo).unwrap();
     assert_eq!(px(&s, &id, 25, 20)[3], 0.0, "one undo step");
 }
+
+#[test]
+fn free_transform_keeps_a_path_editable_and_undoes_in_one_step() {
+    let mut s = Session::new(200, 160, Some(Rgba::WHITE));
+    s.execute(Command::CreatePathLayer { spec: Box::new(square(20.0, 20.0, 60.0, 60.0, true, true)) }).unwrap();
+    let id = s.active().to_string();
+    let n = s.history_len();
+    s.execute(Command::BeginTransform).unwrap();
+    // Non-uniform: paths take any affine map exactly.
+    let m = transform::Affine { a: 2.0, b: 0.0, c: 0.0, d: 1.0, e: 10.0, f: 30.0 };
+    s.execute(Command::SetTransform { matrix: m }).unwrap();
+    s.execute(Command::CommitTransform).unwrap();
+    assert_eq!(s.history_len(), n + 1);
+    let p = s.paths(&id);
+    assert_eq!(p.len(), 1, "still a path layer");
+    let a = &p[0].subpaths[0].anchors;
+    assert_eq!((a[0].x, a[0].y, a[2].x, a[2].y), (50.0, 50.0, 130.0, 90.0));
+    assert!(px(&s, &id, 90, 70)[2] > 0.99, "re-rendered fill inside the new square");
+    s.execute(Command::Undo).unwrap();
+    assert_eq!(s.paths(&id), vec![square(20.0, 20.0, 60.0, 60.0, true, true)]);
+    assert_eq!(px(&s, &id, 90, 70)[3], 0.0);
+}
+
+#[test]
+fn a_distorted_path_bakes_to_pixels() {
+    let mut s = Session::new(200, 160, Some(Rgba::WHITE));
+    s.execute(Command::CreatePathLayer { spec: Box::new(square(20.0, 20.0, 60.0, 60.0, true, true)) }).unwrap();
+    let id = s.active().to_string();
+    s.execute(Command::BeginTransform).unwrap();
+    s.execute(Command::BeginDistort).unwrap();
+    s.execute(Command::SetWarp { warp: transform::WarpMode::Quad([[10.0, 10.0], [70.0, 20.0], [60.0, 60.0], [20.0, 70.0]]) }).unwrap();
+    s.execute(Command::CommitTransform).unwrap();
+    assert!(!s.is_path_layer(&id));
+    assert!(px(&s, &id, 40, 40)[3] > 0.9);
+}

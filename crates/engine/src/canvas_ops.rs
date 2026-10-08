@@ -98,6 +98,7 @@ impl Session {
                 saved_selection: None,
                 clamp_edges: true,
                 warp: None,
+                vector: false,
             };
             f.render(dst);
             f.preview

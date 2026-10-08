@@ -103,6 +103,7 @@ impl Session {
                 saved_selection: None,
                 clamp_edges: false,
                 warp: None,
+                vector: false,
             };
             f.render(self.transform_clip());
             f.preview

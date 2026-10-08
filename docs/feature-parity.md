@@ -27,7 +27,7 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] gradient, with output to pixels or a fill layer (5 shapes, colour→clear or →BG, reverse, selection-aware)
 - [x] liquify (push, twirl left/right, pinch, expand, reconstruct)
 - [x] text (create, edit, move, style, wrap, outline, background, rasterise)
-- [~] pen: path layers (stroke/fill), anchor/handle editing, path menu (selection, fill, stroke with simulated pressure, mask, rasterize); no free-transform path or speed lines yet
+- [x] pen: path layers (stroke/fill), anchor/handle editing, path menu (selection, fill, stroke with simulated pressure, mask, free transform, rasterize); Move keeps path layers vector under any affine map and text layers under rotate + uniform scale
 - [x] shape (line, rect, ellipse and 3–12-sided polygon, stroked with the brush, optional fill)
 - [x] panel (comic panels): draw a frame, cut along a line, drag corners to reshape and frame lines to move, with live gutter and border width
 - [x] select-rect

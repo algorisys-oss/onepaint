@@ -72,6 +72,21 @@ is refused.
 | `StrokePath {tool, simulate_pressure}` | Strokes each subpath polyline onto the target with the brush, eraser, smudge or mixer (current settings), with simulated pressure if asked. One transaction. |
 | `MaskFromPath` | The target's layer mask becomes `existing × coverage`, or just `coverage` when there was no mask. |
 
+## Free transform (PE:2324-2345, 2386-2464)
+- **Vector-preserving:** a Move transform of a whole path or text layer (no
+  selection) does not rasterise it first.
+- **Commit:**
+  - **Paths:** an affine commit maps every path through `bezier::affine`.
+    Anchors take the whole map, handles take only the linear part, and stroke
+    width scales by √|det|. The layer is then re-rendered.
+  - **Text:** a rotation plus a uniform scale moves each anchor and scales
+    the font size (and run sizes), tracking and wrap width. The angle is added
+    to the rotation.
+  - **Baked:** a distort, a warp, or a stretch or mirror of text bakes the
+    preview to pixels and drops the objects.
+- **Undo:** one tree step restores both the objects and the pixels.
+- **Path menu:** "Free transform path" switches to Move.
+
 ## Pen tool (P)
 **Building a path:**
 - A click adds a corner anchor.

@@ -102,6 +102,9 @@ pub(crate) struct Floating {
     pub clamp_edges: bool,
     /// Distort or mesh warp, replacing `matrix` while set.
     pub warp: Option<WarpMode>,
+    /// A whole path or text layer: an affine commit maps its objects
+    /// (Free Transform Path, PE:2330-2345) instead of baking pixels.
+    pub vector: bool,
 }
 
 /// Free 4-corner distort (TL, TR, BR, BL) or a WARP_N² mesh lattice, doc px.
@@ -268,10 +271,13 @@ impl Session {
 
     pub(crate) fn begin_transform(&mut self) -> Result<(), EngineError> {
         self.commit_transform();
-        self.ensure_raster();
-        self.stroke_cancel();
         let id = self.active.clone();
         let clip = self.clip.clone();
+        let vector = clip.is_none() && (self.is_path_layer(&id) || self.is_text_layer(&id));
+        if !vector {
+            self.ensure_raster();
+        }
+        self.stroke_cancel();
         let Some(layer) = self.doc.layer_mut(&id).filter(|l| !l.locked) else {
             return Ok(());
         };
@@ -318,6 +324,7 @@ impl Session {
             saved_selection,
             clamp_edges: false,
             warp: None,
+            vector,
         };
         f.render(self.transform_clip());
         let lifted_selection = f.saved_selection.is_some();
@@ -402,6 +409,10 @@ impl Session {
         let Some(f) = self.transform.take() else {
             return;
         };
+        if f.vector {
+            self.commit_vector_transform(f);
+            return;
+        }
         let Some(layer) = self.doc.layer_mut(&f.layer) else {
             return;
         };
@@ -436,6 +447,77 @@ impl Session {
             self.history_changed();
         }
     }
+}
+
+impl Session {
+    /// Commit a transform of a whole path or text layer, as one undo step.
+    /// Affine maps keep paths editable; text keeps its objects under a
+    /// rotation plus uniform scale. A distort, warp, stretch or mirror of text
+    /// bakes to pixels (PE:2324-2345).
+    fn commit_vector_transform(&mut self, f: Floating) {
+        let dirty = f.bounds.union(&f.preview_bounds);
+        let m = f.matrix;
+        if f.warp.is_none() && m == Affine::IDENTITY {
+            if let Some(l) = self.doc.layer_mut(&f.layer) {
+                l.pixels = f.original;
+            }
+            self.mark_dirty(dirty);
+            return;
+        }
+        // Put the layer back, so the undo step starts from the untouched layer.
+        if let Some(l) = self.doc.layer_mut(&f.layer) {
+            l.pixels = f.original.clone();
+        }
+        let (w, h) = (self.doc.width, self.doc.height);
+        let id = f.layer.clone();
+        let uniform = (m.a - m.d).abs() < 1e-6 && (m.b + m.c).abs() < 1e-6 && m.a * m.d - m.b * m.c > 0.0;
+        let _ = self.tree_edit(None, move |s| {
+            let paths = s.paths(&id);
+            let texts = s.texts(&id);
+            let Some(l) = s.doc.layer_mut(&id) else { return Ok(()) };
+            if f.warp.is_none() && !paths.is_empty() {
+                let pm = onepaint_stroke::bezier::Affine { a: m.a, b: m.b, c: m.c, d: m.d, e: m.e, f: m.f };
+                let mapped: Vec<_> = paths.iter().map(|p| onepaint_stroke::bezier::affine(p, &pm)).collect();
+                path_ops::write_paths(l, &mapped, w, h);
+            } else if f.warp.is_none() && !texts.is_empty() && uniform {
+                let mapped: Vec<_> = texts.iter().map(|t| transform_text(t, &m)).collect();
+                text_ops::write_texts(l, &mapped, w, h);
+            } else {
+                // Bake: the objects can't express this map.
+                l.extra.remove("paths");
+                l.extra.remove("texts");
+                l.extra.remove("text");
+                l.pixels = f.preview.clone();
+            }
+            Ok(())
+        });
+        if f.saved_selection.is_some() {
+            self.set_selection_raw(f.saved_selection.clone());
+        }
+        self.mark_dirty(dirty);
+    }
+}
+
+/// A text object under a rotation plus uniform scale `m`: the anchor moves
+/// with the pixels; size, tracking and wrap width scale (PE:2447-2464).
+fn transform_text(t: &onepaint_text::TextSpec, m: &Affine) -> onepaint_text::TextSpec {
+    let k = m.a.hypot(m.b);
+    let [x, y] = m.apply([t.x, t.y]);
+    let mut out = t.clone();
+    out.x = x;
+    out.y = y;
+    out.font_size_px *= k;
+    if let Some(runs) = out.runs.as_mut() {
+        for r in runs {
+            if let Some(s) = r.font_size_px.as_mut() {
+                *s *= k;
+            }
+        }
+    }
+    out.letter_spacing *= k;
+    out.box_width = out.box_width.map(|b| b * k);
+    out.rotation += m.b.atan2(m.a);
+    out
 }
 
 /// Which part of the transform box a pointer grabbed.

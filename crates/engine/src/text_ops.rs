@@ -12,7 +12,7 @@ fn read_texts(l: &Layer) -> Vec<TextSpec> {
     l.extra.get("text").and_then(|v| serde_json::from_value::<TextSpec>(v.clone()).ok()).into_iter().collect()
 }
 
-fn write_texts(l: &mut Layer, specs: &[TextSpec], w: u32, h: u32) {
+pub(crate) fn write_texts(l: &mut Layer, specs: &[TextSpec], w: u32, h: u32) {
     l.extra.remove("text");
     if specs.is_empty() {
         l.extra.remove("texts");

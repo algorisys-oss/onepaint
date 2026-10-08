@@ -1844,6 +1844,11 @@ fn pen_options(app: &mut App, ui: &mut Ui) {
                 run(app, Command::MaskFromPath);
             }
         });
+        if widgets::menu_item(ui, Some("move"), "Free transform path", "").clicked() {
+            // The Move tool on a path layer maps the path itself (stays editable).
+            app.popover = None;
+            app.set_tool(Tool::Move);
+        }
         if widgets::menu_item(ui, Some("image"), "Rasterize path layer", "").clicked() {
             run(app, Command::RasterizePath { id: active.clone() });
         }
