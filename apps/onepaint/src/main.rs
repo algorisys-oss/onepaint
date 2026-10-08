@@ -10,6 +10,7 @@ mod debug;
 mod palettes;
 mod pen;
 mod progressive;
+mod reference;
 mod text_ui;
 mod thumbs;
 mod timeline;
@@ -102,6 +103,7 @@ pub struct App {
     pub recent: Vec<Rgba>,
     pub palettes: palettes::Palettes,
     pub playback: timeline::Playback,
+    pub reference: reference::ReferenceState,
     pub export_opts: onepaint_formats::export::ExportOptions,
     pub export_psd: bool,
     /// The smart filter whose params are open.
@@ -167,6 +169,7 @@ impl App {
             recent: Vec::new(),
             palettes,
             playback: Default::default(),
+            reference: Default::default(),
             export_opts: Default::default(),
             export_psd: false,
             smart_edit: None,
@@ -642,6 +645,9 @@ impl App {
             }
             if sc(Modifiers::ALT, Key::L) {
                 self.popover = if self.popover == Some(Popover::Layers) { None } else { Some(Popover::Layers) };
+            }
+            if sc(Modifiers::ALT, Key::R) {
+                self.reference.open = !self.reference.open;
             }
             if sc(Modifiers::ALT, Key::B) {
                 self.popover = if self.popover == Some(Popover::Brushes) { None } else { Some(Popover::Brushes) };
@@ -1680,5 +1686,20 @@ mod tests {
         assert!(app.session.is_path_layer(&id));
         assert_eq!(app.session.paths(&id)[0].subpaths.len(), 90);
         assert!(app.session.doc().layer(&id).unwrap().pixels.tile_count() > 0, "stroked");
+    }
+
+    #[test]
+    fn reference_window_toggles_and_snapshots_the_canvas() {
+        let mut h = harness();
+        h.run();
+        key(&mut h, egui::Key::R, egui::Modifiers::ALT);
+        h.run();
+        assert!(h.state().reference.open);
+        assert!(h.query_by_label("Use a snapshot of the canvas").is_some());
+        h.get_by_label("Use a snapshot of the canvas").click();
+        h.run();
+        let r = h.state().reference.image.as_ref().unwrap();
+        assert_eq!((r.width, r.height), (2048, 1536));
+        assert_eq!(r.color_at(10, 10).unwrap().to_hex(), "#ffffff");
     }
 }

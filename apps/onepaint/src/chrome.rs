@@ -17,6 +17,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     side_rail(app, ctx, screen);
     status(app, ctx, screen);
     crate::timeline::show(app, ctx, screen);
+    crate::reference::show(app, ctx);
     if let Some(p) = app.popover {
         let anchor = pos2(screen.right() - M, M + BAR_H + 8.0);
         let rect = match p {
@@ -387,6 +388,10 @@ fn menu(app: &mut App, ui: &mut Ui) {
     if widgets::menu_item(ui, Some("image"), "Export…", "Ctrl+Shift+E").clicked() {
         app.popover = Some(Popover::Export);
         return;
+    }
+    if widgets::menu_item(ui, Some("image"), "Reference window", "Alt+R").clicked() {
+        app.popover = None;
+        app.reference.open = !app.reference.open;
     }
     widgets::hairline(ui);
     let rec_label = if app.session.is_recording() { "Stop recording…" } else { "Start recording" };
@@ -1634,7 +1639,7 @@ fn help(ui: &mut Ui) {
                 ("R-drag, 5", "Rotate / reset rotation"),
                 ("Y, Shift+Y", "Symmetry, move axis"),
                 ("Shift+R / G / P / D", "Rulers, guides, perspective, measure"),
-                ("Alt+L / Alt+B", "Layers / brushes"),
+                ("Alt+L / Alt+B / Alt+R", "Layers / brushes / reference"),
                 ("Tab", "Hide the interface"),
             ],
         ),

@@ -114,7 +114,7 @@ screentone are added as live layers.
 - [x] Rulers, guide lines (drag from rulers, edit/swing/delete, snapping, undo) and measure
 - [x] Quick-shape: hold to straighten a stroke into a line, ellipse or polygon
 - [x] Speed lines (focus and speed lines as editable path layers, matching happypaint's geometry)
-- [ ] Reference window
+- [x] Reference window (image or canvas snapshot, pan/zoom, live colour pick; Alt+R)
 - [ ] Multi-document tabs
 
 ## Input
