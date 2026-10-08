@@ -68,3 +68,28 @@ fn bake_keeps_the_look_and_drops_the_stack() {
     t.open_happypaint(&bytes).unwrap();
     assert_eq!(t.smart_filters(&id), vec![SmartFilter { enabled: None, ..s.smart_filters(&id)[0].clone() }]);
 }
+
+#[test]
+fn blur_adjustment_layers_render_live() {
+    // Left half red on a transparent layer, then a gaussian-blur adjustment layer.
+    let mut s = Session::new(64, 64, None);
+    s.execute(Command::SelectShape {
+        contours: vec![onepaint_selection::rect_polygon([0.0, 0.0], [32.0, 64.0])],
+        mode: onepaint_selection::Mode::Replace,
+    })
+    .unwrap();
+    s.execute(Command::SetColor { rgba: Rgba::new(1.0, 0.0, 0.0, 1.0) }).unwrap();
+    s.execute(Command::FillSelection).unwrap();
+    s.execute(Command::Deselect).unwrap();
+    let mut p = default_params(Kind::GaussianBlur);
+    p.radius = Some(6.0);
+    s.execute(Command::AddAdjustmentLayer { kind: "gaussian-blur".into(), params: p }).unwrap();
+    let edge = s.composite(&[(0, 0)])[0].1.get(34, 20);
+    assert!(edge[3] > 0.05 && edge[3] < 0.95, "the edge is blurred: {edge:?}");
+    let flat = s.flatten();
+    assert!((flat[(20 * 64 + 34) * 4 + 3] - edge[3]).abs() < 1e-3, "exports match the display");
+    // Hiding the adjustment restores the hard edge.
+    let id = s.active().to_string();
+    s.execute(Command::SetLayerProps { id, props: LayerProps { visible: Some(false), ..Default::default() } }).unwrap();
+    assert_eq!(s.composite(&[(0, 0)])[0].1.get(34, 20)[3], 0.0);
+}

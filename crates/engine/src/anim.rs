@@ -376,12 +376,17 @@ impl Session {
     /// The document compositing shows: the animation view when enabled.
     pub(crate) fn display_doc(&self) -> std::borrow::Cow<'_, Document> {
         let anim = self.anim.enabled && total_slots(&self.doc.root) > 0;
-        if !anim && !self.has_smart_filters() {
+        let spatial = Self::has_spatial_adjustments(&self.doc.root);
+        if !anim && !spatial && !self.has_smart_filters() {
             return std::borrow::Cow::Borrowed(&self.doc);
         }
         let mut view =
             if anim { view_document(&self.doc, &self.anim, self.anim_slot, !self.anim_playing, &self.active) } else { self.doc.clone() };
         self.apply_smart_filters(&mut view.root);
+        if spatial {
+            // Mid-stroke the backdrop is reused; it refreshes when the stroke ends.
+            self.render_spatial_adjustments(&mut view.root, !self.is_stroking());
+        }
         std::borrow::Cow::Owned(view)
     }
 
@@ -484,6 +489,7 @@ impl Session {
     pub fn render_slot_rgba8(&self, slot: usize, background: Option<Rgba>) -> Vec<u8> {
         let mut view = view_document(&self.doc, &self.anim, slot, false, &self.active);
         self.apply_smart_filters(&mut view.root);
+        self.render_spatial_adjustments(&mut view.root, true);
         let mut flat = onepaint_compose::flatten(&view, None);
         if let Some(bg) = background {
             let b = bg.to_linear_premul();

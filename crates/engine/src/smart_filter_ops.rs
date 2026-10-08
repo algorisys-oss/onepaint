@@ -154,3 +154,93 @@ impl Session {
         })
     }
 }
+
+/// Live spatial adjustment layers (blur, sharpen…): rendered as the filtered
+/// backdrop of their container, cached by a fingerprint of everything below.
+#[derive(Default)]
+pub(crate) struct SpatialCache(std::sync::Mutex<HashMap<NodeId, (u64, Surface)>>);
+
+fn hash_nodes(nodes: &[Node], s: &mut std::collections::hash_map::DefaultHasher) {
+    for n in nodes {
+        n.id().hash(s);
+        n.visible().hash(s);
+        n.opacity().to_bits().hash(s);
+        n.blend_mode().as_str().hash(s);
+        match n {
+            Node::Group(g) => hash_nodes(&g.children, s),
+            Node::Layer(l) => {
+                (l.clipped, l.inherit_alpha, l.mask_enabled).hash(s);
+                for (k, t) in l.pixels.tiles() {
+                    k.hash(s);
+                    (Arc::as_ptr(t) as usize).hash(s);
+                }
+                if let Some(m) = &l.mask {
+                    for (k, t) in m.tiles() {
+                        k.hash(s);
+                        (Arc::as_ptr(t) as usize).hash(s);
+                    }
+                }
+                if let Some(a) = &l.adjustment {
+                    a.kind.hash(s);
+                    serde_json::to_string(&a.params).unwrap_or_default().hash(s);
+                }
+            }
+        }
+    }
+}
+
+impl Session {
+    pub(crate) fn has_spatial_adjustments(nodes: &[Node]) -> bool {
+        nodes.iter().any(|n| match n {
+            Node::Layer(l) => {
+                l.visible && !l.clipped && l.adjustment.as_ref().and_then(|a| Kind::parse(&a.kind)).is_some_and(|k| !k.is_color())
+            }
+            Node::Group(g) => Self::has_spatial_adjustments(&g.children),
+        })
+    }
+
+    /// Replace spatial adjustment layers in `nodes` (and nested groups) with
+    /// their rendered result. `fresh` = false reuses stale cache entries.
+    pub(crate) fn render_spatial_adjustments(&self, nodes: &mut [Node], fresh: bool) {
+        let (w, h) = (self.doc.width, self.doc.height);
+        let frame = Frame::region(0, 0, w, h, self.doc.dpi as f32);
+        for i in 0..nodes.len() {
+            if let Node::Group(g) = &mut nodes[i] {
+                self.render_spatial_adjustments(&mut g.children, fresh);
+                continue;
+            }
+            let Node::Layer(l) = &nodes[i] else { continue };
+            let Some(kind) = l.adjustment.as_ref().and_then(|a| Kind::parse(&a.kind)) else { continue };
+            if kind.is_color() || !l.visible || l.clipped {
+                continue;
+            }
+            let params = l.adjustment.as_ref().map(|a| a.params.clone()).unwrap_or_default();
+            let mut hs = std::collections::hash_map::DefaultHasher::new();
+            hash_nodes(&nodes[..=i], &mut hs);
+            (w, h).hash(&mut hs);
+            let key = hs.finish();
+            let id = l.id.clone();
+            let mut cache = self.spatial_cache.0.lock().unwrap_or_else(|e| e.into_inner());
+            let out = match cache.get(&id) {
+                Some((k, s)) if *k == key || !fresh => s.clone(),
+                _ => {
+                    // The backdrop: everything below inside this (isolated) container.
+                    let mut d = self.doc.clone_shallow();
+                    d.root = nodes[..i].to_vec();
+                    let flat = onepaint_compose::flatten(&d, None);
+                    let mut backdrop = Surface::new();
+                    backdrop.write_rect(self.doc.bounds(), &flat);
+                    backdrop.prune_empty();
+                    let s = crate::filter_ops::apply_filter(&backdrop, self.doc.bounds(), frame, kind, &params, None);
+                    cache.insert(id.clone(), (key, s.clone()));
+                    s
+                }
+            };
+            drop(cache);
+            if let Node::Layer(l) = &mut nodes[i] {
+                l.adjustment = None;
+                l.pixels = out;
+            }
+        }
+    }
+}

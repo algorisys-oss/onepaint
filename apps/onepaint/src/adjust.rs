@@ -444,9 +444,6 @@ pub fn layer_panel(app: &mut App, ui: &mut Ui) {
     if params_ui(ui, kind, &mut p, &mut app.curve_tab, colour) {
         let _ = app.session.execute(Command::SetAdjustment { id, params: p });
     }
-    if !kind.is_color() {
-        ui.label(RichText::new("Spatial filter layers are kept in the file but not shown yet.").font(theme::medium(11.0)).color(t.warning));
-    }
 }
 
 /// The active layer's smart-filter stack: toggle, edit, delete, bake.

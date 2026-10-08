@@ -485,6 +485,7 @@ pub struct Session {
     anim_slot: usize,
     anim_playing: bool,
     smart_cache: smart_filter_ops::SmartCache,
+    spatial_cache: smart_filter_ops::SpatialCache,
     recorder: Option<recording::Recorder>,
     /// Nesting of `execute`: only top-level calls are recorded.
     rec_depth: u32,
@@ -534,6 +535,7 @@ impl Session {
             anim_slot: 0,
             anim_playing: false,
             smart_cache: Default::default(),
+            spatial_cache: Default::default(),
             recorder: None,
             rec_depth: 0,
             smudge: None,
@@ -658,9 +660,10 @@ impl Session {
 
     /// Flattened canvas as premultiplied linear f32.
     pub fn flatten(&self) -> Vec<f32> {
-        if self.has_smart_filters() {
+        if self.has_smart_filters() || Self::has_spatial_adjustments(&self.doc.root) {
             let mut d = self.doc.clone();
             self.apply_smart_filters(&mut d.root);
+            self.render_spatial_adjustments(&mut d.root, true);
             return onepaint_compose::flatten(&d, self.overlay().as_ref());
         }
         onepaint_compose::flatten(&self.doc, self.overlay().as_ref())
@@ -756,6 +759,7 @@ impl Session {
         let flat = if self.anim.enabled && anim::total_slots(&self.doc.root) > 0 {
             let mut v = anim::view_document(&self.doc, &self.anim, self.anim_slot, false, &self.active);
             self.apply_smart_filters(&mut v.root);
+            self.render_spatial_adjustments(&mut v.root, true);
             onepaint_compose::flatten(&v, None)
         } else {
             self.flatten()
