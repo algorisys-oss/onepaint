@@ -4,6 +4,8 @@
 //! dirty 256² tiles are uploaded as raw f16, and a present pass draws it through
 //! the view transform over a checkerboard. See `docs/specs/07-canvas-ui.md`.
 
+pub mod wet;
+
 use onepaint_raster::{TILE, Tile};
 
 pub const CANVAS_WGSL: &str = include_str!("../shaders/canvas.wgsl");

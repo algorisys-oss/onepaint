@@ -2757,8 +2757,14 @@ dependencies = [
  "bytemuck",
  "half",
  "log",
+ "onepaint-brush",
+ "onepaint-color",
+ "onepaint-doc",
+ "onepaint-engine",
  "onepaint-raster",
+ "onepaint-stroke",
  "pollster 0.4.0",
+ "serde_json",
  "wgpu",
 ]
 

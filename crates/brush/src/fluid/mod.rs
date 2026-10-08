@@ -12,9 +12,11 @@
 //! document paper (spec 36) drives the dry-brush gate, absorption, flow
 //! resistance and granulation.
 
+mod backend;
 pub mod dab;
 mod step;
 
+pub use backend::{StepBackend, StepJob};
 pub use dab::{ClockState, DabAmounts, Fluid, WetClock, dab_amounts, dry_brush, dry_grain_threshold, reservoir};
 
 use onepaint_color::{fast_linear_to_srgb as l2s, fast_srgb_to_linear as s2l, pigment::pigment_mix};
@@ -136,6 +138,15 @@ pub struct FluidSim {
     tilt: [f32; 2],
     /// The document paper and its strength (none = smooth).
     pub(crate) paper: Option<(crate::paper::PaperTexture, f32)>,
+    /// Which state this is: changes whenever the state does, so a backend
+    /// holding a copy knows when it is stale.
+    pub(crate) generation: u64,
+}
+
+/// Fresh state generations, unique across every sim (backends are shared).
+pub(crate) fn next_generation() -> u64 {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 impl FluidSim {
@@ -157,6 +168,7 @@ impl FluidSim {
             oil,
             tilt: [0.0; 2],
             paper: None,
+            generation: next_generation(),
         }
     }
 
@@ -242,6 +254,7 @@ impl FluidSim {
         let (obw, _) = blocks(r);
         let old_occ = std::mem::take(&mut self.occ);
         self.finger = step::finger_field(nr);
+        self.generation = next_generation();
         self.rect = nr;
         self.sim = sim;
         self.col = col;
@@ -283,6 +296,7 @@ impl FluidSim {
         if dabs.is_empty() {
             return Rect::default();
         }
+        self.generation = next_generation();
         let mut bb = Rect::default();
         let mut reach: f64 = 0.0;
         for d in dabs {

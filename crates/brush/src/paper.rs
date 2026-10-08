@@ -39,9 +39,14 @@ impl PaperTexture {
         self.tex.sample_repeat(x / self.tile_px, y / self.tile_px)
     }
 
-    /// Doc px → paper texture units (for the wet sim).
+    /// Doc px per tile (for the wet sim).
     pub fn tile_px(&self) -> f64 {
         self.tile_px
+    }
+
+    /// The grain tile itself (GPU upload).
+    pub fn mask(&self) -> &TipMask {
+        &self.tex
     }
 }
 

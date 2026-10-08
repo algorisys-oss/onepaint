@@ -186,6 +186,8 @@ pub struct App {
     pub toast: Option<(String, f64)>,
     pub new_doc: [u32; 2],
     pub gpu_ok: bool,
+    /// Live wet media steps on the GPU when there is one (spec 35 B).
+    wet_gpu: Option<onepaint_gpu::wet::SharedWetGpu>,
     pub debug: debug::Debug,
     title: String,
     pub pending: Option<Pending>,
@@ -210,7 +212,7 @@ pub struct App {
     pub studio: brush_studio::Studio,
     /// A file chosen by drag-and-drop, opened once unsaved work is dealt with.
     pub open_later: Option<PathBuf>,
-    allow_close: bool,
+    pub(crate) allow_close: bool,
 }
 
 impl App {
@@ -219,6 +221,7 @@ impl App {
         let theme = if debug.light { ThemeKind::Light } else { ThemeKind::Dark };
         onepaint_ui_kit::install(&cc.egui_ctx, theme);
         let gpu_ok = canvas::init_gpu(cc);
+        let wet_gpu = canvas::init_wet_gpu(cc);
         let session = Session::new(2048, 1536, Some(Rgba::WHITE));
         let size = [session.doc().width, session.doc().height];
         // Tests and scripted runs never touch the user's saved palettes.
@@ -257,6 +260,7 @@ impl App {
             toast: None,
             new_doc: [2048, 1536],
             gpu_ok,
+            wet_gpu,
             debug,
             title: String::new(),
             pending: None,
@@ -1205,6 +1209,12 @@ impl eframe::App for App {
         if ctx.input(|i| i.viewport().close_requested()) && self.any_dirty() && !self.allow_close {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.request(Pending::Close, &ctx);
+        }
+        // Every tab's session steps wet paint on the shared GPU stepper.
+        if let Some(w) = &self.wet_gpu
+            && !self.session.has_wet_backend()
+        {
+            self.session.set_wet_backend(Some(Box::new(w.clone())));
         }
         let (space, r) = self.shortcuts(&ctx);
         let rect = ui.max_rect();

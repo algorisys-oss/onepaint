@@ -322,6 +322,8 @@ pub struct Session {
     wet: Option<wet_ops::WetSession>,
     wet_stroke: Option<wet_ops::WetStroke>,
     wet_tilt: [f32; 2],
+    /// Where wet steps run when not on the CPU (the app installs the GPU).
+    wet_backend: Option<Box<dyn onepaint_brush::fluid::StepBackend>>,
     /// The Mixer's kept reservoir, keyed by the colour it was loaded with.
     mixer_held: Option<(String, onepaint_brush::smudge::Reservoir)>,
 }
@@ -375,6 +377,7 @@ impl Session {
             wet: None,
             wet_stroke: None,
             wet_tilt: [0.0; 2],
+            wet_backend: None,
             mixer_held: None,
         };
         s.load_saved_selections();

@@ -103,6 +103,7 @@ impl FluidSim {
     /// rect whose layer pixels may have changed.
     pub fn step(&mut self, layer: &mut Surface, rect: Rect, force: bool) -> Rect {
         self.ensure_rect(rect);
+        self.generation = super::next_generation();
         let Some(rect) = rect.intersect(&self.rect) else { return Rect::default() };
         let oil = if self.oil { 1.0 } else { 0.0 };
         let origin = (self.rect.x, self.rect.y);

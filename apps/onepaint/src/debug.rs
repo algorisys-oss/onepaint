@@ -12,6 +12,7 @@
 //! - `ONEPAINT_ANIM=1` turns the demo layers into frames (background role) with onion skins;
 //!   `ONEPAINT_ANIM=tracks` also converts them to exposure-sheet tracks with markers and a range.
 //! - `ONEPAINT_IMPASTO=1` paints thick, wet-impasto and oil strokes, blends one, and bevels a shape.
+//! - `ONEPAINT_WET=1` paints live watercolour (blue, then yellow into it) and leaves it wet.
 //! - `ONEPAINT_EXIT=1` closes the app after the screenshot.
 
 use crate::{App, Popover};
@@ -34,6 +35,7 @@ pub struct Debug {
     pen: bool,
     anim: bool,
     tracks: bool,
+    wet: bool,
     impasto: bool,
 }
 
@@ -51,6 +53,7 @@ impl Debug {
             || self.pen
             || self.anim
             || self.impasto
+            || self.wet
     }
 
     pub fn from_env() -> Self {
@@ -86,6 +89,7 @@ impl Debug {
             anim: var("ONEPAINT_ANIM").is_some(),
             tracks: var("ONEPAINT_ANIM").is_some_and(|v| v == "tracks"),
             impasto: var("ONEPAINT_IMPASTO").is_some(),
+            wet: var("ONEPAINT_WET").is_some(),
         }
     }
 }
@@ -203,6 +207,13 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
             }
         }
         app.session.stroke_end();
+    }
+    if frame == 3 && app.debug.wet {
+        let h = app.session.doc().height as f64;
+        let hex = |s: &str| Rgba::from_hex(s).unwrap_or_default();
+        let _ = app.session.execute(Command::AddLayer);
+        wave(app, h * 0.45, 40.0, hex("#2f6690"), "watercolor-live", 90.0);
+        wave(app, h * 0.55, 60.0, hex("#e8c547"), "watercolor-live", 70.0);
     }
     if frame == 3 && app.debug.impasto {
         let (w, h) = (app.session.doc().width as f64, app.session.doc().height as f64);
@@ -327,6 +338,8 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
                 e => log::error!("screenshot failed: {e:?}"),
             }
             if app.debug.exit {
+                // A scripted run never asks to save its demo drawing.
+                app.allow_close = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         }

@@ -48,6 +48,13 @@ fn basis() -> &'static Basis {
     })
 }
 
+/// The 9-band basis (band → linear RGB weights) and its pseudo-inverse
+/// (RGB ← bands), for GPU ports of [`pigment_mix`].
+pub fn basis_matrices() -> ([[f64; 3]; BINS], [[f64; BINS]; 3]) {
+    let b = basis();
+    (b.b, b.t)
+}
+
 fn inv3(m: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
     let [a, b, c] = m[0];
     let [d, e, f] = m[1];

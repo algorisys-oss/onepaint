@@ -284,6 +284,9 @@ impl Session {
 
     /// Run `n` fixed steps (live ticks and replay).
     pub(crate) fn wet_steps(&mut self, n: usize) {
+        if n > 0 && self.wet_steps_on_backend(n) {
+            return;
+        }
         let doc = self.doc.bounds();
         for _ in 0..n {
             let Some(mut s) = self.wet.take() else { return };
@@ -308,6 +311,60 @@ impl Session {
                 return;
             }
         }
+    }
+
+    /// Run a tick's steps as one batch on the installed backend (the GPU),
+    /// stopping where the CPU loop would dry. `false` = no backend, or it
+    /// declined: nothing changed, step on the CPU.
+    fn wet_steps_on_backend(&mut self, n: usize) -> bool {
+        let Some(mut be) = self.wet_backend.take() else { return false };
+        let ran = self.wet_batch(be.as_mut(), n);
+        self.wet_backend = Some(be);
+        ran
+    }
+
+    fn wet_batch(&mut self, be: &mut dyn fluid::StepBackend, n: usize) -> bool {
+        let doc = self.doc.bounds();
+        let Some(s) = self.wet.as_ref() else { return false };
+        let (mut clock, mut k, mut done) = (s.clock, 0, false);
+        while k < n {
+            k += 1;
+            if clock.step() == ClockState::Dry && self.wet_stroke.is_none() && !s.sim.oil {
+                done = true;
+                break;
+            }
+        }
+        let Some(mut s) = self.wet.take() else { return false };
+        let grow = 4.0 * k as f64;
+        let b = s.bounds;
+        let bounds = [b[0] - grow, b[1] - grow, b[2] + grow, b[3] + grow];
+        let rect = Rect::covering(bounds[0] as f32, bounds[1] as f32, bounds[2] as f32, bounds[3] as f32).intersect(&doc);
+        let (Some(rect), Some(layer)) = (rect, self.doc.layer_mut(&s.layer)) else {
+            self.wet = Some(s);
+            return false;
+        };
+        let Some(dirty) = s.sim.step_with(be, &mut layer.pixels, rect, k) else {
+            self.wet = Some(s);
+            return false;
+        };
+        (s.bounds, s.clock) = (bounds, clock);
+        s.preview = s.sim.preview();
+        let sim_rect = s.sim.rect();
+        self.wet = Some(s);
+        self.mark_dirty(dirty.union(&sim_rect));
+        if done {
+            self.finish_wet();
+        }
+        true
+    }
+
+    /// Run the wet steps on `backend` (the GPU) when it can; `None` = CPU only.
+    pub fn set_wet_backend(&mut self, backend: Option<Box<dyn fluid::StepBackend>>) {
+        self.wet_backend = backend;
+    }
+
+    pub fn has_wet_backend(&self) -> bool {
+        self.wet_backend.is_some()
     }
 
     /// Settle everything now and commit the session as one undo step.

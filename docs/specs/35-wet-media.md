@@ -181,5 +181,25 @@ height field):
 - **Brush studio:** the Wet section (Blender, Wet/Oil, Load/Pigment, Mix)
   and the Fluid section (Water 5–200%, Pigment) follow happypaint's
   toolbar. Paper response is in the Grain section.
+- **GPU** (`gpu::wet`, `shaders/wet.wgsl`):
+  - **Hook:** `brush::fluid::StepBackend` lets the app run the steps as
+    compute passes; the engine keeps no wgpu dependency.
+  - **Per tick:** one batch of settle + update dispatches. It stops exactly
+    where the CPU loop would dry, then reads back once.
+  - **Settled paint:** accumulates source-over in f32 and lands on the layer
+    once per tick (source-over is associative).
+  - **Skipped work:** blocks with no state (widened by 4 px per step) write
+    zeros. The upload is skipped while the GPU holds the current state
+    generation. Only rows with live blocks are cleared and read back.
+  - **KM:** mixing is a WGSL port of `pigment.rs`, with the basis uploaded
+    from the CPU.
+  - **Oracle:** the CPU step. A batch matches within 5e-4. A whole session
+    matches within 1e-4 on the mean, and the GPU keeps slightly more paint,
+    because the CPU loses settle increments below half an f16 step.
+  - **Speed:** about 16 ms per 4-step tick on Iris Xe for a 600 px wash,
+    against about 75 ms on the CPU on the same busy machine.
+  - **Fallback:** the CPU runs when there is no adapter, when a wash
+    outgrows the storage limit, or with `ONEPAINT_CPU_WET=1`.
 - **Not yet:**
-  - A GPU compute path for large washes.
+  - Keeping the wet state on the GPU across ticks without reading it back
+    (the canvas composite is CPU).

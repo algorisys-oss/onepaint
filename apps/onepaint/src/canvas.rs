@@ -18,6 +18,17 @@ use onepaint_ui_kit::Tokens;
 use std::sync::Arc;
 
 /// Register GPU resources once at startup.
+/// The wet-media GPU stepper on the canvas's device (`None`: CPU only,
+/// also when `ONEPAINT_CPU_WET` is set).
+pub fn init_wet_gpu(cc: &eframe::CreationContext) -> Option<onepaint_gpu::wet::SharedWetGpu> {
+    if std::env::var_os("ONEPAINT_CPU_WET").is_some() {
+        return None;
+    }
+    let rs = cc.wgpu_render_state.as_ref()?;
+    log::info!("wet media steps on the GPU");
+    Some(onepaint_gpu::wet::SharedWetGpu::new(&rs.device, &rs.queue))
+}
+
 pub fn init_gpu(cc: &eframe::CreationContext) -> bool {
     let Some(rs) = cc.wgpu_render_state.as_ref() else {
         return false;
