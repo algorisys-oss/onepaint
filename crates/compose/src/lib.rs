@@ -4,7 +4,10 @@
 //! groups, clip families, masks, inherit alpha). See `docs/specs/02-compositor.md`.
 
 pub mod blend;
+pub mod program;
 pub mod relief;
+#[doc(hidden)]
+pub mod testdocs;
 
 use blend::{blend_px, blend_px_alpha_lock, clip_over};
 use onepaint_doc::{BlendMode, Document, Layer, Node};
@@ -133,7 +136,7 @@ fn clip_into(target: &mut [f32], src: &[f32], opacity: f32) {
 }
 
 /// The clipped layers that directly follow `nodes[i]`.
-fn riders(nodes: &[Node], i: usize) -> usize {
+pub(crate) fn riders(nodes: &[Node], i: usize) -> usize {
     let mut j = i + 1;
     while j < nodes.len() && matches!(&nodes[j], Node::Layer(l) if l.clipped) {
         j += 1;
@@ -212,7 +215,7 @@ fn composite_nodes(nodes: &[Node], tx: i32, ty: i32, target: &mut Buf, ov: Optio
 
 /// The clip of a panel group over one tile (`None` for a plain group). The
 /// mask is derived from the spec, never stored (spec 30).
-fn panel_clip(g: &onepaint_doc::Group, tx: i32, ty: i32) -> Option<TileCoverage> {
+pub(crate) fn panel_clip(g: &onepaint_doc::Group, tx: i32, ty: i32) -> Option<TileCoverage> {
     g.extra.get("panel")?;
     onepaint_panel::panel_of(g).map(|spec| tile_coverage(&spec, tx, ty))
 }

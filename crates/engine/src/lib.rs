@@ -35,6 +35,7 @@ pub mod view;
 pub mod warp;
 
 pub use clipboard::Region;
+pub use onepaint_compose::program::TileProgram;
 pub use onepaint_selection::{Mask, Mode as SelectMode};
 
 use onepaint_brush::{BrushPreset, StrokeEngine};
@@ -512,6 +513,25 @@ impl Session {
         // Wet paint shows on screen while it dries (its preview has the damp veil, so it stays out of exports).
         let ov = self.overlay().or_else(|| self.wet_overlay());
         onepaint_compose::composite_tiles(&self.display_doc(), keys, ov.as_ref())
+    }
+
+    /// Plan the given tiles for the GPU compositor, including any stroke in
+    /// progress. Returns the programs and the tiles that need [`Self::composite`].
+    pub fn plan(&self, keys: &[(i32, i32)]) -> (Vec<TileProgram>, Vec<(i32, i32)>) {
+        let ov = self.overlay().or_else(|| self.wet_overlay());
+        let doc = self.display_doc();
+        let mut cpu = Vec::new();
+        let progs = keys
+            .iter()
+            .filter_map(|&(tx, ty)| {
+                let p = onepaint_compose::program::plan_tile(&doc, tx, ty, ov.as_ref());
+                if p.is_none() {
+                    cpu.push((tx, ty));
+                }
+                p
+            })
+            .collect();
+        (progs, cpu)
     }
 
     /// Flattened canvas as premultiplied linear f32.

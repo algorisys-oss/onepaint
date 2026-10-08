@@ -6,7 +6,7 @@ use eframe::wgpu;
 use egui::{Color32, CursorIcon, Event, Key, PointerButton, Pos2, Rect, Sense, Stroke, TouchPhase, pos2};
 use onepaint_engine::transform::{Handle, TransformParams};
 use onepaint_engine::view::View;
-use onepaint_engine::{Command, SelectMode, Session, Tool};
+use onepaint_engine::{Command, SelectMode, Session, TileProgram, Tool};
 use onepaint_filters::gradient::{GradStop, Shape as GShape, fg_bg, fg_transparent, reverse_stops};
 use onepaint_gpu::{CanvasGpu, ViewParams};
 use onepaint_input::{PointerKind, PressureProvider};
@@ -29,15 +29,29 @@ pub fn init_wet_gpu(cc: &eframe::CreationContext) -> Option<onepaint_gpu::wet::S
     Some(onepaint_gpu::wet::SharedWetGpu::new(&rs.device, &rs.queue))
 }
 
-pub fn init_gpu(cc: &eframe::CreationContext) -> bool {
+/// Returns whether the canvas has a GPU, and whether it composites there
+/// (off when `ONEPAINT_CPU_COMPOSE` is set).
+pub fn init_gpu(cc: &eframe::CreationContext) -> (bool, bool) {
     let Some(rs) = cc.wgpu_render_state.as_ref() else {
-        return false;
+        return (false, false);
     };
-    let gpu = CanvasGpu::new(&rs.device, rs.target_format);
+    let mut gpu = CanvasGpu::new(&rs.device, rs.target_format);
+    let compose = std::env::var_os("ONEPAINT_CPU_COMPOSE").is_none();
+    if compose {
+        gpu.enable_compositor(&rs.device, onepaint_gpu::compose::DEFAULT_BUDGET);
+    }
     rs.renderer.write().callback_resources.insert(gpu);
-    log::info!("canvas GPU: {:?} ({:?})", rs.adapter.get_info().name, rs.adapter.get_info().backend);
-    true
+    log::info!(
+        "canvas GPU: {:?} ({:?}), compositing on the {}",
+        rs.adapter.get_info().name,
+        rs.adapter.get_info().backend,
+        if compose { "GPU" } else { "CPU" }
+    );
+    (true, compose)
 }
+
+/// Tiles handed to the GPU compositor per frame, visible ones first.
+const GPU_TILES_PER_FRAME: usize = 256;
 
 /// Brush cursor settings, copied from the app settings each frame.
 #[derive(Clone, Copy, Debug)]
@@ -55,12 +69,16 @@ impl Default for CursorPrefs {
     }
 }
 
+/// Composited tiles for the texture, from the CPU compositor.
+type TileUploads = Vec<((i32, i32), Tile)>;
+
 /// A selection upload: `Some(Some(bytes))` sets it, `Some(None)` clears it.
 type SelectionUpload = Option<Option<Arc<Vec<u8>>>>;
 
 struct CanvasCallback {
     doc_size: [u32; 2],
     uploads: Arc<Vec<((i32, i32), Tile)>>,
+    programs: Arc<Vec<TileProgram>>,
     selection: SelectionUpload,
     params: ViewParams,
 }
@@ -77,6 +95,7 @@ impl CallbackTrait for CanvasCallback {
         if let Some(gpu) = res.get_mut::<CanvasGpu>() {
             gpu.ensure_size(device, self.doc_size[0], self.doc_size[1]);
             gpu.upload(queue, &self.uploads);
+            gpu.composite(device, queue, &self.programs);
             if let Some(sel) = &self.selection {
                 gpu.set_selection(queue, sel.as_deref().map(|v| v.as_slice()));
             }
@@ -839,7 +858,16 @@ impl Canvas {
 
     /// Draw the canvas into `rect` and handle its input.
     #[allow(clippy::too_many_arguments)]
-    pub fn show(&mut self, ui: &mut egui::Ui, rect: Rect, session: &mut Session, space_held: bool, r_held: bool, gpu: bool) {
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        rect: Rect,
+        session: &mut Session,
+        space_held: bool,
+        r_held: bool,
+        gpu: bool,
+        gpu_compose: bool,
+    ) {
         let t = Tokens::get(ui.ctx());
         let ppp = ui.ctx().pixels_per_point();
         self.view.view_size = [rect.width() as f64, rect.height() as f64];
@@ -1232,7 +1260,7 @@ impl Canvas {
 
         // ── Display ──
         self.pending.extend(session.take_dirty_tiles());
-        let uploads = self.composite_budgeted(session, ui.ctx());
+        let (programs, uploads) = self.composite_budgeted(session, ui.ctx(), gpu && gpu_compose);
         let key = (session.selection_version(), self.doc_size);
         let selection = if self.uploaded_selection != Some(key) {
             self.uploaded_selection = Some(key);
@@ -1256,7 +1284,7 @@ impl Canvas {
         if gpu {
             ui.painter().add(egui_wgpu::Callback::new_paint_callback(
                 rect,
-                CanvasCallback { doc_size: self.doc_size, uploads: Arc::new(uploads), selection, params },
+                CanvasCallback { doc_size: self.doc_size, uploads: Arc::new(uploads), programs: Arc::new(programs), selection, params },
             ));
         }
         if session.selection().is_some() {
@@ -1275,10 +1303,12 @@ impl Canvas {
         }
     }
 
-    /// Composite pending tiles within the frame budget, visible ones first.
-    fn composite_budgeted(&mut self, session: &Session, ctx: &egui::Context) -> Vec<((i32, i32), Tile)> {
+    /// Composite pending tiles, visible ones first: up to a frame's worth as
+    /// GPU programs, and the tiles the GPU can't do on the CPU within the
+    /// frame budget.
+    fn composite_budgeted(&mut self, session: &Session, ctx: &egui::Context, gpu_compose: bool) -> (Vec<TileProgram>, TileUploads) {
         if self.pending.is_empty() {
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         }
         let v = &self.view;
         let corners =
@@ -1289,7 +1319,19 @@ impl Canvas {
         }
         let visible = onepaint_raster::Rect::covering(x0 as f32, y0 as f32, x1 as f32, y1 as f32);
         let centre = v.screen_to_doc([v.view_size[0] / 2.0, v.view_size[1] / 2.0]);
-        let order = crate::progressive::prioritize(&self.pending, visible, centre);
+        let mut order = crate::progressive::prioritize(&self.pending, visible, centre);
+        let modes = self.view_modes;
+        // The present-only view modes run on CPU tiles.
+        let mut programs = Vec::new();
+        if gpu_compose && !modes.any() {
+            let n = order.len().min(GPU_TILES_PER_FRAME);
+            let (progs, cpu) = session.plan(&order[..n]);
+            for p in &progs {
+                self.pending.remove(&(p.tx, p.ty));
+            }
+            programs = progs;
+            order = cpu;
+        }
         let batch = rayon::current_num_threads().max(1);
         let start = std::time::Instant::now();
         let mut out = Vec::new();
@@ -1305,7 +1347,6 @@ impl Canvas {
         if !self.pending.is_empty() {
             ctx.request_repaint();
         }
-        let modes = self.view_modes;
         if modes.any() {
             use rayon::prelude::*;
             let press = crate::press::active(&self.press);
@@ -1315,7 +1356,7 @@ impl Canvas {
                 *t = Tile::from_f32(&px);
             });
         }
-        out
+        (programs, out)
     }
 
     fn move_symmetry_centre(session: &mut Session, d: Pt, doc: [u32; 2]) {

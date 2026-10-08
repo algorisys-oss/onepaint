@@ -2820,10 +2820,12 @@ name = "onepaint-gpu"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "criterion",
  "half",
  "log",
  "onepaint-brush",
  "onepaint-color",
+ "onepaint-compose",
  "onepaint-doc",
  "onepaint-engine",
  "onepaint-raster",

@@ -201,6 +201,8 @@ pub struct App {
     pub toast: Option<(String, f64)>,
     pub new_doc: [u32; 2],
     pub gpu_ok: bool,
+    /// The canvas composites on the GPU (else on the CPU).
+    pub gpu_compose: bool,
     /// Live wet media steps on the GPU when there is one (spec 35 B).
     wet_gpu: Option<onepaint_gpu::wet::SharedWetGpu>,
     /// The pen tablet (Wayland tablet protocol), when the platform has one.
@@ -239,7 +241,7 @@ impl App {
         let debug = debug::Debug::from_env();
         let theme = if debug.light { ThemeKind::Light } else { ThemeKind::Dark };
         onepaint_ui_kit::install(&cc.egui_ctx, theme);
-        let gpu_ok = canvas::init_gpu(cc);
+        let (gpu_ok, gpu_compose) = canvas::init_gpu(cc);
         let wet_gpu = canvas::init_wet_gpu(cc);
         let tablet = tablet::connect(cc);
         let session = Session::new(2048, 1536, Some(Rgba::WHITE));
@@ -282,6 +284,7 @@ impl App {
             toast: None,
             new_doc: [2048, 1536],
             gpu_ok,
+            gpu_compose,
             wet_gpu,
             tablet,
             eraser_from: None,
@@ -1297,7 +1300,7 @@ impl eframe::App for App {
         ui.painter().rect_filled(rect, 0.0, t.stage);
         let pegging = self.timing.peg_mode && self.session.anim_settings().enabled;
         self.canvas.peg_target = self.timing.peg_target.clone().filter(|_| pegging);
-        self.canvas.show(ui, rect, &mut self.session, space, r, self.gpu_ok);
+        self.canvas.show(ui, rect, &mut self.session, space, r, self.gpu_ok, self.gpu_compose);
         // Keep a short history of pen samples (the canvas may use a move a frame late).
         let excess = self.canvas.pen_queue.len().saturating_sub(512);
         self.canvas.pen_queue.drain(..excess);

@@ -12,15 +12,21 @@ workspace = true
 onepaint-raster = { workspace = true }
 onepaint-brush = { workspace = true }
 onepaint-color = { workspace = true }
+onepaint-compose = { workspace = true }
+onepaint-doc = { workspace = true }
 wgpu = { workspace = true, features = ["std", "wgsl"] }
 bytemuck = { workspace = true }
 half = { workspace = true }
 log = { workspace = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
 serde_json = { workspace = true }
 onepaint-engine = { workspace = true }
 onepaint-stroke = { workspace = true }
-onepaint-doc = { workspace = true }
 pollster = { workspace = true }
 wgpu = { workspace = true, default-features = true }
+
+[[bench]]
+name = "compose"
+harness = false

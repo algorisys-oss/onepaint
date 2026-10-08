@@ -1,4 +1,33 @@
-# 13: GPU compositor (design, not built yet)
+# 13: GPU compositor
+
+## Status
+Built (first cut). The parts:
+
+- `compose::program::plan_tile` flattens a tile's tree into `TileProgram`
+  ops: `Layer`, `PushZero`, `PushContent`, `Clip` and `Pop`.
+  `compose::program::run` is a CPU interpreter of the same encoding, and
+  its tests check it against `composite_tile`.
+- `gpu::compose::GpuCompositor` interprets the programs in
+  `shaders/compose.wgsl`, one invocation per pixel. Source tiles live in
+  `Rgba16Float` array atlases (up to 8), keyed on `Arc<Tile>` identity and
+  evicted LRU within the budget (default 1 GiB). The Kubelka–Munk code
+  (`shaders/pigment.wgsl`) sits behind an override constant, so only
+  batches that use pigment pay for it.
+- `Session::plan` returns programs for the tiles the GPU can do and the
+  keys that still need `Session::composite`. The canvas sends up to 256
+  tiles a frame, visible ones first.
+- Strokes in progress, masks and mask strokes, inherit alpha, clip families,
+  nested groups (depth ≤ 8), ghost tints and fully covered panel clips run
+  on the GPU.
+- The CPU still composites tiles that have visible adjustment layers,
+  relief (`height`), paper, partial panel clips or ghost pegs, as well as
+  the present-only view modes. Setting `ONEPAINT_CPU_COMPOSE` forces the
+  CPU path.
+- Tests: `crates/gpu/tests/compose.rs` (random documents and strokes
+  against the oracle, atlas eviction, re-upload of changed tiles).
+- Bench (`crates/gpu/benches/compose.rs`, Iris Xe): a full 4096² × 20-layer
+  recomposite takes 130 ms on the GPU and 847 ms on the CPU, and planning
+  takes 0.3 ms. That is still short of the 50 ms target below.
 
 ## Why
 The CPU compositor is memory-bound (spec 00, performance notes): a full

@@ -1,9 +1,12 @@
 //! GPU display of the document composite.
 //!
 //! The composite lives in one Rgba16Float texture (premultiplied, linear);
-//! dirty 256² tiles are uploaded as raw f16, and a present pass draws it through
-//! the view transform over a checkerboard. See `docs/specs/07-canvas-ui.md`.
+//! dirty 256² tiles are either composited into it on the GPU (`compose`) or
+//! uploaded as raw f16 from the CPU compositor, and a present pass draws it
+//! through the view transform over a checkerboard. See
+//! `docs/specs/07-canvas-ui.md` and `docs/specs/13-gpu-compositor.md`.
 
+pub mod compose;
 pub mod wet;
 
 use onepaint_raster::{TILE, Tile};
@@ -45,6 +48,8 @@ struct Uniforms {
 
 struct DocTextures {
     texture: wgpu::Texture,
+    /// The composite as a compute-pass storage target.
+    storage: wgpu::TextureView,
     selection: wgpu::Texture,
     bind: wgpu::BindGroup,
     size: [u32; 2],
@@ -59,6 +64,7 @@ pub struct CanvasGpu {
     has_selection: bool,
     srgb_target: bool,
     max_dim: u32,
+    compositor: Option<compose::GpuCompositor>,
 }
 
 impl CanvasGpu {
@@ -156,6 +162,26 @@ impl CanvasGpu {
             has_selection: false,
             srgb_target: target.is_srgb(),
             max_dim: device.limits().max_texture_dimension_2d,
+            compositor: None,
+        }
+    }
+
+    /// Composite on the GPU from now on, keeping up to `budget` bytes of layer tiles resident.
+    pub fn enable_compositor(&mut self, device: &wgpu::Device, budget: u64) {
+        self.compositor = Some(compose::GpuCompositor::new(device, budget));
+    }
+
+    pub fn has_compositor(&self) -> bool {
+        self.compositor.is_some()
+    }
+
+    /// Run tile programs straight into the composite texture.
+    pub fn composite(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, programs: &[onepaint_compose::program::TileProgram]) {
+        let (Some(c), Some(t)) = (&mut self.compositor, &self.texture) else {
+            return;
+        };
+        if !programs.is_empty() {
+            c.run(device, queue, programs, &t.storage, t.size);
         }
     }
 
@@ -176,10 +202,11 @@ impl CanvasGpu {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba16Float,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::STORAGE_BINDING,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let storage = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let selection = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("onepaint_selection"),
             size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
@@ -201,7 +228,7 @@ impl CanvasGpu {
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&sel_view) },
             ],
         });
-        self.texture = Some(DocTextures { texture, selection, bind, size: [w, h] });
+        self.texture = Some(DocTextures { texture, storage, selection, bind, size: [w, h] });
         self.has_selection = false;
         true
     }

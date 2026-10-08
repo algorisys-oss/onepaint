@@ -6,6 +6,8 @@ use onepaint_brush::fluid::{StepBackend, StepJob};
 use wgpu::util::DeviceExt;
 
 pub const WET_WGSL: &str = include_str!("../shaders/wet.wgsl");
+/// Kubelka–Munk mixing, appended to the shaders that use it.
+pub const PIGMENT_WGSL: &str = include_str!("../shaders/pigment.wgsl");
 
 /// Activity block size (px), matching the shader.
 const BLOCK: u32 = 16;
@@ -98,8 +100,10 @@ fn storage(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
 
 impl WetGpu {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
-        let module = device
-            .create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("wet"), source: wgpu::ShaderSource::Wgsl(WET_WGSL.into()) });
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("wet"),
+            source: wgpu::ShaderSource::Wgsl(format!("{WET_WGSL}\n{PIGMENT_WGSL}").into()),
+        });
         let mut entries = vec![wgpu::BindGroupLayoutEntry {
             binding: 0,
             visibility: wgpu::ShaderStages::COMPUTE,

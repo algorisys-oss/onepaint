@@ -1,0 +1,200 @@
+#![allow(clippy::unwrap_used)]
+//! The GPU compositor against the CPU oracle (spec 13); skipped without an adapter.
+use onepaint_compose::program::{TileProgram, plan_tile};
+use onepaint_compose::testdocs::{Rng, random_doc, random_stroke};
+use onepaint_compose::{StrokeOverlay, composite_tile};
+use onepaint_doc::{Document, Layer, Node};
+use onepaint_gpu::compose::GpuCompositor;
+use onepaint_raster::{TILE, Tile};
+use std::sync::Arc;
+
+fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
+    pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()
+}
+
+fn target(device: &wgpu::Device, w: u32, h: u32) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba16Float,
+        usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    })
+}
+
+/// The texture as row-major f32 RGBA.
+fn read(device: &wgpu::Device, queue: &wgpu::Queue, tex: &wgpu::Texture) -> Vec<f32> {
+    let (w, h) = (tex.width(), tex.height());
+    let stride = (w * 8).div_ceil(256) * 256;
+    let buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: (stride * h) as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut enc = device.create_command_encoder(&Default::default());
+    enc.copy_texture_to_buffer(
+        tex.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buf,
+            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(stride), rows_per_image: Some(h) },
+        },
+        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+    );
+    queue.submit([enc.finish()]);
+    buf.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    let data = buf.slice(..).get_mapped_range().unwrap();
+    let mut out = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h as usize {
+        let row: &[half::f16] = bytemuck::cast_slice(&data[y * stride as usize..y * stride as usize + w as usize * 8]);
+        out.extend(row.iter().map(|v| v.to_f32()));
+    }
+    out
+}
+
+/// Largest error between the GPU texture and the CPU oracle, relative above 1.
+fn max_error(doc: &Document, ov: Option<&StrokeOverlay>, gpu: &[f32]) -> (f32, (i32, i32, usize)) {
+    let w = doc.width as i32;
+    let mut worst = (0.0f32, (0, 0, 0));
+    for (tx, ty) in doc.bounds().tiles() {
+        // The oracle rounded to f16 like the display path.
+        let cpu = Tile::from_f32(&composite_tile(doc, tx, ty, ov)).to_f32();
+        for ly in 0..TILE {
+            for lx in 0..TILE {
+                let (x, y) = (tx * TILE + lx, ty * TILE + ly);
+                if x >= w || y >= doc.height as i32 {
+                    continue;
+                }
+                for c in 0..4 {
+                    let a = cpu[((ly * TILE + lx) * 4) as usize + c];
+                    let b = gpu[((y * w + x) * 4) as usize + c];
+                    let e = (a - b).abs() / a.abs().max(1.0);
+                    if e > worst.0 || e.is_nan() {
+                        worst = (if e.is_nan() { f32::INFINITY } else { e }, (x, y, c));
+                    }
+                }
+            }
+        }
+    }
+    worst
+}
+
+fn programs(doc: &Document, ov: Option<&StrokeOverlay>) -> Vec<TileProgram> {
+    doc.bounds().tiles().map(|(tx, ty)| plan_tile(doc, tx, ty, ov).unwrap()).collect()
+}
+
+const TOL: f32 = 2e-3;
+
+#[test]
+fn random_documents_match_the_cpu_oracle() {
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let mut gc = GpuCompositor::new(&device, 64 << 20);
+    let (w, h) = (300, 300);
+    let tex = target(&device, w, h);
+    let view = tex.create_view(&Default::default());
+    for seed in 0..40 {
+        let doc = random_doc(seed, w, h, true);
+        gc.run(&device, &queue, &programs(&doc, None), &view, [w, h]);
+        let (e, at) = max_error(&doc, None, &read(&device, &queue, &tex));
+        assert!(e <= TOL, "seed {seed}: error {e} at {at:?}");
+    }
+}
+
+#[test]
+fn strokes_in_progress_match_the_cpu_oracle() {
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let mut gc = GpuCompositor::new(&device, 64 << 20);
+    let (w, h) = (300, 300);
+    let tex = target(&device, w, h);
+    let view = tex.create_view(&Default::default());
+    for seed in 100..140 {
+        let doc = random_doc(seed, w, h, false);
+        let (buf, id, opacity, mode, mask) = random_stroke(seed, &doc).unwrap();
+        let ov = StrokeOverlay { layer_id: &id, stroke: &buf, opacity, mode, mask };
+        gc.run(&device, &queue, &programs(&doc, Some(&ov)), &view, [w, h]);
+        let (e, at) = max_error(&doc, Some(&ov), &read(&device, &queue, &tex));
+        assert!(e <= TOL, "seed {seed}: error {e} at {at:?}");
+    }
+}
+
+/// A document whose tiles outnumber the atlas: it composites in several
+/// batches, evicting between them, and a second run reuses what stayed.
+#[test]
+fn atlas_eviction_keeps_results_exact() {
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let mut gc = GpuCompositor::new(&device, 1);
+    let cap = gc.capacity();
+    let (w, h) = (2048u32, 1024u32);
+    let mut doc = Document::new(w, h, None);
+    let mut rng = Rng::new(9);
+    let layers = cap / 32 + 2;
+    for i in 0..layers {
+        let mut l = Layer::new(&format!("l{i}"));
+        for (tx, ty) in doc.bounds().tiles() {
+            let mut t = Tile::default();
+            let c = [rng.f(), rng.f(), rng.f()];
+            let a = 0.3 + 0.2 * rng.f();
+            for y in 0..TILE as usize {
+                for x in 0..TILE as usize {
+                    t.set(x, y, [c[0] * a, c[1] * a, c[2] * a, a]);
+                }
+            }
+            l.pixels.set_tile(tx, ty, Some(Arc::new(t)));
+        }
+        l.blend_mode = onepaint_doc::BlendMode::ALL[i % 19];
+        doc.root.push(Node::Layer(l));
+    }
+    let tex = target(&device, w, h);
+    let view = tex.create_view(&Default::default());
+    let progs = programs(&doc, None);
+    gc.run(&device, &queue, &progs, &view, [w, h]);
+    assert!(gc.uploads as usize > cap, "{} uploads, capacity {cap}", gc.uploads);
+    let (e, at) = max_error(&doc, None, &read(&device, &queue, &tex));
+    assert!(e <= TOL, "error {e} at {at:?}");
+    // Running one tile again needs no new uploads when its sources stayed resident.
+    let last = progs.last().unwrap().clone();
+    let before = gc.uploads;
+    gc.run(&device, &queue, &[last], &view, [w, h]);
+    assert_eq!(gc.uploads, before);
+}
+
+/// A changed tile (copy-on-write) is uploaded again; an unchanged one is not.
+#[test]
+fn changed_tiles_are_reuploaded() {
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let mut gc = GpuCompositor::new(&device, 64 << 20);
+    let mut doc = random_doc(7, 256, 256, false);
+    let tex = target(&device, 256, 256);
+    let view = tex.create_view(&Default::default());
+    gc.run(&device, &queue, &programs(&doc, None), &view, [256, 256]);
+    let first = gc.uploads;
+    gc.run(&device, &queue, &programs(&doc, None), &view, [256, 256]);
+    assert_eq!(gc.uploads, first);
+    // Paint one pixel on the first layer that has a tile here.
+    let l = onepaint_compose::testdocs::layer_ids(&doc.root)[0].clone();
+    let Some(Node::Layer(layer)) = doc.find_mut(&l) else { panic!("no layer") };
+    layer.pixels.set(3, 3, [0.0, 0.5, 0.0, 0.5]);
+    layer.visible = true;
+    gc.run(&device, &queue, &programs(&doc, None), &view, [256, 256]);
+    assert!(gc.uploads > first);
+    let (e, at) = max_error(&doc, None, &read(&device, &queue, &tex));
+    assert!(e <= TOL, "error {e} at {at:?}");
+}

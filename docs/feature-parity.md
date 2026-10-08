@@ -77,7 +77,7 @@ The modes are:
 - hue, saturation, color, luminosity
 - pigment (brush only)
 
-- [~] All of them on the GPU, matching the CPU oracle (all 19 layer modes are done on the CPU and the composite is shown on the GPU; GPU compositing is not done yet)
+- [~] All of them on the GPU, matching the CPU oracle (all 19 modes, groups, clip families, masks, inherit alpha, ghost tints and strokes in progress composite on the GPU; tiles with adjustment layers, relief, paper, partial panel clips or ghost pegs still use the CPU compositor)
 
 ## Adjustments and filters (48 kinds)
 Each kind works destructively, as an adjustment layer, and as a smart filter.

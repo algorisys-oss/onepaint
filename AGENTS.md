@@ -33,10 +33,13 @@ The performance targets:
 > `docs/specs/00-slice1.md` and `docs/feature-parity.md`. When the code
 > disagrees with this file, fix one of them in the same change.
 >
-> Slice 1 architecture: the CPU tiles (`raster`) are the source of truth;
-> stamping and compositing run on the CPU per dirty tile (rayon); `gpu`
-> displays the composite. GPU stamping and compositing go behind the same
-> APIs next, verified against the CPU oracle.
+> Architecture: the CPU tiles (`raster`) are the source of truth, and
+> stamping runs on the CPU per dirty tile (rayon). Compositing runs on the
+> GPU (spec 13): `compose::program` flattens each dirty tile's layer tree
+> into a program, and `gpu::compose` interprets it in a compute pass over
+> resident tile atlases. Tiles that the GPU path can't handle yet fall back
+> to the CPU compositor, which is also the oracle. GPU stamping goes behind
+> the same APIs next.
 
 ---
 
