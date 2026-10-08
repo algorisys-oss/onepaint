@@ -557,6 +557,13 @@ impl Session {
         self.history_changed();
     }
 
+    /// Take the tool, brushes, colour and painting options of another session
+    /// (switching drawings keeps what you were painting with).
+    pub fn carry_tools_from(&mut self, other: &Session) {
+        (self.tool, self.brush, self.eraser, self.color, self.paint) =
+            (other.tool, other.brush.clone(), other.eraser.clone(), other.color, other.paint);
+    }
+
     pub fn doc(&self) -> &Document {
         &self.doc
     }

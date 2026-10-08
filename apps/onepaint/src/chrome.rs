@@ -127,8 +127,21 @@ fn top_bar(app: &mut App, ctx: &egui::Context) {
                 }
                 ui.label(RichText::new("onepaint").font(theme::semibold(14.0)).color(t.fg));
                 widgets::vline(ui, 24.0);
-                let name = format!("{}{}", app.session.doc().name, if app.dirty() { " •" } else { "" });
-                ui.label(RichText::new(name).color(t.fg_muted));
+                // One chip per open drawing (Ctrl+Alt+← / → to switch).
+                let titles = app.tab_titles();
+                let many = titles.len() > 1;
+                for (i, (name, dirty)) in titles.into_iter().enumerate() {
+                    let active = i == app.active_tab;
+                    let label = format!("{name}{}", if dirty { " •" } else { "" });
+                    let text = RichText::new(label).color(if active { t.fg } else { t.fg_muted });
+                    let r = ui.add(egui::Button::new(text).selected(active && many).frame(many));
+                    if r.clicked() {
+                        app.switch_tab(i);
+                    }
+                    if active && many && icons::button(ui, "x", 18.0, false, "Close drawing").clicked() {
+                        app.request(crate::Pending::CloseTab, ui.ctx());
+                    }
+                }
                 ui.add_space(4.0);
             });
         });

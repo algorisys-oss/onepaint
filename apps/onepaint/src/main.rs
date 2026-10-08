@@ -88,9 +88,49 @@ pub enum Pending {
     New(u32, u32),
     Open,
     Close,
+    /// Close the active drawing's tab.
+    CloseTab,
+}
+
+/// A drawing open in a background tab.
+pub struct DocSlot {
+    session: Session,
+    canvas: Canvas,
+    path: Option<PathBuf>,
+    saved_history_len: Option<usize>,
+    playback: timeline::Playback,
+    replaying: Option<(Vec<onepaint_engine::recording::RecEvent>, usize)>,
+    thumbs: thumbs::Thumbs,
+    xform_layer: Option<String>,
+}
+
+impl DocSlot {
+    fn blank(w: u32, h: u32) -> Self {
+        Self {
+            session: Session::new(w, h, Some(Rgba::WHITE)),
+            canvas: Canvas::new([w, h]),
+            path: None,
+            saved_history_len: Some(0),
+            playback: Default::default(),
+            replaying: None,
+            thumbs: Default::default(),
+            xform_layer: None,
+        }
+    }
+
+    fn name(&self) -> &str {
+        &self.session.doc().name
+    }
+
+    fn dirty(&self) -> bool {
+        self.saved_history_len != Some(self.session.history_len())
+    }
 }
 
 pub struct App {
+    /// Open drawings; the active one's slot is `None` (its state lives in the fields below).
+    pub tabs: Vec<Option<DocSlot>>,
+    pub active_tab: usize,
     pub session: Session,
     pub canvas: Canvas,
     pub theme: ThemeKind,
@@ -157,6 +197,8 @@ impl App {
         let brush_library =
             brush_library::BrushLibrary::load(if cfg!(test) || debug.scripted() { None } else { brush_library::default_dir() });
         let mut app = Self {
+            tabs: vec![None],
+            active_tab: 0,
             session,
             canvas: Canvas::new(size),
             theme,
@@ -267,9 +309,91 @@ impl App {
         }
     }
 
+    fn swap_slot(&mut self, s: &mut DocSlot) {
+        std::mem::swap(&mut self.session, &mut s.session);
+        std::mem::swap(&mut self.canvas, &mut s.canvas);
+        std::mem::swap(&mut self.path, &mut s.path);
+        std::mem::swap(&mut self.saved_history_len, &mut s.saved_history_len);
+        std::mem::swap(&mut self.playback, &mut s.playback);
+        std::mem::swap(&mut self.replaying, &mut s.replaying);
+        std::mem::swap(&mut self.thumbs, &mut s.thumbs);
+        std::mem::swap(&mut self.xform_layer, &mut s.xform_layer);
+    }
+
+    /// Bring tab `i` to the front, keeping the current tools.
+    pub fn switch_tab(&mut self, i: usize) {
+        if i == self.active_tab || i >= self.tabs.len() {
+            return;
+        }
+        let _ = self.session.execute(Command::CommitTransform);
+        let Some(mut s) = self.tabs[i].take() else { return };
+        s.session.carry_tools_from(&self.session);
+        self.swap_slot(&mut s);
+        self.tabs[self.active_tab] = Some(s);
+        self.active_tab = i;
+        self.popover = None;
+    }
+
+    /// Open a blank tab after the current one and switch to it.
+    pub fn new_tab(&mut self) {
+        let _ = self.session.execute(Command::CommitTransform);
+        let mut s = DocSlot::blank(2048, 1536);
+        s.session.carry_tools_from(&self.session);
+        self.swap_slot(&mut s);
+        self.tabs[self.active_tab] = Some(s);
+        let at = self.active_tab + 1;
+        self.tabs.insert(at, None);
+        self.active_tab = at;
+    }
+
+    /// Close the active tab (the last one becomes a fresh drawing).
+    pub fn close_tab(&mut self) {
+        let id = self.session.doc().id.clone();
+        self.autosave.clear(&id);
+        if self.tabs.len() == 1 {
+            self.new_document(2048, 1536);
+            return;
+        }
+        self.tabs.remove(self.active_tab);
+        let i = self.active_tab.min(self.tabs.len() - 1);
+        if let Some(mut s) = self.tabs[i].take() {
+            s.session.carry_tools_from(&self.session);
+            self.swap_slot(&mut s);
+        }
+        self.active_tab = i;
+    }
+
+    /// Tab titles with their unsaved flag.
+    pub fn tab_titles(&self) -> Vec<(String, bool)> {
+        self.tabs
+            .iter()
+            .map(|t| match t {
+                Some(s) => (s.name().to_string(), s.dirty()),
+                None => (self.session.doc().name.clone(), self.dirty()),
+            })
+            .collect()
+    }
+
+    pub fn any_dirty(&self) -> bool {
+        self.dirty() || self.tabs.iter().flatten().any(DocSlot::dirty)
+    }
+
+    /// The current drawing is untouched and untitled (a new one can reuse it).
+    fn pristine(&self) -> bool {
+        self.path.is_none() && self.session.history_len() == 0 && !self.dirty()
+    }
+
     /// Run `action`, or ask first when there are unsaved changes.
     pub fn request(&mut self, action: Pending, ctx: &egui::Context) {
-        if self.dirty() {
+        // New and Open never discard: they go to a new tab unless this one is blank.
+        if matches!(action, Pending::New(..) | Pending::Open) {
+            if !self.pristine() {
+                self.new_tab();
+            }
+            return self.perform(action, ctx);
+        }
+        let dirty = if action == Pending::Close { self.any_dirty() } else { self.dirty() };
+        if dirty {
             self.pending = Some(action);
             self.popover = Some(Popover::Confirm);
         } else {
@@ -293,6 +417,7 @@ impl App {
                 self.allow_close = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
+            Pending::CloseTab => self.close_tab(),
         }
     }
 
@@ -560,6 +685,12 @@ impl App {
         }
         if sc(cmd, Key::N) {
             self.popover = Some(Popover::NewDoc);
+        }
+        if sc(cmd | Modifiers::ALT, Key::ArrowRight) && self.tabs.len() > 1 {
+            self.switch_tab((self.active_tab + 1) % self.tabs.len());
+        }
+        if sc(cmd | Modifiers::ALT, Key::ArrowLeft) && self.tabs.len() > 1 {
+            self.switch_tab((self.active_tab + self.tabs.len() - 1) % self.tabs.len());
         }
         if sc(cmd | Modifiers::SHIFT, Key::E) {
             self.popover = Some(Popover::Export);
@@ -830,7 +961,7 @@ impl eframe::App for App {
         debug::tick(self, &ctx);
         timeline::tick(self, &ctx);
         self.replay_tick(&ctx);
-        if ctx.input(|i| i.viewport().close_requested()) && self.dirty() && !self.allow_close {
+        if ctx.input(|i| i.viewport().close_requested()) && self.any_dirty() && !self.allow_close {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.request(Pending::Close, &ctx);
         }
@@ -976,25 +1107,36 @@ mod tests {
     }
 
     #[test]
-    fn unsaved_work_asks_before_new_canvas() {
+    fn new_drawings_open_in_tabs_and_closing_asks() {
         let mut h = harness();
         h.run();
         drag_stroke(&mut h, pos2(560.0, 420.0), pos2(720.0, 440.0));
         let ctx = h.ctx.clone();
         h.state_mut().request(Pending::New(800, 600), &ctx);
         h.run();
+        assert_eq!(h.state().tabs.len(), 2, "a second tab; nothing discarded");
+        assert_eq!(h.state().session.doc().width, 800);
+        assert_eq!(h.state().popover, None);
+        let titles = h.state().tab_titles();
+        assert!(titles[0].1 && !titles[1].1, "the first drawing is still unsaved: {titles:?}");
+        // Switch back: the painted drawing and its pixels return.
+        key(&mut h, egui::Key::ArrowLeft, egui::Modifiers::COMMAND | egui::Modifiers::ALT);
+        assert_eq!(h.state().active_tab, 0);
+        assert_eq!(h.state().session.doc().width, 2048);
+        assert!(h.state().dirty());
+        // Closing an unsaved tab asks first.
+        h.state_mut().request(Pending::CloseTab, &ctx);
+        h.run();
         assert_eq!(h.state().popover, Some(Popover::Confirm));
-        assert_eq!(h.state().session.doc().width, 2048, "nothing discarded yet");
         h.get_by_label("Cancel").click();
         h.run();
-        assert_eq!(h.state().pending, None);
-        assert!(h.state().dirty());
-        h.state_mut().request(Pending::New(800, 600), &ctx);
+        assert_eq!(h.state().tabs.len(), 2);
+        h.state_mut().request(Pending::CloseTab, &ctx);
         h.run();
         h.get_by_label("Discard").click();
         h.run();
+        assert_eq!(h.state().tabs.len(), 1);
         assert_eq!(h.state().session.doc().width, 800);
-        assert!(!h.state().dirty());
     }
 
     #[test]
