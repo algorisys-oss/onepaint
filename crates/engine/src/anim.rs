@@ -33,7 +33,19 @@ fn d_after() -> String {
     "#1ad940".into()
 }
 
-/// happypaint's `StoredAnimation`; unknown keys (markers, pegs…) are kept.
+/// A named point on the timeline ruler (a key pose, a beat). Markers mark
+/// moments, not drawings: retiming frames leaves them where they are.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Marker {
+    pub slot: usize,
+    pub name: String,
+    pub color: String,
+}
+
+/// Colours new markers cycle through (`animation-store.ts:62`).
+pub const MARKER_COLORS: [&str; 5] = ["#e5484d", "#f5a524", "#30a46c", "#3b82f6", "#a855f7"];
+
+/// happypaint's `StoredAnimation`; unknown keys (pegs…) are kept.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AnimSettings {
@@ -61,8 +73,55 @@ pub struct AnimSettings {
     pub onion_front: bool,
     #[serde(default)]
     pub onion_muted: Vec<i32>,
+    /// Named points on the ruler, sorted by slot.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub markers: Vec<Marker>,
+    /// Play range ends (`None` = that end of the timeline).
+    #[serde(default)]
+    pub mark_in: Option<usize>,
+    #[serde(default)]
+    pub mark_out: Option<usize>,
     #[serde(flatten)]
     pub extra: Extra,
+}
+
+impl AnimSettings {
+    /// Slots playback and range export cover (`playRange`): the marked range,
+    /// clamped and ordered, else the whole timeline.
+    pub fn play_range(&self, total: usize) -> (usize, usize) {
+        let last = total.saturating_sub(1);
+        let a = self.mark_in.map_or(0, |v| v.min(last));
+        let b = self.mark_out.map_or(last, |v| v.min(last));
+        (a.min(b), a.max(b))
+    }
+
+    pub fn has_mark_range(&self) -> bool {
+        self.mark_in.is_some() || self.mark_out.is_some()
+    }
+
+    /// Drop a marker at `slot` (`M1`, `M2`… in cycling colours); a slot
+    /// already marked is left alone.
+    pub fn add_marker(&mut self, slot: usize) {
+        if self.markers.iter().any(|m| m.slot == slot) {
+            return;
+        }
+        let n = self.markers.len();
+        self.markers.push(Marker { slot, name: format!("M{}", n + 1), color: MARKER_COLORS[n % MARKER_COLORS.len()].into() });
+        self.markers.sort_by_key(|m| m.slot);
+    }
+
+    pub fn remove_marker(&mut self, slot: usize) {
+        self.markers.retain(|m| m.slot != slot);
+    }
+
+    /// The next (`delta > 0`) or previous marker's slot from `slot`, if any.
+    pub fn marker_from(&self, slot: usize, delta: i32) -> Option<usize> {
+        if delta > 0 {
+            self.markers.iter().find(|m| m.slot > slot).map(|m| m.slot)
+        } else {
+            self.markers.iter().rev().find(|m| m.slot < slot).map(|m| m.slot)
+        }
+    }
 }
 
 impl Default for AnimSettings {
@@ -503,18 +562,21 @@ impl Session {
         onepaint_formats::flatten_to_srgb8(&flat)
     }
 
-    /// Every timeline slot as RGBA8 (holds expanded).
-    pub fn render_all_slots(&self, background: Option<Rgba>) -> Vec<Vec<u8>> {
-        (0..self.anim_total_slots().max(1)).map(|s| self.render_slot_rgba8(s, background)).collect()
+    /// Every timeline slot as RGBA8 (holds expanded); with `range_only`, just
+    /// the marked play range when one is set (`buildFrameSource`).
+    pub fn render_all_slots(&self, background: Option<Rgba>, range_only: bool) -> Vec<Vec<u8>> {
+        let total = self.anim_total_slots().max(1);
+        let (lo, hi) = if range_only && self.anim.has_mark_range() { self.anim.play_range(total) } else { (0, total - 1) };
+        (lo..=hi).map(|s| self.render_slot_rgba8(s, background)).collect()
     }
 
-    pub fn export_gif(&self, background: Option<Rgba>) -> Result<Vec<u8>, EngineError> {
-        let frames = self.render_all_slots(background);
+    pub fn export_gif(&self, background: Option<Rgba>, range_only: bool) -> Result<Vec<u8>, EngineError> {
+        let frames = self.render_all_slots(background, range_only);
         Ok(onepaint_formats::encode_gif(self.doc.width, self.doc.height, &frames, self.anim.fps)?)
     }
 
-    pub fn export_png_sequence(&self, background: Option<Rgba>) -> Result<Vec<u8>, EngineError> {
-        let frames = self.render_all_slots(background);
+    pub fn export_png_sequence(&self, background: Option<Rgba>, range_only: bool) -> Result<Vec<u8>, EngineError> {
+        let frames = self.render_all_slots(background, range_only);
         let mut files = Vec::new();
         for (i, f) in frames.iter().enumerate() {
             files.push((format!("frame_{:04}.png", i + 1), onepaint_formats::encode_png_rgba8(self.doc.width, self.doc.height, f)?));

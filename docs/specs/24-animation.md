@@ -17,7 +17,7 @@ The sources, relative to `../happypaint/`:
 
 **Document settings:** `doc.animation` = `StoredAnimation`, which is
 `{enabled, fps 12, loop loop|pingpong|once, onionEnabled true, onionBefore 1, onionAfter 1, onionOpacity .35, onionTint true, onionColorBefore #ff2626, onionColorAfter #1ad940, onionFront false, onionMuted []}`.
-Unknown keys (markers, pegs, marks) are preserved. The settings are written
+Markers and the play range (`markers`, `markIn`, `markOut`) are typed. Other unknown keys (pegs) are preserved. The settings are written
 once animation has been enabled.
 
 **Flipbook** (no track groups):
@@ -98,3 +98,21 @@ built yet (see divergences).
 - The settings and node fields round-trip through `.happypaint`.
 - GIF export decodes with the right frame count (holds expanded) and delay.
   PNG-zip has one PNG per slot.
+
+## Markers and play range (`animation-store.ts:525-590`)
+- **Markers:** `{slot, name, color}` on the ruler, sorted by slot. They
+  stay put when frames are retimed.
+  - Shift+M adds `M<n>` at the playhead in the next of five colours. A slot
+    that is already marked is left alone.
+  - Alt+, and Alt+. jump to the previous and next marker.
+  - The timeline's marker chips jump on click and are removed on
+    right-click.
+- **Play range:**
+  - Shift+I and Shift+O, or the timeline's In and Out buttons, set
+    `markIn` and `markOut`. The range is clamped to the timeline and
+    ordered.
+  - Playback steps inside it. Play from outside it, or at the end of a
+    play-once, starts at the in-point.
+  - "Clear range" removes it.
+- **Export:** "Export marked range (GIF / PNG .zip)" exports just the range.
+- **Not yet:** renaming and recolouring markers.

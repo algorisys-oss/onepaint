@@ -134,17 +134,21 @@ fn settings_round_trip_and_export() {
     let mut s = flipbook();
     enable(&mut s, |a| a.fps = 8.0);
     let mut a = s.anim_settings().clone();
-    a.extra.insert("markers".into(), serde_json::json!([{"slot": 1, "name": "key", "color": "#e5484d"}]));
+    a.add_marker(1);
+    a.markers[0].name = "key".into();
+    (a.mark_in, a.mark_out) = (Some(2), Some(1));
     s.execute(Command::SetAnimation { settings: Box::new(a) }).unwrap();
     let bytes = s.save_happypaint().unwrap();
     let mut t = Session::new(4, 4, None);
     t.open_happypaint(&bytes).unwrap();
     assert!(t.anim_settings().enabled);
     assert_eq!(t.anim_settings().fps, 8.0);
-    assert_eq!(t.anim_settings().extra["markers"][0]["name"], "key");
+    let a = t.anim_settings();
+    assert_eq!((a.markers[0].slot, a.markers[0].name.as_str(), a.markers[0].color.as_str()), (1, "key", "#e5484d"));
+    assert_eq!(a.play_range(4), (1, 2), "in/out order themselves");
     assert_eq!(t.anim_total_slots(), 4, "holds survive");
 
-    let gif = t.export_gif(Some(Rgba::WHITE)).unwrap();
+    let gif = t.export_gif(Some(Rgba::WHITE), false).unwrap();
     let dec = image::codecs::gif::GifDecoder::new(std::io::Cursor::new(&gif)).unwrap();
     use image::AnimationDecoder;
     let frames: Vec<_> = dec.into_frames().collect::<Result<_, _>>().unwrap();
@@ -152,10 +156,32 @@ fn settings_round_trip_and_export() {
     let (n, d) = frames[0].delay().numer_denom_ms();
     assert_eq!(n / d, 130, "round(100/8) cs");
     assert!(frames[0].buffer().get_pixel(2, 2)[0] > 250);
-    let zip = t.export_png_sequence(None).unwrap();
+    assert_eq!(t.render_all_slots(None, true).len(), 2, "range export: the marked slots only");
+    let zip = t.export_png_sequence(None, false).unwrap();
     let files = onepaint_formats::zip::read_zip(&zip).unwrap();
     assert_eq!(
         files.iter().map(|f| f.0.as_str()).collect::<Vec<_>>(),
         ["frame_0001.png", "frame_0002.png", "frame_0003.png", "frame_0004.png"]
     );
+}
+
+#[test]
+fn markers_and_the_play_range() {
+    let mut a = AnimSettings::default();
+    assert_eq!(a.play_range(10), (0, 9));
+    assert!(!a.has_mark_range());
+    a.mark_out = Some(40);
+    assert_eq!(a.play_range(10), (0, 9), "clamped to the timeline");
+    a.mark_in = Some(3);
+    assert_eq!(a.play_range(10), (3, 9));
+    for slot in [7, 2, 7] {
+        a.add_marker(slot);
+    }
+    assert_eq!(a.markers.iter().map(|m| (m.slot, m.name.as_str())).collect::<Vec<_>>(), [(2, "M2"), (7, "M1")]);
+    assert_eq!((a.marker_from(2, 1), a.marker_from(7, 1), a.marker_from(7, -1), a.marker_from(2, -1)), (Some(7), None, Some(2), None));
+    a.remove_marker(7);
+    assert_eq!(a.markers.len(), 1);
+    // happypaint's stored shape.
+    let v = serde_json::to_value(&a).unwrap();
+    assert_eq!((v["markIn"].as_u64(), v["markers"][0]["color"].as_str()), (Some(3), Some("#f5a524")));
 }

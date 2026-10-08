@@ -17,7 +17,7 @@ pub struct Playback {
     dir: i32,
 }
 
-fn set_settings(app: &mut App, f: impl FnOnce(&mut AnimSettings)) {
+pub(crate) fn set_settings(app: &mut App, f: impl FnOnce(&mut AnimSettings)) {
     let mut s = app.session.anim_settings().clone();
     f(&mut s);
     let _ = app.session.execute(Command::SetAnimation { settings: Box::new(s) });
@@ -34,6 +34,17 @@ pub fn toggle(app: &mut App) {
 pub fn set_playing(app: &mut App, playing: bool) {
     app.playback = Playback { playing, last: None, acc: 0.0, dir: 1 };
     let _ = app.session.execute(Command::SetAnimPlaying { playing });
+    if !playing {
+        return;
+    }
+    // Starting outside the marked range, or at the end of a play-once, begins
+    // at the in-point (`setPlaying`).
+    let s = app.session.anim_settings();
+    let (lo, hi) = s.play_range(app.session.anim_total_slots());
+    let slot = app.session.anim_slot();
+    if slot < lo || slot > hi || (s.loop_mode == LoopMode::Once && slot >= hi) {
+        let _ = app.session.execute(Command::SetAnimSlot { slot: lo });
+    }
 }
 
 pub fn step(app: &mut App, delta: i32) {
@@ -65,7 +76,8 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
     let mut moved = false;
     while app.playback.acc >= period {
         app.playback.acc -= period;
-        let (next, dir, done) = step_slot(slot, 0, total - 1, s.loop_mode, app.playback.dir);
+        let (lo, hi) = s.play_range(total);
+        let (next, dir, done) = step_slot(slot, lo, hi, s.loop_mode, app.playback.dir);
         (slot, app.playback.dir) = (next, dir);
         moved = true;
         if done {
@@ -165,6 +177,7 @@ pub fn show(app: &mut App, ctx: &egui::Context, screen: egui::Rect) {
                         app.settings.save();
                     }
                 });
+                markers_row(app, ui);
                 ui.add_space(4.0);
                 egui::ScrollArea::horizontal().id_salt("frames").max_width(ui.available_width()).show(ui, |ui| {
                     ui.horizontal(|ui| frames_strip(app, ui));
@@ -268,6 +281,45 @@ pub fn readout(metric: TimelineMetric, slot: usize, total: usize, ordinal: usize
         }
         TimelineMetric::Frames => format!("{ordinal}/{frames} · slot {}/{}", slot + 1, total),
     }
+}
+
+/// Markers and the play range: add a marker at the playhead, set in / out,
+/// clear the range; marker chips jump on click and go on right-click.
+fn markers_row(app: &mut App, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    let a = app.session.anim_settings().clone();
+    let slot = app.session.anim_slot();
+    ui.horizontal_wrapped(|ui| {
+        let small = |s: &str| RichText::new(s).font(theme::medium(11.0));
+        if ui.add(egui::Button::new(small("+ Marker"))).on_hover_text("Add a marker here (Shift+M)").clicked() {
+            set_settings(app, |x| x.add_marker(slot));
+        }
+        if ui.add(egui::Button::new(small("In"))).on_hover_text("Play range: mark in (Shift+I)").clicked() {
+            set_settings(app, |x| x.mark_in = Some(slot));
+        }
+        if ui.add(egui::Button::new(small("Out"))).on_hover_text("Play range: mark out (Shift+O)").clicked() {
+            set_settings(app, |x| x.mark_out = Some(slot));
+        }
+        if a.has_mark_range() {
+            let (lo, hi) = a.play_range(app.session.anim_total_slots());
+            ui.label(small(&format!("range {}–{}", lo + 1, hi + 1)).color(t.accent));
+            if ui.add(egui::Button::new(small("Clear range"))).clicked() {
+                set_settings(app, |x| (x.mark_in, x.mark_out) = (None, None));
+            }
+        }
+        for m in &a.markers {
+            let c = onepaint_color::Rgba::from_hex(&m.color).map_or(t.accent, widgets::to_color32);
+            let label = RichText::new(format!("◆ {}", m.name)).font(theme::medium(11.0)).color(if m.slot == slot { t.fg } else { c });
+            let r = ui.add(egui::Button::new(label).frame(false)).on_hover_text(format!("Slot {} · right-click to remove", m.slot + 1));
+            if r.clicked() {
+                let _ = app.session.execute(Command::SetAnimSlot { slot: m.slot });
+            }
+            if r.secondary_clicked() {
+                let s = m.slot;
+                set_settings(app, |x| x.remove_marker(s));
+            }
+        }
+    });
 }
 
 #[cfg(test)]

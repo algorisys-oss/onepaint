@@ -109,6 +109,11 @@ actions! {
     AnimLastFrame = "anim-last-frame", "Last frame", Animation, [">"];
     AnimAddFrame = "anim-add-frame", "Add frame after the current one", Animation, ["n"];
     AnimToggleOnion = "anim-toggle-onion", "Onion skins on/off", Animation, ["o"];
+    AnimAddMarker = "anim-add-marker", "Add a marker here", Animation, ["shift+m"];
+    AnimPrevMarker = "anim-prev-marker", "Previous marker", Animation, ["alt+,"];
+    AnimNextMarker = "anim-next-marker", "Next marker", Animation, ["alt+."];
+    AnimMarkIn = "anim-mark-in", "Play range: mark in", Animation, ["shift+i"];
+    AnimMarkOut = "anim-mark-out", "Play range: mark out", Animation, ["shift+o"];
 }
 
 impl Action {

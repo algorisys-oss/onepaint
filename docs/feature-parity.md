@@ -134,7 +134,7 @@ screentone are added as live layers.
   - three-finger swipe down for the copy/paste menu
   - four-finger tap to toggle the UI
 - [x] Palm rejection while a pen is active (fingers ignored for 1.5 s after pen input)
-- [~] Full keyboard shortcuts (the happypaint keybindings map) (all default bindings except markers and mark in/out; no rebinding UI yet)
+- [x] Full keyboard shortcuts (the happypaint keybindings map), rebindable in Settings (spec 34)
 
 ## History and recording
 - [x] Undo and redo with tile snapshots and pixel deltas (copy-on-write tile snapshots)
@@ -142,7 +142,7 @@ screentone are added as live layers.
 - [~] Export a timelapse as video (animated GIF; no MP4)
 
 ## Animation
-- [~] Animation Assist: flipbook frames, holds, background/foreground, onion skins (tint, front, muted), playback (loop/ping-pong/once), timeline strip; exposure-sheet tracks composite and onion per track, but the track grid UI, markers and out-of-pegs are not built
+- [~] Animation Assist: flipbook frames, holds, background/foreground, onion skins (tint, front, muted), playback (loop/ping-pong/once), timeline strip; exposure-sheet tracks composite and onion per track, timeline markers and a play range (playback and range export); the track grid UI and out-of-pegs are not built
 - [x] Frame export (animated GIF, PNG sequence zip)
 
 ## Color

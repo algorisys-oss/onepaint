@@ -716,12 +716,22 @@ impl App {
 
     /// Animated GIF or a zip of PNG frames (white behind GIF frames).
     pub fn export_animation(&mut self, gif: bool, now: f64) {
+        self.export_animation_impl(gif, false, now);
+    }
+
+    /// Export only the marked play range.
+    pub fn export_animation_range(&mut self, gif: bool, now: f64) {
+        self.export_animation_impl(gif, true, now);
+    }
+
+    fn export_animation_impl(&mut self, gif: bool, range_only: bool, now: f64) {
         let name = self.session.doc().name.clone();
         let (filter, ext) = if gif { ("Animated GIF", "gif") } else { ("PNG sequence", "zip") };
         let Some(path) = rfd::FileDialog::new().add_filter(filter, &[ext]).set_file_name(format!("{name}.{ext}")).save_file() else {
             return;
         };
-        let bytes = if gif { self.session.export_gif(Some(Rgba::WHITE)) } else { self.session.export_png_sequence(None) };
+        let bytes =
+            if gif { self.session.export_gif(Some(Rgba::WHITE), range_only) } else { self.session.export_png_sequence(None, range_only) };
         match bytes.map_err(|e| e.to_string()).and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string())) {
             Ok(()) => self.notify(format!("Exported {}", path.display()), now),
             Err(e) => self.notify(format!("Export failed: {e}"), now),
@@ -1027,6 +1037,25 @@ impl App {
                 if on(Action::AnimLastFrame) {
                     let last = self.session.anim_total_slots().saturating_sub(1);
                     let _ = self.session.execute(Command::SetAnimSlot { slot: last });
+                }
+                if on(Action::AnimAddMarker) {
+                    let slot = self.session.anim_slot();
+                    timeline::set_settings(self, |a| a.add_marker(slot));
+                }
+                for (action, delta) in [(Action::AnimPrevMarker, -1), (Action::AnimNextMarker, 1)] {
+                    if on(action)
+                        && let Some(slot) = self.session.anim_settings().marker_from(self.session.anim_slot(), delta)
+                    {
+                        let _ = self.session.execute(Command::SetAnimSlot { slot });
+                    }
+                }
+                if on(Action::AnimMarkIn) {
+                    let slot = self.session.anim_slot();
+                    timeline::set_settings(self, |a| a.mark_in = Some(slot));
+                }
+                if on(Action::AnimMarkOut) {
+                    let slot = self.session.anim_slot();
+                    timeline::set_settings(self, |a| a.mark_out = Some(slot));
                 }
             }
             if on(Action::ToolPan) {
@@ -2086,6 +2115,47 @@ mod tests {
         h.run();
         assert_eq!(h.state().settings.timeline_metric, settings::TimelineMetric::Seconds);
         assert!(h.query_by_label("timeline metric: seconds").is_some());
+    }
+
+    #[test]
+    fn markers_and_the_play_range_from_the_keyboard() {
+        let mut h = harness();
+        h.run();
+        h.get_by_label("Animation").click();
+        h.run();
+        for _ in 0..3 {
+            h.get_by_label("Add frame").click();
+            h.run();
+        }
+        let total = h.state().session.anim_total_slots();
+        assert!(total >= 4);
+        let goto = |h: &mut Harness<'_, App>, slot: usize| {
+            let _ = h.state_mut().session.execute(Command::SetAnimSlot { slot });
+        };
+        goto(&mut h, 1);
+        key(&mut h, egui::Key::M, egui::Modifiers::SHIFT);
+        key(&mut h, egui::Key::I, egui::Modifiers::SHIFT);
+        goto(&mut h, 2);
+        key(&mut h, egui::Key::O, egui::Modifiers::SHIFT);
+        let a = h.state().session.anim_settings().clone();
+        assert_eq!((a.markers.len(), a.mark_in, a.mark_out), (1, Some(1), Some(2)));
+        // Playing from outside the range starts at the in-point and stays in it.
+        goto(&mut h, total - 1);
+        timeline::set_playing(h.state_mut(), true);
+        assert_eq!(h.state().session.anim_slot(), 1);
+        for _ in 0..20 {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(15));
+            assert!((1..=2).contains(&h.state().session.anim_slot()));
+        }
+        timeline::set_playing(h.state_mut(), false);
+        // Alt+, jumps back to the marker.
+        goto(&mut h, total - 1);
+        key(&mut h, egui::Key::Comma, egui::Modifiers::ALT);
+        assert_eq!(h.state().session.anim_slot(), 1);
+        h.get_by_label("Clear range").click();
+        h.run();
+        assert!(!h.state().session.anim_settings().has_mark_range());
     }
 
     #[test]
