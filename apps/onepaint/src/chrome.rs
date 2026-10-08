@@ -479,7 +479,10 @@ fn brushes(app: &mut App, ui: &mut Ui) {
     let eraser = app.session.tool() == Tool::Eraser;
     if !eraser {
         // Category chips; the list shows one category at a time (124 presets).
-        let cats: Vec<String> = onepaint_brush::categories().into_iter().filter(|c| c != "Eraser").collect();
+        let mut cats: Vec<String> = onepaint_brush::categories().into_iter().filter(|c| c != "Eraser").collect();
+        if !onepaint_brush::user_presets().is_empty() {
+            cats.push(onepaint_brush::IMPORTED_CATEGORY.into());
+        }
         if app.brush_category.is_empty() || !cats.contains(&app.brush_category) {
             app.brush_category = app.session.current_brush().category.clone();
             if !cats.contains(&app.brush_category) {
@@ -499,12 +502,16 @@ fn brushes(app: &mut App, ui: &mut Ui) {
         ui.add_space(4.0);
     }
     let category = app.brush_category.clone();
+    let imported = !eraser && category == onepaint_brush::IMPORTED_CATEGORY;
+    let list = if imported { onepaint_brush::user_presets() } else { onepaint_brush::presets() };
+    let mut delete = None;
     // Fit the list below the top bar so the popover never overlaps it.
-    let room = (ui.ctx().content_rect().height() - ui.cursor().top() - 230.0).clamp(120.0, 360.0);
+    let room = (ui.ctx().content_rect().height() - ui.cursor().top() - 260.0).clamp(120.0, 360.0);
     egui::ScrollArea::vertical().max_height(room).show(ui, |ui| {
-        for p in onepaint_brush::presets().into_iter().filter(|p| if eraser { p.is_eraser() } else { p.category == category }) {
+        for p in list.into_iter().filter(|p| if eraser { p.is_eraser() } else { p.category == category }) {
             let sel = p.id == current;
             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 62.0), Sense::click());
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, sel, &p.name));
             if sel {
                 ui.painter().rect_filled(rect, t.radius, t.accent_soft);
             } else if resp.hovered() {
@@ -524,8 +531,26 @@ fn brushes(app: &mut App, ui: &mut Ui) {
             if resp.clicked() {
                 let _ = app.session.execute(Command::SetBrush { preset_id: p.id.clone() });
             }
+            if imported {
+                resp.context_menu(|ui| {
+                    if ui.button("Delete brush").clicked() {
+                        delete = Some(p.clone());
+                        ui.close();
+                    }
+                });
+            }
         }
     });
+    if let Some(p) = delete {
+        let now = ui.input(|i| i.time);
+        match app.brush_library.remove(&p.id) {
+            Ok(_) => app.notify(format!("Deleted {}", p.name), now),
+            Err(e) => app.notify(format!("Couldn't save the brush library: {e}"), now),
+        }
+    }
+    if !eraser {
+        brush_files(app, ui);
+    }
     widgets::hairline(ui);
     let b = app.session.current_brush().clone();
     let mut size = b.size as f32;
@@ -540,6 +565,44 @@ fn brushes(app: &mut App, ui: &mut Ui) {
     if widgets::slider_row(ui, "Flow", &mut flow, 0.01..=1.0, |v| format!("{:.0}%", v * 100.0)).changed() {
         let _ = app.session.execute(Command::SetBrushFlow { flow: flow as f64 });
     }
+}
+
+/// Import brush files and export the current brush (spec 23).
+fn brush_files(app: &mut App, ui: &mut Ui) {
+    let now = ui.input(|i| i.time);
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        if widgets::secondary_button(ui, "Import brushes…", 160.0).clicked()
+            && let Some(path) = rfd::FileDialog::new().add_filter("Brushes", &onepaint_formats::brushes::BRUSH_EXTENSIONS).pick_file()
+        {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("brushes").to_string();
+            match std::fs::read(&path).map_err(|e| e.to_string()).and_then(|b| app.brush_library.import(&name, &b)) {
+                Ok(imp) => {
+                    if imp.brushes > 0 {
+                        app.brush_category = onepaint_brush::IMPORTED_CATEGORY.into();
+                    }
+                    app.notify(crate::brush_library::summary(&imp), now);
+                }
+                Err(e) => app.notify(format!("Couldn't import: {e}"), now),
+            }
+        }
+        if widgets::secondary_button(ui, "Export brush…", 160.0).clicked() {
+            let b = app.session.current_brush().clone();
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("happypaint brush", &["happybrush"])
+                .set_file_name(format!("{}.happybrush", b.name))
+                .save_file()
+            {
+                match onepaint_formats::brushes::export_happybrush(&b)
+                    .map_err(|e| e.to_string())
+                    .and_then(|bytes| std::fs::write(&path, bytes).map_err(|e| e.to_string()))
+                {
+                    Ok(()) => app.notify(format!("Exported {}", path.display()), now),
+                    Err(e) => app.notify(format!("Export failed: {e}"), now),
+                }
+            }
+        }
+    });
 }
 
 fn color(app: &mut App, ui: &mut Ui) {

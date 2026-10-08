@@ -153,7 +153,9 @@ grep across both repos.
 - Keep modules small and single-purpose. Prefer composition. No file
   should exceed about 1,500 lines (happypaint's `paint-engine.ts` shows why).
 - Domain crates are **pure and deterministic**: no globals, no wall-clock
-  reads, no I/O except in `formats` and `cloud`.
+  reads, no I/O except in `formats` and `cloud`. The one exception is
+  `brush`'s tip cache and user-brush registry (imported presets, tips and
+  grains; spec 23), which `preset()`, `tip_for()` and `grain_for()` consult.
 - Every GPU pass has a CPU reference in `compose` or `filters`, and its test
   asserts the two match within 1/255 (8-bit) or 1e-3 (float).
 - Errors: `thiserror` in libraries, `anyhow` only in `apps/*`. No `unwrap()`

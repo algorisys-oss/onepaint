@@ -164,7 +164,8 @@ fn library() -> &'static Library {
     L.get_or_init(|| serde_json::from_str(LIBRARY_JSON).unwrap_or(Library { categories: Vec::new(), presets: Vec::new() }))
 }
 
-/// Every happypaint preset (124), in happypaint's order.
+/// Every built-in happypaint preset (124), in happypaint's order.
+/// Imported presets are in `user_presets()`.
 pub fn presets() -> Vec<BrushPreset> {
     library().presets.clone()
 }
@@ -181,8 +182,9 @@ impl BrushPreset {
     }
 }
 
+/// A built-in preset, or an imported one from the user library.
 pub fn preset(id: &str) -> Option<BrushPreset> {
-    library().presets.iter().find(|p| p.id == id).cloned()
+    library().presets.iter().find(|p| p.id == id).cloned().or_else(|| crate::user::user_preset(id))
 }
 
 pub const DEFAULT_BRUSH: &str = "hard-round";

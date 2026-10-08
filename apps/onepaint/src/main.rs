@@ -2,6 +2,7 @@
 
 mod adjust;
 mod autosave;
+mod brush_library;
 mod canvas;
 mod chrome;
 mod clip;
@@ -131,6 +132,8 @@ pub struct App {
     pub curve_tab: usize,
     /// Category shown in the brush library.
     pub brush_category: String,
+    /// Imported brushes and where they persist.
+    pub brush_library: brush_library::BrushLibrary,
     /// A file chosen by drag-and-drop, opened once unsaved work is dealt with.
     pub open_later: Option<PathBuf>,
     allow_close: bool,
@@ -146,6 +149,9 @@ impl App {
         let size = [session.doc().width, session.doc().height];
         // Tests and scripted runs never touch the user's saved palettes.
         let palettes = palettes::Palettes::load(if cfg!(test) || debug.scripted() { None } else { palettes::default_path() });
+        // Nor the user's imported brushes.
+        let brush_library =
+            brush_library::BrushLibrary::load(if cfg!(test) || debug.scripted() { None } else { brush_library::default_dir() });
         let mut app = Self {
             session,
             canvas: Canvas::new(size),
@@ -182,6 +188,7 @@ impl App {
             recover: None,
             curve_tab: 0,
             brush_category: String::new(),
+            brush_library,
             open_later: None,
             allow_close: false,
         };

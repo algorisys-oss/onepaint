@@ -49,7 +49,7 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] Smudge and mixer brushes
 - [x] Kubelka–Munk pigment mixing (mixer reservoir and deposit, and the `pigment` blend mode)
 - [ ] Brush studio: an editor with live preview and a try-it pad
-- [ ] Import `.abr`, Procreate `.brush` and `.brushset`, and `.happybrush`
+- [x] Import `.abr`, Procreate `.brush` and `.brushset`, and `.happybrush`; export `.happybrush` (spec 23; an ABR dual brush and wet edges are kept as `maskTip` and `settle` but not painted yet, see divergence 7)
 
 ## Layers
 - [x] Add, delete, reorder, duplicate and merge
