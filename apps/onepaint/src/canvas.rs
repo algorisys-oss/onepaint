@@ -663,6 +663,26 @@ impl Canvas {
         session.stroke_extend(&pts[1..]);
     }
 
+    /// Re-stroke a polyline (resampled to ~2 px) as the live preview.
+    fn preview_points(session: &mut Session, pts: &[Pt]) {
+        session.stroke_cancel();
+        let mut path = Vec::new();
+        for w in pts.windows(2) {
+            let n = ((w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]) / 2.0).ceil().max(1.0) as usize;
+            path.extend((0..n).map(|k| {
+                let t = k as f64 / n as f64;
+                [w[0][0] + (w[1][0] - w[0][0]) * t, w[0][1] + (w[1][1] - w[0][1]) * t]
+            }));
+        }
+        path.extend(pts.last().copied());
+        if path.len() < 2 {
+            return;
+        }
+        let sp: Vec<StrokePoint> = path.iter().enumerate().map(|(i, p)| StrokePoint::at(p[0], p[1], 1.0, i as f64 * 4.0)).collect();
+        session.stroke_begin(sp[0]);
+        session.stroke_extend(&sp[1..]);
+    }
+
     fn doc_f(&self) -> [f64; 2] {
         [self.doc_size[0] as f64, self.doc_size[1] as f64]
     }
@@ -748,8 +768,14 @@ impl Canvas {
                         }
                         Drag::PerspLine { origin } => {
                             let origin = *origin;
-                            let end = onepaint_stroke::snap::hard_line_end(&self.snap_config(session), origin, d);
-                            Self::preview_shape(session, &Shape::Line { a: origin, b: end });
+                            let cfg = self.snap_config(session);
+                            match cfg.fisheye {
+                                Some(poles) => Self::preview_points(session, &onepaint_stroke::snap::hard_curve_path(&poles, origin, d)),
+                                None => {
+                                    let end = onepaint_stroke::snap::hard_line_end(&cfg, origin, d);
+                                    Self::preview_shape(session, &Shape::Line { a: origin, b: end });
+                                }
+                            }
                         }
                         Drag::Vp { index } => {
                             let index = *index;
@@ -1136,7 +1162,22 @@ impl Canvas {
             }
         }
         let p = &g.perspective;
-        if p.enabled && !p.points.is_empty() {
+        if p.enabled && p.curved && p.points.len() >= 5 {
+            let col = hex(&p.color);
+            let poles: [Pt; 5] = std::array::from_fn(|i| [p.points[i].x * w, p.points[i].y * h]);
+            for (pts, emph) in onepaint_stroke::fisheye::guide_lines(&poles, p.density, w, h) {
+                let sp: Vec<Pos2> = pts.iter().map(|q| self.to_screen(rect, *q)).collect();
+                let (c, width) = if emph { (col.gamma_multiply(0.6), 1.5) } else { (col.gamma_multiply(0.3), 1.0) };
+                painter.add(egui::Shape::line(sp, Stroke::new(width, c)));
+            }
+            for v in &p.points {
+                let c = self.to_screen(rect, [v.x * w, v.y * h]);
+                ui.painter().circle_filled(c, 9.0, col.gamma_multiply(if self.persp_editing { 0.95 } else { 0.5 }));
+                if self.persp_editing {
+                    ui.painter().circle_stroke(c, 9.0, Stroke::new(1.5, Color32::WHITE));
+                }
+            }
+        } else if p.enabled && !p.points.is_empty() {
             let col = hex(&p.color);
             let fan = (p.density as usize * 3).max(6);
             let mut border = Vec::with_capacity(fan * 4);

@@ -164,6 +164,7 @@ impl Guides {
             soft: persp && p.snap == PerspectiveSnap::Soft,
             guides: if self.snap_guides { self.lines.clone() } else { Vec::new() },
             guide_tol: GUIDE_HIT_PX / scale.max(1e-6),
+            fisheye: (persp && p.curved && p.points.len() >= 5).then(|| std::array::from_fn(|i| [p.points[i].x * w, p.points[i].y * h])),
         }
     }
 

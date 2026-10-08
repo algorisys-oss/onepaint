@@ -194,6 +194,10 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
         g.grid.size = 128.0;
         g.grid.subdivisions = 2;
         g.perspective.enabled = true;
+        if std::env::var("ONEPAINT_GUIDES").is_ok_and(|v| v == "fisheye") {
+            g.perspective.curved = true;
+            g.perspective.points = onepaint_engine::guides::perspective_preset(5);
+        }
         g.snap_hv = true;
         g.rulers = true;
         let (w, h) = (app.session.doc().width as f64, app.session.doc().height as f64);

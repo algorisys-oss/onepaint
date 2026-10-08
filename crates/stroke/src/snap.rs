@@ -26,6 +26,8 @@ pub struct SnapConfig {
     /// the nearest one within `guide_tol` doc px.
     pub guides: Vec<GuideLine>,
     pub guide_tol: f64,
+    /// Fish-eye poles (L, R, T, B, O): strokes follow arcs instead of lines.
+    pub fisheye: Option<[Pt; 5]>,
 }
 
 pub fn grid_node(p: Pt, step: f64) -> Pt {
@@ -41,7 +43,7 @@ fn unit(x: f64, y: f64) -> Option<Pt> {
 impl SnapConfig {
     /// Whether freehand strokes snap at all (hard perspective uses `hard_line_end`).
     pub fn active(&self) -> bool {
-        self.hv || self.grid_step.is_some() || (self.soft && !self.vps.is_empty()) || !self.guides.is_empty()
+        self.hv || self.grid_step.is_some() || (self.soft && (!self.vps.is_empty() || self.fisheye.is_some())) || !self.guides.is_empty()
     }
 
     pub fn candidates(&self, origin: Pt, include_vp: bool) -> Vec<Pt> {
@@ -79,6 +81,15 @@ fn project(o: Pt, dir: Pt, p: Pt) -> Pt {
     [o[0] + t * dir[0], o[1] + t * dir[1]]
 }
 
+/// Hard fish-eye: the path along the best curve from `origin` toward `cur`.
+pub fn hard_curve_path(poles: &[Pt; 5], origin: Pt, cur: Pt) -> Vec<Pt> {
+    use crate::fisheye::{pick_curve, project, sample_curve};
+    match pick_curve(poles, origin, cur) {
+        Some(c) => sample_curve(&c, origin, project(&c, cur)),
+        None => vec![origin, cur],
+    }
+}
+
 /// Hard perspective: the far end of the straight line from `origin`, on the
 /// best axis for the drag (re-chosen every move).
 pub fn hard_line_end(cfg: &SnapConfig, origin: Pt, cur: Pt) -> Pt {
@@ -97,6 +108,7 @@ pub struct Snapper {
     /// Still choosing the axis (until the drag is long enough to trust).
     choosing: bool,
     line: Option<(Pt, Pt)>,
+    curve: Option<crate::fisheye::Curve>,
 }
 
 impl Snapper {
@@ -107,7 +119,7 @@ impl Snapper {
         }
         // Grid first, then guides: a guide placed against this drawing wins.
         let origin = snap_point_to_guides(&cfg.guides, cfg.grid_step.map_or(o, |s| grid_node(o, s)), cfg.guide_tol);
-        Some(Self { cfg, origin, choosing: true, line: None })
+        Some(Self { cfg, origin, choosing: true, line: None, curve: None })
     }
 
     /// The (grid-snapped) stroke origin.
@@ -121,7 +133,9 @@ impl Snapper {
             let len = dx.hypot(dy);
             if len >= SNAP_READ_MIN {
                 let d = [dx / len, dy / len];
-                if let Some(axis) = pick_axis(&self.cfg.candidates(self.origin, self.cfg.soft), d) {
+                if let (true, Some(poles)) = (self.cfg.soft, self.cfg.fisheye.as_ref()) {
+                    self.curve = crate::fisheye::pick_curve(poles, self.origin, p);
+                } else if let Some(axis) = pick_axis(&self.cfg.candidates(self.origin, self.cfg.soft), d) {
                     self.line = Some((self.origin, axis));
                 }
                 if len >= SNAP_COMMIT {
@@ -129,9 +143,12 @@ impl Snapper {
                 }
             }
         }
-        let Some((o, dir)) = self.line else { return p };
-        let proj = project(o, dir, p);
-        if self.cfg.soft && !self.cfg.vps.is_empty() {
+        let proj = match (&self.curve, self.line) {
+            (Some(c), _) => crate::fisheye::project(c, p),
+            (None, Some((o, dir))) => project(o, dir, p),
+            _ => return p,
+        };
+        if self.cfg.soft && (!self.cfg.vps.is_empty() || self.cfg.fisheye.is_some()) {
             return [p[0] + (proj[0] - p[0]) * SOFT_SNAP_STRENGTH, p[1] + (proj[1] - p[1]) * SOFT_SNAP_STRENGTH];
         }
         proj

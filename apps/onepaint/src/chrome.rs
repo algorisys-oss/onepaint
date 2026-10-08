@@ -1905,6 +1905,12 @@ fn guides(app: &mut App, ui: &mut Ui) {
             if let Some(i) = segmented(ui, &["No snap", "Soft", "Hard line"], cur) {
                 g.perspective.snap = snaps[i];
             }
+            if widgets::toggle(ui, &mut g.perspective.curved, "Fish-eye (5-point curvilinear)").changed()
+                && g.perspective.curved
+                && g.perspective.points.len() < 5
+            {
+                g.perspective.points = perspective_preset(5);
+            }
             let mut d = g.perspective.density as f32;
             if widgets::slider_row(ui, "Density", &mut d, 2.0..=32.0, |v| format!("{v:.0}")).changed() {
                 g.perspective.density = d.round() as u32;

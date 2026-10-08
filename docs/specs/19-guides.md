@@ -137,3 +137,17 @@ candidate.
   the canvas and in the status bar.
 - It stays until the next measurement or Escape.
 - Escape leaves every edit mode.
+
+## Fish-eye (slice 20)
+The source is `guides-overlay.ts:138-252` and `paint-canvas.tsx` (fish-eye snapping).
+
+- **Poles:** the 5-point preset gives L, R, T, B and O.
+- **Overlay:** `density` arcs per side through L/R and through T/B, bowed
+  evenly across `half the diagonal`; `max(4, 2*density)` radial spokes out to
+  the field-of-view radius (the mean pole distance); and an emphasised
+  equator, meridian and field-of-view circle.
+- **Snapping:** from the stroke's anchor, the drag direction picks the arc
+  through L/R, the arc through T/B, or the radial line toward O, by the best
+  tangent match.
+  - Soft mode pulls 70% onto the curve.
+  - Hard mode re-strokes the arc from the origin to the cursor's projection.

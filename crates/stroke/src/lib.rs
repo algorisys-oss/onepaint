@@ -5,6 +5,7 @@
 //! `engine/brush/dynamics.ts` and `engine/util/rng.ts`; see `docs/specs/03-brush-stroke.md`.
 
 pub mod bezier;
+pub mod fisheye;
 pub mod guide_lines;
 pub mod shape;
 pub mod snap;

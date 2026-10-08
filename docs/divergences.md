@@ -22,7 +22,6 @@ short by fixing entries, not by growing it.
 | 15 | Pattern fill | Built-in patterns only, sampled bilinearly with repeat | Also imported `patternImage` PNGs; mipmapped sampling | The image needs a decoder in `formats` and mips in `gpu`. Until then an imported pattern falls back to the built-in. |
 | 16 | Screentone | `fwidth` is estimated from neighbouring doc pixels; never flattened for preview | GPU `fwidth`; preview flattens unresolvable dots to grey | The flattening is preview-only and needs the view scale, so it comes with the GPU canvas. Export output already matches. |
 | 17 | `sin` hashes (glitch, wind, tone sand) | CPU f32 `sin` | GPU `sin` | Large arguments differ between GPUs too. The CPU stays the oracle for the wgpu port. |
-| 18 | Fish-eye (curved 5-point) perspective | The `curved` flag is preserved in files; guides draw and snap straight | Arcs through the poles, arc snapping | Port `drawFisheyeLines` and `pickFisheyeCurve`. |
 | 19 | Rulers on a rotated canvas | Hidden while the canvas is rotated (pinned rulers only) | A document-attached tick band that turns with the artwork | Draw the doc-edge band when `rulers_pinned` is false. |
 | 20 | Animation video export | GIF and PNG-sequence zip only | Also MP4/WebM via WebCodecs | Needs a native encoder (openh264 or ffmpeg); a dependency decision for the owner. |
 | 21 | Exposure-sheet editing | Tracks render, play and onion correctly, but the timeline shows the active track as a strip | A row-per-track grid with drag retiming, markers and out-of-pegs | UI work only; the model is complete. |

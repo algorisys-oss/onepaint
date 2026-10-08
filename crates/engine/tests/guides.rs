@@ -102,3 +102,20 @@ fn guide_line_edits_are_one_undo_step() {
     .unwrap();
     assert!((s.guides().lines[0].angle - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
 }
+
+#[test]
+fn fisheye_soft_snapping_follows_an_arc() {
+    use onepaint_engine::guides::{PerspectiveSnap, perspective_preset};
+    let mut g = Guides::default();
+    g.perspective.enabled = true;
+    g.perspective.curved = true;
+    g.perspective.points = perspective_preset(5);
+    g.perspective.snap = PerspectiveSnap::Soft;
+    let cfg = g.snap_config(1000, 800, 1.0, false);
+    assert!(cfg.fisheye.is_some() && cfg.active());
+    // Above the centre a horizontal drag bends along the L–R arc (it sags toward y=400 at the ends).
+    let mut s = onepaint_stroke::snap::Snapper::arm(cfg, [500.0, 100.0]).unwrap();
+    s.apply([530.0, 100.0]);
+    let far = s.apply([900.0, 100.0]);
+    assert!(far[1] > 100.0 + 5.0, "pulled down along the arc: {far:?}");
+}

@@ -109,7 +109,7 @@ screentone are added as live layers.
 - [~] Pan, zoom and rotate at 60fps or better on large documents (pan, zoom and rotate all work; not yet measured on 8k documents)
 - [x] Grid (size, subdivisions, snap to grid)
 - [x] Symmetry guides (axis/spoke overlay)
-- [~] 1–5-point perspective with stroke snapping (soft and hard; vanishing-point editing; fish-eye curved mode still to do)
+- [x] 1–5-point perspective with stroke snapping (soft and hard, vanishing-point editing, 5-point fish-eye arcs)
 - [x] Horizontal/vertical snap
 - [x] Rulers, guide lines (drag from rulers, edit/swing/delete, snapping, undo) and measure
 - [x] Quick-shape: hold to straighten a stroke into a line, ellipse or polygon
