@@ -461,7 +461,7 @@ impl Canvas {
         space: bool,
         r: bool,
     ) -> Drag {
-        if button == PointerButton::Middle || space {
+        if button == PointerButton::Middle || space || (button == PointerButton::Primary && session.tool() == Tool::Hand) {
             return Drag::Pan;
         }
         if r {
@@ -569,6 +569,7 @@ impl Canvas {
                 Drag::Paint
             }
             Tool::Pen => self.pen_press(session, p, d, m, time_ms),
+            Tool::Hand => Drag::Pan,
             Tool::Gradient => {
                 session.gradient_begin();
                 let stops = self.gradient_stops(session);

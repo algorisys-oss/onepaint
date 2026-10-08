@@ -61,6 +61,8 @@ pub enum Tool {
     Mixer,
     Liquify,
     Pen,
+    /// Hand: drags pan the view.
+    Hand,
 }
 
 /// Optional layer property edits; `None` leaves a property unchanged.

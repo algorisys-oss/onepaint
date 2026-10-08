@@ -172,9 +172,9 @@ impl Session {
     /// Source-over the current colour at the selection's coverage.
     fn fill_selection(&mut self) {
         self.ensure_raster();
-        let Some(clip) = self.clip.clone() else {
-            return;
-        };
+        // No selection: fill the whole layer (Photoshop's Edit ▸ Fill).
+        let (w, h) = (self.doc.width, self.doc.height);
+        let clip = self.clip.clone().unwrap_or_else(|| Arc::new(Mask::from_vec(w, h, vec![255; (w * h) as usize])));
         let Some(l) = self.editable_active() else {
             return;
         };

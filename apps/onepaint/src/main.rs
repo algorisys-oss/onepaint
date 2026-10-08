@@ -61,6 +61,7 @@ pub enum Popover {
     Export,
     SmartFilters,
     MoveOptions,
+    Help,
 }
 
 /// What a file opens as.
@@ -627,6 +628,89 @@ impl App {
                     }
                 });
                 let _ = self.session.execute(Command::SealHistory);
+            }
+            // happypaint's keybinding map (input/keybindings.ts).
+            if sc(Modifiers::SHIFT, Key::A) {
+                timeline::toggle(self);
+            }
+            if sc(Modifiers::SHIFT, Key::Y) && self.session.guides().symmetry.is_on() {
+                self.canvas.sym_editing = !self.canvas.sym_editing;
+            }
+            if sc(Modifiers::SHIFT, Key::D) {
+                self.canvas.measuring = !self.canvas.measuring;
+                self.canvas.lines_editing = false;
+            }
+            if sc(Modifiers::ALT, Key::L) {
+                self.popover = if self.popover == Some(Popover::Layers) { None } else { Some(Popover::Layers) };
+            }
+            if sc(Modifiers::ALT, Key::B) {
+                self.popover = if self.popover == Some(Popover::Brushes) { None } else { Some(Popover::Brushes) };
+            }
+            if sc(Modifiers::SHIFT, Key::Questionmark) || sc(Modifiers::NONE, Key::Questionmark) {
+                self.popover = if self.popover == Some(Popover::Help) { None } else { Some(Popover::Help) };
+            }
+            if sc(Modifiers::NONE, Key::X) {
+                let fg = self.session.color();
+                let bg = self.canvas.options.background;
+                self.set_color(bg);
+                self.canvas.options.background = fg;
+            }
+            if sc(Modifiers::NONE, Key::D) {
+                self.set_color(Rgba::BLACK);
+                self.canvas.options.background = Rgba::WHITE;
+            }
+            if sc(cmd, Key::Backspace) {
+                let (fg, bg) = (self.session.color(), self.canvas.options.background);
+                let _ = self.session.execute(Command::SetColor { rgba: bg });
+                let _ = self.session.execute(Command::FillSelection);
+                let _ = self.session.execute(Command::SetColor { rgba: fg });
+            }
+            let centre = [self.canvas.view.view_size[0] / 2.0, self.canvas.view.view_size[1] / 2.0];
+            if sc(Modifiers::NONE, Key::Equals) || sc(Modifiers::NONE, Key::Plus) {
+                self.canvas.view.zoom_at(centre, 1.25);
+            }
+            if sc(Modifiers::NONE, Key::Minus) {
+                self.canvas.view.zoom_at(centre, 0.8);
+            }
+            if sc(Modifiers::NONE, Key::Num0) {
+                self.canvas.view.fit();
+            }
+            if sc(Modifiers::NONE, Key::Num1) {
+                self.canvas.view.actual_pixels();
+            }
+            if sc(Modifiers::NONE, Key::Num5) {
+                let r = self.canvas.view.rotation;
+                self.canvas.view.rotate_at(centre, -r);
+            }
+            if sc(cmd, Key::OpenBracket) {
+                self.canvas.view.rotate_at(centre, -15f64.to_radians());
+            }
+            if sc(cmd, Key::CloseBracket) {
+                self.canvas.view.rotate_at(centre, 15f64.to_radians());
+            }
+            if self.session.anim_settings().enabled {
+                if sc(Modifiers::NONE, Key::K) {
+                    let playing = self.playback.playing;
+                    timeline::set_playing(self, !playing);
+                }
+                if sc(Modifiers::NONE, Key::N) {
+                    let _ = self.session.execute(Command::AddFrame);
+                }
+                if sc(Modifiers::NONE, Key::O) {
+                    let mut a = self.session.anim_settings().clone();
+                    a.onion_enabled = !a.onion_enabled;
+                    let _ = self.session.execute(Command::SetAnimation { settings: Box::new(a) });
+                }
+                if sc(Modifiers::SHIFT, Key::Comma) {
+                    let _ = self.session.execute(Command::SetAnimSlot { slot: 0 });
+                }
+                if sc(Modifiers::SHIFT, Key::Period) {
+                    let last = self.session.anim_total_slots().saturating_sub(1);
+                    let _ = self.session.execute(Command::SetAnimSlot { slot: last });
+                }
+            }
+            if sc(Modifiers::NONE, Key::H) {
+                self.set_tool(Tool::Hand);
             }
             if sc(Modifiers::ALT, Key::Backspace) {
                 let _ = self.session.execute(Command::FillSelection);
@@ -1529,5 +1613,32 @@ mod tests {
         let a = app.canvas.view.screen_to_doc([400.0, 300.0]);
         assert!((adj.params.grad_ax.unwrap() as f64 - a[0] / 2048.0).abs() < 0.01);
         assert!(adj.params.grad_bx.unwrap() > adj.params.grad_ax.unwrap());
+    }
+
+    #[test]
+    fn happypaint_shortcuts() {
+        let mut h = harness();
+        h.run();
+        h.state_mut().set_color(Rgba::from_hex("#ff0000").unwrap());
+        key(&mut h, egui::Key::X, egui::Modifiers::NONE);
+        assert_eq!(h.state().session.color().to_hex(), "#ffffff", "X swaps with the background");
+        assert_eq!(h.state().canvas.options.background.to_hex(), "#ff0000");
+        key(&mut h, egui::Key::D, egui::Modifiers::NONE);
+        assert_eq!(h.state().session.color().to_hex(), "#000000");
+        let s0 = h.state().canvas.view.scale;
+        key(&mut h, egui::Key::Equals, egui::Modifiers::NONE);
+        assert!(h.state().canvas.view.scale > s0);
+        key(&mut h, egui::Key::H, egui::Modifiers::NONE);
+        assert_eq!(h.state().session.tool(), Tool::Hand);
+        let off = h.state().canvas.view.doc_to_screen([0.0, 0.0]);
+        drag_stroke(&mut h, pos2(500.0, 400.0), pos2(560.0, 400.0));
+        let moved = h.state().canvas.view.doc_to_screen([0.0, 0.0]);
+        assert!((moved[0] - off[0] - 60.0).abs() < 1.0, "hand drag pans");
+        assert_eq!(h.state().session.doc().layer(h.state().session.active()).unwrap().pixels.tile_count(), 0);
+        key(&mut h, egui::Key::Questionmark, egui::Modifiers::SHIFT);
+        h.run();
+        assert_eq!(h.state().popover, Some(Popover::Help));
+        key(&mut h, egui::Key::A, egui::Modifiers::SHIFT);
+        assert!(h.state().session.anim_settings().enabled, "Shift+A toggles animation");
     }
 }

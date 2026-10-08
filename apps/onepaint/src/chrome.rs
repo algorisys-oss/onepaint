@@ -37,6 +37,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             Popover::Guides => popover_at(ctx, "guides", anchor, Align2::RIGHT_TOP, |ui| guides(app, ui)),
             Popover::LiquifyOptions => popover_at(ctx, "liquify", anchor, Align2::RIGHT_TOP, |ui| liquify_options(app, ui)),
             Popover::PenOptions => popover_at(ctx, "pen", anchor, Align2::RIGHT_TOP, |ui| pen_options(app, ui)),
+            Popover::Help => popover_at(ctx, "help", screen.center(), Align2::CENTER_CENTER, help),
             Popover::MoveOptions => popover_at(ctx, "move", anchor, Align2::RIGHT_TOP, |ui| move_options(app, ui)),
             Popover::SmartFilters => popover_at(ctx, "smart", anchor, Align2::RIGHT_TOP, |ui| crate::adjust::smart_panel(app, ui)),
             Popover::Export => popover_at(ctx, "export", screen.center(), Align2::CENTER_CENTER, |ui| export_dialog(app, ui)),
@@ -1591,6 +1592,90 @@ fn export_dialog(app: &mut App, ui: &mut Ui) {
         if widgets::secondary_button(ui, "Cancel", 90.0).clicked() {
             app.popover = None;
         }
+    });
+}
+
+/// Shortcuts & gestures (`?`).
+fn help(ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    ui.set_width(560.0);
+    widgets::section_label(ui, "Shortcuts & gestures");
+    let groups: [(&str, &[(&str, &str)]); 5] = [
+        (
+            "Tools",
+            &[
+                ("B / E", "Brush / eraser"),
+                ("Shift+B", "Mixer brush"),
+                ("S", "Smudge"),
+                ("G", "Fill"),
+                ("I or Alt-click", "Eyedropper"),
+                ("V or Ctrl+T", "Move / transform"),
+                ("H or hold Space", "Pan"),
+                ("T / P / U", "Text / pen / shape"),
+                ("M / L / W", "Rectangle / lasso / wand select"),
+            ],
+        ),
+        (
+            "Brush & colour",
+            &[
+                ("[ / ]", "Brush size"),
+                ("X", "Swap colours"),
+                ("D", "Black & white"),
+                ("Alt+Backspace", "Fill with colour"),
+                ("Ctrl+Backspace", "Fill with background"),
+            ],
+        ),
+        (
+            "View",
+            &[
+                ("= / −", "Zoom in / out"),
+                ("0 / 1", "Fit / 100%"),
+                ("Ctrl+[ / ]", "Rotate 15°"),
+                ("R-drag, 5", "Rotate / reset rotation"),
+                ("Y, Shift+Y", "Symmetry, move axis"),
+                ("Shift+R / G / P / D", "Rulers, guides, perspective, measure"),
+                ("Alt+L / Alt+B", "Layers / brushes"),
+                ("Tab", "Hide the interface"),
+            ],
+        ),
+        (
+            "Animation",
+            &[
+                ("Shift+A", "Animation mode"),
+                ("K", "Play / pause"),
+                (", / .", "Previous / next frame"),
+                ("< / >", "First / last frame"),
+                ("N", "Add frame"),
+                ("O", "Onion skins"),
+            ],
+        ),
+        (
+            "Edit",
+            &[
+                ("Ctrl+Z / Ctrl+Shift+Z", "Undo / redo"),
+                ("Ctrl+C / X / V", "Copy / cut / paste"),
+                ("Ctrl+J", "Layer via copy"),
+                ("Ctrl+A / D / Shift+I", "Select all / deselect / invert"),
+                ("Ctrl+S / O / N", "Save / open / new"),
+                ("Ctrl+Shift+E", "Export"),
+            ],
+        ),
+    ];
+    egui::ScrollArea::vertical().max_height(ui.ctx().content_rect().height() - 120.0).show(ui, |ui| {
+        ui.columns(2, |cols| {
+            for (i, (title, rows)) in groups.iter().enumerate() {
+                let ui = &mut cols[usize::from(i >= 2)];
+                ui.label(RichText::new(*title).font(theme::semibold(12.5)).color(t.fg));
+                egui::Grid::new(*title).num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
+                    for (k, what) in rows.iter() {
+                        ui.label(RichText::new(*k).font(theme::mono(11.0)).color(t.accent));
+                        ui.label(RichText::new(*what).color(t.fg_muted));
+                        ui.end_row();
+                    }
+                });
+                ui.add_space(8.0);
+            }
+        });
     });
 }
 
