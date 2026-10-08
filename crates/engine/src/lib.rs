@@ -13,6 +13,7 @@ mod liquify_ops;
 mod mask_ops;
 mod paint_ops;
 pub mod path_ops;
+pub mod recording;
 mod saved_selection_ops;
 mod selection_ops;
 pub mod smart_filter_ops;
@@ -469,6 +470,9 @@ pub struct Session {
     anim_slot: usize,
     anim_playing: bool,
     smart_cache: smart_filter_ops::SmartCache,
+    recorder: Option<recording::Recorder>,
+    /// Nesting of `execute`: only top-level calls are recorded.
+    rec_depth: u32,
     smudge: Option<smudge_ops::ActiveSmudge>,
     liquify: Option<liquify_ops::ActiveLiquify>,
     /// The Mixer's kept reservoir, keyed by the colour it was loaded with.
@@ -515,6 +519,8 @@ impl Session {
             anim_slot: 0,
             anim_playing: false,
             smart_cache: Default::default(),
+            recorder: None,
+            rec_depth: 0,
             smudge: None,
             liquify: None,
             mixer_held: None,
@@ -745,6 +751,7 @@ impl Session {
     // ── Strokes (happypaint PaintSink) ──
 
     pub fn stroke_begin(&mut self, p: StrokePoint) {
+        self.rec(|t| recording::RecEvent::Begin { t, p });
         self.commit_filter();
         self.commit_transform();
         if !self.mask_target() {
@@ -806,6 +813,10 @@ impl Session {
     }
 
     pub fn stroke_extend(&mut self, pts: &[StrokePoint]) {
+        if self.recorder.is_some() {
+            let v = pts.to_vec();
+            self.rec(|t| recording::RecEvent::Extend { t, pts: v });
+        }
         if self.smudge.is_some() {
             self.smudge_extend(pts);
             return;
@@ -840,6 +851,9 @@ impl Session {
 
     /// Advance time-based brush effects (airbrush) while a stroke is held.
     pub fn stroke_tick(&mut self, now_ms: f64) {
+        if self.stroke.is_some() {
+            self.rec(|t| recording::RecEvent::Tick { t, now: now_ms });
+        }
         let Some(st) = self.stroke.as_mut() else { return };
         let dabs = st.engine.airbrush_tick(now_ms);
         self.draw_dabs(dabs);
@@ -851,6 +865,9 @@ impl Session {
     }
 
     pub fn stroke_cancel(&mut self) {
+        if self.is_stroking() {
+            self.rec(|t| recording::RecEvent::Cancel { t });
+        }
         self.smudge_cancel();
         self.liquify_cancel();
         if let Some(st) = self.stroke.take() {
@@ -862,6 +879,9 @@ impl Session {
 
     /// Flatten the stroke into its layer as one undo step.
     pub fn stroke_end(&mut self) {
+        if self.is_stroking() {
+            self.rec(|t| recording::RecEvent::End { t });
+        }
         self.smudge_end();
         self.liquify_end();
         let Some(mut st) = self.stroke.take() else {
@@ -927,6 +947,17 @@ impl Session {
     // ── Commands ──
 
     pub fn execute(&mut self, cmd: Command) -> Result<(), EngineError> {
+        if self.recorder.is_some() {
+            let c = cmd.clone();
+            self.rec(|t| recording::RecEvent::Cmd { t, cmd: Box::new(c) });
+        }
+        self.rec_depth += 1;
+        let r = self.execute_inner(cmd);
+        self.rec_depth -= 1;
+        r
+    }
+
+    fn execute_inner(&mut self, cmd: Command) -> Result<(), EngineError> {
         if self.filter.is_some() {
             match &cmd {
                 Command::UpdateFilter { .. } | Command::CommitFilter | Command::CancelFilter => {}

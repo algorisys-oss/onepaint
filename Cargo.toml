@@ -28,7 +28,7 @@ onepaint-text = { path = "crates/text" }
 
 thiserror = "2"
 serde = { version = "1", features = ["derive", "rc"] }
-serde_json = { version = "1", features = ["preserve_order"] }
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 bytemuck = { version = "1", features = ["derive"] }
 rayon = "1"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }

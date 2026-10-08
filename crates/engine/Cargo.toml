@@ -9,6 +9,8 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+half = { workspace = true }
+flate2 = { workspace = true }
 onepaint-text = { workspace = true }
 onepaint-filters = { workspace = true }
 rayon = { workspace = true }

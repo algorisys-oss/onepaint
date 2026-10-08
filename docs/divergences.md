@@ -26,3 +26,4 @@ short by fixing entries, not by growing it.
 | 19 | Rulers on a rotated canvas | Hidden while the canvas is rotated (pinned rulers only) | A document-attached tick band that turns with the artwork | Draw the doc-edge band when `rulers_pinned` is false. |
 | 20 | Animation video export | GIF and PNG-sequence zip only | Also MP4/WebM via WebCodecs | Needs a native encoder (openh264 or ffmpeg); a dependency decision for the owner. |
 | 21 | Exposure-sheet editing | Tracks render, play and onion correctly, but the timeline shows the active track as a strip | A row-per-track grid with drag retiming, markers and out-of-pegs | UI work only; the model is complete. |
+| 22 | Recordings | `.onepaint-rec` (start document, lossless tiles, session state, serde command log); timelapse as GIF | `.happypaint-rec` logs PaintEngine calls; MP4 timelapse | The engines differ, so logs are not interchangeable. |

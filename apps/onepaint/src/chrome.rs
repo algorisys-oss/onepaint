@@ -317,6 +317,9 @@ fn status(app: &mut App, ctx: &egui::Context, screen: egui::Rect) {
                     let r = app.canvas.view.rotation;
                     app.canvas.view.rotate_at(c, -r);
                 }
+                if app.session.is_recording() {
+                    ui.label(RichText::new("● REC").font(theme::mono(11.5)).color(t.danger));
+                }
                 let d = app.session.doc();
                 ui.label(RichText::new(format!("{}×{}", d.width, d.height)).font(theme::mono(11.5)).color(t.fg_faint));
                 if let Some([x, y]) = app.canvas.hover_doc {
@@ -379,6 +382,20 @@ fn menu(app: &mut App, ui: &mut Ui) {
     if widgets::menu_item(ui, Some("image"), "Export…", "Ctrl+Shift+E").clicked() {
         app.popover = Some(Popover::Export);
         return;
+    }
+    widgets::hairline(ui);
+    let rec_label = if app.session.is_recording() { "Stop recording…" } else { "Start recording" };
+    if widgets::menu_item(ui, Some("film"), rec_label, "").clicked() {
+        app.popover = None;
+        app.toggle_recording(now);
+    }
+    if widgets::menu_item(ui, Some("play"), "Replay recording…", "").clicked() {
+        app.popover = None;
+        app.replay_recording(now);
+    }
+    if widgets::menu_item(ui, Some("film"), "Export timelapse…", "").clicked() {
+        app.popover = None;
+        app.export_timelapse(now);
     }
     if app.session.anim_settings().enabled {
         if widgets::menu_item(ui, Some("film"), "Export animated GIF…", "").clicked() {

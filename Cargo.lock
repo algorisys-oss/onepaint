@@ -2691,6 +2691,8 @@ name = "onepaint-engine"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "flate2",
+ "half",
  "image",
  "log",
  "onepaint-brush",

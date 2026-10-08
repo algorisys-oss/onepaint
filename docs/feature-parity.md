@@ -135,8 +135,8 @@ screentone are added as live layers.
 
 ## History and recording
 - [x] Undo and redo with tile snapshots and pixel deltas (copy-on-write tile snapshots)
-- [ ] Record a session as a command log, then replay it
-- [ ] Export a timelapse as video
+- [x] Record a session as a command log, then replay it (own `.onepaint-rec`; exact replay)
+- [~] Export a timelapse as video (animated GIF; no MP4)
 
 ## Animation
 - [~] Animation Assist: flipbook frames, holds, background/foreground, onion skins (tint, front, muted), playback (loop/ping-pong/once), timeline strip; exposure-sheet tracks composite and onion per track, but the track grid UI, markers and out-of-pegs are not built

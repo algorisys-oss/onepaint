@@ -103,6 +103,8 @@ pub struct App {
     pub export_psd: bool,
     /// The smart filter whose params are open.
     pub smart_edit: Option<usize>,
+    /// A recording playing back on the canvas: events and position.
+    pub replaying: Option<(Vec<onepaint_engine::recording::RecEvent>, usize)>,
     /// End live-edit coalescing before the next smart-filter change.
     pub session_seal: bool,
     /// Inline rename of the active palette in progress.
@@ -160,6 +162,7 @@ impl App {
             export_opts: Default::default(),
             export_psd: false,
             smart_edit: None,
+            replaying: None,
             session_seal: false,
             palette_rename: None,
             thumbs: thumbs::Thumbs::default(),
@@ -322,6 +325,91 @@ impl App {
                 self.path = Some(path);
             }
             Err(e) => self.notify(format!("Save failed: {e}"), now),
+        }
+    }
+
+    /// File ▸ Start / Stop recording (spec 26).
+    pub fn toggle_recording(&mut self, now: f64) {
+        if !self.session.is_recording() {
+            match self.session.start_recording() {
+                Ok(()) => self.notify("Recording", now),
+                Err(e) => self.notify(format!("Couldn't start recording: {e}"), now),
+            }
+            return;
+        }
+        let Some(rec) = self.session.stop_recording() else { return };
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("onepaint recording", &["onepaint-rec"])
+            .set_file_name(format!("{}.onepaint-rec", self.session.doc().name))
+            .save_file()
+        else {
+            return;
+        };
+        match rec.to_bytes().map_err(|e| e.to_string()).and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string())) {
+            Ok(()) => self.notify(format!("Saved {}", path.display()), now),
+            Err(e) => self.notify(format!("Save failed: {e}"), now),
+        }
+    }
+
+    fn pick_recording(&mut self, now: f64) -> Option<onepaint_engine::recording::Recording> {
+        let path = rfd::FileDialog::new().add_filter("onepaint recording", &["onepaint-rec"]).pick_file()?;
+        match std::fs::read(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|b| onepaint_engine::recording::Recording::from_bytes(&b).map_err(|e| e.to_string()))
+        {
+            Ok(r) => Some(r),
+            Err(e) => {
+                self.notify(format!("Couldn't open the recording: {e}"), now);
+                None
+            }
+        }
+    }
+
+    /// Play a recording on the canvas (replaces the document, asks first if dirty).
+    pub fn replay_recording(&mut self, now: f64) {
+        let Some(rec) = self.pick_recording(now) else { return };
+        match onepaint_engine::recording::Replay::new(&rec) {
+            Ok(r) => {
+                let (session, events) = r.into_parts();
+                self.session = session;
+                let d = self.session.doc();
+                self.canvas.reset_for([d.width, d.height]);
+                self.path = None;
+                self.saved_history_len = None;
+                self.thumbs.clear();
+                self.replaying = Some((events, 0));
+            }
+            Err(e) => self.notify(format!("Couldn't replay: {e}"), now),
+        }
+    }
+
+    pub fn export_timelapse(&mut self, now: f64) {
+        let Some(rec) = self.pick_recording(now) else { return };
+        let Some(path) = rfd::FileDialog::new().add_filter("Animated GIF", &["gif"]).set_file_name("timelapse.gif").save_file() else {
+            return;
+        };
+        let gif = onepaint_engine::recording::Replay::new(&rec).and_then(|r| r.timelapse_gif());
+        match gif.map_err(|e| e.to_string()).and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string())) {
+            Ok(()) => self.notify(format!("Exported {}", path.display()), now),
+            Err(e) => self.notify(format!("Export failed: {e}"), now),
+        }
+    }
+
+    /// Advance an on-canvas replay (~4 s for the whole log at 60 fps).
+    fn replay_tick(&mut self, ctx: &egui::Context) {
+        let Some((events, pos)) = self.replaying.as_mut() else { return };
+        let per = (events.len() / 240).max(1);
+        let end = (*pos + per).min(events.len());
+        for ev in &events[*pos..end] {
+            self.session.apply_event(ev);
+        }
+        *pos = end;
+        if *pos >= events.len() {
+            self.replaying = None;
+            let now = ctx.input(|i| i.time);
+            self.notify("Replay finished", now);
+        } else {
+            ctx.request_repaint();
         }
     }
 
@@ -638,6 +726,7 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         debug::tick(self, &ctx);
         timeline::tick(self, &ctx);
+        self.replay_tick(&ctx);
         if ctx.input(|i| i.viewport().close_requested()) && self.dirty() && !self.allow_close {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.request(Pending::Close, &ctx);
@@ -1359,5 +1448,30 @@ mod tests {
         h.get_by_label("Bake into pixels").click();
         h.run();
         assert!(h.state().session.smart_filters(&id).is_empty());
+    }
+
+    #[test]
+    fn a_recorded_session_replays_on_the_canvas() {
+        let mut h = harness();
+        h.run();
+        h.state_mut().popover = Some(Popover::Menu);
+        h.run();
+        h.get_by_label("Start recording").click();
+        h.run();
+        assert!(h.state().session.is_recording());
+        drag_stroke(&mut h, pos2(500.0, 420.0), pos2(720.0, 440.0));
+        let rec = h.state_mut().session.stop_recording().unwrap();
+        let want = h.state().session.flatten();
+        let (session, events) = onepaint_engine::recording::Replay::new(&rec).unwrap().into_parts();
+        h.state_mut().session = session;
+        h.state_mut().replaying = Some((events, 0));
+        for _ in 0..300 {
+            h.step();
+            if h.state().replaying.is_none() {
+                break;
+            }
+        }
+        assert!(h.state().replaying.is_none());
+        assert_eq!(h.state().session.flatten(), want);
     }
 }
