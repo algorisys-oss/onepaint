@@ -1617,10 +1617,14 @@ fn export_dialog(app: &mut App, ui: &mut Ui) {
         if opts.format == F::Ppm {
             widgets::toggle(ui, &mut opts.ascii, "ASCII (P3)");
         }
+        if opts.format == F::Tiff {
+            widgets::toggle(ui, &mut opts.cmyk, "CMYK for print (coated press, 300% ink)");
+        }
         let d = app.session.doc();
         let (w, h) = output_size(d.width, d.height, opts.scale);
         let note = match opts.format {
             F::Jpeg | F::Ppm => " · flattened on white",
+            F::Tiff if opts.cmyk => " · CMYK on white",
             _ => "",
         };
         ui.label(RichText::new(format!("{w} × {h} px at {} dpi{note}", d.dpi)).font(theme::mono(11.0)).color(t.fg_muted));
@@ -1697,6 +1701,7 @@ fn help(ui: &mut Ui) {
                 ("Y, Shift+Y", "Symmetry, move axis"),
                 ("Shift+R / G / P / D", "Rulers, guides, perspective, measure"),
                 ("Alt+L / Alt+B / Alt+R", "Layers / brushes / reference"),
+                ("Ctrl+Y", "Grayscale value check"),
                 ("Tab", "Hide the interface"),
             ],
         ),
@@ -1871,6 +1876,25 @@ fn liquify_options(app: &mut App, ui: &mut Ui) {
     ui.label(RichText::new("Size follows the brush size ([ and ]).").font(theme::medium(10.5)).color(t.fg_faint));
 }
 
+/// Grayscale, print preview (CMYK soft-proof) and the non-printable warning.
+fn view_modes(app: &mut App, ui: &mut Ui) {
+    let mut v = app.canvas.view_modes();
+    widgets::section_label(ui, "View");
+    widgets::toggle(ui, &mut v.grayscale, "Grayscale value check (Ctrl+Y)");
+    widgets::toggle(ui, &mut v.proof, "Print preview (CMYK proof)");
+    if v.proof {
+        widgets::toggle(ui, &mut v.paper_white, "Simulate paper white");
+        widgets::toggle(ui, &mut v.black_ink, "Simulate black ink");
+    }
+    let warn = [0.0f32, 5.0, 2.0];
+    let cur = warn.iter().position(|w| *w == v.gamut_warn).unwrap_or(0);
+    ui.label(RichText::new("Non-printable colours").font(theme::medium(11.0)).color(Tokens::get(ui.ctx()).fg_muted));
+    if let Some(i) = segmented(ui, &["Off", "ΔE > 5", "ΔE > 2"], cur) {
+        v.gamut_warn = warn[i];
+    }
+    app.canvas.set_view_modes(v);
+}
+
 fn guides(app: &mut App, ui: &mut Ui) {
     use onepaint_engine::Guides;
     use onepaint_engine::SymmetryMode as M;
@@ -1880,6 +1904,8 @@ fn guides(app: &mut App, ui: &mut Ui) {
     let mut g = app.session.guides().clone();
     let before = g.clone();
     egui::ScrollArea::vertical().max_height(ui.ctx().content_rect().height() - 140.0).show(ui, |ui| {
+        view_modes(app, ui);
+        widgets::hairline(ui);
         widgets::section_label(ui, "Grid");
         widgets::toggle(ui, &mut g.grid.enabled, "Show grid");
         if g.grid.enabled {

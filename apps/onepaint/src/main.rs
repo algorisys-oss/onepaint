@@ -786,8 +786,14 @@ impl App {
         let cmd = Modifiers::COMMAND;
         let sc = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, k)));
         let typing = ctx.egui_wants_keyboard_input();
-        if sc(cmd | Modifiers::SHIFT, Key::Z) || sc(cmd, Key::Y) {
+        if sc(cmd | Modifiers::SHIFT, Key::Z) {
             let _ = self.session.execute(Command::Redo);
+        }
+        if sc(cmd, Key::Y) {
+            // Value check (happypaint: redo is Ctrl+Shift+Z, so Y is free).
+            let mut v = self.canvas.view_modes();
+            v.grayscale = !v.grayscale;
+            self.canvas.set_view_modes(v);
         }
         if sc(cmd, Key::Z) {
             let _ = self.session.execute(Command::Undo);
@@ -1555,6 +1561,24 @@ mod tests {
         h.get_by_label("None").click();
         h.run();
         assert!(h.state().session.texts(&id)[0].balloon.is_none());
+    }
+
+    #[test]
+    fn ctrl_y_is_the_value_check_and_the_guides_panel_holds_print_preview() {
+        let mut h = harness();
+        h.run();
+        key(&mut h, egui::Key::Y, egui::Modifiers::COMMAND);
+        assert!(h.state().canvas.view_modes().grayscale);
+        key(&mut h, egui::Key::Y, egui::Modifiers::COMMAND);
+        assert!(!h.state().canvas.view_modes().grayscale);
+        h.state_mut().popover = Some(Popover::Guides);
+        h.run();
+        h.get_by_label("Print preview (CMYK proof)").click();
+        h.run();
+        assert!(h.state().canvas.view_modes().proof);
+        h.get_by_label("ΔE > 5").click();
+        h.run();
+        assert_eq!(h.state().canvas.view_modes().gamut_warn, 5.0);
     }
 
     #[test]

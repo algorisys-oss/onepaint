@@ -31,12 +31,14 @@ pub struct ExportOptions {
     pub quality: u8,
     /// PPM: P3 (ASCII) instead of P6.
     pub ascii: bool,
+    /// TIFF: separate to CMYK through the built-in press (flattened on white).
+    pub cmyk: bool,
     pub dpi: f64,
 }
 
 impl Default for ExportOptions {
     fn default() -> Self {
-        Self { format: ExportFormat::Png, scale: 1.0, quality: 92, ascii: false, dpi: 300.0 }
+        Self { format: ExportFormat::Png, scale: 1.0, quality: 92, ascii: false, cmyk: false, dpi: 300.0 }
     }
 }
 
@@ -83,7 +85,7 @@ pub fn export_flat(px: &[f32], w: u32, h: u32, o: &ExportOptions) -> Result<(Vec
         })
         .collect();
     let scaled = resample(&src, w, h, nw, nh);
-    let opaque = matches!(o.format, ExportFormat::Jpeg | ExportFormat::Ppm);
+    let opaque = matches!(o.format, ExportFormat::Jpeg | ExportFormat::Ppm) || (o.format == ExportFormat::Tiff && o.cmyk);
     let rgba: Vec<u8> = scaled
         .iter()
         .flat_map(|p| {
@@ -124,6 +126,7 @@ pub fn export_flat(px: &[f32], w: u32, h: u32, o: &ExportOptions) -> Result<(Vec
             enc.encode(&rgb, nw, nh, image::ExtendedColorType::Rgb8).map_err(|e| FormatError::Image(e.to_string()))?;
             out
         }
+        ExportFormat::Tiff if o.cmyk => crate::tiff_cmyk::encode_cmyk_tiff(&rgba, nw, nh, o.dpi),
         ExportFormat::Tiff => {
             use image::ImageEncoder;
             let mut out = std::io::Cursor::new(Vec::new());

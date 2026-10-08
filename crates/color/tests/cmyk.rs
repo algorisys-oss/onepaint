@@ -56,8 +56,28 @@ fn baked_luts_match() {
 
 #[test]
 fn proof_keeps_in_gamut_colours_and_flags_saturated_ones() {
-    let (white, de) = proof([1.0, 1.0, 1.0], false);
+    let (white, de) = proof([1.0, 1.0, 1.0], false, false);
     assert!(white.iter().all(|v| (v - 1.0).abs() < 0.01) && de < 1.0);
-    let (_, de_blue) = proof([0.0, 0.0, 1.0], false);
+    let (_, de_blue) = proof([0.0, 0.0, 1.0], false, false);
     assert!(de_blue > 10.0, "pure RGB blue is out of the press gamut: ΔE {de_blue}");
+}
+
+#[test]
+fn view_modes_on_premultiplied_linear_pixels() {
+    let mut px = [0.0f32, 0.0, 1.0, 1.0, 0.5, 0.5, 0.5, 0.5];
+    let before = px;
+    apply_view(&mut px, &ViewModes::default());
+    assert_eq!(px, before);
+    let mut g = before;
+    apply_view(&mut g, &ViewModes { grayscale: true, ..Default::default() });
+    assert!((g[0] - g[1]).abs() < 1e-6 && (g[1] - g[2]).abs() < 1e-6 && g[3] == 1.0 && g[7] == 0.5);
+    let mut w = before;
+    apply_view(&mut w, &ViewModes { gamut_warn: 5.0, ..Default::default() });
+    assert!(w[0] > 0.5 && w[2] < 0.05, "blue flagged red: {w:?}");
+    let mut p = before;
+    apply_view(&mut p, &ViewModes { proof: true, ..Default::default() });
+    assert_eq!(p[7], 1.0, "the proof is flattened on paper");
+    let mut sim = before;
+    apply_view(&mut sim, &ViewModes { proof: true, paper_white: true, ..Default::default() });
+    assert!(sim[4] < p[4], "simulated paper is darker than display white");
 }

@@ -145,22 +145,24 @@ pub fn slider_row(
 /// iOS-style toggle switch with a label.
 pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     let t = Tokens::get(ui.ctx());
-    let mut resp = ui
-        .horizontal(|ui| {
-            let (rect, resp) = ui.allocate_exact_size(vec2(32.0, 18.0), Sense::click());
-            let how_on = ui.ctx().animate_bool(resp.id, *on);
-            let bg = if *on { t.accent } else { t.border };
-            ui.painter().rect_filled(rect, 9.0, bg);
-            let x = egui::lerp((rect.left() + 9.0)..=(rect.right() - 9.0), how_on);
-            ui.painter().circle_filled(pos2(x, rect.center().y), 7.0, Color32::WHITE);
-            ui.label(egui::RichText::new(label).color(if *on { t.fg } else { t.fg_muted }));
-            resp
-        })
-        .inner;
+    // One control for the switch and its label: both click, one accessible name.
+    let galley = ui.painter().layout_no_wrap(label.to_string(), egui::TextStyle::Body.resolve(ui.style()), Color32::WHITE);
+    let gap = ui.spacing().item_spacing.x;
+    let size = vec2(32.0 + gap + galley.size().x, galley.size().y.max(18.0));
+    let (rect, mut resp) = ui.allocate_exact_size(size, Sense::click());
     if resp.clicked() {
         *on = !*on;
         resp.mark_changed();
     }
+    let checked = *on;
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, checked, label));
+    let sw = egui::Rect::from_min_size(pos2(rect.left(), rect.center().y - 9.0), vec2(32.0, 18.0));
+    let how_on = ui.ctx().animate_bool(resp.id, *on);
+    ui.painter().rect_filled(sw, 9.0, if *on { t.accent } else { t.border });
+    let x = egui::lerp((sw.left() + 9.0)..=(sw.right() - 9.0), how_on);
+    ui.painter().circle_filled(pos2(x, sw.center().y), 7.0, Color32::WHITE);
+    let text_pos = pos2(sw.right() + gap, rect.center().y - galley.size().y / 2.0);
+    ui.painter().galley(text_pos, galley, if *on { t.fg } else { t.fg_muted });
     resp
 }
 

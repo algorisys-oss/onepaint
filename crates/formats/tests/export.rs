@@ -52,3 +52,15 @@ fn scaling_and_tiff() {
     assert_eq!(back.get_pixel(1, 0)[3], 0);
     assert_eq!(output_size(1000, 10, 0.001), (100, 1), "clamped to 10%");
 }
+
+#[test]
+fn tiff_cmyk_separates_flattened_on_white() {
+    let o = ExportOptions { format: ExportFormat::Tiff, cmyk: true, dpi: 300.0, ..Default::default() };
+    let (t, w, h) = export_flat(&px(), 2, 1, &o).unwrap();
+    assert_eq!((w, h), (2, 1));
+    assert_eq!(&t[..4], b"II*\0");
+    let strip = &t[t.len() - 8..];
+    // Red: magenta and yellow, no cyan; the transparent pixel is paper (no ink).
+    assert!(strip[0] < 10 && strip[1] > 200 && strip[2] > 200, "{strip:?}");
+    assert_eq!(&strip[4..], &[0, 0, 0, 0]);
+}

@@ -214,12 +214,70 @@ pub fn separate_rgba8(rgba: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-/// Soft-proof one gamma sRGB colour (already on white): the media-relative
-/// print (or absolute with `paper_white`) and the gamut error ΔE.
-pub fn proof(rgb: [f64; 3], paper_white: bool) -> ([f64; 3], f64) {
+/// Soft-proof one gamma sRGB colour (already on white): the print, made
+/// media-relative unless paper white / black ink are simulated, and the
+/// gamut error ΔE.
+pub fn proof(rgb: [f64; 3], paper_white: bool, black_ink: bool) -> ([f64; 3], f64) {
     let p = builtin_press();
     let s = trilinear(&p.proof_lut, rgb[0], rgb[1], rgb[2]);
-    let printed = [s[0] / 255.0, s[1] / 255.0, s[2] / 255.0];
-    let out = if paper_white { printed } else { normalize_proof(printed, p.white, p.black) };
+    let lo = if black_ink { [0.0; 3] } else { p.black.map(s2l) };
+    let hi = if paper_white { [1.0; 3] } else { p.white.map(s2l) };
+    let out = std::array::from_fn(|ch| l2s(((s2l(s[ch] / 255.0) - lo[ch]) / (hi[ch] - lo[ch]).max(1e-4)).clamp(0.0, 1.0)));
     (out, s[3] / DELTA_E_SCALE)
+}
+
+/// Present-only view modes (happypaint's View menu): value check, print
+/// preview and the non-printable-colour warning.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ViewModes {
+    pub grayscale: bool,
+    pub proof: bool,
+    pub paper_white: bool,
+    pub black_ink: bool,
+    /// Flag colours the press moved by more than this ΔE; 0 = off.
+    pub gamut_warn: f32,
+}
+
+impl ViewModes {
+    pub fn any(&self) -> bool {
+        self.grayscale || self.proof || self.gamut_warn > 0.0
+    }
+}
+
+const WARN: [f32; 3] = [0.78, 0.06, 0.10];
+
+/// Apply the view modes to premultiplied-linear RGBA in place (the compositor
+/// present shader: grayscale on the encoded colour, then the proof lookup).
+pub fn apply_view(px: &mut [f32], v: &ViewModes) {
+    if !v.any() {
+        return;
+    }
+    let warn_lut = v.gamut_warn as f64 * DELTA_E_SCALE;
+    for p in px.chunks_exact_mut(4) {
+        let a = p[3];
+        let enc = |c: f32| if a > 0.0 { crate::linear_to_srgb(c / a) * a } else { 0.0 };
+        let mut c = [enc(p[0]), enc(p[1]), enc(p[2])];
+        if v.grayscale {
+            let lum = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+            c = [lum; 3];
+        }
+        let mut out_a = a;
+        if v.proof || v.gamut_warn > 0.0 {
+            let on_white = c.map(|x| (x + 1.0 - a).clamp(0.0, 1.0) as f64);
+            let s = trilinear(&builtin_press().proof_lut, on_white[0], on_white[1], on_white[2]);
+            if v.proof {
+                c = proof(on_white, v.paper_white, v.black_ink).0.map(|x| x as f32);
+                out_a = 1.0;
+            }
+            if v.gamut_warn > 0.0 && s[3] >= warn_lut {
+                c = WARN;
+                out_a = 1.0;
+            }
+        }
+        for ch in 0..3 {
+            let straight = if out_a > 0.0 { c[ch] / out_a } else { 0.0 };
+            p[ch] = crate::srgb_to_linear(straight) * out_a;
+        }
+        p[3] = out_a;
+    }
 }

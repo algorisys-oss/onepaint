@@ -147,8 +147,8 @@ screentone are added as live layers.
 - [x] Palettes, with import (.swatches, .aco, .ase, .gpl) and export (.swatches)
 - [x] Median-cut palette extraction (from the canvas or an image file)
 - [ ] ICC profiles
-- [ ] CMYK soft-proof and press profiles
-- [ ] TIFF CMYK export
+- [~] CMYK soft-proof and press profiles (built-in coated press, print preview, paper and ink simulation, gamut warning, Ctrl+Y value check; user ICC press profiles not yet; spec 32)
+- [x] TIFF CMYK export
 
 ## Files
 - [x] `.happypaint` v9: read and write (v1–v9 read; v9 write; JSON-level compatible)

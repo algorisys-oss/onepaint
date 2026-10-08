@@ -252,6 +252,8 @@ pub struct Canvas {
     hold: HoldTracker,
     /// Composite tiles still waiting for a frame's budget.
     pending: std::collections::BTreeSet<(i32, i32)>,
+    /// Present-only view modes (grayscale, print preview, gamut warning).
+    view_modes: onepaint_color::cmyk::ViewModes,
     pub text_edit: Option<TextEdit>,
     /// Style for new text objects (happypaint's text-store style).
     pub text_style: onepaint_text::TextSpec,
@@ -289,6 +291,7 @@ impl Canvas {
             xform: TransformParams::default(),
             hold: HoldTracker::default(),
             pending: Default::default(),
+            view_modes: Default::default(),
             text_edit: None,
             text_style: onepaint_text::TextSpec::default(),
             snapper: None,
@@ -300,6 +303,19 @@ impl Canvas {
             pen: Default::default(),
             gestures: Default::default(),
             gesture_out: Vec::new(),
+        }
+    }
+
+    pub fn view_modes(&self) -> onepaint_color::cmyk::ViewModes {
+        self.view_modes
+    }
+
+    /// Change the view modes and re-present every tile.
+    pub fn set_view_modes(&mut self, v: onepaint_color::cmyk::ViewModes) {
+        if v != self.view_modes {
+            self.view_modes = v;
+            let [w, h] = self.doc_size;
+            self.pending.extend(onepaint_raster::Rect::new(0, 0, w as i32, h as i32).tiles());
         }
     }
 
@@ -1132,6 +1148,15 @@ impl Canvas {
         }
         if !self.pending.is_empty() {
             ctx.request_repaint();
+        }
+        let modes = self.view_modes;
+        if modes.any() {
+            use rayon::prelude::*;
+            out.par_iter_mut().for_each(|(_, t)| {
+                let mut px = t.to_f32();
+                onepaint_color::cmyk::apply_view(&mut px, &modes);
+                *t = Tile::from_f32(&px);
+            });
         }
         out
     }
