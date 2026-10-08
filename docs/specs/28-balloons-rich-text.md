@@ -102,16 +102,26 @@ The pure edits work on char ranges `[a, b)`:
   (rich-text-spec rule 2).
 
 ## UI (`apps/onepaint/src/text_ui.rs`)
-- **Selection toolbar** (PC:7360): B, I, U, S, A− and A+, a colour swatch
-  (the current colour) and a font menu, applied to the field's selection. With
-  no selection the whole-object controls apply, as before. Runs are kept in
-  step as the user types.
+- **Selection toolbar** (PC:7360): B, I, U, S, A− and A+, a "Text" colour
+  button (the current colour) and a font menu, applied to the field's
+  selection. The toggles show the selection's common state.
+  - With no selection they act on the whole object through
+    `apply_to_object`. It sets the object field (`bold`, `italic`, `color`,
+    `fontFamily`, `fontSizePx`) and drops the matching run overrides. Size
+    keeps run ratios. Underline throughout collapses to the object
+    `underline`. Strikethrough becomes a run over everything.
+  - The field previews the runs (colour, weight, italic, decorations,
+    relative size) and keeps them in step as the user types (`replace_text`).
+- **Not ported yet:** PC's real colour picker for the selection (onepaint's
+  colour buttons take the current colour, like the rest of this panel). The
+  tail-tip drag handle is still open in happypaint too (manga-spec P3b), as is
+  joining balloons.
 - **Balloon row** (TP:285-344):
   - **Shape menu** (None/Speech/Rounded/Shout/Thought). Picking a shape clears
     `bgColor` and creates a default balloon if there is none: fill `#ffffff`,
     stroke `#000000`, width 3 (TS:138-139).
-  - **Swatches:** the fill and outline swatches take the current colour.
-  - **Outline width.**
+  - **Swatches:** the "Fill" and "Rim" buttons take the current colour; the
+    outline width is a drag value. Picking "Background" removes the balloon.
   - **Tail:** an angle slider (0-360°, default 90°) places the tip at
     `fontSize·2.2` from the block origin, with width `max(8, 0.5·fontSize)`
     (TP:85-97). "No tail" clears it.
@@ -123,7 +133,8 @@ The pure edits work on char ranges `[a, b)`:
 - **Goldens:** happypaint's own `rasterizeTexts`, run in Chromium for every
   shape, with fill and with stroke (except the cloud stroke and the tail, which
   diverge). onepaint's local raster differs on fewer than 1% of the shape's
-  pixels, with tolerance at the antialiased edge.
+  pixels, with tolerance at the antialiased edge. The cloud stroke outlines
+  only the union (its inner lobe arcs stay fill).
 - **Tail:** the tip region is filled. The balloon centre is filled (the union,
   not happypaint's wedge).
 - **Rendering:** with a balloon behind text, the balloon pixels are the fill
@@ -134,4 +145,5 @@ The pure edits work on char ranges `[a, b)`:
 - **Round trip:** a spec with a balloon and runs survives `.happypaint`
   save and open unchanged.
 - **UI:** kittest. Typing, selecting a range and clicking B gives a bold run;
-  picking Speech gives a balloon.
+  typing keeps the runs in step; picking Speech gives the default balloon and
+  None removes it. `tail_from_angle` and `tail_angle` are tested directly.

@@ -36,7 +36,7 @@ The source is `engine/text/text-renderer.ts` (TR), relative to
   follows: `sans-serif`/`system-ui` → SansSerif, `serif`, `monospace`,
   `cursive`.
 - Output is premultiplied linear: sRGB colours are linearised.
-- **Balloons:** the spec is preserved but not drawn yet (divergence).
+- **Balloons** and the rich-text editor: see [spec 28](28-balloons-rich-text.md).
 
 ## Engine
 - `AddText{spec}` adds to the active text layer, or creates a new text layer

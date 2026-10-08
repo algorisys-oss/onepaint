@@ -59,7 +59,7 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] Clipping masks (clip families)
 - [x] Alpha lock
 - [ ] Off-canvas pixel overflow
-- [~] Text layers: multiple rich-text objects and balloons, vector until baked (rich runs render; balloons are kept in files but not drawn; no rich-text editing UI yet)
+- [x] Text layers: multiple rich-text objects and balloons, vector until baked (per-run bold, italic, underline, strikethrough, size, font and colour on a selection; spec 28)
 - [x] Vector path layers, plus path ops
 - [~] Adjustment layers and fill layers (colour and fill kinds composite live; spatial kinds are kept but not rendered)
 - [x] Per-layer smart-filter stacks (add from any filter, toggle, edit, remove, bake; cached; exported)
@@ -166,4 +166,4 @@ screentone are added as live layers.
 
 ## Comics
 - [ ] Panel layouts and panel tool
-- [ ] Balloons (in text layers)
+- [x] Balloons (in text layers): speech, rounded, shout and thought shapes, tail, fill and rim (spec 28; the tail is aimed by angle, as in happypaint)
