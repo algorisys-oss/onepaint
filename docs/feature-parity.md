@@ -178,4 +178,5 @@ screentone are added as live layers.
   - cursor: ring, crosshair, both or dot; paint colour; thickness 1–4
   - history: undo steps (5–1000)
 - [x] Cursor traced from the tip shape (`cursorTipShape`), square cursor for square tips
-- [ ] Timeline metric (frames/seconds), keyboard rebinding
+- [x] Keyboard shortcut rebinding (spec 34)
+- [ ] Timeline metric (frames/seconds)

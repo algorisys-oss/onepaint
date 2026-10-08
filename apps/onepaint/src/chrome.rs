@@ -41,7 +41,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             Popover::ClipboardMenu => popover_at(ctx, "clipboard", screen.center(), Align2::CENTER_CENTER, |ui| clipboard_menu(app, ui)),
             Popover::PanelOptions => popover_at(ctx, "panel", anchor, Align2::RIGHT_TOP, |ui| crate::panel_ui::options(app, ui)),
             Popover::Gallery => popover_at(ctx, "gallery", screen.center(), Align2::CENTER_CENTER, |ui| crate::gallery::show(app, ui)),
-            Popover::Help => popover_at(ctx, "help", screen.center(), Align2::CENTER_CENTER, help),
+            Popover::Help => popover_at(ctx, "help", screen.center(), Align2::CENTER_CENTER, |ui| help(ui, &app.settings.keybindings)),
             Popover::Settings => popover_at(ctx, "settings", screen.center(), Align2::CENTER_CENTER, |ui| crate::settings::dialog(app, ui)),
             Popover::Paper => popover_at(ctx, "paper", screen.center(), Align2::CENTER_CENTER, |ui| paper_dialog(app, ui)),
             Popover::MoveOptions => popover_at(ctx, "move", anchor, Align2::RIGHT_TOP, |ui| move_options(app, ui)),
@@ -1707,7 +1707,7 @@ fn clipboard_menu(app: &mut App, ui: &mut Ui) {
 }
 
 /// Shortcuts & gestures (`?`).
-fn help(ui: &mut Ui) {
+fn help(ui: &mut Ui, keys: &crate::keymap::Overrides) {
     let t = Tokens::get(ui.ctx());
     ui.set_width(560.0);
     widgets::section_label(ui, "Shortcuts & gestures");
@@ -1796,6 +1796,19 @@ fn help(ui: &mut Ui) {
                     }
                 });
                 ui.add_space(8.0);
+            }
+            // The list above shows the defaults; changed shortcuts are listed here.
+            if !keys.is_empty() {
+                let ui = &mut cols[1];
+                ui.label(RichText::new("Your shortcuts").font(theme::semibold(12.5)).color(t.fg));
+                egui::Grid::new("your-keys").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
+                    for (id, combo) in keys {
+                        let Some(a) = crate::keymap::Action::from_id(id) else { continue };
+                        ui.label(RichText::new(crate::keymap::format_combo(combo)).font(theme::mono(11.0)).color(t.accent));
+                        ui.label(RichText::new(a.label()).color(t.fg_muted));
+                        ui.end_row();
+                    }
+                });
             }
         });
     });

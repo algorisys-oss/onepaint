@@ -48,6 +48,31 @@ The sources are `state/settings-store.ts` and
   Smudge, Mixer and Liquify keep the ring. Crosshair and Dot styles ignore
   it, and Both adds the crosshair.
 
+## Keyboard shortcuts (`apps/onepaint/src/keymap.rs`)
+- **Actions:** happypaint's registry (`input/keybindings.ts`) with the same
+  ids, labels, categories, defaults and order, less the five marker and
+  play-range actions onepaint has no feature for.
+- **Combos:** happypaint's strings: `ctrl+alt+shift+key`, `ctrl` meaning
+  Ctrl or Cmd. Symbols drop shift (`?`, `+`); Shift+, and Shift+. are `<`
+  and `>`.
+- **Matching:** modifiers match exactly. When a combo is bound twice, the
+  first action in the registry wins.
+- **Storage:** overrides are `keybindings` in `settings.json`
+  (id → combo). An override replaces that action's defaults. Unknown ids
+  and unreadable combos are dropped on load.
+- **Settings ▸ Keyboard shortcuts:**
+  - The section lists each category.
+  - Clicking a shortcut, then pressing a combo, captures it; Esc cancels.
+  - Each row has a per-row reset, and a "duplicate" badge appears when a
+    combo is shared.
+  - The footer has "Reset all shortcuts".
+- **Hard-wired keys:** keys the app hard-wires (undo and redo, save, open,
+  new, export, clipboard, the selection commands, Ctrl+J, the Ctrl zoom
+  keys, Enter, Tab, Escape, Space, Backspace and Delete) are refused at
+  capture.
+- **Help:** the help popover lists any changed shortcuts under "Your
+  shortcuts".
+
 ## Not yet
 - Following pen tilt and the stroke direction on the cursor, the timeline
-  metric, and keyboard rebinding (after the timeline and shortcut work lands).
+  metric, and hold-E to erase then spring back to the previous tool.

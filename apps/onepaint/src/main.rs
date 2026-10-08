@@ -10,6 +10,7 @@ mod clip;
 mod debug;
 mod gallery;
 mod gestures;
+mod keymap;
 mod palettes;
 mod panel_ui;
 mod pen;
@@ -22,6 +23,7 @@ mod timeline;
 
 use canvas::Canvas;
 use egui::{Key, KeyboardShortcut, Modifiers};
+use keymap::Action;
 use onepaint_color::Rgba;
 use onepaint_engine::{Command, Event, Session, Tool};
 use onepaint_ui_kit::{ThemeKind, widgets::Hsv};
@@ -164,6 +166,8 @@ pub struct App {
     pub bevel: [f32; 2],
     /// The New canvas dialog's paper preset (index into `PAPER_PRESETS`).
     pub new_paper: usize,
+    /// Settings ▸ Keyboard shortcuts: the action waiting for a key press.
+    pub capture: Option<Action>,
     pub playback: timeline::Playback,
     pub reference: reference::ReferenceState,
     pub gallery: gallery::Gallery,
@@ -237,6 +241,7 @@ impl App {
             palettes,
             bevel: [0.0, 0.25],
             new_paper: 0,
+            capture: None,
             settings: settings::Settings::load(if cfg!(test) || debug.scripted() { None } else { settings::default_path() }),
             playback: Default::default(),
             reference: Default::default(),
@@ -829,6 +834,17 @@ impl App {
         let cmd = Modifiers::COMMAND;
         let sc = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, k)));
         let typing = ctx.egui_wants_keyboard_input();
+        // Settings ▸ Keyboard shortcuts is waiting for a key: it takes the press.
+        if self.popover != Some(Popover::Settings) {
+            self.capture = None;
+        }
+        if self.capture.is_some() {
+            self.capture_key(ctx, now);
+            return (false, false);
+        }
+        // Rebindable actions (keymap.rs); hard-wired keys are left for below.
+        let fired = keymap::take_actions(ctx, &self.settings.keybindings, typing);
+        let on = |a: Action| fired.contains(&a);
         if sc(cmd | Modifiers::SHIFT, Key::Z) {
             let _ = self.session.execute(Command::Redo);
         }
@@ -853,10 +869,10 @@ impl App {
         if sc(cmd, Key::N) {
             self.popover = Some(Popover::NewDoc);
         }
-        if sc(cmd | Modifiers::ALT, Key::ArrowRight) && self.tabs.len() > 1 {
+        if on(Action::DocNextTab) && self.tabs.len() > 1 {
             self.switch_tab((self.active_tab + 1) % self.tabs.len());
         }
-        if sc(cmd | Modifiers::ALT, Key::ArrowLeft) && self.tabs.len() > 1 {
+        if on(Action::DocPrevTab) && self.tabs.len() > 1 {
             self.switch_tab((self.active_tab + self.tabs.len() - 1) % self.tabs.len());
         }
         if sc(cmd | Modifiers::SHIFT, Key::E) {
@@ -930,172 +946,173 @@ impl App {
                 });
                 let _ = self.session.execute(Command::SealHistory);
             }
-            // happypaint's keybinding map (input/keybindings.ts).
-            if sc(Modifiers::SHIFT, Key::A) {
+            // Rebindable actions (keymap.rs).
+            if on(Action::AnimToggle) {
                 timeline::toggle(self);
             }
-            if sc(Modifiers::SHIFT, Key::Y) && self.session.guides().symmetry.is_on() {
+            if on(Action::ToggleSymmetryMoveAxis) && self.session.guides().symmetry.is_on() {
                 self.canvas.sym_editing = !self.canvas.sym_editing;
             }
-            if sc(Modifiers::SHIFT, Key::D) {
+            if on(Action::ToggleMeasure) {
                 self.canvas.measuring = !self.canvas.measuring;
                 self.canvas.lines_editing = false;
             }
-            if sc(Modifiers::ALT, Key::L) {
+            if on(Action::ToggleLayersPanel) {
                 self.popover = if self.popover == Some(Popover::Layers) { None } else { Some(Popover::Layers) };
             }
-            if sc(Modifiers::ALT, Key::R) {
+            if on(Action::ToggleReference) {
                 self.reference.open = !self.reference.open;
             }
-            if sc(Modifiers::ALT, Key::B) {
+            if on(Action::ToggleBrushPanel) {
                 self.popover = if self.popover == Some(Popover::Brushes) { None } else { Some(Popover::Brushes) };
             }
-            if sc(Modifiers::SHIFT, Key::Questionmark) || sc(Modifiers::NONE, Key::Questionmark) {
+            if on(Action::ToggleHelp) {
                 self.popover = if self.popover == Some(Popover::Help) { None } else { Some(Popover::Help) };
             }
-            if sc(Modifiers::NONE, Key::X) {
+            if on(Action::ColorSwap) {
                 let fg = self.session.color();
                 let bg = self.canvas.options.background;
                 self.set_color(bg);
                 self.canvas.options.background = fg;
             }
-            if sc(Modifiers::NONE, Key::D) {
+            if on(Action::ColorReset) {
                 self.set_color(Rgba::BLACK);
                 self.canvas.options.background = Rgba::WHITE;
             }
-            if sc(cmd, Key::Backspace) {
+            if on(Action::FillBackground) {
                 let (fg, bg) = (self.session.color(), self.canvas.options.background);
                 let _ = self.session.execute(Command::SetColor { rgba: bg });
                 let _ = self.session.execute(Command::FillSelection);
                 let _ = self.session.execute(Command::SetColor { rgba: fg });
             }
             let centre = [self.canvas.view.view_size[0] / 2.0, self.canvas.view.view_size[1] / 2.0];
-            if sc(Modifiers::NONE, Key::Equals) || sc(Modifiers::NONE, Key::Plus) {
+            if on(Action::ZoomIn) {
                 self.canvas.view.zoom_at(centre, 1.25);
             }
-            if sc(Modifiers::NONE, Key::Minus) {
+            if on(Action::ZoomOut) {
                 self.canvas.view.zoom_at(centre, 0.8);
             }
-            if sc(Modifiers::NONE, Key::Num0) {
+            if on(Action::ZoomFit) {
                 self.canvas.view.fit();
             }
-            if sc(Modifiers::NONE, Key::Num1) {
+            if on(Action::Zoom100) {
                 self.canvas.view.actual_pixels();
             }
-            if sc(Modifiers::NONE, Key::Num5) {
+            if on(Action::RotateReset) {
                 let r = self.canvas.view.rotation;
                 self.canvas.view.rotate_at(centre, -r);
             }
-            if sc(cmd, Key::OpenBracket) {
+            if on(Action::RotateLeft) {
                 self.canvas.view.rotate_at(centre, -15f64.to_radians());
             }
-            if sc(cmd, Key::CloseBracket) {
+            if on(Action::RotateRight) {
                 self.canvas.view.rotate_at(centre, 15f64.to_radians());
             }
             if self.session.anim_settings().enabled {
-                if sc(Modifiers::NONE, Key::K) {
+                if on(Action::AnimPlayPause) {
                     let playing = self.playback.playing;
                     timeline::set_playing(self, !playing);
                 }
-                if sc(Modifiers::NONE, Key::N) {
+                if on(Action::AnimAddFrame) {
                     let _ = self.session.execute(Command::AddFrame);
                 }
-                if sc(Modifiers::NONE, Key::O) {
+                if on(Action::AnimToggleOnion) {
                     let mut a = self.session.anim_settings().clone();
                     a.onion_enabled = !a.onion_enabled;
                     let _ = self.session.execute(Command::SetAnimation { settings: Box::new(a) });
                 }
-                if sc(Modifiers::SHIFT, Key::Comma) {
+                if on(Action::AnimFirstFrame) {
                     let _ = self.session.execute(Command::SetAnimSlot { slot: 0 });
                 }
-                if sc(Modifiers::SHIFT, Key::Period) {
+                if on(Action::AnimLastFrame) {
                     let last = self.session.anim_total_slots().saturating_sub(1);
                     let _ = self.session.execute(Command::SetAnimSlot { slot: last });
                 }
             }
-            if sc(Modifiers::NONE, Key::H) {
+            if on(Action::ToolPan) {
                 self.set_tool(Tool::Hand);
             }
-            if sc(Modifiers::NONE, Key::F) {
+            if on(Action::ToggleFillShape) {
                 self.canvas.options.fill_shape = !self.canvas.options.fill_shape;
                 let msg = if self.canvas.options.fill_shape { "Fill mode on: brush strokes fill their outline" } else { "Fill mode off" };
                 self.notify(msg, now);
             }
-            if sc(Modifiers::ALT, Key::Backspace) {
+            if on(Action::FillForeground) {
                 let _ = self.session.execute(Command::FillSelection);
             }
             if sc(Modifiers::NONE, Key::Delete) || sc(Modifiers::NONE, Key::Backspace) {
                 let _ = self.session.execute(Command::ClearSelected);
             }
-            // Shift+ shortcuts first: a plain-key shortcut also matches with Shift held.
-            if sc(Modifiers::SHIFT, Key::P) && self.session.guides().perspective.enabled {
+            if on(Action::TogglePerspectiveEdit) && self.session.guides().perspective.enabled {
                 self.canvas.persp_editing = !self.canvas.persp_editing;
             }
-            if sc(Modifiers::SHIFT, Key::R) {
+            if on(Action::ToggleRulers) {
                 let mut g = self.session.guides().clone();
                 g.rulers = !g.rulers;
                 let _ = self.session.execute(Command::SetGuides { guides: Box::new(g) });
             }
-            if sc(Modifiers::SHIFT, Key::G) {
+            if on(Action::ToggleGuidesEdit) {
                 self.canvas.lines_editing = !self.canvas.lines_editing;
                 self.canvas.measuring = false;
             }
-            for (key, tool) in [
-                (Key::M, Tool::SelectRect),
-                (Key::L, Tool::SelectLasso),
-                (Key::W, Tool::SelectWand),
-                (Key::G, Tool::Fill),
-                (Key::I, Tool::Eyedropper),
+            for (action, tool) in [
+                (Action::ToolSelectRect, Tool::SelectRect),
+                (Action::ToolSelectLasso, Tool::SelectLasso),
+                (Action::ToolSelectWand, Tool::SelectWand),
+                (Action::ToolFill, Tool::Fill),
+                (Action::ToolEyedropper, Tool::Eyedropper),
             ] {
-                if sc(Modifiers::NONE, key) {
+                if on(action) {
                     self.set_tool(tool);
                 }
             }
-            // Shift+B first: a plain-B shortcut also matches with Shift held.
-            if sc(Modifiers::SHIFT, Key::B) {
+            if on(Action::ToggleSettings) {
+                self.popover = if self.popover == Some(Popover::Settings) { None } else { Some(Popover::Settings) };
+            }
+            if on(Action::ToolMixer) {
                 self.set_tool(Tool::Mixer);
             }
-            if sc(Modifiers::NONE, Key::B) {
+            if on(Action::ToolBrush) {
                 self.set_tool(Tool::Brush);
             }
-            if sc(Modifiers::NONE, Key::S) {
+            if on(Action::ToolSmudge) {
                 self.set_tool(Tool::Smudge);
             }
-            if sc(Modifiers::NONE, Key::Y) {
+            if on(Action::ToggleSymmetry) {
                 self.toggle_symmetry();
             }
-            if sc(Modifiers::NONE, Key::E) {
+            if on(Action::ToolEraser) {
                 self.set_tool(Tool::Eraser);
             }
-            if sc(Modifiers::NONE, Key::T) {
+            if on(Action::ToolText) {
                 self.set_tool(Tool::Text);
             }
-            if sc(Modifiers::NONE, Key::U) {
+            if on(Action::ToolShape) {
                 self.set_tool(Tool::Shape);
             }
-            if sc(Modifiers::NONE, Key::P) {
+            if on(Action::ToolPen) {
                 self.set_tool(Tool::Pen);
             }
             if self.session.anim_settings().enabled {
-                if sc(Modifiers::NONE, Key::Comma) {
+                if on(Action::AnimPrevFrame) {
                     timeline::step(self, -1);
                 }
-                if sc(Modifiers::NONE, Key::Period) {
+                if on(Action::AnimNextFrame) {
                     timeline::step(self, 1);
                 }
             }
-            if sc(Modifiers::NONE, Key::V) || sc(cmd, Key::T) {
+            if on(Action::ToolMove) {
                 self.set_tool(Tool::Move);
             }
             if self.session.transform_active() && sc(Modifiers::NONE, Key::Enter) {
                 self.commit_transform();
             }
-            if sc(Modifiers::NONE, Key::OpenBracket) {
+            if on(Action::BrushSizeDown) {
                 let s = self.session.current_brush().size;
                 let _ = self.session.execute(Command::SetBrushSize { size: (s / 1.15).floor().max(1.0) });
                 self.canvas.size_flash = 1.0;
             }
-            if sc(Modifiers::NONE, Key::CloseBracket) {
+            if on(Action::BrushSizeUp) {
                 let s = self.session.current_brush().size;
                 let _ = self.session.execute(Command::SetBrushSize { size: (s * 1.15).ceil() });
                 self.canvas.size_flash = 1.0;
@@ -1119,6 +1136,32 @@ impl App {
         }
         let held = |k| !typing && ctx.input(|i| i.key_down(k));
         (held(Key::Space), held(Key::R))
+    }
+
+    /// Settings ▸ Keyboard shortcuts: the next key press becomes the
+    /// action's combo. Escape cancels; hard-wired keys are refused.
+    fn capture_key(&mut self, ctx: &egui::Context, now: f64) {
+        let Some(action) = self.capture else { return };
+        let press = ctx.input_mut(|i| {
+            let p = i.events.iter().find_map(|e| match e {
+                egui::Event::Key { key, pressed: true, modifiers, .. } => Some((*key, *modifiers)),
+                _ => None,
+            });
+            i.events.retain(|e| !matches!(e, egui::Event::Key { .. } | egui::Event::Text(_)));
+            p
+        });
+        let Some((key, m)) = press else { return };
+        self.capture = None;
+        if key == Key::Escape && !(m.ctrl || m.command || m.alt || m.shift) {
+            return;
+        }
+        let combo = keymap::combo_of(key, m);
+        if keymap::RESERVED.contains(&combo.as_str()) {
+            self.notify(format!("{} is reserved", keymap::format_combo(&combo)), now);
+            return;
+        }
+        self.settings.keybindings.insert(action.id().to_string(), combo);
+        self.settings.save();
     }
 }
 
@@ -2082,6 +2125,57 @@ mod tests {
     }
 
     #[test]
+    fn shortcuts_can_be_rebound_from_settings() {
+        let mut h = harness();
+        h.run();
+        h.state_mut().popover = Some(Popover::Settings);
+        // The shortcut rows are below the fold of the dialog's scroll area.
+        h.step();
+        h.step();
+        let mut last = egui::Rect::NOTHING;
+        for _ in 0..30 {
+            h.get_by_label("Smudge shortcut").scroll_to_me();
+            h.step();
+            let r = h.get_by_label("Smudge shortcut").rect();
+            if r == last {
+                break;
+            }
+            last = r;
+        }
+        h.get_by_label("Smudge shortcut").click();
+        h.step();
+        assert_eq!(h.state().capture, Some(Action::ToolSmudge));
+        // Shift+S becomes Smudge; plain S no longer is.
+        key(&mut h, egui::Key::S, egui::Modifiers::SHIFT);
+        assert_eq!(h.state().settings.keybindings.get("tool-smudge").map(String::as_str), Some("shift+s"));
+        assert_eq!(h.state().capture, None);
+        // A reserved key is refused.
+        h.get_by_label("Smudge shortcut").click();
+        h.step();
+        key(&mut h, egui::Key::Z, egui::Modifiers::COMMAND);
+        assert_eq!(h.state().settings.keybindings.get("tool-smudge").map(String::as_str), Some("shift+s"));
+        h.state_mut().popover = None;
+        h.run();
+        key(&mut h, egui::Key::S, egui::Modifiers::NONE);
+        assert_ne!(h.state().session.tool(), Tool::Smudge);
+        key(&mut h, egui::Key::S, egui::Modifiers::SHIFT);
+        assert_eq!(h.state().session.tool(), Tool::Smudge);
+        // Reset all brings S back.
+        h.state_mut().popover = Some(Popover::Settings);
+        for _ in 0..10 {
+            h.step();
+        }
+        h.get_by_label("Reset all shortcuts").click();
+        h.run();
+        assert!(h.state().settings.keybindings.is_empty());
+        h.state_mut().popover = None;
+        h.run();
+        key(&mut h, egui::Key::B, egui::Modifiers::NONE);
+        key(&mut h, egui::Key::S, egui::Modifiers::NONE);
+        assert_eq!(h.state().session.tool(), Tool::Smudge);
+    }
+
+    #[test]
     fn settings_dialog_drives_the_engine_and_the_tab_cap() {
         let mut h = harness();
         h.run();
@@ -2091,8 +2185,14 @@ mod tests {
         h.run();
         assert_eq!(h.state().popover, Some(Popover::Settings));
         // The centred dialog settles over a few frames.
-        for _ in 0..5 {
+        let mut last = egui::Rect::NOTHING;
+        for _ in 0..20 {
             h.step();
+            let r = h.get_by_label("Always use pressure for size").rect();
+            if r == last {
+                break;
+            }
+            last = r;
         }
         h.get_by_label("Always use pressure for size").click();
         h.run();

@@ -50,6 +50,8 @@ pub struct Settings {
     /// Trace the brush tip's shape (image tips; round and square are exact already).
     pub cursor_tip_shape: bool,
     pub max_history_steps: usize,
+    /// Shortcut overrides: action id → combo (`keymap.rs`).
+    pub keybindings: crate::keymap::Overrides,
     #[serde(skip)]
     path: Option<PathBuf>,
 }
@@ -68,6 +70,7 @@ impl Default for Settings {
             cursor_thickness: 1,
             cursor_tip_shape: true,
             max_history_steps: DEFAULT_HISTORY_STEPS,
+            keybindings: Default::default(),
             path: None,
         }
     }
@@ -96,6 +99,8 @@ impl Settings {
         self.max_open_tabs = self.max_open_tabs.clamp(MIN_OPEN_TABS, MAX_OPEN_TABS);
         self.cursor_thickness = self.cursor_thickness.clamp(1, 4);
         self.max_history_steps = self.max_history_steps.clamp(5, 1000);
+        // Unknown actions and unreadable combos are dropped (happypaint keeps them).
+        self.keybindings.retain(|id, combo| crate::keymap::Action::from_id(id).is_some() && crate::keymap::is_valid(combo));
     }
 
     pub fn save(&self) {
@@ -187,9 +192,16 @@ pub fn dialog(app: &mut App, ui: &mut Ui) {
                 s.max_history_steps = steps.round() as usize;
             }
         });
+        ui.add_space(8.0);
+        widgets::hairline(ui);
+        shortcuts(ui, &mut s.keybindings, &mut app.capture);
     });
     ui.add_space(6.0);
     ui.horizontal(|ui| {
+        if widgets::secondary_button(ui, "Reset all shortcuts", 150.0).clicked() {
+            app.settings.keybindings.clear();
+            app.capture = None;
+        }
         if widgets::secondary_button(ui, "Reset to defaults", 140.0).clicked() {
             let path = app.settings.path.take();
             app.settings = Settings { path, ..Settings::default() };
@@ -202,6 +214,62 @@ pub fn dialog(app: &mut App, ui: &mut Ui) {
         app.settings.clamp();
         app.settings.save();
     }
+}
+
+/// Settings ▸ Keyboard shortcuts (`settings-dialog.tsx:104-143`).
+fn shortcuts(ui: &mut Ui, ov: &mut crate::keymap::Overrides, capture: &mut Option<crate::keymap::Action>) {
+    use crate::keymap::{Action, Category, combos_for, duplicated, format_combo};
+    let t = Tokens::get(ui.ctx());
+    widgets::section_label(ui, "Keyboard shortcuts");
+    ui.label(
+        RichText::new("Click a shortcut, then press the new key combination. Esc cancels.").font(theme::medium(10.5)).color(t.fg_faint),
+    );
+    let dups = duplicated(ov);
+    ui.columns(2, |cols| {
+        for (i, cat) in Category::ALL.iter().enumerate() {
+            let ui = &mut cols[usize::from(i >= 2)];
+            ui.label(RichText::new(cat.label()).font(theme::semibold(12.5)).color(t.fg));
+            egui::Grid::new(("keys", cat.label())).num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
+                for a in Action::ALL.iter().copied().filter(|a| a.category() == *cat) {
+                    ui.label(RichText::new(a.label()).color(t.fg_muted));
+                    ui.horizontal(|ui| {
+                        if dups.contains(&a) {
+                            ui.label(RichText::new("duplicate").font(theme::medium(10.0)).color(t.danger))
+                                .on_hover_text("This shortcut is used by another action");
+                        }
+                        let capturing = *capture == Some(a);
+                        let text = if capturing {
+                            "Press keys…".to_string()
+                        } else {
+                            combos_for(a, ov).first().map_or_else(String::new, |c| format_combo(c))
+                        };
+                        let b = egui::Button::new(RichText::new(text).font(theme::mono(11.0)).color(if capturing {
+                            t.on_accent
+                        } else {
+                            t.fg
+                        }))
+                        .fill(if capturing { t.accent } else { t.field })
+                        .min_size(egui::vec2(96.0, 20.0));
+                        let r = ui.add(b);
+                        r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("{} shortcut", a.label())));
+                        if r.clicked() {
+                            *capture = if capturing { None } else { Some(a) };
+                        }
+                        let custom = ov.contains_key(a.id());
+                        let reset = ui.add_enabled(custom, egui::Button::new("↺").min_size(egui::vec2(20.0, 20.0)));
+                        reset.widget_info(|| {
+                            egui::WidgetInfo::labeled(egui::WidgetType::Button, custom, format!("Reset {} shortcut", a.label()))
+                        });
+                        if reset.on_hover_text("Reset to default").clicked() {
+                            ov.remove(a.id());
+                        }
+                    });
+                    ui.end_row();
+                }
+            });
+            ui.add_space(6.0);
+        }
+    });
 }
 
 #[cfg(test)]
