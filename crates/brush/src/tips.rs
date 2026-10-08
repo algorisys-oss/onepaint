@@ -106,6 +106,11 @@ pub fn grain_for(id: &str) -> Option<Arc<Mask>> {
     cached(format!("grain:{id}"), || GRAINS.iter().find(|g| g.0 == id).map(|g| g.3))
 }
 
+/// Built-in tip ids for the UI: the procedural tips, then the image tips.
+pub fn tip_ids() -> Vec<&'static str> {
+    ["round", "soft", "square"].into_iter().chain(TIPS.iter().map(|t| t.0)).collect()
+}
+
 /// Grain names for the UI.
 pub fn grain_names() -> Vec<(&'static str, &'static str)> {
     GRAINS.iter().map(|g| (g.0, g.1)).collect()

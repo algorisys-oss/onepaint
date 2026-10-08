@@ -3,6 +3,7 @@
 mod adjust;
 mod autosave;
 mod brush_library;
+mod brush_studio;
 mod canvas;
 mod chrome;
 mod clip;
@@ -60,6 +61,7 @@ pub enum Popover {
     PenOptions,
     Export,
     SmartFilters,
+    BrushStudio,
 }
 
 /// What a file opens as.
@@ -134,6 +136,8 @@ pub struct App {
     pub brush_category: String,
     /// Imported brushes and where they persist.
     pub brush_library: brush_library::BrushLibrary,
+    /// Brush studio state: try-it pad, preview, search.
+    pub studio: brush_studio::Studio,
     /// A file chosen by drag-and-drop, opened once unsaved work is dealt with.
     pub open_later: Option<PathBuf>,
     allow_close: bool,
@@ -189,6 +193,7 @@ impl App {
             curve_tab: 0,
             brush_category: String::new(),
             brush_library,
+            studio: brush_studio::Studio::default(),
             open_later: None,
             allow_close: false,
         };

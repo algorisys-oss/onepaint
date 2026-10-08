@@ -2,7 +2,7 @@
 //!
 //! - `ONEPAINT_SCREENSHOT=out.png` saves a screenshot of the window after a few frames.
 //! - `ONEPAINT_DEMO=1` paints a small demo scene first.
-//! - `ONEPAINT_POPOVER=layers|brushes|color|menu|new` opens a popover.
+//! - `ONEPAINT_POPOVER=layers|brushes|color|menu|new|studio|…` opens a popover.
 //! - `ONEPAINT_THEME=light` starts in the light theme.
 //! - `ONEPAINT_TRANSFORM=1` starts a rotated move on the active layer.
 //! - `ONEPAINT_TEXT=1` adds a text object and opens its editor.
@@ -67,6 +67,7 @@ impl Debug {
                 "adjustments" => Some(Popover::Adjustments),
                 "mixer" => Some(Popover::MixerOptions),
                 "liquify" => Some(Popover::LiquifyOptions),
+                "studio" => Some(Popover::BrushStudio),
                 _ => None,
             }),
             exit: var("ONEPAINT_EXIT").is_some(),
@@ -242,6 +243,11 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
     }
     if frame == 3 && app.debug.popover.is_some() {
         app.popover = app.debug.popover;
+    }
+    if frame == 8 && app.debug.popover == Some(Popover::BrushStudio) {
+        let lin = app.session.color().to_linear_premul();
+        let b = app.session.current_brush().clone();
+        app.studio.scribble(&b, [lin[0], lin[1], lin[2]]);
     }
     if frame == 12 && app.debug.shot.is_some() {
         ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));

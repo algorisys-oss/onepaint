@@ -48,7 +48,7 @@ Sources, all under `../happypaint/frontend/src/`:
 - [ ] Wet/oil media: wet, height (impasto), settle and bevel
 - [x] Smudge and mixer brushes
 - [x] Kubelka–Munk pigment mixing (mixer reservoir and deposit, and the `pigment` blend mode)
-- [ ] Brush studio: an editor with live preview and a try-it pad
+- [x] Brush studio: an editor with live preview and a try-it pad (spec 27; wet, fluid, dual-brush and tip-colour controls wait for their engine features, see divergences 25-27)
 - [x] Import `.abr`, Procreate `.brush` and `.brushset`, and `.happybrush`; export `.happybrush` (spec 23; an ABR dual brush and wet edges are kept as `maskTip` and `settle` but not painted yet, see divergence 7)
 
 ## Layers

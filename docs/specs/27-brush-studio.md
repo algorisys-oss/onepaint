@@ -151,9 +151,9 @@ Colour dynamics are dropped when all four are 0 (`:883-900`).
 **Grain** (`:1273-1383`)
 
 None plus the built-in and user grains. With a grain: Amount (`strength`,
-%), Scale (16..400 px, clamp 16..600), Move (%), Random per stroke (toggle,
+%), Scale (16..400 px, clamp 16..600), Random per stroke (toggle,
 `random` 1 or omitted). Defaults when picking a grain: scale 160,
-strength 0.5, move 0.
+strength 0.5. (happypaint also has Move and Paper; see below.)
 
 **Search** (`:535-559, 1436-1440`): a field at the top hides every section
 whose title and labels don't contain the query, and shows
@@ -192,8 +192,8 @@ white. Resizing the dialog clears the pad.
 
 Tip colour (`useTipColor`, tip hue/sat/bright), Fill shape, brush-size
 scaling and the global force-pressure toggles, Space·J, Hue→Shift, Tip col,
-the Wet, Fluid and Dual brush sections, and Paper: onepaint's stroke engine
-does not implement them yet. Their preset values are preserved untouched in
+the Wet, Fluid and Dual brush sections, grain Move, and Paper: onepaint's
+stroke engine does not implement them yet. Their preset values are preserved untouched in
 `extra` or the typed fields.
 
 ## Tests
@@ -210,6 +210,10 @@ does not implement them yet. Their preset values are preserved untouched in
 - `crates/brush/src/user.rs`: duplicate names and ids, rename, overwrite.
 - `crates/formats/src/brushes/library.rs`: a saved custom brush reloads
   from a temp dir.
-- `apps/onepaint/src/brush_studio.rs`: a kittest opens the studio from the
-  brush popover, moves a slider and checks the current brush changed; saves
-  a copy and resets.
+- `apps/onepaint/src/brush_studio.rs`: kittests open the studio from the
+  brush popover, move a slider and check the current brush changed; reset;
+  pick a tip, save a copy and save over it; scribble on the try-it pad
+  without touching the canvas, then clear it; search hides sections.
+
+`ONEPAINT_POPOVER=studio` opens the studio with a sample scribble for visual
+checks.

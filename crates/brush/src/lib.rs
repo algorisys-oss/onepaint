@@ -11,7 +11,7 @@ pub mod symmetry;
 mod tips;
 mod user;
 
-pub use tips::{GrainSampler, Mask as TipMask, Tip, grain_for, grain_names, tip_for};
+pub use tips::{GrainSampler, Mask as TipMask, Tip, grain_for, grain_names, tip_for, tip_ids};
 pub use user::{
     CUSTOM_CATEGORY, CUSTOM_ID_PREFIX, IMPORTED_CATEGORY, USER_GRAIN_PREFIX, USER_TIP_PREFIX, UserGrain, UserLibrary, add_custom_brush,
     add_user_brushes, is_user_preset, remove_user_brush, rename_user_brush, set_user_library, update_user_brush, user_library,
