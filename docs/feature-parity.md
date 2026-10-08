@@ -94,7 +94,7 @@ screentone are added as live layers.
 - [~] **Distort:** twirl, pinch, ripple, polar-coordinates (no on-canvas handles)
 - [x] **Stylize:** bloom, chromatic-aberration, halftone, tone, glitch, mosaic, crystallize, emboss, oil-paint, wind, line-art (Sobel/XDoG)
 - [~] **Render:** light-rays, lens-flare, clouds, fog, smoke, nebula, starfield, lightning (no on-canvas handles; the lightning raster replaces Canvas2D)
-- [~] **Fill:** gradient-fill, solid-fill, pattern-fill (imported pattern images are not decoded; the built-ins are)
+- [x] **Fill:** gradient-fill, solid-fill, pattern-fill (built-ins and imported image tiles, stored as PNG data URLs fit within 512 px)
 - [x] Smart-filter stacks (`layer.filters`)
 
 ## Selection

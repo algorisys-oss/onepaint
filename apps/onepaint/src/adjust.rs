@@ -242,6 +242,7 @@ pub fn params_ui(ui: &mut Ui, kind: Kind, p: &mut Params, curve_tab: &mut usize,
             ch |= pins_ui(ui, p);
             ch |= generic(ui, kind, p, colour);
         }
+        Kind::PatternFill => ch |= pattern_ui(ui, p, colour),
         _ => ch |= generic(ui, kind, p, colour),
     }
     ch
@@ -441,6 +442,46 @@ fn selective_ui(ui: &mut Ui, p: &mut Params, colour: onepaint_color::Rgba) -> bo
     ch
 }
 
+/// Pattern Fill: the built-ins, or an imported image tile kept in the params
+/// as a PNG data URL (fit within 512 px, as happypaint stores it).
+fn pattern_ui(ui: &mut Ui, p: &mut Params, colour: onepaint_color::Rgba) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let id_before = p.pattern_id.clone();
+    let mut ch = generic(ui, Kind::PatternFill, p, colour);
+    if ch && p.pattern_id != id_before {
+        // Picking a built-in replaces an imported tile.
+        p.pattern_image = None;
+    }
+    let imported = p.pattern_image.as_deref().is_some_and(|u| !u.is_empty());
+    ui.horizontal(|ui| {
+        if widgets::secondary_button(ui, "Import pattern…", 130.0).clicked()
+            && let Some(path) =
+                rfd::FileDialog::new().add_filter("Image", &["png", "jpg", "jpeg", "webp", "bmp", "gif", "tif", "tiff"]).pick_file()
+        {
+            if let Some(url) = import_pattern(&path) {
+                p.pattern_image = Some(url);
+                ch = true;
+            }
+        }
+        if imported && widgets::secondary_button(ui, "Use built-in", 110.0).clicked() {
+            p.pattern_image = None;
+            ch = true;
+        }
+    });
+    if imported {
+        ui.label(RichText::new("Imported image tile").font(theme::medium(10.5)).color(t.fg_faint));
+    }
+    ch
+}
+
+/// Decode an image file into a pattern tile data URL.
+pub fn import_pattern(path: &std::path::Path) -> Option<String> {
+    use onepaint_filters::pattern::{PATTERN_IMPORT_MAX, png_data_url};
+    let bytes = std::fs::read(path).ok()?;
+    let img = onepaint_formats::fit_image(onepaint_formats::decode_image(&bytes).ok()?, PATTERN_IMPORT_MAX);
+    png_data_url(&img.rgba, img.width, img.height)
+}
+
 /// Field Blur pins: position and blur per pin, plus add and delete.
 fn pins_ui(ui: &mut Ui, p: &mut Params) -> bool {
     let mut pins = p.pins.clone().unwrap_or_default();
@@ -599,5 +640,29 @@ pub fn smart_panel(app: &mut App, ui: &mut Ui) {
         let _ = app.session.execute(Command::BakeSmartFilters { id });
         app.smart_edit = None;
         app.popover = None;
+    }
+}
+
+#[cfg(test)]
+mod pattern_tests {
+    #[test]
+    fn importing_a_large_image_fits_the_tile_within_512() {
+        let dir = std::env::temp_dir().join(format!("onepaint-pattern-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("big.png");
+        let px: Vec<u8> = [10u8, 200, 30, 255].repeat(1024 * 512);
+        let big = onepaint_filters::pattern::png_data_url(&px, 1024, 512).unwrap();
+        std::fs::write(&path, onepaint_filters::pattern::base64_decode(big.split_once(',').unwrap().1).unwrap()).unwrap();
+        let url = super::import_pattern(&path).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        let mut p = onepaint_filters::default_params(onepaint_filters::Kind::PatternFill);
+        p.pattern_image = Some(url);
+        let pr = onepaint_filters::prepare_in(onepaint_filters::Kind::PatternFill, &p, onepaint_filters::Frame::region(0, 0, 8, 8, 72.0));
+        let c = pr.color_px([0.0; 4], 3, 3);
+        assert!(c[1] > 0.5 && c[3] > 0.99, "{c:?}");
+        let (_, body) = p.pattern_image.as_deref().unwrap().split_once(',').unwrap();
+        let png = onepaint_filters::pattern::base64_decode(body).unwrap();
+        let img = onepaint_formats::decode_image(&png).unwrap();
+        assert_eq!((img.width, img.height), (512, 256));
     }
 }

@@ -205,3 +205,34 @@ fn pattern_fill_repeats_at_its_scale() {
     let vals: Vec<f32> = (0..64).map(|x| pr.color_px([0.0; 4], x, 10)[0]).collect();
     assert!(vals.iter().any(|v| *v < 0.01) && vals.iter().any(|v| *v > 0.99));
 }
+
+#[test]
+fn imported_patterns_tile_from_their_data_url() {
+    use onepaint_filters::pattern::*;
+    assert_eq!(base64_decode(&base64_encode(b"onepaint!")).unwrap(), b"onepaint!");
+    assert_eq!(base64_encode(b"ab"), "YWI=");
+    assert_eq!(fit_within(2048, 1024, PATTERN_IMPORT_MAX), (512, 256));
+    assert_eq!(fit_within(100, 40, PATTERN_IMPORT_MAX), (100, 40));
+    // A 4×2 tile: red left half, transparent right half.
+    let mut px = Vec::new();
+    for _y in 0..2 {
+        for x in 0..4 {
+            px.extend(if x < 2 { [255, 0, 0, 255] } else { [0, 0, 0, 0] });
+        }
+    }
+    let url = png_data_url(&px, 4, 2).unwrap();
+    assert!(url.starts_with("data:image/png;base64,"));
+    let frame = Frame::region(0, 0, 64, 64, 72.0);
+    let mut p = default_params(Kind::PatternFill);
+    p.pattern_image = Some(url);
+    (p.pattern_scale, p.pattern_off_x, p.pattern_off_y) = (Some(4.0), Some(0.0), Some(0.0));
+    let pr = prepare_in(Kind::PatternFill, &p, frame);
+    let red = pr.color_px([0.0; 4], 2, 3);
+    assert!(red[0] > 0.99 && red[3] > 0.99, "{red:?}");
+    assert!(pr.color_px([0.0; 4], 12, 3)[3] < 0.01, "transparent half");
+    let again = pr.color_px([0.0; 4], 2 + 16, 3 + 8);
+    assert!((again[0] - red[0]).abs() < 1e-4, "repeats every 16 × 8 px at scale 4");
+    // An undecodable image leaves the layer empty.
+    p.pattern_image = Some("data:image/png;base64,AAAA".into());
+    assert_eq!(prepare_in(Kind::PatternFill, &p, frame).color_px([0.0; 4], 5, 5), [0.0; 4]);
+}

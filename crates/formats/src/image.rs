@@ -122,6 +122,19 @@ pub fn decode_image(bytes: &[u8]) -> Result<DecodedImage, FormatError> {
     Ok(DecodedImage { width: rgba.width(), height: rgba.height(), rgba: rgba.into_raw() })
 }
 
+/// Scale down (never up) to fit `max` on the longer side, with high-quality
+/// filtering (an imported pattern tile, `utils/pattern-import.ts`).
+pub fn fit_image(img: DecodedImage, max: u32) -> DecodedImage {
+    let k = (max as f64 / img.width.max(img.height).max(1) as f64).min(1.0);
+    if k >= 1.0 {
+        return img;
+    }
+    let (w, h) = (((img.width as f64 * k).round() as u32).max(1), ((img.height as f64 * k).round() as u32).max(1));
+    let Some(src) = image::RgbaImage::from_raw(img.width, img.height, img.rgba.clone()) else { return img };
+    let out = image::imageops::resize(&src, w, h, image::imageops::FilterType::CatmullRom);
+    DecodedImage { width: w, height: h, rgba: out.into_raw() }
+}
+
 /// Place a decoded image into a new surface with its top-left at (x, y),
 /// converting to premultiplied linear light.
 pub fn image_to_surface(img: &DecodedImage, x: i32, y: i32) -> onepaint_raster::Surface {

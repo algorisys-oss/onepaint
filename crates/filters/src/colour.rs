@@ -175,9 +175,15 @@ pub(crate) fn extra_for(kind: crate::Kind, p: &Params, frame: Frame) -> Extra {
         Kind::SelectiveColor => e.samples = sc_samples(p),
         Kind::GradientFill => e.ramp = Some(std::sync::Arc::new(Ramp::new(&fill_stops(p)))),
         Kind::PatternFill => {
-            let id = p.pattern_id.as_deref().unwrap_or("checker");
-            let tile = crate::pattern::pattern_pixels(id, p.pattern_color_a.unwrap_or([0.0; 3]), p.pattern_color_b.unwrap_or([1.0; 3]));
-            e.pattern = Some(std::sync::Arc::new(tile));
+            e.pattern = match p.pattern_image.as_deref().filter(|u| !u.is_empty()) {
+                Some(url) => crate::pattern::imported_tile(url),
+                None => {
+                    let id = p.pattern_id.as_deref().unwrap_or("checker");
+                    let tile =
+                        crate::pattern::pattern_pixels(id, p.pattern_color_a.unwrap_or([0.0; 3]), p.pattern_color_b.unwrap_or([1.0; 3]));
+                    Some(std::sync::Arc::new(tile))
+                }
+            };
         }
         _ => {}
     }
@@ -306,8 +312,7 @@ fn pattern_fill(p: &Params, e: &Extra, x: i32, y: i32) -> Px {
     let a = p.pattern_angle.unwrap_or(0.0).to_radians();
     let (c, s) = (a.cos(), a.sin());
     let r = [c * d[0] - s * d[1], s * d[0] + c * d[1]];
-    let tw = tile.size as f32 * scale;
-    let t = tile.sample_repeat(r[0] / tw, r[1] / tw);
+    let t = tile.sample_repeat(r[0] / (tile.w as f32 * scale), r[1] / (tile.h as f32 * scale));
     let l = from_work([t[0], t[1], t[2]]);
     [l[0] * t[3], l[1] * t[3], l[2] * t[3], t[3]]
 }
