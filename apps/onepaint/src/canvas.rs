@@ -292,6 +292,7 @@ pub struct Canvas {
     pub cursor: CursorPrefs,
     /// Present-only view modes (grayscale, print preview, gamut warning).
     view_modes: onepaint_color::cmyk::ViewModes,
+    press: Option<std::sync::Arc<onepaint_color::cmyk::Press>>,
     pub text_edit: Option<TextEdit>,
     /// Style for new text objects (happypaint's text-store style).
     pub text_style: onepaint_text::TextSpec,
@@ -337,6 +338,7 @@ impl Canvas {
             hold: HoldTracker::default(),
             pending: Default::default(),
             view_modes: Default::default(),
+            press: None,
             cursor: Default::default(),
             text_edit: None,
             text_style: onepaint_text::TextSpec::default(),
@@ -362,6 +364,21 @@ impl Canvas {
 
     pub fn view_modes(&self) -> onepaint_color::cmyk::ViewModes {
         self.view_modes
+    }
+
+    /// Proof through `press` (the built-in press when none).
+    pub fn set_press(&mut self, press: Option<std::sync::Arc<onepaint_color::cmyk::Press>>) {
+        let same = match (&self.press, &press) {
+            (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
+            (a, b) => a.is_none() && b.is_none(),
+        };
+        if !same {
+            self.press = press;
+            if self.view_modes.any() {
+                let [w, h] = self.doc_size;
+                self.pending.extend(onepaint_raster::Rect::new(0, 0, w as i32, h as i32).tiles());
+            }
+        }
     }
 
     /// Change the view modes and re-present every tile.
@@ -1268,9 +1285,10 @@ impl Canvas {
         let modes = self.view_modes;
         if modes.any() {
             use rayon::prelude::*;
+            let press = crate::press::active(&self.press);
             out.par_iter_mut().for_each(|(_, t)| {
                 let mut px = t.to_f32();
-                onepaint_color::cmyk::apply_view(&mut px, &modes);
+                onepaint_color::cmyk::apply_view_with(press, &mut px, &modes);
                 *t = Tile::from_f32(&px);
             });
         }

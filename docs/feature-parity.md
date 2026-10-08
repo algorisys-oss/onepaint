@@ -149,8 +149,8 @@ screentone are added as live layers.
 - [x] Color picker
 - [x] Palettes, with import (.swatches, .aco, .ase, .gpl) and export (.swatches)
 - [x] Median-cut palette extraction (from the canvas or an image file)
-- [ ] ICC profiles
-- [~] CMYK soft-proof and press profiles (built-in coated press, print preview, paper and ink simulation, gamut warning, Ctrl+Y value check; user ICC press profiles not yet; spec 32)
+- [x] ICC profiles (sRGB/Display-P3 tags on PNG and JPEG export, embedded RGB profiles converted on import; spec 32)
+- [x] CMYK soft-proof and press profiles (built-in coated press or a loaded ICC press, print preview, paper and ink simulation, gamut warning, Ctrl+Y value check; spec 32)
 - [x] TIFF CMYK export
 
 ## Files
@@ -159,7 +159,7 @@ screentone are added as live layers.
 - [x] `.happypaint-book` (open as tabs; save all tabs as a book)
 - [ ] `.happypaint-rec`
 - [~] PSD: read and write layers, groups, masks, blend modes, clipping, DPI and simple adjustments (8/16-bit RGB/grey read, PSB read; text exported as pixels)
-- [~] PNG, JPEG, WebP, TIFF and Netpbm, keeping ICC profiles and DPI (import all; export PNG/JPEG/TIFF/PPM with scale and DPI; no ICC embedding yet)
+- [x] PNG, JPEG, WebP, TIFF and Netpbm, keeping ICC profiles and DPI (import all, converting embedded RGB profiles; export PNG/JPEG/TIFF/PPM with scale, DPI and ICC tags)
 - [~] GIF, MP4, WebM and PNG-zip export (GIF and PNG-zip; no MP4/WebM)
 - [x] Clipboard: copy and paste images (in-place paste, the system clipboard, layer via copy/cut)
 - [ ] Camera and screen capture as a reference or import

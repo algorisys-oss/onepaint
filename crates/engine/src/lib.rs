@@ -613,6 +613,16 @@ impl Session {
 
     /// What you see (the current animation frame, without onion ghosts), encoded.
     pub fn export_image(&self, o: &onepaint_formats::export::ExportOptions) -> Result<Vec<u8>, EngineError> {
+        self.export_image_with(o, onepaint_color::cmyk::builtin_press())
+    }
+
+    /// As `export_image`, with a CMYK TIFF separated through `press`. A
+    /// Display-P3 document exports P3 values tagged with the P3 profile.
+    pub fn export_image_with(
+        &self,
+        o: &onepaint_formats::export::ExportOptions,
+        press: &onepaint_color::cmyk::Press,
+    ) -> Result<Vec<u8>, EngineError> {
         let flat = if self.anim.enabled && anim::total_slots(&self.doc.root) > 0 {
             let mut v = anim::view_document(&self.doc, &self.anim, self.anim_slot, false, &self.active);
             self.apply_smart_filters(&mut v.root);
@@ -621,8 +631,8 @@ impl Session {
         } else {
             self.flatten()
         };
-        let o = onepaint_formats::export::ExportOptions { dpi: self.doc.dpi, ..*o };
-        Ok(onepaint_formats::export::export_flat(&flat, self.doc.width, self.doc.height, &o)?.0)
+        let o = onepaint_formats::export::ExportOptions { dpi: self.doc.dpi, display_p3: self.doc.color_space == "display-p3", ..*o };
+        Ok(onepaint_formats::export::export_flat_with(&flat, self.doc.width, self.doc.height, &o, press)?.0)
     }
 
     /// The flattened canvas as an 8-bit straight-alpha sRGB PNG.

@@ -116,10 +116,20 @@ pub struct DecodedImage {
 }
 
 /// Decode PNG, JPEG, WebP, BMP, GIF or TIFF (format sniffed from the bytes).
+/// An embedded RGB ICC profile is converted to sRGB (as browsers do).
 pub fn decode_image(bytes: &[u8]) -> Result<DecodedImage, FormatError> {
-    let img = image::load_from_memory(bytes).map_err(|e| FormatError::Image(e.to_string()))?;
-    let rgba = img.to_rgba8();
-    Ok(DecodedImage { width: rgba.width(), height: rgba.height(), rgba: rgba.into_raw() })
+    use image::ImageDecoder;
+    let err = |e: image::ImageError| FormatError::Image(e.to_string());
+    let reader =
+        image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().map_err(|e| FormatError::Image(e.to_string()))?;
+    let mut dec = reader.into_decoder().map_err(err)?;
+    let icc = dec.icc_profile().ok().flatten();
+    let img = image::DynamicImage::from_decoder(dec).map_err(err)?;
+    let mut rgba = img.to_rgba8().into_raw();
+    if let Some(p) = icc {
+        onepaint_color::icc::rgba8_to_srgb(&p, &mut rgba);
+    }
+    Ok(DecodedImage { width: img.width(), height: img.height(), rgba })
 }
 
 /// Scale down (never up) to fit `max` on the longer side, with high-quality

@@ -2713,6 +2713,7 @@ dependencies = [
 name = "onepaint-color"
 version = "0.1.0"
 dependencies = [
+ "moxcms",
  "serde",
  "serde_json",
 ]

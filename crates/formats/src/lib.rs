@@ -4,6 +4,7 @@
 pub mod book;
 pub mod brushes;
 pub mod export;
+pub mod icc_embed;
 mod image;
 pub mod palette;
 pub mod psd;

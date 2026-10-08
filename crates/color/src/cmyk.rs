@@ -151,38 +151,119 @@ pub struct Press {
     pub proof_lut: Vec<u8>,
     pub white: [f64; 3],
     pub black: [f64; 3],
+    /// Shown in the View menu ("Generic coated (built-in)" or the profile's).
+    pub name: String,
+    /// The loaded profile's bytes (a CMYK TIFF embeds them); none built in.
+    pub icc: Option<Vec<u8>>,
+}
+
+/// Bake both LUTs from a separation (gamma sRGB → CMYK 0..1, ink amounts)
+/// and a proof (CMYK → gamma sRGB) over the whole grid.
+fn bake(
+    sep_grid: impl Fn(&[[f64; 3]]) -> Vec<[f64; 4]>,
+    proof_all: impl Fn(&[[f64; 4]]) -> Vec<[f64; 3]>,
+    name: String,
+    icc: Option<Vec<u8>>,
+) -> Press {
+    let n = GRID;
+    let mut grid = Vec::with_capacity(n * n * n);
+    for bi in 0..n {
+        for gi in 0..n {
+            for ri in 0..n {
+                grid.push([ri as f64 / (n - 1) as f64, gi as f64 / (n - 1) as f64, bi as f64 / (n - 1) as f64]);
+            }
+        }
+    }
+    let seps = sep_grid(&grid);
+    let ends = sep_grid(&[[1.0; 3], [0.0; 3]]);
+    let ends = proof_all(&ends);
+    let (white, black) = (ends[0], ends[1]);
+    let proofs = proof_all(&seps);
+    let mut sep_lut = Vec::with_capacity(n * n * n * 4);
+    let mut proof_lut = Vec::with_capacity(n * n * n * 4);
+    for ((src, c), p) in grid.iter().zip(&seps).zip(&proofs) {
+        sep_lut.extend(c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8));
+        proof_lut.extend(p.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8));
+        let a = srgb_to_lab(src[0], src[1], src[2]);
+        let q = normalize_proof(*p, white, black);
+        let bq = srgb_to_lab(q[0], q[1], q[2]);
+        let de = ((a[0] - bq[0]).powi(2) + (a[1] - bq[1]).powi(2) + (a[2] - bq[2]).powi(2)).sqrt();
+        proof_lut.push((de * DELTA_E_SCALE).round().min(255.0) as u8);
+    }
+    Press { sep_lut, proof_lut, white, black, name, icc }
 }
 
 /// The built-in press, baked once (~36k warm-started Newton solves).
 pub fn builtin_press() -> &'static Press {
     static P: OnceLock<Press> = OnceLock::new();
     P.get_or_init(|| {
-        let sep = |r, g, b, s| separate_rgb(r, g, b, s);
-        let white = cmyk_to_proof_rgb(&sep(1.0, 1.0, 1.0, None));
-        let black = cmyk_to_proof_rgb(&sep(0.0, 0.0, 0.0, None));
-        let n = GRID;
-        let mut sep_lut = Vec::with_capacity(n * n * n * 4);
-        let mut proof_lut = Vec::with_capacity(n * n * n * 4);
-        let mut prev = None;
-        for bi in 0..n {
-            for gi in 0..n {
-                for ri in 0..n {
-                    let src = [ri as f64 / (n - 1) as f64, gi as f64 / (n - 1) as f64, bi as f64 / (n - 1) as f64];
-                    let c = sep(src[0], src[1], src[2], prev);
-                    prev = Some(c);
-                    sep_lut.extend(c.map(|v| (v * 255.0).round() as u8));
-                    let p = cmyk_to_proof_rgb(&c);
-                    proof_lut.extend(p.map(|v| (v * 255.0).round() as u8));
-                    let a = srgb_to_lab(src[0], src[1], src[2]);
-                    let q = normalize_proof(p, white, black);
-                    let bq = srgb_to_lab(q[0], q[1], q[2]);
-                    let de = ((a[0] - bq[0]).powi(2) + (a[1] - bq[1]).powi(2) + (a[2] - bq[2]).powi(2)).sqrt();
-                    proof_lut.push((de * DELTA_E_SCALE).round().min(255.0) as u8);
-                }
-            }
-        }
-        Press { sep_lut, proof_lut, white, black }
+        let sep = |grid: &[[f64; 3]]| {
+            let mut prev = None;
+            grid.iter()
+                .map(|c| {
+                    let s = separate_rgb(c[0], c[1], c[2], prev);
+                    prev = Some(s);
+                    s
+                })
+                .collect()
+        };
+        let proof = |cs: &[[f64; 4]]| cs.iter().map(cmyk_to_proof_rgb).collect();
+        bake(sep, proof, "Generic coated (built-in)".into(), None)
     })
+}
+
+/// Why a press profile can't be used.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PressError(pub String);
+
+impl std::fmt::Display for PressError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// A press from a CMYK output profile (`.icc` / `.icm`): separation and proof
+/// through it at relative colorimetric, as happypaint does, with
+/// `moxcms` as the colour engine (happypaint parses the LUTs itself).
+pub fn press_from_icc(bytes: &[u8]) -> Result<Press, PressError> {
+    use moxcms::{ColorProfile, DataColorSpace, Layout, ProfileText, RenderingIntent, TransformOptions};
+    let err = |m: &str| PressError(m.into());
+    let prof = ColorProfile::new_from_slice(bytes).map_err(|e| PressError(format!("Not a readable ICC profile ({e:?})")))?;
+    if prof.color_space != DataColorSpace::Cmyk {
+        return Err(err("Not a CMYK press profile"));
+    }
+    let name = match &prof.description {
+        Some(ProfileText::PlainString(s)) => s.clone(),
+        Some(ProfileText::Localizable(l)) => l.first().map(|v| v.value.clone()).unwrap_or_default(),
+        Some(ProfileText::Description(d)) => d.ascii_string.clone(),
+        None => String::new(),
+    };
+    let name = if name.trim().is_empty() { "Custom press".to_string() } else { name.trim().trim_end_matches('\0').to_string() };
+    let srgb = ColorProfile::new_srgb();
+    let opts = TransformOptions { rendering_intent: RenderingIntent::RelativeColorimetric, ..Default::default() };
+    let to_cmyk = srgb
+        .create_transform_f32(Layout::Rgb, &prof, Layout::Rgba, opts)
+        .map_err(|e| PressError(format!("Can't separate through it ({e:?})")))?;
+    let to_rgb = prof
+        .create_transform_f32(Layout::Rgba, &srgb, Layout::Rgb, opts)
+        .map_err(|e| PressError(format!("Can't proof through it ({e:?})")))?;
+    let sep = |grid: &[[f64; 3]]| {
+        let src: Vec<f32> = grid.iter().flat_map(|c| c.map(|v| v as f32)).collect();
+        let mut dst = vec![0.0f32; grid.len() * 4];
+        if to_cmyk.transform(&src, &mut dst).is_err() {
+            return vec![[0.0; 4]; grid.len()];
+        }
+        dst.chunks_exact(4).map(|c| [c[0] as f64, c[1] as f64, c[2] as f64, c[3] as f64]).collect()
+    };
+    let proof = |cs: &[[f64; 4]]| {
+        let src: Vec<f32> = cs.iter().flat_map(|c| c.map(|v| v as f32)).collect();
+        let mut dst = vec![0.0f32; cs.len() * 3];
+        if to_rgb.transform(&src, &mut dst).is_err() {
+            return vec![[0.0; 3]; cs.len()];
+        }
+        dst.chunks_exact(3).map(|c| [c[0] as f64, c[1] as f64, c[2] as f64]).collect()
+    };
+    Ok(bake(sep, proof, name, Some(bytes.to_vec())))
 }
 
 fn trilinear(lut: &[u8], r: f64, g: f64, b: f64) -> [f64; 4] {
@@ -206,19 +287,27 @@ fn trilinear(lut: &[u8], r: f64, g: f64, b: f64) -> [f64; 4] {
     out
 }
 
-/// Straight RGBA8 (already on white) → CMYK bytes through the separation LUT.
+/// Straight RGBA8 (already on white) → CMYK bytes through the built-in press.
 pub fn separate_rgba8(rgba: &[u8]) -> Vec<u8> {
-    let p = builtin_press();
+    separate_rgba8_with(builtin_press(), rgba)
+}
+
+/// Straight RGBA8 (already on white) → CMYK bytes through `p`'s separation LUT.
+pub fn separate_rgba8_with(p: &Press, rgba: &[u8]) -> Vec<u8> {
     rgba.chunks_exact(4)
         .flat_map(|px| trilinear(&p.sep_lut, px[0] as f64 / 255.0, px[1] as f64 / 255.0, px[2] as f64 / 255.0).map(|v| v.round() as u8))
         .collect()
 }
 
+/// Soft-proof one gamma sRGB colour on the built-in press.
+pub fn proof(rgb: [f64; 3], paper_white: bool, black_ink: bool) -> ([f64; 3], f64) {
+    proof_with(builtin_press(), rgb, paper_white, black_ink)
+}
+
 /// Soft-proof one gamma sRGB colour (already on white): the print, made
 /// media-relative unless paper white / black ink are simulated, and the
 /// gamut error ΔE.
-pub fn proof(rgb: [f64; 3], paper_white: bool, black_ink: bool) -> ([f64; 3], f64) {
-    let p = builtin_press();
+pub fn proof_with(p: &Press, rgb: [f64; 3], paper_white: bool, black_ink: bool) -> ([f64; 3], f64) {
     let s = trilinear(&p.proof_lut, rgb[0], rgb[1], rgb[2]);
     let lo = if black_ink { [0.0; 3] } else { p.black.map(s2l) };
     let hi = if paper_white { [1.0; 3] } else { p.white.map(s2l) };
@@ -249,6 +338,11 @@ const WARN: [f32; 3] = [0.78, 0.06, 0.10];
 /// Apply the view modes to premultiplied-linear RGBA in place (the compositor
 /// present shader: grayscale on the encoded colour, then the proof lookup).
 pub fn apply_view(px: &mut [f32], v: &ViewModes) {
+    apply_view_with(builtin_press(), px, v);
+}
+
+/// [`apply_view`] proofing on `press`.
+pub fn apply_view_with(press: &Press, px: &mut [f32], v: &ViewModes) {
     if !v.any() {
         return;
     }
@@ -264,9 +358,9 @@ pub fn apply_view(px: &mut [f32], v: &ViewModes) {
         let mut out_a = a;
         if v.proof || v.gamut_warn > 0.0 {
             let on_white = c.map(|x| (x + 1.0 - a).clamp(0.0, 1.0) as f64);
-            let s = trilinear(&builtin_press().proof_lut, on_white[0], on_white[1], on_white[2]);
+            let s = trilinear(&press.proof_lut, on_white[0], on_white[1], on_white[2]);
             if v.proof {
-                c = proof(on_white, v.paper_white, v.black_ink).0.map(|x| x as f32);
+                c = proof_with(press, on_white, v.paper_white, v.black_ink).0.map(|x| x as f32);
                 out_a = 1.0;
             }
             if v.gamut_warn > 0.0 && s[3] >= warn_lut {

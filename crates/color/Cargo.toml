@@ -9,6 +9,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+moxcms = "0.8"
 serde = { workspace = true }
 
 [dev-dependencies]

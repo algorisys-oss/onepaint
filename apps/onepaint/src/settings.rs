@@ -65,7 +65,7 @@ pub struct Settings {
     /// Shortcut overrides: action id → combo (`keymap.rs`).
     pub keybindings: crate::keymap::Overrides,
     #[serde(skip)]
-    path: Option<PathBuf>,
+    pub path: Option<PathBuf>,
 }
 
 impl Default for Settings {

@@ -81,3 +81,31 @@ fn view_modes_on_premultiplied_linear_pixels() {
     apply_view(&mut sim, &ViewModes { proof: true, paper_white: true, ..Default::default() });
     assert!(sim[4] < p[4], "simulated paper is darker than display white");
 }
+
+#[test]
+fn a_cmyk_icc_press_separates_and_proofs() {
+    // A real press profile from the system (colord's FOGRA39); skipped without one.
+    let Ok(bytes) = std::fs::read("/usr/share/color/icc/colord/FOGRA39L_coated.icc") else {
+        eprintln!("skipping: no FOGRA39 profile on this system");
+        return;
+    };
+    let p = onepaint_color::cmyk::press_from_icc(&bytes).unwrap();
+    assert!(p.name.to_lowercase().contains("fogra") || !p.name.is_empty(), "{}", p.name);
+    assert_eq!(p.icc.as_deref(), Some(&bytes[..]));
+    let sep = |rgb: [u8; 3]| onepaint_color::cmyk::separate_rgba8_with(&p, &[rgb[0], rgb[1], rgb[2], 255]);
+    // Paper takes no ink; black takes lots; cyan-ish blue is mostly cyan.
+    assert!(sep([255, 255, 255]).iter().all(|v| *v <= 3), "white {:?}", sep([255, 255, 255]));
+    let k = sep([0, 0, 0]);
+    assert!(k.iter().map(|v| *v as u32).sum::<u32>() > 600, "black {k:?}");
+    let blue = sep([0, 120, 220]);
+    assert!(blue[0] > blue[1] && blue[0] > blue[2], "{blue:?}");
+    // In-gamut colours proof close; saturated green moves (out of gamut).
+    let (q, de) = onepaint_color::cmyk::proof_with(&p, [0.6, 0.5, 0.45], false, false);
+    assert!(de < 6.0, "neutral ΔE {de}, {q:?}");
+    let (_, de_green) = onepaint_color::cmyk::proof_with(&p, [0.0, 1.0, 0.0], false, false);
+    assert!(de_green > 10.0, "green ΔE {de_green}");
+    // Not a CMYK profile: refused with a readable reason.
+    let srgb = onepaint_color::icc::build_icc_profile(onepaint_color::icc::RgbSpace::Srgb);
+    assert!(onepaint_color::cmyk::press_from_icc(&srgb).is_err());
+    assert!(onepaint_color::cmyk::press_from_icc(b"junk").is_err());
+}

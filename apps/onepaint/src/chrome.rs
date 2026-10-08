@@ -1967,6 +1967,13 @@ fn view_modes(app: &mut App, ui: &mut Ui) {
         v.gamut_warn = warn[i];
     }
     app.canvas.set_view_modes(v);
+    // The press the proof, the warning and CMYK TIFF all go through.
+    let name = crate::press::active(&app.press).name.clone();
+    let hint = if app.press.is_some() { "Clear" } else { "Load .icc…" };
+    if widgets::menu_item(ui, Some("palette"), &format!("Press: {name}"), hint).clicked() {
+        let now = ui.input(|i| i.time);
+        app.toggle_press_profile(now);
+    }
 }
 
 fn guides(app: &mut App, ui: &mut Ui) {

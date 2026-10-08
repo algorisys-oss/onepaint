@@ -14,6 +14,7 @@ mod keymap;
 mod palettes;
 mod panel_ui;
 mod pen;
+mod press;
 mod progressive;
 mod reference;
 mod settings;
@@ -168,6 +169,8 @@ pub struct App {
     pub bevel: [f32; 2],
     /// The New canvas dialog's paper preset (index into `PAPER_PRESETS`).
     pub new_paper: usize,
+    /// A loaded CMYK press profile; the built-in press when none.
+    pub press: Option<std::sync::Arc<onepaint_color::cmyk::Press>>,
     /// Settings ▸ Keyboard shortcuts: the action waiting for a key press.
     pub capture: Option<Action>,
     pub playback: timeline::Playback,
@@ -251,6 +254,7 @@ impl App {
             palettes,
             bevel: [0.0, 0.25],
             new_paper: 0,
+            press: None,
             capture: None,
             settings: settings::Settings::load(if cfg!(test) || debug.scripted() { None } else { settings::default_path() }),
             playback: Default::default(),
@@ -287,6 +291,8 @@ impl App {
             open_later: None,
             allow_close: false,
         };
+        app.press = press::restore(press::saved_path(app.settings.path.as_deref()).as_deref());
+        app.canvas.set_press(app.press.clone());
         if let Some(p) = open {
             app.open_path(p);
         } else if !app.debug.scripted()
@@ -778,11 +784,35 @@ impl App {
         else {
             return;
         };
-        match self.session.export_image(&opts).map_err(|e| e.to_string()).and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string()))
+        match self
+            .session
+            .export_image_with(&opts, press::active(&self.press))
+            .map_err(|e| e.to_string())
+            .and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string()))
         {
             Ok(()) => self.notify(format!("Exported {}", path.display()), now),
             Err(e) => self.notify(format!("Export failed: {e}"), now),
         }
+    }
+
+    /// View ▸ Press: load a `.icc` / `.icm` press profile, or go back to the
+    /// built-in press when one is loaded.
+    pub fn toggle_press_profile(&mut self, now: f64) {
+        let path = press::saved_path(self.settings.path.as_deref());
+        if self.press.take().is_some() {
+            press::forget(path.as_deref());
+            self.notify("Press: Generic coated (built-in)", now);
+        } else {
+            let Some(file) = rfd::FileDialog::new().add_filter("ICC profile", &["icc", "icm"]).pick_file() else { return };
+            match std::fs::read(&file).map_err(|e| e.to_string()).and_then(|b| press::load(&b, path.as_deref())) {
+                Ok(p) => {
+                    self.notify(format!("Press profile loaded: {}", p.name), now);
+                    self.press = Some(p);
+                }
+                Err(e) => self.notify(format!("Couldn't use that profile: {e}"), now),
+            }
+        }
+        self.canvas.set_press(self.press.clone());
     }
 
     pub fn export_png(&mut self, now: f64) {
@@ -1919,6 +1949,17 @@ mod tests {
         h.get_by_label("ΔE > 5").click();
         h.run();
         assert_eq!(h.state().canvas.view_modes().gamut_warn, 5.0);
+        assert!(h.query_by_label_contains("Press: Generic coated (built-in)").is_some());
+        // A loaded press is named there, and clicking it goes back to the built-in.
+        let Ok(icc) = std::fs::read("/usr/share/color/icc/colord/FOGRA39L_coated.icc") else { return };
+        let p = press::load(&icc, None).unwrap();
+        let name = p.name.clone();
+        h.state_mut().press = Some(p.clone());
+        h.state_mut().canvas.set_press(Some(p));
+        h.run();
+        h.get_by_label_contains(&format!("Press: {name}")).click();
+        h.run();
+        assert!(h.state().press.is_none());
     }
 
     #[test]

@@ -43,7 +43,30 @@ The sources are `engine/color/cmyk.ts`, `engine/color/press-profile.ts`,
   InkSet 1 and 8 bits per ink in one strip. The resolution is d/1 per inch.
   The bytes match happypaint's golden.
 - **Export dialog:** TIFF has a "CMYK for print" option. The image is
-  flattened on white, then separated through the built-in press.
+  flattened on white, then separated through the active press. A loaded
+  profile is embedded as InterColorProfile (tag 34675, UNDEFINED), with the
+  strip word-aligned after it.
 
-## Not ported
-- User ICC press profiles (`pickPressProfile`) and ICC embedding (tag 34675).
+## Press profiles (`press_from_icc`, app `press.rs`)
+- **Loading:** a CMYK output `.icc`/`.icm` (FOGRA39, SWOP, GRACoL …) is
+  parsed with `moxcms`. Both LUTs are baked through the same `bake` as the
+  built-in press, using relative colorimetric sRGB→CMYK and CMYK→sRGB. An RGB
+  or unparseable profile is refused with a sentence.
+- **Scope:** app-level, as in happypaint. One press drives the print
+  preview, the gamut warning and the CMYK TIFF.
+- **Persistence:** saved as `press.icc` beside `settings.json` and restored
+  at launch. A file that no longer loads is deleted.
+- **UI:** the guides popover's View section has "Press: <name>". Clicking it
+  loads a profile, or clears it back to "Generic coated (built-in)".
+
+## RGB profiles (`color::icc`, `formats::icc_embed`)
+- **Generated profiles (`build_icc_profile`):** ICC v4.2 matrix/TRC
+  profiles for sRGB and Display P3, built from `icc.ts`'s constants. The
+  creation date is fixed, so the bytes are deterministic.
+- **Export:** PNG gets an `iCCP` chunk right after IHDR, keyed by the
+  profile name, and no `sRGB` chunk. JPEG gets one APP2 `ICC_PROFILE`
+  segment after APP0/APP1. A Display-P3 document exports P3 values tagged P3
+  (divergence 40). Netpbm and RGB TIFF are untagged.
+- **Import:** an embedded RGB profile is converted to sRGB (relative
+  colorimetric, alpha untouched), as the browser does when happypaint decodes
+  an image. CMYK and grey profiles are left as the decoder gives them.

@@ -64,3 +64,35 @@ fn tiff_cmyk_separates_flattened_on_white() {
     assert!(strip[0] < 10 && strip[1] > 200 && strip[2] > 200, "{strip:?}");
     assert_eq!(&strip[4..], &[0, 0, 0, 0]);
 }
+
+#[test]
+fn exports_are_tagged_and_p3_round_trips_through_import() {
+    // Saturated red-ish, which differs in P3.
+    let red = [0.6f32, 0.05, 0.02, 1.0];
+    for format in [ExportFormat::Png, ExportFormat::Jpeg] {
+        let o = ExportOptions { format, quality: 100, display_p3: true, ..Default::default() };
+        let (b, _, _) = export_flat(&red, 1, 1, &o).unwrap();
+        let back = onepaint_formats::decode_image(&b).unwrap();
+        let plain = onepaint_formats::decode_image(
+            &export_flat(&red, 1, 1, &ExportOptions { format, quality: 100, ..Default::default() }).unwrap().0,
+        )
+        .unwrap();
+        for (a, b) in back.rgba.iter().zip(&plain.rgba) {
+            assert!(a.abs_diff(*b) <= 3, "{format:?}: P3 export reads back as the sRGB one: {:?} vs {:?}", back.rgba, plain.rgba);
+        }
+        assert!(b.windows(11).any(|w| w == b"ICC_PROFILE") || b.windows(4).any(|w| w == b"iCCP"), "{format:?} is tagged");
+    }
+}
+
+#[test]
+fn a_cmyk_tiff_embeds_a_loaded_press_profile() {
+    let Ok(icc) = std::fs::read("/usr/share/color/icc/colord/FOGRA39L_coated.icc") else { return };
+    let press = onepaint_color::cmyk::press_from_icc(&icc).unwrap();
+    let o = ExportOptions { format: ExportFormat::Tiff, cmyk: true, ..Default::default() };
+    let (t, _, _) = onepaint_formats::export::export_flat_with(&px(), 2, 1, &o, &press).unwrap();
+    // Tag 34675, type UNDEFINED, pointing at the profile; the strip follows.
+    let entry = t.windows(8).position(|w| w[..4] == [0x73, 0x87, 7, 0]).expect("InterColorProfile tag");
+    let off = u32::from_le_bytes(t[entry + 8..entry + 12].try_into().unwrap()) as usize;
+    assert_eq!(&t[off..off + icc.len()], &icc[..]);
+    assert_eq!(t.len(), (off + icc.len()).next_multiple_of(2) + 2 * 4, "word-aligned strip of 2 CMYK pixels");
+}
