@@ -1103,6 +1103,21 @@ impl Session {
         if st.noop {
             return;
         }
+        // Watercolour settle: rim and granulation, on paint going on (PE:977).
+        if !st.mask
+            && st.mode != StrokeMode::Erase
+            && let Some(fx) = st.engine.brush().settle()
+        {
+            let b = st.engine.brush();
+            let grain = b.grain.as_ref().and_then(|g| {
+                Some(onepaint_brush::settle::SettleGrain { tex: onepaint_brush::grain_for(&g.id)?, scale: g.scale.max(1.0) })
+            });
+            let hardness = b.hardness;
+            onepaint_brush::settle::apply(&mut st.buffer, self.doc.bounds(), fx, grain.as_ref(), hardness);
+            for (tx, ty) in st.buffer.tile_keys() {
+                self.mark_dirty(Rect::from_tile(tx, ty));
+            }
+        }
         if st.mode == StrokeMode::Erase && st.height.is_some() {
             self.height_carve(&st.layer, &st.buffer, st.opacity);
         }

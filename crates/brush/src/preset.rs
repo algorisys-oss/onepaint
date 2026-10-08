@@ -218,6 +218,12 @@ impl BrushPreset {
         self.extra.get("wet").and_then(|w| w.get("load")).and_then(|v| v.as_f64()).unwrap_or(1.0)
     }
 
+    /// Watercolour settle (`settle`), when it does anything.
+    pub fn settle(&self) -> Option<crate::settle::Settle> {
+        let s: crate::settle::Settle = serde_json::from_value(self.extra.get("settle")?.clone()).ok()?;
+        s.is_active().then_some(s)
+    }
+
     /// Impasto depth (`impasto.depth`, 0 = flat).
     pub fn impasto_depth(&self) -> f64 {
         self.extra.get("impasto").and_then(|w| w.get("depth")).and_then(|v| v.as_f64()).unwrap_or(0.0).max(0.0)

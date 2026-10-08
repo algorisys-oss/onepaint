@@ -12,8 +12,8 @@ height field):
 |---|---|---|---|
 | A | `wet {wetness, load, mix, pigment, tip, blend}` | Stroke-synchronous mixer: pickup, reservoir, contamination | **done** |
 | C | `impasto {depth}` | A per-layer height field, lit as relief at composite time; bevel from alpha | **done** |
-| D | `settle {edgeDarken, granulate}` | A flatten-time pass on dry watercolour strokes | next |
-| B | `fluid {water, pigment, rewet, blow, oil}` | A live, time-stepped wet simulation | last |
+| D | `settle {edgeDarken, granulate}` | A flatten-time pass on dry watercolour strokes | **done** |
+| B | `fluid {water, pigment, rewet, blow, oil}` | A live, time-stepped wet simulation | next |
 
 ## A. Wet presets (`brush::WetMedia`, `engine` stroke routing)
 - **Accessor:** `BrushPreset::wet()` reads the `wet` block, which stays
@@ -93,3 +93,26 @@ height field):
   - Metallic layers.
   - The dry-stamp paper tooth fill (`fill = max(alpha·.55, smoothstep(.02,
     .25, h))`) waits for paper texture.
+
+## D. Settle (`brush::settle`)
+- **When:** paint strokes with a `settle` block (`edgeDarken` or
+  `granulate` > 0). It runs at stroke end on the finished stroke buffer,
+  before the flatten and after the tail dabs. Erase and mask strokes never
+  settle. The live preview shows the unsettled stroke, as in happypaint.
+- **Rim:**
+  - Taps are bilinear alpha on two 8-tap rings, at 4 px and 14 px
+    (diagonals at r/√2).
+  - Taps clamp to the document edge.
+  - `rim = clamp(max((a − ring)/a · 2))`
+  - `na = a · (1 + edge · 0.9 · rim)`
+- **Soft halo:**
+  - The gate is `smoothstep(.5, .15, hardness)`.
+  - `r = a/mx`, where `mx` is the maximum over all taps.
+  - `band = smoothstep(.95, .65, r) · smoothstep(.03, .18, r) · gate`
+  - `na = max(na, mix(a, mx·(1 + .9·edge), band))`
+- **Granulation:**
+  - Uses the brush grain at `grain.scale` doc px, fixed to the canvas
+    (no offset or rotation), repeat-sampled.
+  - `na *= 1 + granulate · .55 · (2g − 1)`
+- **Result:** `na` is clamped to `[.45·a, 1]`. Premultiplied RGB scales by
+  `na/a`, so the hue is unchanged.

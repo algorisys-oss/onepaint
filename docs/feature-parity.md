@@ -37,7 +37,7 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] select-wand
 
 ## Brushes
-- [~] All 118 presets, including Manga and the baked Procreate brushes, with identical parameters (all 124 load with verbatim parameters, tips and grains; the 14 wet presets paint through the mixer and impasto builds relief; settle and fluid are not painted yet)
+- [~] All 118 presets, including Manga and the baked Procreate brushes, with identical parameters (all 124 load with verbatim parameters, tips and grains; the 14 wet presets paint through the mixer and impasto builds relief, settle dries watercolour; the 5 live-fluid presets are not simulated yet)
 - [~] Dynamics: pressure, tilt, twist and velocity mapped to size, opacity and flow (all implemented; hardware tilt and pressure need a tablet backend, see Input)
 - [x] Velocity-synthesized pressure for devices without hardware pressure
 - [x] Computed and sampled tips (happypaint's generators baked to PNG)
@@ -45,7 +45,7 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] Airbrush (time-based ticks)
 - [x] Smoothing and the stabilizer
 - [x] Symmetry: mirror and radial (angle, centre, 2–24 spokes; Y toggles)
-- [~] Wet/oil media (spec 35): wet presets pick up and drag paint; impasto height with relief lighting, blender levelling, eraser carving and `.happypaint` round trip; Bevel & Emboss from alpha. Settle and live fluid are next
+- [~] Wet/oil media (spec 35): wet presets pick up and drag paint; impasto height with relief lighting, blender levelling, eraser carving and `.happypaint` round trip; Bevel & Emboss from alpha; watercolour settle (dried rim, granulation). Live fluid is next
 - [x] Smudge and mixer brushes
 - [x] Kubelka–Munk pigment mixing (mixer reservoir and deposit, and the `pigment` blend mode)
 - [x] Brush studio: an editor with live preview and a try-it pad (spec 27; wet, fluid, dual-brush and tip-colour controls wait for their engine features, see divergences 25-27)

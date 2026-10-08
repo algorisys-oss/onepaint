@@ -6,6 +6,7 @@
 mod assets;
 pub mod height;
 mod preset;
+pub mod settle;
 pub mod smudge;
 pub mod studio;
 pub mod symmetry;
