@@ -8,6 +8,7 @@ pub mod bezier;
 pub mod guide_lines;
 pub mod shape;
 pub mod snap;
+pub mod speed_lines;
 
 use serde::{Deserialize, Serialize};
 

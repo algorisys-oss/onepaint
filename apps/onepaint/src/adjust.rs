@@ -31,7 +31,51 @@ pub fn list(app: &mut App, ui: &mut Ui) {
             }
             ui.add_space(4.0);
         }
+        widgets::section_label(ui, "Effect lines");
+        for (label, focus) in [("Focus lines", true), ("Speed lines", false)] {
+            if widgets::menu_item(ui, None, label, "").clicked() {
+                effect_lines(app, focus);
+                app.popover = None;
+            }
+        }
     });
+}
+
+/// Manga focus or speed lines as a new path layer stroked with the current
+/// brush (adjustments.tsx `makeEffectLines`): editable with the pen afterwards.
+pub fn effect_lines(app: &mut App, focus: bool) {
+    use onepaint_stroke::speed_lines::{FocusLines, SpeedLines, focus_lines, speed_lines};
+    let (w, h) = (app.session.doc().width as f64, app.session.doc().height as f64);
+    let seed = (app.session.history_len() as u32).wrapping_mul(2_654_435_761) ^ 0x9e37_79b9;
+    let subpaths = if focus {
+        focus_lines(&FocusLines {
+            center: [w / 2.0, h / 2.0],
+            count: 90,
+            inner_radius: w.min(h) * 0.18,
+            outer_radius: w.hypot(h) / 2.0,
+            jitter: 0.35,
+            angle_jitter: 0.7,
+            start_angle: 0.0,
+            sweep: std::f64::consts::TAU,
+            seed,
+        })
+    } else {
+        speed_lines(&SpeedLines { angle: 0.0, count: 60, width: w, height: h, jitter: 0.35, spacing_jitter: 0.6, seed })
+    };
+    let c = app.session.color();
+    let b = app.session.current_brush();
+    let spec = onepaint_stroke::bezier::PathSpec {
+        subpaths,
+        stroke: Some(onepaint_stroke::bezier::PathStroke {
+            brush_id: b.id.clone(),
+            size: b.size,
+            color: [c.r, c.g, c.b],
+            opacity: 1.0,
+            seed: Some(seed),
+        }),
+        fill: None,
+    };
+    let _ = app.session.execute(Command::CreatePathLayer { spec: Box::new(spec) });
 }
 
 fn pick(app: &mut App, k: Kind) {

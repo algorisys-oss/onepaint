@@ -1665,4 +1665,20 @@ mod tests {
         assert!(alpha_at(&h, [600.0, 350.0]) > 0.9, "inside filled");
         assert_eq!(alpha_at(&h, [450.0, 350.0]), 0.0);
     }
+
+    #[test]
+    fn focus_lines_make_an_editable_path_layer() {
+        let mut h = harness();
+        h.run();
+        h.state_mut().popover = Some(Popover::Adjustments);
+        h.run();
+        assert!(h.query_by_label("Focus lines").is_some(), "listed under Effect lines");
+        crate::adjust::effect_lines(h.state_mut(), true);
+        h.run();
+        let app = h.state();
+        let id = app.session.active().to_string();
+        assert!(app.session.is_path_layer(&id));
+        assert_eq!(app.session.paths(&id)[0].subpaths.len(), 90);
+        assert!(app.session.doc().layer(&id).unwrap().pixels.tile_count() > 0, "stroked");
+    }
 }
