@@ -267,6 +267,9 @@ pub struct Canvas {
     /// The last measurement (doc px), shown until the next one or Escape.
     pub measure: Option<(Pt, Pt)>,
     pub pen: crate::pen::PenState,
+    pub gestures: crate::gestures::Gestures,
+    /// Recognised gestures for the app to act on (undo, redo, UI, clipboard).
+    pub gesture_out: Vec<crate::gestures::Gesture>,
 }
 
 impl Canvas {
@@ -295,6 +298,8 @@ impl Canvas {
             measuring: false,
             measure: None,
             pen: Default::default(),
+            gestures: Default::default(),
+            gesture_out: Vec::new(),
         }
     }
 
@@ -728,19 +733,44 @@ impl Canvas {
         // ── Input ──
         let events = ui.input(|i| i.events.clone());
         for ev in &events {
-            if let Event::Touch { phase, force, .. } = ev {
+            if let Event::Touch { id, phase, pos, force, .. } = ev {
                 if force.is_some() {
                     self.last_pen_force = *force;
                 }
-                if *phase == TouchPhase::End || *phase == TouchPhase::Cancel {
-                    self.last_pen_force = None;
+                let (pen, p) = (force.is_some(), [pos.x, pos.y]);
+                let out = match phase {
+                    TouchPhase::Start => self.gestures.start(id.0, p, time_ms, pen),
+                    TouchPhase::Move => {
+                        self.gestures.moved(id.0, p, time_ms);
+                        Vec::new()
+                    }
+                    TouchPhase::End | TouchPhase::Cancel => {
+                        self.last_pen_force = None;
+                        self.gestures.end(id.0, time_ms)
+                    }
+                };
+                for g in out {
+                    if g == crate::gestures::Gesture::MultiTouchStarted {
+                        // The first finger's emulated stroke was really the start of a gesture.
+                        if matches!(self.drag, Drag::Paint | Drag::PerspLine { .. } | Drag::FillShape { .. }) {
+                            session.stroke_cancel();
+                        }
+                        self.drag = Drag::None;
+                    } else {
+                        self.gesture_out.push(g);
+                    }
                 }
             }
+        }
+        let suppress = self.gestures.suppress_pointer();
+        if let Some(mt) = ui.input(|i| i.multi_touch()).filter(|m| m.num_touches >= 2) {
+            self.view.pan(mt.translation_delta.x as f64, mt.translation_delta.y as f64);
         }
         let local = |p: Pos2| pos2(p.x - rect.left(), p.y - rect.top());
         // Raw events, so a stroke starts on press (no drag threshold) and uses every sample.
         for ev in &events {
             match ev {
+                Event::PointerButton { pressed: true, .. } if suppress => {}
                 Event::PointerButton { pos, button, pressed: true, modifiers: m } if resp.hovered() && matches!(self.drag, Drag::None) => {
                     let p = local(*pos);
                     self.drag = self.press(session, p, *button, *m, time_ms, space_held, r_held);

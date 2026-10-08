@@ -38,6 +38,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             Popover::Guides => popover_at(ctx, "guides", anchor, Align2::RIGHT_TOP, |ui| guides(app, ui)),
             Popover::LiquifyOptions => popover_at(ctx, "liquify", anchor, Align2::RIGHT_TOP, |ui| liquify_options(app, ui)),
             Popover::PenOptions => popover_at(ctx, "pen", anchor, Align2::RIGHT_TOP, |ui| pen_options(app, ui)),
+            Popover::ClipboardMenu => popover_at(ctx, "clipboard", screen.center(), Align2::CENTER_CENTER, |ui| clipboard_menu(app, ui)),
             Popover::Gallery => popover_at(ctx, "gallery", screen.center(), Align2::CENTER_CENTER, |ui| crate::gallery::show(app, ui)),
             Popover::Help => popover_at(ctx, "help", screen.center(), Align2::CENTER_CENTER, help),
             Popover::MoveOptions => popover_at(ctx, "move", anchor, Align2::RIGHT_TOP, |ui| move_options(app, ui)),
@@ -1638,12 +1639,30 @@ fn export_dialog(app: &mut App, ui: &mut Ui) {
     });
 }
 
+/// Copy / cut / paste (three-finger swipe down).
+fn clipboard_menu(app: &mut App, ui: &mut Ui) {
+    ui.set_width(200.0);
+    widgets::section_label(ui, "Copy & paste");
+    if widgets::menu_item(ui, Some("copy"), "Copy", "Ctrl+C").clicked() {
+        crate::clip::copy(app);
+        app.popover = None;
+    }
+    if widgets::menu_item(ui, Some("brush-cleaning"), "Cut", "Ctrl+X").clicked() {
+        crate::clip::cut(app);
+        app.popover = None;
+    }
+    if widgets::menu_item(ui, Some("plus"), "Paste", "Ctrl+V").clicked() {
+        crate::clip::paste(app);
+        app.popover = None;
+    }
+}
+
 /// Shortcuts & gestures (`?`).
 fn help(ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     ui.set_width(560.0);
     widgets::section_label(ui, "Shortcuts & gestures");
-    let groups: [(&str, &[(&str, &str)]); 5] = [
+    let groups: [(&str, &[(&str, &str)]); 6] = [
         (
             "Tools",
             &[
@@ -1682,6 +1701,16 @@ fn help(ui: &mut Ui) {
             ],
         ),
         (
+            "Touch",
+            &[
+                ("Pinch / two fingers", "Zoom, rotate, pan"),
+                ("Two-finger tap", "Undo"),
+                ("Three-finger tap", "Redo"),
+                ("Three-finger swipe down", "Copy & paste"),
+                ("Four-finger tap", "Hide the interface"),
+            ],
+        ),
+        (
             "Animation",
             &[
                 ("Shift+A", "Animation mode"),
@@ -1707,7 +1736,7 @@ fn help(ui: &mut Ui) {
     egui::ScrollArea::vertical().max_height(ui.ctx().content_rect().height() - 120.0).show(ui, |ui| {
         ui.columns(2, |cols| {
             for (i, (title, rows)) in groups.iter().enumerate() {
-                let ui = &mut cols[usize::from(i >= 2)];
+                let ui = &mut cols[usize::from(i >= 3)];
                 ui.label(RichText::new(*title).font(theme::semibold(12.5)).color(t.fg));
                 egui::Grid::new(*title).num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
                     for (k, what) in rows.iter() {

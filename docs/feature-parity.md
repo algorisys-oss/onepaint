@@ -124,13 +124,13 @@ screentone are added as live layers.
   - [ ] X11
   - [ ] Wayland
 - [ ] Coalesced (high-rate) pen samples
-- [ ] Multi-touch gestures with Procreate's vocabulary:
+- [~] Multi-touch gestures with Procreate's vocabulary (all but touch-and-hold eyedropper):
   - pinch to zoom and rotate, two-finger pan
   - two-finger tap to undo, three-finger tap to redo
   - touch-and-hold for the eyedropper
   - three-finger swipe down for the copy/paste menu
   - four-finger tap to toggle the UI
-- [ ] Palm rejection while a pen is active
+- [x] Palm rejection while a pen is active (fingers ignored for 1.5 s after pen input)
 - [~] Full keyboard shortcuts (the happypaint keybindings map) (all default bindings except markers and mark in/out; no rebinding UI yet)
 
 ## History and recording

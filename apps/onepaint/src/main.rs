@@ -9,6 +9,7 @@ mod chrome;
 mod clip;
 mod debug;
 mod gallery;
+mod gestures;
 mod palettes;
 mod pen;
 mod progressive;
@@ -66,6 +67,8 @@ pub enum Popover {
     MoveOptions,
     Help,
     Gallery,
+    /// Three-finger swipe down: copy, cut, paste.
+    ClipboardMenu,
     BrushStudio,
 }
 
@@ -628,6 +631,25 @@ impl App {
         }
     }
 
+    /// Act on recognised touch gestures (Procreate's vocabulary).
+    fn gestures(&mut self, ctx: &egui::Context) {
+        use gestures::Gesture;
+        for g in std::mem::take(&mut self.canvas.gesture_out) {
+            match g {
+                Gesture::Tap(2) => {
+                    let _ = self.session.execute(Command::Undo);
+                }
+                Gesture::Tap(3) => {
+                    let _ = self.session.execute(Command::Redo);
+                }
+                Gesture::Tap(4) => self.hide_ui = !self.hide_ui,
+                Gesture::SwipeDown3 => self.popover = Some(Popover::ClipboardMenu),
+                _ => {}
+            }
+        }
+        let _ = ctx;
+    }
+
     /// Advance an on-canvas replay (~4 s for the whole log at 60 fps).
     fn replay_tick(&mut self, ctx: &egui::Context) {
         let Some((events, pos)) = self.replaying.as_mut() else { return };
@@ -1056,6 +1078,7 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         debug::tick(self, &ctx);
         timeline::tick(self, &ctx);
+        self.gestures(&ctx);
         self.replay_tick(&ctx);
         if ctx.input(|i| i.viewport().close_requested()) && self.any_dirty() && !self.allow_close {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -1978,5 +2001,36 @@ mod tests {
         key(&mut h, egui::Key::ArrowLeft, egui::Modifiers::COMMAND | egui::Modifiers::ALT);
         assert_eq!(h.state().session.doc().width, 320);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn touch(h: &mut Harness<'_, App>, id: u64, phase: egui::TouchPhase, p: egui::Pos2) {
+        h.event(Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(id), phase, pos: p, force: None });
+    }
+
+    #[test]
+    fn multi_finger_taps_undo_and_redo() {
+        // Real touch timing: 60 fps frames, so a quick tap is a tap.
+        let mut h = Harness::builder()
+            .with_size(vec2(1200.0, 800.0))
+            .with_max_steps(400)
+            .with_step_dt(1.0 / 60.0)
+            .build_eframe(|cc| App::new(cc, None));
+        h.run();
+        drag_stroke(&mut h, pos2(560.0, 420.0), pos2(720.0, 440.0));
+        let painted = h.state().session.history_len();
+        assert!(h.state().session.can_undo());
+        for (n, want_undo) in [(2u64, true), (3, false)] {
+            for i in 0..n {
+                touch(&mut h, i, egui::TouchPhase::Start, pos2(300.0 + i as f32 * 60.0, 300.0));
+            }
+            h.step();
+            for i in 0..n {
+                touch(&mut h, i, egui::TouchPhase::End, pos2(300.0 + i as f32 * 60.0, 300.0));
+            }
+            h.step();
+            h.step();
+            assert_eq!(h.state().session.can_redo(), want_undo, "{n}-finger tap");
+        }
+        assert_eq!(h.state().session.history_len(), painted);
     }
 }
