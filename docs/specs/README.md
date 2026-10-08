@@ -39,3 +39,4 @@ The happypaint references are relative to `../happypaint/frontend/src/`.
 | 24 | [Animation Assist](24-animation.md) | compose, engine, formats, app |
 | 25 | [Export dialog](25-export.md) | formats, engine, app |
 | 26 | [Recording, replay, timelapse](26-recording.md) | engine, app |
+| 27 | [Brush studio](27-brush-studio.md) | brush, engine, app |

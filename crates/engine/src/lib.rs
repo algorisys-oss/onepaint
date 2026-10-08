@@ -234,6 +234,11 @@ pub enum Command {
     SetBrush {
         preset_id: String,
     },
+    /// Replace the whole current preset (the brush studio's live edit);
+    /// an eraser preset goes to the eraser tool, like `SetBrush`.
+    SetBrushPreset {
+        preset: Box<BrushPreset>,
+    },
     SetBrushSize {
         size: f64,
     },
@@ -974,6 +979,7 @@ impl Session {
                 Command::SetColor { .. }
                 | Command::SetTool { .. }
                 | Command::SetBrush { .. }
+                | Command::SetBrushPreset { .. }
                 | Command::SetBrushSize { .. }
                 | Command::SetBrushOpacity { .. }
                 | Command::SetBrushFlow { .. }
@@ -1155,6 +1161,16 @@ impl Session {
                     self.tool = Tool::Eraser;
                 } else {
                     self.brush = p;
+                    self.tool = Tool::Brush;
+                }
+                Ok(())
+            }
+            Command::SetBrushPreset { preset } => {
+                if preset.is_eraser() {
+                    self.eraser = *preset;
+                    self.tool = Tool::Eraser;
+                } else {
+                    self.brush = *preset;
                     self.tool = Tool::Brush;
                 }
                 Ok(())

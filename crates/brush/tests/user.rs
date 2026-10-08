@@ -90,3 +90,31 @@ fn image_tip_paints_its_shape() {
     assert!(s.get(50, 50)[3] < 0.05, "hole in the middle: {:?}", s.get(50, 50));
     assert!(s.get(50 + 23, 50)[3] > 0.5, "ring: {:?}", s.get(73, 50));
 }
+
+#[test]
+fn custom_brushes_duplicate_rename_and_save_over() {
+    // Spec 27: a pure UserLibrary, so no global state is touched.
+    let mut lib = UserLibrary::default();
+    let mut base = preset("soft-round").unwrap();
+    base.size = 42.0;
+    let a = lib.add_custom(&base, "  My soft  ");
+    assert_eq!((a.id.as_str(), a.name.as_str(), a.category.as_str()), ("b_1", "My soft", CUSTOM_CATEGORY));
+    assert_eq!(a.size, 42.0);
+    let b = lib.add_custom(&base, "   ");
+    assert_eq!((b.id.as_str(), b.name.as_str()), ("b_2", "Brush"));
+    lib.remove("b_1");
+    assert_eq!(lib.add_custom(&base, "x").id, "b_1", "first free number");
+
+    let e = lib.add_custom(&preset("eraser-hard").unwrap(), "My eraser");
+    assert!(e.is_eraser(), "a custom eraser stays an eraser");
+
+    assert!(lib.rename("b_2", "Renamed"));
+    assert_eq!(lib.preset("b_2").unwrap().name, "Renamed");
+    assert!(!lib.rename("soft-round", "nope"), "built-ins can't be renamed");
+
+    let mut edited = lib.preset("b_2").unwrap().clone();
+    edited.hardness = 0.25;
+    assert!(lib.update(&edited));
+    assert_eq!(lib.preset("b_2").unwrap().hardness, 0.25);
+    assert!(!lib.update(&preset("hard-round").unwrap()), "built-ins are read-only");
+}
