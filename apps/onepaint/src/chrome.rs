@@ -38,6 +38,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             Popover::Guides => popover_at(ctx, "guides", anchor, Align2::RIGHT_TOP, |ui| guides(app, ui)),
             Popover::LiquifyOptions => popover_at(ctx, "liquify", anchor, Align2::RIGHT_TOP, |ui| liquify_options(app, ui)),
             Popover::PenOptions => popover_at(ctx, "pen", anchor, Align2::RIGHT_TOP, |ui| pen_options(app, ui)),
+            Popover::Gallery => popover_at(ctx, "gallery", screen.center(), Align2::CENTER_CENTER, |ui| crate::gallery::show(app, ui)),
             Popover::Help => popover_at(ctx, "help", screen.center(), Align2::CENTER_CENTER, help),
             Popover::MoveOptions => popover_at(ctx, "move", anchor, Align2::RIGHT_TOP, |ui| move_options(app, ui)),
             Popover::SmartFilters => popover_at(ctx, "smart", anchor, Align2::RIGHT_TOP, |ui| crate::adjust::smart_panel(app, ui)),
@@ -379,6 +380,10 @@ fn toast(app: &mut App, ctx: &egui::Context, screen: egui::Rect) {
 fn menu(app: &mut App, ui: &mut Ui) {
     let now = ui.input(|i| i.time);
     ui.set_width(240.0);
+    if widgets::menu_item(ui, Some("image"), "Gallery…", "").clicked() {
+        app.popover = Some(Popover::Gallery);
+        return;
+    }
     if widgets::menu_item(ui, Some("file-plus"), "New canvas…", "Ctrl+N").clicked() {
         app.popover = Some(Popover::NewDoc);
         return;

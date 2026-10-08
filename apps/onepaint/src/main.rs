@@ -7,6 +7,7 @@ mod canvas;
 mod chrome;
 mod clip;
 mod debug;
+mod gallery;
 mod palettes;
 mod pen;
 mod progressive;
@@ -63,6 +64,7 @@ pub enum Popover {
     SmartFilters,
     MoveOptions,
     Help,
+    Gallery,
 }
 
 /// What a file opens as.
@@ -144,6 +146,7 @@ pub struct App {
     pub palettes: palettes::Palettes,
     pub playback: timeline::Playback,
     pub reference: reference::ReferenceState,
+    pub gallery: gallery::Gallery,
     pub export_opts: onepaint_formats::export::ExportOptions,
     pub export_psd: bool,
     /// The smart filter whose params are open.
@@ -212,6 +215,7 @@ impl App {
             palettes,
             playback: Default::default(),
             reference: Default::default(),
+            gallery: gallery::Gallery::load(if cfg!(test) || debug.scripted() { None } else { gallery::default_path() }),
             export_opts: Default::default(),
             export_psd: false,
             smart_edit: None,
@@ -246,6 +250,8 @@ impl App {
         {
             app.recover = Some(p);
             app.popover = Some(Popover::Recover);
+        } else if !app.debug.scripted() && !cfg!(test) && !app.gallery.recent.is_empty() {
+            app.popover = Some(Popover::Gallery);
         }
         app
     }
@@ -300,6 +306,7 @@ impl App {
             Ok(()) => {
                 let d = self.session.doc();
                 self.canvas.reset_for([d.width, d.height]);
+                self.gallery.touch(&p);
                 // An imported image saves as a new .happypaint, never over the source file.
                 self.path = native.then_some(p);
                 self.saved_history_len = Some(0);
@@ -459,6 +466,7 @@ impl App {
                 let id = self.session.doc().id.clone();
                 self.autosave.clear(&id);
                 self.notify(format!("Saved {}", path.display()), now);
+                self.gallery.touch(&path);
                 self.path = Some(path);
             }
             Err(e) => self.notify(format!("Save failed: {e}"), now),
@@ -1843,5 +1851,22 @@ mod tests {
         let r = h.state().reference.image.as_ref().unwrap();
         assert_eq!((r.width, r.height), (2048, 1536));
         assert_eq!(r.color_at(10, 10).unwrap().to_hex(), "#ffffff");
+    }
+
+    #[test]
+    fn opened_files_appear_in_the_gallery() {
+        let mut h = harness();
+        h.run();
+        let dir = std::env::temp_dir().join(format!("onepaint-galtest-{}", onepaint_doc::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = dir.join("sky.png");
+        std::fs::write(&png, onepaint_formats::encode_png_rgba8(4, 4, &[90u8; 64]).unwrap()).unwrap();
+        h.state_mut().open_path(png.clone());
+        h.run();
+        assert_eq!(h.state().gallery.recent.first(), Some(&png.canonicalize().unwrap()));
+        h.state_mut().popover = Some(Popover::Gallery);
+        h.run();
+        assert!(h.query_by_label("New drawing").is_some());
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
