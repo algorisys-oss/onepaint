@@ -121,12 +121,12 @@ screentone are added as live layers.
 - [x] Multi-document tabs (New/Open add a tab unless the current drawing is blank; Ctrl+Alt+arrows switch; closing asks when unsaved)
 
 ## Input
-- [ ] Pen pressure, tilt, twist and the eraser end:
-  - [ ] Windows Ink/Wintab
+- [~] Pen pressure, tilt, twist and the eraser end:
+  - [ ] Windows Ink/Wintab (pressure through winit's pen input; tilt, twist and the eraser end not yet)
   - [ ] macOS
   - [ ] X11
-  - [ ] Wayland
-- [ ] Coalesced (high-rate) pen samples
+  - [x] Wayland (tablet protocol: pressure, tilt, twist, eraser end; spec 07)
+- [x] Coalesced (high-rate) pen samples (Wayland: every tablet sample is a stroke point)
 - [x] Multi-touch gestures with Procreate's vocabulary:
   - pinch to zoom and rotate, two-finger pan
   - two-finger tap to undo (hold two fingers to repeat), three-finger tap to redo

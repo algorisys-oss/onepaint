@@ -1,5 +1,7 @@
 //! Input normalisation: per-device pressure (happypaint `input/pressure.ts`).
 
+pub mod tablet;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PointerKind {
     Mouse,

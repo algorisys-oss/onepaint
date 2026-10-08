@@ -61,3 +61,27 @@ y pointing down.
 - `ui_kit` widgets build without panicking in an `egui_kittest` harness,
   and snapshot images are produced for both themes.
 - Manual check: `./dev-start.sh` covers every goal in spec 00.
+
+## Pen tablets (`input::tablet`, `apps/onepaint/src/tablet.rs`)
+- **Wayland:** the tablet protocol (`zwp_tablet_v2`, via `octotablet`)
+  gives pressure (0..1), tilt (`[sin x, sin y]` of the angle from
+  perpendicular, rotated into canvas space), twist (roll, degrees) and the
+  eraser end.
+- **Pointer events:** once the protocol is bound, the compositor sends the
+  pen there instead of as pointer events. So each sample becomes the
+  touch-with-force plus pointer events egui-winit makes for pens elsewhere,
+  and the UI and canvas need no second path.
+- **Every sample is a stroke point:** high-rate samples are not collapsed to
+  one per frame.
+- **Per-sample data:** pressure, tilt and twist travel in a queue the canvas
+  matches by position.
+- **Eraser end:** turning the pen over switches to the Eraser while it is in
+  range, then back to the previous tool.
+- **Safety:** the tablet holds the window's raw handles. It is built from
+  eframe's creation context and dropped in `on_exit`, the module's one
+  `unsafe` (SAFETY-commented).
+- **Not yet:**
+  - Windows: winit's pen input gives pressure; tilt and twist need Windows
+    Ink, which isn't hooked up.
+  - X11: XInput2 valuators.
+  - macOS: NSEvent pressure and tilt.

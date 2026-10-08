@@ -17,6 +17,7 @@ mod pen;
 mod progressive;
 mod reference;
 mod settings;
+mod tablet;
 mod text_ui;
 mod thumbs;
 mod timeline;
@@ -188,6 +189,10 @@ pub struct App {
     pub gpu_ok: bool,
     /// Live wet media steps on the GPU when there is one (spec 35 B).
     wet_gpu: Option<onepaint_gpu::wet::SharedWetGpu>,
+    /// The pen tablet (Wayland tablet protocol), when the platform has one.
+    tablet: Option<onepaint_input::tablet::Tablet>,
+    /// The tool to go back to when the pen's eraser end leaves.
+    eraser_from: Option<Tool>,
     pub debug: debug::Debug,
     title: String,
     pub pending: Option<Pending>,
@@ -222,6 +227,7 @@ impl App {
         onepaint_ui_kit::install(&cc.egui_ctx, theme);
         let gpu_ok = canvas::init_gpu(cc);
         let wet_gpu = canvas::init_wet_gpu(cc);
+        let tablet = tablet::connect(cc);
         let session = Session::new(2048, 1536, Some(Rgba::WHITE));
         let size = [session.doc().width, session.doc().height];
         // Tests and scripted runs never touch the user's saved palettes.
@@ -261,6 +267,8 @@ impl App {
             new_doc: [2048, 1536],
             gpu_ok,
             wet_gpu,
+            tablet,
+            eraser_from: None,
             debug,
             title: String::new(),
             pending: None,
@@ -1200,6 +1208,15 @@ impl App {
 }
 
 impl eframe::App for App {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        tablet::feed(self, ctx, raw);
+    }
+
+    fn on_exit(&mut self) {
+        // The tablet borrows the window's handles: let go before it closes.
+        self.tablet = None;
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         debug::tick(self, &ctx);
@@ -1232,6 +1249,9 @@ impl eframe::App for App {
         let t = onepaint_ui_kit::Tokens::get(&ctx);
         ui.painter().rect_filled(rect, 0.0, t.stage);
         self.canvas.show(ui, rect, &mut self.session, space, r, self.gpu_ok);
+        // Keep a short history of pen samples (the canvas may use a move a frame late).
+        let excess = self.canvas.pen_queue.len().saturating_sub(512);
+        self.canvas.pen_queue.drain(..excess);
         if !self.gpu_ok {
             ui.painter().text(
                 rect.center(),
@@ -1363,6 +1383,47 @@ mod tests {
         assert!(traced(&mut h, at + egui::vec2(1.0, 0.0)) > 8, "the leaf's outline");
         h.state_mut().settings.cursor_tip_shape = false;
         assert_eq!(traced(&mut h, at), 0, "tracing off: the ring again");
+    }
+
+    #[test]
+    fn tablet_samples_carry_pressure_tilt_and_twist_and_the_eraser_end_swaps() {
+        use onepaint_engine::recording::RecEvent;
+        use onepaint_input::tablet::{PenEvent, PenSample, PenTool};
+        let mut h = harness();
+        h.run();
+        let send = |h: &mut Harness<'_, App>, evs: &[PenEvent]| {
+            let out = tablet::translate(h.state_mut(), evs, 1.0, egui::Modifiers::NONE);
+            for e in out {
+                h.event(e);
+            }
+            h.step();
+        };
+        let sample = |x: f32, p: f32| PenSample { pos: [x, 420.0], pressure: Some(p), tilt: [0.5, -0.25], twist: 30.0 };
+        h.state_mut().session.start_recording().unwrap();
+        send(&mut h, &[PenEvent::In(PenTool::Pen), PenEvent::Move(sample(500.0, 0.0))]);
+        send(&mut h, &[PenEvent::Down(sample(500.0, 0.1))]);
+        // Several samples in one frame: every one is a stroke point with its own pressure.
+        send(&mut h, &(1..=8).map(|i| PenEvent::Move(sample(500.0 + i as f32 * 10.0, 0.1 * i as f32))).collect::<Vec<_>>());
+        send(&mut h, &[PenEvent::Up, PenEvent::Out]);
+        let rec = h.state_mut().session.stop_recording().unwrap();
+        let pts: Vec<_> = rec
+            .events
+            .iter()
+            .flat_map(|e| match e {
+                RecEvent::Begin { p, .. } => vec![*p],
+                RecEvent::Extend { pts, .. } => pts.clone(),
+                _ => vec![],
+            })
+            .collect();
+        assert!(pts.len() >= 9, "every sample is a point: {}", pts.len());
+        assert!(pts.last().unwrap().pressure > pts[1].pressure + 0.3, "pressure rises with the pen");
+        assert!(pts.iter().all(|p| (p.tilt_x - 0.5).abs() < 1e-6 && (p.tilt_y + 0.25).abs() < 1e-6 && p.twist == 30.0));
+        assert!(h.state().session.can_undo(), "the pen painted");
+        // The eraser end erases while in range, then the brush comes back.
+        send(&mut h, &[PenEvent::In(PenTool::Eraser)]);
+        assert_eq!(h.state().session.tool(), Tool::Eraser);
+        send(&mut h, &[PenEvent::Out]);
+        assert_eq!(h.state().session.tool(), Tool::Brush);
     }
 
     #[test]

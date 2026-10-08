@@ -271,6 +271,13 @@ pub struct Canvas {
     poly: Option<(Vec<Pt>, SelectMode)>,
     pressure: Option<PressureProvider>,
     last_pen_force: Option<f32>,
+    /// Tablet samples for this frame's pointer moves, in order (pressure,
+    /// tilt and twist per sample; matched by position).
+    pub pen_queue: std::collections::VecDeque<(Pos2, onepaint_input::tablet::PenSample)>,
+    /// The tablet nib is down.
+    pub pen_down: bool,
+    /// The canvas rect's top-left on screen (pen samples are screen points).
+    screen_origin: Pos2,
     pub hover_doc: Option<[f64; 2]>,
     last_pos: Option<Pos2>,
     /// The size slider/keys changed the brush recently: show a preview ring.
@@ -319,6 +326,9 @@ impl Canvas {
             poly: None,
             pressure: None,
             last_pen_force: None,
+            pen_queue: Default::default(),
+            pen_down: false,
+            screen_origin: Pos2::ZERO,
             hover_doc: None,
             last_pos: None,
             size_flash: 0.0,
@@ -504,9 +514,26 @@ impl Canvas {
 
     fn stroke_point(&mut self, pos: Pos2, t: f64, force: Option<f32>) -> StrokePoint {
         let d = self.doc_pt(pos);
+        // A tablet sample at this position carries its own pressure, tilt and twist.
+        let pen = self.pen_sample_at(pos);
+        let force = pen.and_then(|s| s.pressure).or(force);
         let p = self.pressure.get_or_insert_with(|| PressureProvider::new(PointerKind::Mouse));
         let pressure = p.pressure(pos.x as f64, pos.y as f64, t, force.map(|f| f as f64));
-        StrokePoint { x: d[0], y: d[1], pressure, t: Some(t), ..Default::default() }
+        let (tilt, twist) = pen.map_or(([0.0; 2], 0.0), |s| (s.tilt, s.twist));
+        // Tilt is in screen space; the canvas may be rotated.
+        let (c, sn) = (self.view.rotation.cos() as f32, self.view.rotation.sin() as f32);
+        let (tx, ty) = (tilt[0] * c + tilt[1] * sn, -tilt[0] * sn + tilt[1] * c);
+        StrokePoint { x: d[0], y: d[1], pressure, tilt_x: tx as f64, tilt_y: ty as f64, twist: twist as f64, t: Some(t) }
+    }
+
+    /// The queued tablet sample for a canvas-local position; it and older
+    /// samples leave the queue. A position no sample has keeps the queue.
+    fn pen_sample_at(&mut self, pos: Pos2) -> Option<onepaint_input::tablet::PenSample> {
+        let o = self.screen_origin;
+        let i = self.pen_queue.iter().position(|(p, _)| pos2(p.x - o.x, p.y - o.y) == pos)?;
+        let s = self.pen_queue[i].1;
+        self.pen_queue.drain(..=i);
+        Some(s)
     }
 
     /// Finish the polygon lasso (Enter, or a click near the first vertex).
@@ -846,6 +873,7 @@ impl Canvas {
             self.view.pan(mt.translation_delta.x as f64, mt.translation_delta.y as f64);
         }
         let local = |p: Pos2| pos2(p.x - rect.left(), p.y - rect.top());
+        self.screen_origin = rect.min;
         // Raw events, so a stroke starts on press (no drag threshold) and uses every sample.
         for ev in &events {
             match ev {
