@@ -171,6 +171,7 @@ pub fn random_adjustment(r: &mut Rng) -> onepaint_doc::Adjustment {
         "noise",
         "solid-fill",
         "gradient-fill",
+        "tone",
     ];
     let kind = kinds[r.below(kinds.len() as u32) as usize];
     let mut c = || [r.f(), r.f(), r.f()];
@@ -207,6 +208,14 @@ pub fn random_adjustment(r: &mut Rng) -> onepaint_doc::Adjustment {
             json!({"colorSamples": samples, "showRange": c()[0] < 0.2})
         }
         "noise" => json!({"amount": c()[0], "mono": c()[1] < 0.5}),
+        "tone" => {
+            let k = c();
+            let shape = ["dot", "line", "cross"][(k[0] * 3.0) as usize % 3];
+            let density = ["flat", "luminance", "gradient"][(k[1] * 3.0) as usize % 3];
+            json!({"toneShape": shape, "toneDensity": density, "toneLevel": k[2], "toneLevelEnd": 1.0 - k[2],
+                   "toneGradientAngle": k[0] * 360.0, "lpi": 20.0 + k[1] * 60.0, "angle": k[2] * 90.0,
+                   "hardDots": k[0] < 0.2, "target": c()})
+        }
         "solid-fill" => json!({"fillColor": c()}),
         "gradient-fill" => {
             let (k, s) = (c(), ["linear", "radial", "angle", "reflected", "diamond"]);

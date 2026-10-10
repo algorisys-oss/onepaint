@@ -447,6 +447,17 @@ fn shape_t(shape: u32, d: vec2<f32>, ab: vec2<f32>) -> f32 {
     }
 }
 
+// Screentone's signed distance to the ink at `q` (filters colour.rs `tone`).
+fn tone_dist(q: vec2<f32>, cell: f32, cs: vec2<f32>, shape: u32, level: f32) -> f32 {
+    let rp = vec2<f32>(cs.x * q.x - cs.y * q.y, cs.y * q.x + cs.x * q.y);
+    let d = rp - (floor(rp / cell) + 0.5) * cell;
+    switch shape {
+        case 1u: { return abs(d.y) - level * cell * 0.5; }
+        case 2u: { return min(abs(d.x), abs(d.y)) - level * cell * 0.35; }
+        default: { return length(d) - level * cell * 0.72; }
+    }
+}
+
 // `pos`: the pixel in doc px (noise and fills depend on it, spec 46).
 fn adjust(op: Op, s: vec4<f32>, pos: vec2<i32>) -> vec4<f32> {
     let base = op.b.x;
@@ -530,6 +541,33 @@ fn adjust(op: Op, s: vec4<f32>, pos: vec2<i32>) -> vec4<f32> {
         }
         case 15u: {
             return vec4<f32>(p0.xyz, 1.0);
+        }
+        case 17u: {
+            // Screentone: p0 = density, level, level end, shape; p1 = gradient
+            // direction, its extent, cell; p2 = angle cos, sin, hard dots; p3 = ink.
+            let p2 = adj[base + 2u];
+            let px = vec2<f32>(pos) + 0.5;
+            var level = p0.y;
+            if (p0.x == 1.0) {
+                level = (1.0 - clamp(dot(c01(w), LUMA), 0.0, 1.0)) * a;
+            } else if (p0.x == 2.0) {
+                level = mix(p0.y, p0.z, clamp(dot(px, p1.xy) / p1.z, 0.0, 1.0));
+            }
+            let shape = u32(p0.w);
+            let dist = tone_dist(px, p1.w, p2.xy, shape, level);
+            var cov: f32;
+            if (p2.z > 0.5) {
+                cov = select(0.0, 1.0, dist <= 0.0);
+            } else {
+                let fw = abs(tone_dist(px + vec2<f32>(1.0, 0.0), p1.w, p2.xy, shape, level) - dist)
+                    + abs(tone_dist(px + vec2<f32>(0.0, 1.0), p1.w, p2.xy, shape, level) - dist);
+                let k = max(fw, 1e-5);
+                cov = 1.0 - sstep(-k, k, dist);
+            }
+            if (level < 0.0005) {
+                cov = 0.0;
+            }
+            return vec4<f32>(adj[base + 3u].xyz * cov, cov);
         }
         case 16u: {
             let t = shape_t(u32(p0.x), vec2<f32>(pos) + 0.5 - p0.yz, vec2<f32>(p0.w, p1.x) - p0.yz);

@@ -6,7 +6,7 @@
 
 use crate::colour::{grad_shape_code, sc_samples};
 use crate::gradient::Ramp;
-use crate::tex::from_work;
+use crate::tex::{from_work, to_work};
 use crate::{Frame, Kind, Lut, MAX_COLOR_SAMPLES, Params, build_curves_lut, build_gradient_lut, fill_stops};
 
 /// Floats per adjustment: selective colour's flag, count and eight samples
@@ -107,6 +107,33 @@ pub fn gpu_adjust(kind: Kind, p: &Params, frame: Frame) -> Option<GpuAdjust> {
             ramp = Some(Ramp::new(&fill_stops(p)).entries().to_vec());
             16
         }
+        Kind::Tone => {
+            // The sand shape hashes with `sin`, whose low bits differ on the GPU.
+            let shape = match p.tone_shape.as_deref().unwrap_or("dot") {
+                "sand" => return None,
+                "line" => 1.0,
+                "cross" => 2.0,
+                _ => 0.0,
+            };
+            let density = match p.tone_density.as_deref().unwrap_or("flat") {
+                "luminance" => 1.0,
+                "gradient" => 2.0,
+                _ => 0.0,
+            };
+            let size = frame.size();
+            let g = p.tone_gradient_angle.unwrap_or(0.0).to_radians();
+            let dir = [g.sin(), g.cos()];
+            let denom = (dir[0].abs() * size[0] + dir[1].abs() * size[1]).max(1.0);
+            let dpi = if frame.dpi > 0.0 { frame.dpi } else { 300.0 };
+            let cell = (dpi / p.lpi.unwrap_or(60.0).max(5.0)).max(1.0);
+            let ang = p.angle.unwrap_or(15.0).to_radians();
+            let lvl = p.tone_level.unwrap_or(0.5).clamp(0.0, 1.0);
+            let end = p.tone_level_end.unwrap_or(0.0).clamp(0.0, 1.0);
+            put(0, &[density, lvl, end, shape, dir[0], dir[1], denom, cell, ang.cos(), ang.sin()]);
+            put(10, &[if p.hard_dots.unwrap_or(false) { 1.0 } else { 0.0 }]);
+            put(12, &from_work(to_work(p.target.unwrap_or([0.0; 3])).map(|v| v.clamp(0.0, 1.0))));
+            17
+        }
         _ => return None,
     };
     Some(GpuAdjust { code, params: f, lut, ramp })
@@ -120,11 +147,13 @@ mod tests {
     fn colour_kinds_pack_and_the_rest_stay_on_the_cpu() {
         let f = Frame::default();
         let gpu: Vec<Kind> = Kind::ALL.into_iter().filter(|&k| gpu_adjust(k, &crate::default_params(k), f).is_some()).collect();
-        assert_eq!(gpu.len(), 16);
+        assert_eq!(gpu.len(), 17);
         assert!(gpu.iter().all(|k| k.is_color()));
-        for k in [Kind::Tone, Kind::PatternFill, Kind::GaussianBlur, Kind::Clouds] {
+        for k in [Kind::PatternFill, Kind::GaussianBlur, Kind::Clouds] {
             assert!(gpu_adjust(k, &crate::default_params(k), f).is_none(), "{k:?}");
         }
+        let sand = Params { tone_shape: Some("sand".into()), ..crate::default_params(Kind::Tone) };
+        assert!(gpu_adjust(Kind::Tone, &sand, f).is_none());
         assert_eq!(gpu_adjust(Kind::GradientFill, &crate::default_params(Kind::GradientFill), f).unwrap().ramp.unwrap().len(), 1024);
         let curves = gpu_adjust(Kind::Curves, &crate::default_params(Kind::Curves), f).unwrap();
         assert_eq!(curves.lut.unwrap()[255][0], 255);

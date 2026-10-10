@@ -72,12 +72,13 @@ fn random_adjustments_carry_their_params() {
 }
 
 #[test]
-fn tone_and_pattern_fill_layers_stay_on_the_cpu() {
+fn sand_tone_and_pattern_fill_layers_stay_on_the_cpu() {
     for kind in ["tone", "pattern-fill"] {
         let mut doc = random_doc(4, 300, 300, false);
         let mut l = Layer::new("adj");
-        l.adjustment =
-            Some(Box::new(Adjustment { kind: kind.into(), params: onepaint_filters::default_params(Kind::parse(kind).unwrap()) }));
+        let mut params = onepaint_filters::default_params(Kind::parse(kind).unwrap());
+        params.tone_shape = Some("sand".into());
+        l.adjustment = Some(Box::new(Adjustment { kind: kind.into(), params }));
         doc.root.push(Node::Layer(l));
         assert!(plan_tile(&doc, 0, 0, None).is_none(), "{kind}");
     }
