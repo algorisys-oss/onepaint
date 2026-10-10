@@ -878,6 +878,8 @@ impl Canvas {
     ) {
         let t = Tokens::get(ui.ctx());
         let ppp = ui.ctx().pixels_per_point();
+        // Overlays (handles, guides, cursors) stay on the stage, off the docks and status bar.
+        ui.set_clip_rect(rect);
         self.view.view_size = [rect.width() as f64, rect.height() as f64];
         let resp = ui.interact(rect, ui.id().with("canvas"), Sense::click_and_drag());
         let time_ms = ui.input(|i| i.time) * 1000.0;
