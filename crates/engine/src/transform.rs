@@ -88,6 +88,8 @@ impl Affine {
 /// Lifted content being transformed.
 pub(crate) struct Floating {
     pub layer: NodeId,
+    /// The layer with the lifted part taken out (shown once the box moves).
+    pub remainder: Surface,
     /// Layer pixels before the transform (for cancel and the undo entry).
     pub original: Surface,
     /// Dense premultiplied copy of the lifted pixels over `bounds`.
@@ -139,6 +141,11 @@ impl Floating {
             o[c] = top + (bot - top) * ty;
         }
         o
+    }
+
+    /// Untouched raster content: the layer shows as it was, with no preview over it.
+    pub(crate) fn at_rest(&self) -> bool {
+        !self.vector && self.warp.is_none() && self.matrix == Affine::IDENTITY
     }
 
     /// Map each destination cell back to its source uv rect (perspective-correct).
@@ -260,7 +267,7 @@ impl Session {
     }
 
     pub(crate) fn transform_overlay(&self) -> Option<StrokeOverlay<'_>> {
-        self.transform.as_ref().map(|f| StrokeOverlay {
+        self.transform.as_ref().filter(|f| !f.at_rest()).map(|f| StrokeOverlay {
             mask: false,
             layer_id: &f.layer,
             stroke: &f.preview,
@@ -313,8 +320,10 @@ impl Session {
             layer.pixels.clear();
         }
         let saved_selection = self.selection.clone();
+        let remainder = layer.pixels.clone();
         let mut f = Floating {
             layer: id,
+            remainder,
             original,
             src,
             bounds,
@@ -329,6 +338,7 @@ impl Session {
         f.render(self.transform_clip());
         let lifted_selection = f.saved_selection.is_some();
         self.transform = Some(f);
+        self.show_floating();
         if lifted_selection {
             // happypaint clears the marquee while transforming (PE:2016).
             self.set_selection_raw(None);
@@ -359,6 +369,7 @@ impl Session {
         let old = f.preview_bounds;
         f.render(doc);
         let new = f.preview_bounds;
+        self.show_floating();
         self.mark_dirty(old.union(&new));
     }
 
@@ -377,6 +388,7 @@ impl Session {
         f.warp = Some(w);
         f.render(doc);
         let new = f.preview_bounds;
+        self.show_floating();
         self.mark_dirty(old.union(&new));
     }
 
@@ -389,7 +401,23 @@ impl Session {
         f.matrix = m;
         f.render(doc);
         let new = f.preview_bounds;
+        self.show_floating();
         self.mark_dirty(old.union(&new));
+    }
+
+    /// The layer as the box stands: untouched content shows the layer as it
+    /// was (a soft selection's lifted part and remainder don't recombine
+    /// exactly), moved content shows the remainder under the preview.
+    fn show_floating(&mut self) {
+        let Some(f) = self.transform.as_ref() else { return };
+        if f.vector {
+            return;
+        }
+        let pixels = if f.at_rest() { f.original.clone() } else { f.remainder.clone() };
+        let id = f.layer.clone();
+        if let Some(l) = self.doc.layer_mut(&id) {
+            l.pixels = pixels;
+        }
     }
 
     pub(crate) fn cancel_transform(&mut self) {
@@ -411,6 +439,16 @@ impl Session {
         };
         if f.vector {
             self.commit_vector_transform(f);
+            return;
+        }
+        // Nothing moved: the layer is exactly as it was. Recombining the lifted
+        // part with the remainder would lose alpha under a soft selection, with
+        // nothing to undo (happypaint 0.195.1).
+        if f.at_rest() {
+            if let Some(l) = self.doc.layer_mut(&f.layer) {
+                l.pixels = f.original;
+            }
+            self.mark_dirty(f.bounds.union(&f.preview_bounds));
             return;
         }
         let Some(layer) = self.doc.layer_mut(&f.layer) else {

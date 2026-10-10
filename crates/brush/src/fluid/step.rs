@@ -65,7 +65,7 @@ fn settle_rate(sim: &Field, w: f32, u: f32, v: f32, oil: f32, paper: (PaperTap, 
     dc *= 1.0 + EDGE_SETTLE * front * (1.0 - wet);
     // Granulation: valleys collect pigment, ridges shed it.
     if paper.1 > 0.0 {
-        dc *= 1.0 + paper.1 * GRAN_SWING * (paper.0.at(u, v) * 2.0 - 1.0);
+        dc *= 1.0 + paper.1 * GRAN_SWING * (1.0 - paper.0.at(u, v) * 2.0);
     }
     (dc.clamp(0.0, 1.0), front)
 }
@@ -148,7 +148,7 @@ impl FluidSim {
                                 let mut k = (1.0 + force_f * FORCE_RIM * front) * dc.max(force_f);
                                 // Force-dry recreates the granulation it bypasses, once.
                                 if paper.1 > 0.0 {
-                                    k *= 1.0 + force_f * paper.1 * GRAN_SWING * (paper.0.at(u, v) * 2.0 - 1.0);
+                                    k *= 1.0 + force_f * paper.1 * GRAN_SWING * (1.0 - paper.0.at(u, v) * 2.0);
                                 }
                                 let mut s = col.map(|c| (c * k).clamp(0.0, 1.0));
                                 for c in 0..3 {
@@ -341,4 +341,56 @@ fn update_px(
     let damp = (DAMP + (0.84 - DAMP) * oil) * smoothstep(0.005, 0.04, w_new);
     let vel = vel.map(|v| (v * damp).clamp(-V_MAX, V_MAX));
     ([w_new, curl, vel[0], vel[1]], col_new)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::WetDab;
+    use super::*;
+
+    #[test]
+    fn granulation_settles_pigment_in_the_paper_valleys() {
+        // happypaint 0.195.3: dc ·= 1 + s·1.2·(1 − 2p), so low paper collects.
+        let doc = Rect::new(0, 0, 200, 120);
+        let rough = onepaint_doc::PAPER_PRESETS.iter().find(|p| p.id == "rough").and_then(|p| p.paper()).unwrap();
+        let tex = crate::paper::PaperTexture::new(&rough).unwrap();
+        let mut sim = FluidSim::new(doc, Rect::new(40, 40, 120, 40), false);
+        sim.set_paper(Some(&rough));
+        let dabs: Vec<_> = (0..40)
+            .map(|i| WetDab {
+                x: 60.0 + i as f64 * 2.0,
+                y: 60.0,
+                radius: 16.0,
+                water: 0.09,
+                pigment: 0.4,
+                color: [0.1, 0.2, 0.8],
+                vx: 0.0,
+                vy: 0.0,
+                rewet: 0.0,
+                dry: 0.0,
+                grain_thr: 0.0,
+            })
+            .collect();
+        sim.deposit(&dabs, None);
+        let mut layer = Surface::new();
+        for _ in 0..30 {
+            let r = sim.rect();
+            sim.step(&mut layer, r, false);
+        }
+        let (mut lo, mut hi) = ((0.0, 0), (0.0, 0));
+        for y in 52..68 {
+            for x in 70..130 {
+                let h = tex.height(x as f64 + 0.5, y as f64 + 0.5);
+                let a = layer.get(x, y)[3] as f64;
+                if h < 0.35 {
+                    lo = (lo.0 + a, lo.1 + 1);
+                } else if h > 0.65 {
+                    hi = (hi.0 + a, hi.1 + 1);
+                }
+            }
+        }
+        assert!(lo.1 > 20 && hi.1 > 20, "both kinds of paper sampled: {lo:?} {hi:?}");
+        let (lo, hi) = (lo.0 / lo.1 as f64, hi.0 / hi.1 as f64);
+        assert!(lo > hi * 1.1, "valleys {lo} vs ridges {hi}");
+    }
 }

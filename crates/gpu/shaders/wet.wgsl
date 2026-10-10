@@ -158,7 +158,7 @@ fn settle_rate(w: f32, u: f32, v: f32) -> vec2<f32> {
     dc *= 1.0 - p.oil;
     dc *= 1.0 + EDGE_SETTLE * front * (1.0 - wet);
     if (p.paper_strength > 0.0) {
-        dc *= 1.0 + p.paper_strength * GRAN_SWING * (paper_at(u, v) * 2.0 - 1.0);
+        dc *= 1.0 + p.paper_strength * GRAN_SWING * (1.0 - paper_at(u, v) * 2.0);
     }
     return vec2<f32>(clamp(dc, 0.0, 1.0), front);
 }

@@ -437,7 +437,14 @@ impl FluidSim {
     /// cool veil wherever the paper is wet (display only).
     pub fn preview(&self) -> Surface {
         use rayon::prelude::*;
-        let veil = if self.oil { 0.0 } else { 0.24 };
+        // Oils don't look damp. Linear documents need the stronger veil for the
+        // same visible darkening (0.88^2.2 ≈ 0.76); 8-bit ones use 0.12
+        // (wet-renderer.ts `u_prevVeil`).
+        let veil = match (self.oil, self.space) {
+            (true, _) => 0.0,
+            (false, onepaint_color::Space::Gamma) => 0.12,
+            (false, onepaint_color::Space::Linear) => 0.24,
+        };
         let r = self.rect;
         let bw = blocks(r).0;
         let mut per_tile: std::collections::BTreeMap<(i32, i32), Vec<Rect>> = Default::default();

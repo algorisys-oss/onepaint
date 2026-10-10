@@ -93,3 +93,20 @@ fn reads_a_file_written_by_ag_psd() {
     let m = masked.mask.as_ref().unwrap();
     assert!(m.get(10, 10)[0] > 0.99 && m.get(50, 10)[0] < 0.01);
 }
+
+#[test]
+fn fill_layers_export_their_picture() {
+    let mut d = Document::new(64, 48, None);
+    let mut l = Layer::new("Solid");
+    let mut params = onepaint_filters::default_params(onepaint_filters::Kind::SolidFill);
+    params.fill_color = Some([1.0, 0.5, 0.0]);
+    l.adjustment = Some(Box::new(onepaint_doc::Adjustment { kind: "solid-fill".into(), params }));
+    d.root.push(Node::Layer(l));
+    let flat = vec![1.0f32; 64 * 48 * 4];
+    let back = read_psd(&write_psd(&d, &flat).unwrap()).unwrap();
+    let Some(Node::Layer(s)) = back.root.iter().find(|n| n.name() == "Solid") else { panic!("the fill layer") };
+    let p = s.pixels.get(10, 10);
+    let c = onepaint_color::Space::Linear.to_srgb8(p);
+    // 0.5 · 255 = 127.5 rounds either way through the transfer table.
+    assert!(c[0] == 255 && c[1].abs_diff(128) <= 1 && c[2] == 0 && c[3] == 255, "{c:?}");
+}

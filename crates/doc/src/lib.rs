@@ -45,6 +45,12 @@ pub enum BlendMode {
     Pigment,
 }
 
+/// A blend mode happypaint knows and onepaint doesn't yet (Pass Through,
+/// Dissolve, Vivid Light, …) is kept under this key in the node's `extra`,
+/// so the file saves it back; it composites as Normal meanwhile. Setting a
+/// mode clears it.
+pub const RAW_BLEND_KEY: &str = "blendMode";
+
 impl BlendMode {
     pub const ALL: [BlendMode; 20] = {
         use BlendMode::*;
@@ -117,7 +123,7 @@ impl BlendMode {
         }
     }
 
-    /// Unknown strings read as `normal`.
+    /// Unknown strings read as `normal` (see [`RAW_BLEND_KEY`]).
     pub fn parse(s: &str) -> Self {
         Self::ALL.into_iter().find(|m| m.as_str() == s).unwrap_or_default()
     }
@@ -276,7 +282,10 @@ impl Node {
         both!(self, n => n.opacity = v.clamp(0.0, 1.0))
     }
     pub fn set_blend_mode(&mut self, v: BlendMode) {
-        both!(self, n => n.blend_mode = v)
+        both!(self, n => {
+            n.blend_mode = v;
+            n.extra.remove(RAW_BLEND_KEY);
+        })
     }
     pub fn as_layer(&self) -> Option<&Layer> {
         match self {

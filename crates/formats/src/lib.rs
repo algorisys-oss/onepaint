@@ -262,6 +262,16 @@ fn count_tiles(nodes: &[Value]) -> u64 {
         .sum()
 }
 
+/// A mode onepaint can't composite yet keeps its name, so saving writes it
+/// back (the extras are written after `blendMode`).
+fn keep_raw_blend(o: &Map<String, Value>, parsed: BlendMode, extra: &mut onepaint_doc::Extra) {
+    if let Some(raw) = o.get("blendMode").and_then(Value::as_str)
+        && raw != parsed.as_str()
+    {
+        extra.insert(onepaint_doc::RAW_BLEND_KEY.into(), Value::String(raw.into()));
+    }
+}
+
 fn read_node(v: &Value, chunks: &[u8], doc: Rect, progress: &Progress, space: Space) -> Result<Node, FormatError> {
     let o = v.as_object().ok_or_else(|| corrupt("node is not an object"))?;
     if let Some(children) = o.get("children").and_then(Value::as_array) {
@@ -272,6 +282,7 @@ fn read_node(v: &Value, chunks: &[u8], doc: Rect, progress: &Progress, space: Sp
         g.blend_mode = BlendMode::parse(&s(o, "blendMode"));
         g.collapsed = b(o, "collapsed", false);
         g.extra = extras(o, GROUP_KNOWN);
+        keep_raw_blend(o, g.blend_mode, &mut g.extra);
         for c in children {
             g.children.push(read_node(c, chunks, doc, progress, space)?);
         }
@@ -288,6 +299,7 @@ fn read_node(v: &Value, chunks: &[u8], doc: Rect, progress: &Progress, space: Sp
     l.inherit_alpha = b(o, "inheritAlpha", false);
     l.mask_enabled = b(o, "maskEnabled", true);
     l.extra = extras(o, LEAF_KNOWN);
+    keep_raw_blend(o, l.blend_mode, &mut l.extra);
     if let Some(kind) = l.extra.remove("adjustmentKind").and_then(|v| v.as_str().map(str::to_string)) {
         let params = l.extra.remove("adjustmentParams").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
         l.adjustment = Some(Box::new(onepaint_doc::Adjustment { kind, params }));

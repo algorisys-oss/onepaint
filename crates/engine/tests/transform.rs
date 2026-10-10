@@ -300,3 +300,31 @@ fn undo_with_an_untouched_box_undoes_and_with_a_pending_move_abandons_it() {
     assert_eq!(px(&s, 25, 25), RED, "back where it started");
     assert_eq!(px(&s, 125, 25)[3], 0.0);
 }
+
+#[test]
+fn an_untouched_transform_under_a_soft_selection_changes_nothing() {
+    // happypaint 0.195.1: lifting under partial coverage and dropping back
+    // in place must not fade the layer, while showing or on Apply.
+    let mut s = session_with_block();
+    let id = s.active().to_string();
+    let before = s.doc().layer(&id).unwrap().pixels.clone();
+    s.execute(Command::SelectShape { contours: vec![rect_polygon([15.0, 15.0], [45.0, 35.0])], mode: Mode::Replace }).unwrap();
+    s.execute(Command::SetFeather { radius: 6.0 }).unwrap();
+    let n = s.history_len();
+    s.execute(Command::BeginTransform).unwrap();
+    assert_eq!(s.flatten(), {
+        let mut t = session_with_block();
+        t.execute(Command::SelectShape { contours: vec![rect_polygon([15.0, 15.0], [45.0, 35.0])], mode: Mode::Replace }).unwrap();
+        t.flatten()
+    });
+    s.execute(Command::SetTransform { matrix: Affine::translate(5.0, 0.0) }).unwrap();
+    s.execute(Command::SetTransform { matrix: Affine::IDENTITY }).unwrap();
+    s.execute(Command::CommitTransform).unwrap();
+    let after = &s.doc().layer(&id).unwrap().pixels;
+    for y in 10..50 {
+        for x in 10..50 {
+            assert_eq!(after.get(x, y), before.get(x, y), "{x},{y}");
+        }
+    }
+    assert_eq!(s.history_len(), n, "nothing to undo");
+}

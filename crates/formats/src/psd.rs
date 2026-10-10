@@ -88,12 +88,38 @@ const KEYS: [(BlendMode, &[u8; 4]); 19] = [
     (BlendMode::Luminosity, b"lum "),
 ];
 
+/// Photoshop modes onepaint doesn't composite yet, by happypaint's name.
+const RAW_KEYS: [(&str, &[u8; 4]); 9] = [
+    ("pass-through", b"pass"),
+    ("dissolve", b"diss"),
+    ("darker-color", b"dkCl"),
+    ("lighter-color", b"lgCl"),
+    ("vivid-light", b"vLit"),
+    ("linear-light", b"lLit"),
+    ("pin-light", b"pLit"),
+    ("hard-mix", b"hMix"),
+    ("subtract", b"fsub"),
+];
+
 fn key_of(m: BlendMode) -> &'static [u8; 4] {
     KEYS.iter().find(|k| k.0 == m).map_or(b"norm", |k| k.1)
 }
 
+/// The node's key, its kept happypaint mode first (see `RAW_BLEND_KEY`).
+fn key_for(m: BlendMode, extra: &onepaint_doc::Extra) -> &'static [u8; 4] {
+    let raw = extra.get(onepaint_doc::RAW_BLEND_KEY).and_then(|v| v.as_str());
+    raw.and_then(|r| RAW_KEYS.iter().find(|k| k.0 == r)).map_or_else(|| key_of(m), |k| k.1)
+}
+
 fn mode_of(k: &[u8]) -> BlendMode {
     KEYS.iter().find(|e| &e.1[..] == k).map_or(BlendMode::Normal, |e| e.0)
+}
+
+/// Keep a mode onepaint can't composite yet under its happypaint name.
+fn keep_raw(k: &[u8], extra: &mut onepaint_doc::Extra) {
+    if let Some((name, _)) = RAW_KEYS.iter().find(|e| &e.1[..] == k) {
+        extra.insert(onepaint_doc::RAW_BLEND_KEY.into(), serde_json::Value::String((*name).into()));
+    }
 }
 
 // ── Writer ──
@@ -160,12 +186,34 @@ fn rle_channel(rows: &[Vec<u8>]) -> Vec<u8> {
     w.0
 }
 
-fn layer_record(l: &Layer, doc: Rect, space: onepaint_color::Space) -> Record {
-    let rect = l.pixels.content_bounds().and_then(|b| b.intersect(&doc)).filter(|_| l.adjustment.is_none());
+/// A fill layer's picture over the document (it has no pixels of its own).
+fn fill_pixels(l: &Layer, frame: onepaint_filters::Frame) -> Option<Surface> {
+    use rayon::prelude::*;
+    let adj = l.adjustment.as_ref()?;
+    let kind = onepaint_filters::Kind::parse(&adj.kind).filter(|k| k.is_fill())?;
+    let p = onepaint_filters::prepare_in(kind, &adj.params, frame);
+    let (w, h) = (frame.doc_w as usize, frame.doc_h as usize);
+    let mut px = vec![0.0f32; w * h * 4];
+    px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
+        for x in 0..w {
+            row[x * 4..x * 4 + 4].copy_from_slice(&p.color_px([0.0; 4], x as i32, y as i32));
+        }
+    });
+    let mut s = Surface::new();
+    s.write_rect(Rect::new(0, 0, w as i32, h as i32), &px);
+    Some(s)
+}
+
+fn layer_record(l: &Layer, doc: Rect, frame: onepaint_filters::Frame) -> Record {
+    let space = frame.space;
+    // Fill layers export their picture; adjustments carry none (they're kept as recipes).
+    let fill = fill_pixels(l, frame);
+    let pixels = fill.as_ref().unwrap_or(&l.pixels);
+    let rect = pixels.content_bounds().and_then(|b| b.intersect(&doc)).filter(|_| l.adjustment.is_none() || fill.is_some());
     let mut channels = Vec::new();
     let rect = match rect {
         Some(r) => {
-            let px = l.pixels.read_rect(r);
+            let px = pixels.read_rect(r);
             let (w, h) = (r.w as usize, r.h as usize);
             let srgb: Vec<[u8; 4]> = px.chunks_exact(4).map(|p| space.to_srgb8([p[0], p[1], p[2], p[3]])).collect();
             // Channel order: alpha (-1), then R, G, B.
@@ -221,7 +269,7 @@ fn layer_record(l: &Layer, doc: Rect, space: onepaint_color::Space) -> Record {
     Record {
         rect,
         channels,
-        key: *key_of(l.blend_mode),
+        key: *key_for(l.blend_mode, &l.extra),
         opacity: (l.opacity.clamp(0.0, 1.0) * 255.0).round() as u8,
         clipping: l.clipped as u8,
         flags: 0x08 | hidden | if l.adjustment.is_some() { 0x10 } else { 0 },
@@ -245,19 +293,24 @@ fn empty_record(name: &str, key: [u8; 4], opacity: u8, flags: u8, lsct: Vec<u8>)
     }
 }
 
-fn flatten(nodes: &[Node], doc: Rect, space: onepaint_color::Space, out: &mut Vec<Record>) {
+fn flatten(nodes: &[Node], doc: Rect, frame: onepaint_filters::Frame, out: &mut Vec<Record>) {
     for n in nodes {
         match n {
-            Node::Layer(l) => out.push(layer_record(l, doc, space)),
+            Node::Layer(l) => out.push(layer_record(l, doc, frame)),
             Node::Group(g) => {
                 out.push(empty_record("</Layer group>", *b"norm", 255, 0x08 | 0x10, 3u32.to_be_bytes().to_vec()));
-                flatten(&g.children, doc, space, out);
+                flatten(&g.children, doc, frame, out);
                 let mut lsct = 1u32.to_be_bytes().to_vec();
                 lsct.extend_from_slice(b"8BIM");
-                lsct.extend_from_slice(key_of(g.blend_mode));
+                lsct.extend_from_slice(key_for(g.blend_mode, &g.extra));
                 lsct.extend_from_slice(&0u32.to_be_bytes());
                 let flags = 0x08 | 0x10 | if g.visible { 0 } else { 2 };
-                out.push(empty_record(&g.name, *key_of(g.blend_mode), (g.opacity.clamp(0.0, 1.0) * 255.0).round() as u8, flags, lsct));
+                // Photoshop writes a pass-through group's own record as Normal.
+                let rec_key = match key_for(g.blend_mode, &g.extra) {
+                    b"pass" => b"norm",
+                    k => k,
+                };
+                out.push(empty_record(&g.name, *rec_key, (g.opacity.clamp(0.0, 1.0) * 255.0).round() as u8, flags, lsct));
             }
         }
     }
@@ -282,7 +335,8 @@ pub fn write_psd(doc: &Document, composite: &[f32]) -> Result<Vec<u8>, FormatErr
     }
     let bounds = doc.bounds();
     let mut records = Vec::new();
-    flatten(&doc.root, bounds, doc.space(), &mut records);
+    let frame = onepaint_filters::Frame::region(0, 0, doc.width, doc.height, doc.dpi as f32).in_space(doc.space());
+    flatten(&doc.root, bounds, frame, &mut records);
     let (w, h) = (doc.width as usize, doc.height as usize);
     let comp: Vec<[u8; 4]> = composite.chunks_exact(4).map(|p| doc.space().to_srgb8([p[0], p[1], p[2], p[3]])).collect();
     let has_alpha = comp.iter().any(|c| c[3] < 255);
@@ -754,7 +808,9 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                         g.children = children;
                         g.visible = rec.flags & 2 == 0;
                         g.opacity = rec.opacity as f32 / 255.0;
-                        g.blend_mode = mode_of(&rec.lsct.and_then(|l| l.1).unwrap_or(rec.key));
+                        let key = rec.lsct.and_then(|l| l.1).unwrap_or(rec.key);
+                        g.blend_mode = mode_of(&key);
+                        keep_raw(&key, &mut g.extra);
                         if let Some(top) = stack.last_mut() {
                             top.push(Node::Group(g));
                         }
@@ -764,6 +820,7 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                         l.visible = rec.flags & 2 == 0;
                         l.opacity = rec.opacity as f32 / 255.0;
                         l.blend_mode = mode_of(&rec.key);
+                        keep_raw(&rec.key, &mut l.extra);
                         l.clipped = rec.clipping != 0;
                         l.pixels = pixels.unwrap_or_default();
                         l.mask_enabled = rec.mask.is_none_or(|m| m.2 & 2 == 0);

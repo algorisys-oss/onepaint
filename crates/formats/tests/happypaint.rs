@@ -230,3 +230,30 @@ fn reads_count_progress_and_stop_when_cancelled() {
     assert_eq!(p.fraction(), Some(1.0));
     assert!(matches!(psd::read_psd_with(&psd, &c), Err(FormatError::Cancelled)));
 }
+
+#[test]
+fn blend_modes_onepaint_cannot_composite_yet_survive_a_round_trip() {
+    let mut d = Document::new(300, 200, Some(Rgba::WHITE));
+    let mut g = Group::new("g");
+    g.extra.insert(RAW_BLEND_KEY.into(), serde_json::json!("pass-through"));
+    let mut l = Layer::new("ink");
+    fill(&mut l.pixels, 10, 10, 50, 50, [0.2, 0.1, 0.0, 1.0]);
+    l.extra.insert(RAW_BLEND_KEY.into(), serde_json::json!("vivid-light"));
+    g.children.push(Node::Layer(l));
+    d.root.push(Node::Group(g));
+    let raw = |d: &Document| -> Vec<String> {
+        let Node::Group(g) = d.root.last().unwrap() else { panic!("a group") };
+        let Node::Layer(l) = &g.children[0] else { panic!("a layer") };
+        [&g.extra, &l.extra].map(|e| e.get(RAW_BLEND_KEY).and_then(|v| v.as_str()).unwrap_or("").to_string()).to_vec()
+    };
+    let back = read_happypaint(&write_happypaint(&d, None, "t").unwrap()).unwrap();
+    assert_eq!(raw(&back), ["pass-through", "vivid-light"]);
+    let flat = vec![1.0f32; 300 * 200 * 4];
+    let psd = psd::read_psd(&psd::write_psd(&back, &flat).unwrap()).unwrap();
+    assert_eq!(raw(&psd), ["pass-through", "vivid-light"]);
+    // Choosing a mode in onepaint replaces the kept one.
+    let mut n = back.root.last().unwrap().clone();
+    n.set_blend_mode(BlendMode::Multiply);
+    let Node::Group(g) = n else { panic!("a group") };
+    assert!(!g.extra.contains_key(RAW_BLEND_KEY));
+}

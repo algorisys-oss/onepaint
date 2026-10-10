@@ -90,6 +90,7 @@ impl Session {
         let resample = |s: &Surface| -> Surface {
             let mut f = transform::Floating {
                 layer: String::new(),
+                remainder: Surface::new(),
                 original: Surface::new(),
                 src: s.read_rect(src_bounds),
                 bounds: src_bounds,

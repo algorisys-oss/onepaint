@@ -97,6 +97,7 @@ impl Session {
             let bounds = Rect::new(0, 0, img.width as i32, img.height as i32);
             let mut f = transform::Floating {
                 layer: String::new(),
+                remainder: Surface::new(),
                 original: Surface::new(),
                 src,
                 bounds,
