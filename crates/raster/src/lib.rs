@@ -1,9 +1,9 @@
 //! Sparse, unbounded, tiled pixel surfaces.
 //!
-//! Pixels are premultiplied RGBA stored as `f16` in 256² tiles behind `Arc`, so
-//! cloning a [`Surface`] is a cheap snapshot and writes are copy-on-write.
+//! Pixels are premultiplied RGBA in 256² tiles behind `Arc`, so cloning a
+//! [`Surface`] is a cheap snapshot and writes are copy-on-write. Tiles hold
+//! linear `f16`, or 8-bit bytes in 8-bit documents (spec 49).
 
-use half::f16;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -11,6 +11,9 @@ pub const TILE: i32 = 256;
 pub const TILE_PX: usize = (TILE * TILE) as usize;
 
 pub type Px = [f32; 4];
+
+mod tile;
+pub use tile::{Store, Tile};
 
 /// File key for a tile: tx in the high 16 bits (happypaint `tile-grid.ts:22-25`).
 pub fn pack_key(tx: i32, ty: i32) -> u32 {
@@ -24,68 +27,6 @@ pub fn unpack_key(key: u32) -> (i32, i32) {
 /// Tile containing pixel (x, y).
 pub fn tile_of(x: i32, y: i32) -> (i32, i32) {
     (x.div_euclid(TILE), y.div_euclid(TILE))
-}
-
-/// One 256² tile of premultiplied RGBA f16, row-major, row 0 at the top.
-#[derive(Clone, PartialEq)]
-pub struct Tile {
-    pub data: Vec<f16>,
-}
-
-impl Default for Tile {
-    fn default() -> Self {
-        Self { data: vec![f16::ZERO; TILE_PX * 4] }
-    }
-}
-
-impl std::fmt::Debug for Tile {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Tile")
-    }
-}
-
-impl Tile {
-    pub fn filled(p: Px) -> Self {
-        let px = p.map(f16::from_f32);
-        let mut data = Vec::with_capacity(TILE_PX * 4);
-        for _ in 0..TILE_PX {
-            data.extend_from_slice(&px);
-        }
-        Self { data }
-    }
-
-    #[inline]
-    pub fn get(&self, lx: usize, ly: usize) -> Px {
-        let i = (ly * TILE as usize + lx) * 4;
-        let d = &self.data[i..i + 4];
-        [d[0].to_f32(), d[1].to_f32(), d[2].to_f32(), d[3].to_f32()]
-    }
-
-    #[inline]
-    pub fn set(&mut self, lx: usize, ly: usize, p: Px) {
-        let i = (ly * TILE as usize + lx) * 4;
-        let d = &mut self.data[i..i + 4];
-        for c in 0..4 {
-            d[c] = f16::from_f32(p[c]);
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.data.chunks_exact(4).all(|p| p[3].to_f32() <= 0.0)
-    }
-
-    /// The tile's pixels as f32, for bulk processing.
-    pub fn to_f32(&self) -> Vec<f32> {
-        let mut out = vec![0.0; self.data.len()];
-        half::slice::HalfFloatSliceExt::convert_to_f32_slice(&self.data[..], &mut out);
-        out
-    }
-
-    pub fn from_f32(data: &[f32]) -> Self {
-        let mut out = vec![f16::ZERO; TILE_PX * 4];
-        half::slice::HalfFloatSliceExt::convert_from_f32_slice(&mut out[..], data);
-        Self { data: out }
-    }
 }
 
 /// Integer rectangle in document pixels.
@@ -307,7 +248,7 @@ impl Surface {
             let (mut x0, mut y0, mut x1, mut y1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
             for ly in 0..TILE as usize {
                 for lx in 0..TILE as usize {
-                    if t.data[(ly * TILE as usize + lx) * 4 + 3].to_f32() > 0.0 {
+                    if t.get(lx, ly)[3] > 0.0 {
                         x0 = x0.min(lx as i32);
                         x1 = x1.max(lx as i32);
                         y0 = y0.min(ly as i32);

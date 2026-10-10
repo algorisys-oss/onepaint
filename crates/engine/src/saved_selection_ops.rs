@@ -56,7 +56,7 @@ impl Session {
 
     fn push_saved(&mut self, before: Vec<SavedSelection>) {
         let bytes = 64 + self.saved.iter().map(|s| s.mask.data().len()).sum::<usize>() / 8;
-        self.history.push(Change::SavedSelections { before, after: self.saved.clone() }, bytes);
+        self.record(Change::SavedSelections { before, after: self.saved.clone() }, bytes);
         self.events.push(Event::SavedSelectionsChanged);
         self.history_changed();
     }

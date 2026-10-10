@@ -150,7 +150,7 @@ const MAX_CACHED_OPAQUE: usize = 1 << 16;
 
 /// Every pixel's alpha is exactly 1 (f16 0x3c00).
 fn is_opaque(t: &Tile) -> bool {
-    t.data.chunks_exact(4).all(|p| p[3].to_bits() == 0x3c00)
+    t.is_opaque()
 }
 
 impl PlanCache {
@@ -734,8 +734,7 @@ fn split(ops: &[Op], units: &[Unit]) -> Option<Split> {
 // ── CPU interpreter (the encoding's own oracle) ──
 
 fn load(t: &Tile, i: usize) -> Px {
-    let d = &t.data[i * 4..i * 4 + 4];
-    [d[0].to_f32(), d[1].to_f32(), d[2].to_f32(), d[3].to_f32()]
+    t.get(i % TILE as usize, i / TILE as usize)
 }
 
 fn eval(c: &Content, i: usize) -> Px {

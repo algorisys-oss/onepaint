@@ -10,6 +10,7 @@ mod canvas_ops;
 mod clipboard;
 mod color_drop;
 mod command;
+mod depth_ops;
 mod filter_ops;
 pub mod guides;
 pub use command::Command;
@@ -388,7 +389,7 @@ pub struct Session {
 }
 
 fn tile_bytes(t: &Option<Arc<Tile>>) -> usize {
-    t.as_ref().map_or(0, |_| TILE_PX * 8)
+    t.as_ref().map_or(0, |t| t.byte_size())
 }
 
 /// Decode a `.happypaint` file without a session, so it can run on a worker
@@ -467,6 +468,7 @@ impl Session {
             plan_cache: Default::default(),
         };
         s.load_saved_selections();
+        s.quantize_document();
         s.load_anim();
         s.guides = s.doc.extra.get("guides").and_then(|v| serde_json::from_value::<Guides>(v.clone()).ok()).unwrap_or_default().sanitized();
         s.mark_all_dirty();
@@ -1247,7 +1249,7 @@ impl Session {
                     && before != self.guides.lines
                 {
                     let bytes = 64 * (before.len() + self.guides.lines.len()) + 64;
-                    self.history.push(Change::GuideLines { before, after: self.guides.lines.clone() }, bytes);
+                    self.record(Change::GuideLines { before, after: self.guides.lines.clone() }, bytes);
                     self.history_changed();
                 }
                 Ok(())
@@ -1417,7 +1419,7 @@ impl Session {
             true
         };
         if !coalesced {
-            self.history.push(Change::Tree { before, after, active_before, active_after, key }, 1024);
+            self.record(Change::Tree { before, after, active_before, active_after, key }, 1024);
         }
         self.doc.touch();
         self.events.push(Event::LayersChanged);

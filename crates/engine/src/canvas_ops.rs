@@ -46,7 +46,7 @@ impl Session {
 
     fn record_shape(&mut self, before: DocShape) {
         let after = self.shape();
-        self.history.push(Change::Document { before: Box::new(before), after: Box::new(after.clone()) }, 4096);
+        self.record(Change::Document { before: Box::new(before), after: Box::new(after.clone()) }, 4096);
         self.apply_shape(after);
         self.doc.touch();
         self.history_changed();

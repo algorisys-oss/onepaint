@@ -210,6 +210,8 @@ pub struct App {
     pub bevel: [f32; 2],
     /// The New canvas dialog's paper preset (index into `PAPER_PRESETS`).
     pub new_paper: usize,
+    /// Colour depth for new canvases (spec 49; happypaint's default is 16-bit float).
+    pub new_depth: onepaint_doc::Depth,
     /// Frame selection and out-of-pegs mode (the timeline's view state).
     pub timing: timing::Timing,
     /// A loaded CMYK press profile; the built-in press when none.
@@ -313,6 +315,7 @@ impl App {
             palettes,
             bevel: [0.0, 0.25],
             new_paper: 0,
+            new_depth: onepaint_doc::Depth::Rgba16F,
             press: None,
             timing: Default::default(),
             capture: None,
@@ -407,6 +410,7 @@ impl App {
         self.autosave.clear(&id);
         let mut doc = onepaint_doc::Document::new(w, h, Some(Rgba::WHITE));
         doc.set_paper(onepaint_doc::PAPER_PRESETS.get(self.new_paper).and_then(|p| p.paper()));
+        doc.depth = self.new_depth;
         self.session.replace_document(doc);
         self.canvas.reset_for([w, h]);
         self.path = None;
@@ -1644,6 +1648,21 @@ mod tests {
         h.state_mut().new_paper = 3;
         h.state_mut().new_document(640, 480);
         assert_eq!(h.state().session.doc().paper().unwrap().grain_id, "canvas");
+    }
+
+    #[test]
+    fn the_new_canvas_dialog_makes_8bit_documents() {
+        let mut h = harness();
+        h.run();
+        h.state_mut().popover = Some(Popover::NewDoc);
+        h.run();
+        h.get_by_label("8-bit").click();
+        h.run();
+        assert!(h.query_by_label("Standard, smallest memory").is_some());
+        h.get_by_label("Create").click();
+        h.run();
+        assert_eq!(h.state().session.doc().depth, onepaint_doc::Depth::Rgba8);
+        assert_eq!(h.state().session.doc().layer_ids().len(), 2);
     }
 
     #[test]

@@ -67,7 +67,7 @@ impl Session {
             }
         }
         if !changes.is_empty() {
-            self.history.push(Change::Tiles { layer: lq.layer, plane: Plane::Pixels, tiles: changes }, bytes);
+            self.record(Change::Tiles { layer: lq.layer, plane: Plane::Pixels, tiles: changes }, bytes);
             self.doc.touch();
             self.history_changed();
         }

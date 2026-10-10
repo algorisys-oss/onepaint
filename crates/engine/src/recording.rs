@@ -77,7 +77,7 @@ fn dump_tiles(doc: &Document) -> Vec<u8> {
             raw.push(kind);
             raw.extend(tx.to_le_bytes());
             raw.extend(ty.to_le_bytes());
-            raw.extend(t.data.iter().flat_map(|v| v.to_bits().to_le_bytes()));
+            raw.extend(t.f16_data().iter().flat_map(|v| v.to_bits().to_le_bytes()));
         }
     };
     for id in doc.layer_ids() {
@@ -122,7 +122,10 @@ fn load_tiles(doc: &mut Document, bytes: &[u8]) -> Result<(), EngineError> {
         let ty = i32::from_le_bytes(raw.get(p + 5..p + 9).ok_or_else(bad)?.try_into().map_err(|_| bad())?);
         let data = raw.get(p + 9..p + 9 + n).ok_or_else(bad)?;
         p += 9 + n;
-        let tile = Tile { data: data.chunks_exact(2).map(|b| half::f16::from_bits(u16::from_le_bytes([b[0], b[1]]))).collect() };
+        if data.len() != onepaint_raster::TILE_PX * 8 {
+            return Err(bad());
+        }
+        let tile = Tile::from_f16(data.chunks_exact(2).map(|b| half::f16::from_bits(u16::from_le_bytes([b[0], b[1]]))).collect());
         if let Some(l) = doc.layer_mut(&id) {
             let target = match kind {
                 1 => l.mask.get_or_insert_with(Surface::new),

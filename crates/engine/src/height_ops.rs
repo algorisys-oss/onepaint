@@ -77,7 +77,7 @@ impl Session {
         }
         self.history.begin_transaction();
         for (c, b) in paint.into_iter().chain(relief) {
-            self.history.push(c, b);
+            self.record(c, b);
         }
         self.history.end_transaction();
         self.doc.touch();

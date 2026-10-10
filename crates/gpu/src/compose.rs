@@ -516,7 +516,7 @@ impl GpuCompositor {
                 origin: wgpu::Origin3d { x: 0, y: 0, z: idx % self.per_atlas },
                 aspect: wgpu::TextureAspect::All,
             },
-            bytemuck::cast_slice(&t.data),
+            bytemuck::cast_slice(&t.f16_data()),
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(TILE as u32 * 8), rows_per_image: Some(TILE as u32) },
             wgpu::Extent3d { width: TILE as u32, height: TILE as u32, depth_or_array_layers: 1 },
         );

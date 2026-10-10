@@ -442,7 +442,7 @@ impl Session {
         }
         self.mark_dirty(f.bounds.union(&f.preview_bounds));
         if !changes.is_empty() {
-            self.history.push(Change::Tiles { layer: f.layer, plane: Plane::Pixels, tiles: changes }, bytes);
+            self.record(Change::Tiles { layer: f.layer, plane: Plane::Pixels, tiles: changes }, bytes);
             self.doc.touch();
             self.history_changed();
         }

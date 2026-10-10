@@ -424,6 +424,22 @@ fn new_doc(app: &mut App, ui: &mut Ui) {
     if let Some(i) = segmented(ui, &labels, app.new_paper) {
         app.new_paper = i;
     }
+    ui.add_space(8.0);
+    // happypaint's depths and hints (new-document-dialog.tsx DEPTHS).
+    use onepaint_doc::Depth;
+    let depths = [
+        (Depth::Rgba8, "8-bit", "Standard, smallest memory"),
+        (Depth::Rgba16F, "16-bit float", "Smoother gradients — recommended"),
+        (Depth::Rgba32F, "32-bit float", "HDR / pro, ~2× the memory"),
+    ];
+    ui.label(RichText::new("Color depth").color(t.fg_muted));
+    let cur = depths.iter().position(|d| d.0 == app.new_depth).unwrap_or(1);
+    let labels: Vec<&str> = depths.iter().map(|d| d.1).collect();
+    if let Some(i) = segmented(ui, &labels, cur) {
+        app.new_depth = depths[i].0;
+    }
+    let hint = depths.iter().find(|d| d.0 == app.new_depth).map_or("", |d| d.2);
+    ui.label(RichText::new(hint).font(theme::medium(10.5)).color(t.fg_faint));
     ui.add_space(12.0);
     ui.horizontal(|ui| {
         if widgets::primary_button(ui, "Create", 120.0).clicked() {

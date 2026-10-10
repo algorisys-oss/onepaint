@@ -99,7 +99,7 @@ impl Session {
             return;
         }
         let bytes = changes.iter().map(|(_, b, a)| tile_bytes(b) + tile_bytes(a)).sum();
-        self.history.push(Change::Tiles { layer: cd.layer, plane: Plane::Pixels, tiles: changes }, bytes);
+        self.record(Change::Tiles { layer: cd.layer, plane: Plane::Pixels, tiles: changes }, bytes);
         self.doc.touch();
         self.history_changed();
     }

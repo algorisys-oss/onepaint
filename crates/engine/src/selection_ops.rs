@@ -45,7 +45,7 @@ impl Session {
         }
         let before = self.selection.clone();
         let bytes = (self.doc.width * self.doc.height) as usize * 2;
-        self.history.push(Change::Selection { before, after: after.clone() }, bytes);
+        self.record(Change::Selection { before, after: after.clone() }, bytes);
         self.set_selection_raw(after);
         self.history_changed();
     }
@@ -205,7 +205,7 @@ impl Session {
             return;
         }
         let bytes = changes.iter().map(|(_, b, a)| tile_bytes(b) + tile_bytes(a)).sum();
-        self.history.push(Change::Tiles { layer: id.to_string(), plane: Plane::Pixels, tiles: changes }, bytes);
+        self.record(Change::Tiles { layer: id.to_string(), plane: Plane::Pixels, tiles: changes }, bytes);
         self.mark_dirty(rect);
         self.doc.touch();
         self.history_changed();

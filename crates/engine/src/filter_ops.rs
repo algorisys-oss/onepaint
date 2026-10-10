@@ -170,7 +170,7 @@ impl Session {
                 active_after: self.active.clone(),
                 key: None,
             };
-            self.history.push(change, bytes.max(1024));
+            self.record(change, bytes.max(1024));
             self.doc.touch();
             self.events.push(Event::LayersChanged);
             self.history_changed();
@@ -195,7 +195,7 @@ impl Session {
             }
         }
         if !changes.is_empty() {
-            self.history.push(Change::Tiles { layer: f.layer, plane: Plane::Pixels, tiles: changes }, bytes);
+            self.record(Change::Tiles { layer: f.layer, plane: Plane::Pixels, tiles: changes }, bytes);
             self.doc.touch();
             self.history_changed();
         }
