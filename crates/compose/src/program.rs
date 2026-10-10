@@ -12,6 +12,7 @@ use crate::{GHOST_PEG_KEY, GHOST_TINT_KEY, StrokeMode, StrokeOverlay, apply_stro
 use onepaint_doc::{BlendMode, Document, Layer, Node};
 use onepaint_panel::coverage::TileCoverage;
 use onepaint_raster::{Px, TILE_PX, Tile};
+use std::ops::Range;
 use std::sync::Arc;
 
 /// Registers per pixel: the tile itself plus nested groups and clip families.
@@ -70,26 +71,26 @@ pub struct TileProgram {
     pub split: Option<Split>,
 }
 
-/// A run of ops whose result is cached as one image (spec 38).
+/// A run of the program's ops whose result is cached as one image (spec 38).
 #[derive(Clone, Debug)]
 pub struct Segment {
     /// Changes whenever anything the segment reads changes.
     pub key: u64,
-    pub ops: Vec<Op>,
+    pub range: Range<usize>,
 }
 
-/// A program cut at the hot unit: the prefix and suffix images are cached,
-/// only `hot` and `tail` run every frame.
+/// A program cut at the hot unit, as ranges into its ops: the prefix and
+/// suffix images are cached, only `hot` and `tail` run every frame.
 #[derive(Clone, Debug)]
 pub struct Split {
     /// Everything below the hot unit; the frame starts from its image.
     pub prefix: Option<Segment>,
-    pub hot: Vec<Op>,
+    pub hot: Range<usize>,
     /// Normal, backdrop-independent units above: applied as one image `S`
     /// over the result (`S + (1 − S.a) · x`).
     pub suffix: Option<Segment>,
     /// Units above that can't fold; they run every frame.
-    pub tail: Vec<Op>,
+    pub tail: Range<usize>,
 }
 
 /// Every source tile `ops` read, in op order (with repeats).
@@ -116,9 +117,10 @@ impl TileProgram {
     }
 }
 
-impl Segment {
-    pub fn sources(&self) -> impl Iterator<Item = &Arc<Tile>> {
-        op_sources(&self.ops)
+impl TileProgram {
+    /// The ops in `r` (a split's range).
+    pub fn at(&self, r: &Range<usize>) -> &[Op] {
+        &self.ops[r.clone()]
     }
 }
 
@@ -204,6 +206,28 @@ fn contains(n: &Node, id: &str) -> bool {
 /// Plan one output tile, or `None` when it needs the CPU compositor.
 pub fn plan_tile(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverlay>) -> Option<TileProgram> {
     plan_tile_split(doc, tx, ty, ov, None)
+}
+
+/// Plan many tiles in parallel, in order: the programs, and the keys the
+/// GPU path can't handle (they stay on the CPU compositor).
+pub fn plan_tiles(
+    doc: &Document,
+    keys: &[(i32, i32)],
+    ov: Option<&StrokeOverlay>,
+    hot: Option<&str>,
+) -> (Vec<TileProgram>, Vec<(i32, i32)>) {
+    use rayon::prelude::*;
+    let planned: Vec<Result<TileProgram, (i32, i32)>> =
+        keys.par_iter().map(|&(tx, ty)| plan_tile_split(doc, tx, ty, ov, hot).ok_or((tx, ty))).collect();
+    let mut progs = Vec::with_capacity(planned.len());
+    let mut cpu = Vec::new();
+    for p in planned {
+        match p {
+            Ok(p) => progs.push(p),
+            Err(k) => cpu.push(k),
+        }
+    }
+    (progs, cpu)
 }
 
 /// Segments reading fewer sources than this aren't worth a cache image.
@@ -351,30 +375,22 @@ impl Planner<'_> {
 fn split(ops: &[Op], units: &[Unit]) -> Option<Split> {
     let h = units.iter().position(|u| u.hot)?;
     let hot_unit = &units[h];
-    let mut prefix_ops = ops[..hot_unit.start].to_vec();
-    let mut hot = ops[hot_unit.start..hot_unit.end].to_vec();
     let after = &units[h + 1..];
     // Units are contiguous: every top-level op belongs to one.
     let folds = after.iter().take_while(|u| u.folds).count();
     let fold_end = if folds == 0 { hot_unit.end } else { after[folds - 1].end };
-    let mut suffix_ops = ops[hot_unit.end..fold_end].to_vec();
-    let mut tail = ops[fold_end..].to_vec();
-    let worth = |o: &[Op]| op_sources(o).count() >= MIN_SEGMENT_SOURCES;
-    let prefix = if worth(&prefix_ops) {
-        Some(Segment { key: segment_key(&prefix_ops), ops: prefix_ops })
-    } else {
-        prefix_ops.append(&mut hot);
-        hot = prefix_ops;
-        None
+    let worth = |r: &Range<usize>| op_sources(&ops[r.clone()]).nth(MIN_SEGMENT_SOURCES - 1).is_some();
+    let segment = |r: Range<usize>| Segment { key: segment_key(&ops[r.clone()]), range: r };
+    // A segment not worth caching runs with its neighbour instead.
+    let (prefix, hot_start) = match 0..hot_unit.start {
+        r if worth(&r) => (Some(segment(r)), hot_unit.start),
+        _ => (None, 0),
     };
-    let suffix = if worth(&suffix_ops) {
-        Some(Segment { key: segment_key(&suffix_ops), ops: suffix_ops })
-    } else {
-        suffix_ops.append(&mut tail);
-        tail = suffix_ops;
-        None
+    let (suffix, tail_start) = match hot_unit.end..fold_end {
+        r if worth(&r) => (Some(segment(r)), fold_end),
+        _ => (None, hot_unit.end),
     };
-    Some(Split { prefix, hot, suffix, tail })
+    Some(Split { prefix, hot: hot_start..hot_unit.end, suffix, tail: tail_start..ops.len() })
 }
 
 // ── CPU interpreter (the encoding's own oracle) ──
@@ -455,13 +471,13 @@ pub fn run_split(prog: &TileProgram) -> Vec<f32> {
     let mut out = vec![0.0; TILE_PX * 4];
     let mut stack: Vec<Px> = Vec::with_capacity(MAX_STACK);
     for i in 0..TILE_PX {
-        let base = s.prefix.as_ref().map_or([0.0; 4], |p| exec(&p.ops, [0.0; 4], i, &mut stack));
-        let mut v = exec(&s.hot, base, i, &mut stack);
+        let base = s.prefix.as_ref().map_or([0.0; 4], |p| exec(prog.at(&p.range), [0.0; 4], i, &mut stack));
+        let mut v = exec(prog.at(&s.hot), base, i, &mut stack);
         if let Some(sfx) = &s.suffix {
-            let img = exec(&sfx.ops, [0.0; 4], i, &mut stack);
+            let img = exec(prog.at(&sfx.range), [0.0; 4], i, &mut stack);
             v = blend_px(BlendMode::Normal, v, img, 1.0);
         }
-        v = exec(&s.tail, v, i, &mut stack);
+        v = exec(prog.at(&s.tail), v, i, &mut stack);
         out[i * 4..i * 4 + 4].copy_from_slice(&v);
     }
     out

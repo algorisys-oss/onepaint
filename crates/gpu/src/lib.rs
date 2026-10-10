@@ -185,6 +185,15 @@ impl CanvasGpu {
         }
     }
 
+    /// Fill the cache images `programs` will need (spec 38 warm-up).
+    pub fn warm(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, programs: &[onepaint_compose::program::TileProgram]) {
+        if let Some(c) = &mut self.compositor
+            && !programs.is_empty()
+        {
+            c.warm(device, queue, programs);
+        }
+    }
+
     /// (Re)create the composite texture when the document size changes. Returns false if too large.
     pub fn ensure_size(&mut self, device: &wgpu::Device, w: u32, h: u32) -> bool {
         if self.texture.as_ref().is_some_and(|t| t.size == [w, h]) {

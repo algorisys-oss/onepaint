@@ -52,6 +52,8 @@ pub fn init_gpu(cc: &eframe::CreationContext) -> (bool, bool) {
 
 /// Tiles handed to the GPU compositor per frame, visible ones first.
 const GPU_TILES_PER_FRAME: usize = 256;
+/// Tiles whose cache images an idle frame warms (spec 38).
+const WARM_TILES_PER_FRAME: usize = 64;
 
 /// Brush cursor settings, copied from the app settings each frame.
 #[derive(Clone, Copy, Debug)]
@@ -79,6 +81,8 @@ struct CanvasCallback {
     doc_size: [u32; 2],
     uploads: Arc<Vec<((i32, i32), Tile)>>,
     programs: Arc<Vec<TileProgram>>,
+    /// Programs whose cache images to fill on an idle frame (spec 38).
+    warm: Arc<Vec<TileProgram>>,
     selection: SelectionUpload,
     params: ViewParams,
 }
@@ -96,6 +100,7 @@ impl CallbackTrait for CanvasCallback {
             gpu.ensure_size(device, self.doc_size[0], self.doc_size[1]);
             gpu.upload(queue, &self.uploads);
             gpu.composite(device, queue, &self.programs);
+            gpu.warm(device, queue, &self.warm);
             if let Some(sel) = &self.selection {
                 gpu.set_selection(queue, sel.as_deref().map(|v| v.as_slice()));
             }
@@ -314,6 +319,9 @@ pub struct Canvas {
     hold: HoldTracker,
     /// Composite tiles still waiting for a frame's budget.
     pending: std::collections::BTreeSet<(i32, i32)>,
+    /// Spec 38 warm-up: the layer it is for, and its tiles still to warm.
+    warm_layer: Option<String>,
+    warm_queue: Vec<(i32, i32)>,
     /// Brush cursor look (Settings ▸ Cursor).
     pub cursor: CursorPrefs,
     /// Present-only view modes (grayscale, print preview, gamut warning).
@@ -366,6 +374,8 @@ impl Canvas {
             xform: TransformParams::default(),
             hold: HoldTracker::default(),
             pending: Default::default(),
+            warm_layer: None,
+            warm_queue: Vec::new(),
             view_modes: Default::default(),
             press: None,
             cursor: Default::default(),
@@ -427,6 +437,8 @@ impl Canvas {
         self.poly = None;
         self.uploaded_selection = None;
         self.pending.clear();
+        self.warm_layer = None;
+        self.warm_queue.clear();
         self.persp_editing = false;
         self.sym_editing = false;
         self.lines_editing = false;
@@ -1272,6 +1284,7 @@ impl Canvas {
         // ── Display ──
         self.pending.extend(session.take_dirty_tiles());
         let (programs, uploads) = self.composite_budgeted(session, ui.ctx(), gpu && gpu_compose);
+        let warm = if gpu && gpu_compose { self.warm_up(session, ui.ctx()) } else { Vec::new() };
         let key = (session.selection_version(), self.doc_size);
         let selection = if self.uploaded_selection != Some(key) {
             self.uploaded_selection = Some(key);
@@ -1295,7 +1308,14 @@ impl Canvas {
         if gpu {
             ui.painter().add(egui_wgpu::Callback::new_paint_callback(
                 rect,
-                CanvasCallback { doc_size: self.doc_size, uploads: Arc::new(uploads), programs: Arc::new(programs), selection, params },
+                CanvasCallback {
+                    doc_size: self.doc_size,
+                    uploads: Arc::new(uploads),
+                    programs: Arc::new(programs),
+                    warm: Arc::new(warm),
+                    selection,
+                    params,
+                },
             ));
         }
         if session.selection().is_some() {
@@ -1314,13 +1334,40 @@ impl Canvas {
         }
     }
 
-    /// Composite pending tiles, visible ones first: up to a frame's worth as
-    /// GPU programs, and the tiles the GPU can't do on the CPU within the
-    /// frame budget.
-    fn composite_budgeted(&mut self, session: &Session, ctx: &egui::Context, gpu_compose: bool) -> (Vec<TileProgram>, TileUploads) {
-        if self.pending.is_empty() {
-            return (Vec::new(), Vec::new());
+    /// Spec 38 warm-up: when the active layer changes, queue its tiles
+    /// (visible first); on frames with nothing pending, plan a batch of them
+    /// so the GPU fills their cache images before the first drag or stroke.
+    fn warm_up(&mut self, session: &Session, ctx: &egui::Context) -> Vec<TileProgram> {
+        let active = session.active();
+        if self.warm_layer.as_deref() != Some(active) {
+            self.warm_layer = Some(active.to_string());
+            let keys: std::collections::BTreeSet<(i32, i32)> = session
+                .doc()
+                .layer(active)
+                .map(|l| l.pixels.tile_keys().into_iter().filter(|k| self.in_doc(*k)).collect())
+                .unwrap_or_default();
+            let (visible, centre) = self.visible_and_centre();
+            self.warm_queue = crate::progressive::prioritize(&keys, visible, centre);
+            self.warm_queue.reverse();
         }
+        if !self.pending.is_empty() || self.warm_queue.is_empty() || session.is_stroking() || self.view_modes.any() {
+            return Vec::new();
+        }
+        let n = self.warm_queue.len().min(WARM_TILES_PER_FRAME);
+        let keys: Vec<(i32, i32)> = self.warm_queue.split_off(self.warm_queue.len() - n);
+        if !self.warm_queue.is_empty() {
+            ctx.request_repaint();
+        }
+        session.plan(&keys).0.into_iter().filter(|p| p.split.is_some()).collect()
+    }
+
+    fn in_doc(&self, (tx, ty): (i32, i32)) -> bool {
+        let n = |s: u32| (s as i32 + onepaint_raster::TILE - 1) / onepaint_raster::TILE;
+        tx >= 0 && ty >= 0 && tx < n(self.doc_size[0]) && ty < n(self.doc_size[1])
+    }
+
+    /// The doc rect on screen and the doc point at the view's centre.
+    fn visible_and_centre(&self) -> (onepaint_raster::Rect, [f64; 2]) {
         let v = &self.view;
         let corners =
             [[0.0, 0.0], [v.view_size[0], 0.0], [0.0, v.view_size[1]], [v.view_size[0], v.view_size[1]]].map(|c| v.screen_to_doc(c));
@@ -1329,7 +1376,17 @@ impl Canvas {
             (x0, y0, x1, y1) = (x0.min(c[0]), y0.min(c[1]), x1.max(c[0]), y1.max(c[1]));
         }
         let visible = onepaint_raster::Rect::covering(x0 as f32, y0 as f32, x1 as f32, y1 as f32);
-        let centre = v.screen_to_doc([v.view_size[0] / 2.0, v.view_size[1] / 2.0]);
+        (visible, v.screen_to_doc([v.view_size[0] / 2.0, v.view_size[1] / 2.0]))
+    }
+
+    /// Composite pending tiles, visible ones first: up to a frame's worth as
+    /// GPU programs, and the tiles the GPU can't do on the CPU within the
+    /// frame budget.
+    fn composite_budgeted(&mut self, session: &Session, ctx: &egui::Context, gpu_compose: bool) -> (Vec<TileProgram>, TileUploads) {
+        if self.pending.is_empty() {
+            return (Vec::new(), Vec::new());
+        }
+        let (visible, centre) = self.visible_and_centre();
         let mut order = crate::progressive::prioritize(&self.pending, visible, centre);
         let modes = self.view_modes;
         // The present-only view modes run on CPU tiles.

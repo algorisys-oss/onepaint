@@ -88,11 +88,26 @@ fn stack(above: Vec<Node>) -> Document {
     d
 }
 
-fn split_of(d: &Document, hot: &str) -> onepaint_compose::program::Split {
+/// A split's parts as op lists, for asserting on.
+struct Parts {
+    prefix: Option<Seg>,
+    hot: Vec<Op>,
+    suffix: Option<Seg>,
+    tail: Vec<Op>,
+}
+
+struct Seg {
+    key: u64,
+    ops: Vec<Op>,
+}
+
+fn split_of(d: &Document, hot: &str) -> Parts {
     let id = find(d, hot);
     let p = plan_tile_split(d, 0, 0, None, Some(&id)).unwrap();
     assert!(close(&run_split(&p), &composite_tile(d, 0, 0, None)));
-    p.split.unwrap()
+    let s = p.split.clone().unwrap();
+    let seg = |g: Option<onepaint_compose::program::Segment>| g.map(|g| Seg { key: g.key, ops: p.at(&g.range).to_vec() });
+    Parts { prefix: seg(s.prefix), hot: p.at(&s.hot).to_vec(), suffix: seg(s.suffix), tail: p.at(&s.tail).to_vec() }
 }
 
 fn find(d: &Document, name: &str) -> String {

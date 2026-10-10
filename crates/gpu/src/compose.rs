@@ -178,8 +178,12 @@ pub struct GpuCompositor {
     cache_free: Vec<u32>,
     /// Stand-in for the cache's storage view in the composite pass.
     dummy_store: wgpu::TextureView,
+    /// Stand-in canvas target for a warm-up, which writes only the cache.
+    dummy_target: wgpu::TextureView,
     /// Use split programs' cached segments (spec 38).
     pub split_cache: bool,
+    /// Walk the next over-budget frame backwards.
+    reverse: bool,
     /// Segment images computed since creation (for tests and stats).
     pub fills: u64,
 }
@@ -322,6 +326,18 @@ impl GpuCompositor {
                 view_formats: &[],
             })
             .create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() });
+        let dummy_target = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("compose target (unused)"),
+                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba16Float,
+                usage: wgpu::TextureUsages::STORAGE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&Default::default());
         Self {
             simple,
             pipelines,
@@ -341,7 +357,9 @@ impl GpuCompositor {
             cache_slots: HashMap::new(),
             cache_free: Vec::new(),
             dummy_store,
+            dummy_target,
             split_cache: cache_layers >= 2,
+            reverse: false,
             fills: 0,
         }
     }
@@ -489,22 +507,33 @@ impl GpuCompositor {
         let cap = self.capacity();
         // Each program may need two cache slots; keep a batch within the cache.
         let cache_cap = (self.cache_layers as usize / 2).max(1);
+        let mut order: Vec<&TileProgram> = programs.iter().collect();
+        // A frame bigger than the atlas runs in several batches. Alternate the
+        // direction each time, so the LRU keeps what the next frame starts on
+        // instead of evicting exactly that (photocraft gpu/src/lib.rs:886-930).
+        let total: HashSet<usize> = programs.iter().flat_map(|p| self.batch_sources(p)).map(key).collect();
+        if total.len() > cap {
+            if self.reverse {
+                order.reverse();
+            }
+            self.reverse = !self.reverse;
+        }
         let mut start = 0;
         let mut need: HashSet<usize> = HashSet::new();
-        for (i, p) in programs.iter().enumerate() {
+        for (i, p) in order.iter().enumerate() {
             let mut fresh: Vec<usize> = self.batch_sources(p).map(key).filter(|k| !need.contains(k)).collect();
             fresh.sort_unstable();
             fresh.dedup();
             let full = need.len() + fresh.len() > cap || i - start >= MAX_JOBS || (self.split_cache && i - start >= cache_cap);
             if i > start && full {
-                self.flush(device, queue, &programs[start..i], target, doc_size);
+                self.flush(device, queue, &order[start..i], target, doc_size);
                 start = i;
                 need.clear();
             }
             need.extend(fresh);
         }
-        if start < programs.len() {
-            self.flush(device, queue, &programs[start..], target, doc_size);
+        if start < order.len() {
+            self.flush(device, queue, &order[start..], target, doc_size);
         }
     }
 
@@ -514,9 +543,9 @@ impl GpuCompositor {
         match (&p.split, self.split_cache) {
             (Some(s), true) => {
                 let missing = |seg: &'a Option<Segment>| {
-                    seg.as_ref().filter(|g| !self.cache_slots.contains_key(&g.key)).into_iter().flat_map(|g| g.sources())
+                    seg.as_ref().filter(|g| !self.cache_slots.contains_key(&g.key)).into_iter().flat_map(|g| op_sources(p.at(&g.range)))
                 };
-                Box::new(op_sources(&s.hot).chain(op_sources(&s.tail)).chain(missing(&s.prefix)).chain(missing(&s.suffix)))
+                Box::new(op_sources(p.at(&s.hot)).chain(op_sources(p.at(&s.tail))).chain(missing(&s.prefix)).chain(missing(&s.suffix)))
             }
             _ => Box::new(p.sources()),
         }
@@ -543,7 +572,7 @@ impl GpuCompositor {
     }
 
     /// The cache slot for a segment this batch: `(slot, needs a fill)`.
-    fn cache_slot(&mut self, seg: &Segment) -> Option<(u32, bool)> {
+    fn cache_slot(&mut self, seg: &Segment, ops: &[Op]) -> Option<(u32, bool)> {
         let clock = self.clock;
         if let Some(c) = self.cache_slots.get_mut(&seg.key) {
             c.used = clock;
@@ -558,16 +587,16 @@ impl GpuCompositor {
                 idx
             }
         };
-        let sources = seg.sources().map(Arc::downgrade).collect();
+        let sources = op_sources(ops).map(Arc::downgrade).collect();
         self.cache_slots.insert(seg.key, CacheSlot { idx, _sources: sources, used: clock });
         Some((idx, true))
     }
 
     /// Plan a batch's jobs: segment fills first, then the composites.
-    fn plan_batch<'a>(&mut self, device: &wgpu::Device, batch: &'a [TileProgram]) -> (Vec<Work<'a>>, Vec<Work<'a>>) {
+    fn plan_batch<'a>(&mut self, device: &wgpu::Device, batch: &[&'a TileProgram]) -> (Vec<Work<'a>>, Vec<Work<'a>>) {
         let mut fills: Vec<Work<'a>> = Vec::new();
         let mut main: Vec<Work<'a>> = Vec::new();
-        for p in batch {
+        for &p in batch {
             let origin = [(p.tx * TILE) as u32, (p.ty * TILE) as u32];
             let split = p.split.as_ref().filter(|_| self.split_cache);
             let Some(s) = split else {
@@ -577,9 +606,10 @@ impl GpuCompositor {
             self.ensure_cache(device);
             let mut slot = |seg: &'a Option<Segment>, fills: &mut Vec<Work<'a>>| -> Option<Option<u32>> {
                 let Some(seg) = seg else { return Some(None) };
-                let (idx, fresh) = self.cache_slot(seg)?;
+                let ops = p.at(&seg.range);
+                let (idx, fresh) = self.cache_slot(seg, ops)?;
                 if fresh {
-                    fills.push(Work { origin: [0, 0], ops: seg.ops.iter().collect(), over: None, init: NONE, dest: idx });
+                    fills.push(Work { origin: [0, 0], ops: ops.iter().collect(), over: None, init: NONE, dest: idx });
                 }
                 Some(Some(idx))
             };
@@ -588,15 +618,22 @@ impl GpuCompositor {
                 main.push(Work { origin, ops: p.ops.iter().collect(), over: None, init: NONE, dest: NONE });
                 continue;
             };
-            let mut ops: Vec<&Op> = s.hot.iter().collect();
+            let mut ops: Vec<&Op> = p.at(&s.hot).iter().collect();
             let over = suffix.map(|idx| (ops.len(), idx));
-            ops.extend(s.tail.iter());
+            ops.extend(p.at(&s.tail));
             main.push(Work { origin, ops, over, init: prefix.unwrap_or(NONE), dest: NONE });
         }
         (fills, main)
     }
 
-    fn flush(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, batch: &[TileProgram], target: &wgpu::TextureView, doc_size: [u32; 2]) {
+    fn flush(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        batch: &[&TileProgram],
+        target: &wgpu::TextureView,
+        doc_size: [u32; 2],
+    ) {
         self.clock += 1;
         let (fills, main) = self.plan_batch(device, batch);
         self.fills += fills.len() as u64;
@@ -609,39 +646,47 @@ impl GpuCompositor {
         }
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("compose") });
         // Fills and composites can't share a dispatch: one writes the cache, the other reads it.
-        let mut buffers = Vec::new();
-        for (label, works, fill) in [("compose fill", &fills, true), ("compose", &main, false)] {
-            if works.is_empty() {
-                continue;
-            }
-            let (jobs, ops, simple) = self.encode_jobs(works);
-            let general = works.len() - simple;
-            let pigment = works.iter().filter(|w| !is_simple(&w.ops)).any(|w| uses_pigment(&w.ops));
-            let bind = self.bind(
-                device,
-                queue,
-                &jobs,
-                &ops,
-                Params { doc_size, per_atlas: self.per_atlas, general_base: simple as u32 },
-                target,
-                fill,
-            );
-            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some(label), timestamp_writes: None });
-            pass.set_bind_group(0, &bind, &[]);
-            let n = (TILE as u32) / 8;
-            if simple > 0 {
-                pass.set_pipeline(&self.simple);
-                pass.dispatch_workgroups(n, n, simple as u32);
-            }
-            if general > 0 {
-                pass.set_pipeline(&self.pipelines[usize::from(pigment)]);
-                pass.dispatch_workgroups(n, n, general as u32);
-            }
-            drop(pass);
-            buffers.push(bind);
-        }
+        self.dispatch(device, queue, &mut enc, &fills, doc_size, Some(target), true);
+        self.dispatch(device, queue, &mut enc, &main, doc_size, Some(target), false);
         // Submit per batch: the next batch's uploads may evict slots this one reads.
         queue.submit([enc.finish()]);
+    }
+
+    /// Record one pass over `works`: the fill pass writes cache slots, the
+    /// composite pass writes `target`.
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        enc: &mut wgpu::CommandEncoder,
+        works: &[Work],
+        doc_size: [u32; 2],
+        target: Option<&wgpu::TextureView>,
+        fill: bool,
+    ) {
+        if works.is_empty() {
+            return;
+        }
+        let (jobs, ops, simple) = self.encode_jobs(works);
+        let general = works.len() - simple;
+        let pigment = works.iter().filter(|w| !is_simple(&w.ops)).any(|w| uses_pigment(&w.ops));
+        let params = Params { doc_size, per_atlas: self.per_atlas, general_base: simple as u32 };
+        let bind = self.bind(device, queue, &jobs, &ops, params, target, fill);
+        let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some(if fill { "compose fill" } else { "compose" }),
+            timestamp_writes: None,
+        });
+        pass.set_bind_group(0, &bind, &[]);
+        let n = (TILE as u32) / 8;
+        if simple > 0 {
+            pass.set_pipeline(&self.simple);
+            pass.dispatch_workgroups(n, n, simple as u32);
+        }
+        if general > 0 {
+            pass.set_pipeline(&self.pipelines[usize::from(pigment)]);
+            pass.dispatch_workgroups(n, n, general as u32);
+        }
     }
 
     /// Jobs and ops for `works`, the lean ones first; returns how many are lean.
@@ -680,7 +725,7 @@ impl GpuCompositor {
         jobs: &[Job],
         ops: &[GpuOp],
         params: Params,
-        target: &wgpu::TextureView,
+        target: Option<&wgpu::TextureView>,
         fill: bool,
     ) -> wgpu::BindGroup {
         // Each pass has its own buffers: both are written before the submit.
@@ -702,7 +747,7 @@ impl GpuCompositor {
             wgpu::BindGroupEntry { binding: 1, resource: self.km.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 2, resource: b.jobs.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 3, resource: b.ops.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(target) },
+            wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(target.unwrap_or(&self.dummy_target)) },
         ];
         for i in 0..ATLASES {
             let view = self.atlases.get(i).map_or(&self.dummy, |(_, v)| v);
@@ -716,6 +761,34 @@ impl GpuCompositor {
         entries.push(wgpu::BindGroupEntry { binding: 13, resource: wgpu::BindingResource::TextureView(read) });
         entries.push(wgpu::BindGroupEntry { binding: 14, resource: wgpu::BindingResource::TextureView(write) });
         device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("compose"), layout: &self.layout, entries: &entries })
+    }
+
+    /// Fill the cache images `programs` will need, without compositing
+    /// (spec 38 warm-up, run on idle frames after the active layer changes).
+    pub fn warm(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, programs: &[TileProgram]) {
+        if !self.split_cache {
+            return;
+        }
+        let cache_cap = (self.cache_layers as usize / 2).max(1);
+        let all: Vec<&TileProgram> = programs.iter().collect();
+        for chunk in all.chunks(cache_cap) {
+            self.clock += 1;
+            let (fills, _) = self.plan_batch(device, chunk);
+            if fills.is_empty() {
+                continue;
+            }
+            self.fills += fills.len() as u64;
+            for w in &fills {
+                for t in w.ops.iter().flat_map(|op| op_sources(std::slice::from_ref(*op))) {
+                    if self.resident(device, queue, t).is_none() {
+                        log::error!("compose atlas full; a warm-up fill skipped");
+                    }
+                }
+            }
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("compose warm") });
+            self.dispatch(device, queue, &mut enc, &fills, [0, 0], None, true);
+            queue.submit([enc.finish()]);
+        }
     }
 
     /// Cached segment images held.

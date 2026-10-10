@@ -369,3 +369,46 @@ fn a_small_cache_still_composites_exactly() {
     }
     assert!(gc.cached_segments() <= 2);
 }
+
+#[test]
+fn warm_up_fills_ahead_so_the_first_frame_fills_nothing() {
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let mut gc = GpuCompositor::new(&device, 64 << 20);
+    let d = deep_doc(8);
+    let hot = d.layer_ids()[3].clone();
+    let progs = split_programs(&d, None, &hot);
+    gc.warm(&device, &queue, &progs);
+    let warmed = gc.fills;
+    assert_eq!(warmed, 2 * progs.len() as u64);
+    gc.warm(&device, &queue, &progs);
+    assert_eq!(gc.fills, warmed, "a second warm-up has nothing to do");
+    let tex = target(&device, 512, 512);
+    let view = tex.create_view(&Default::default());
+    gc.run(&device, &queue, &progs, &view, [512, 512]);
+    assert_eq!(gc.fills, warmed, "the first frame only composites");
+    let (e, at) = max_error(&d, None, &read(&device, &queue, &tex));
+    assert!(e <= TOL, "error {e} at {at:?}");
+}
+
+#[test]
+fn an_over_budget_frame_alternates_and_stays_exact() {
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    // An atlas of one array (≥ 256 tiles) and a document needing more.
+    let tile_bytes = (TILE as u64) * (TILE as u64) * 8;
+    let mut gc = GpuCompositor::new(&device, 64 * tile_bytes);
+    let d = deep_doc(80);
+    let tex = target(&device, 512, 512);
+    let view = tex.create_view(&Default::default());
+    let progs = programs(&d, None);
+    for _ in 0..3 {
+        gc.run(&device, &queue, &progs, &view, [512, 512]);
+        let (e, at) = max_error(&d, None, &read(&device, &queue, &tex));
+        assert!(e <= TOL, "error {e} at {at:?}");
+    }
+}

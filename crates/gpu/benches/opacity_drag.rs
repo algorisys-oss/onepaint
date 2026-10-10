@@ -10,7 +10,7 @@
 #![allow(clippy::unwrap_used)]
 
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use onepaint_compose::program::{TileProgram, plan_tile, plan_tile_split};
+use onepaint_compose::program::{TileProgram, plan_tile, plan_tiles};
 use onepaint_doc::{Document, Layer, Node};
 use onepaint_gpu::compose::{DEFAULT_BUDGET, GpuCompositor};
 use onepaint_raster::{TILE, Tile};
@@ -136,9 +136,7 @@ fn bench(c: &mut Criterion) {
         let hot = d.root[DRAGGED].id().to_string();
         let mut o = 0.5f32;
         // Spec 38: plan with the dragged layer hot; the first frame fills the cache.
-        let split = |d: &Document| -> Vec<TileProgram> {
-            frame_keys.iter().filter_map(|&(tx, ty)| plan_tile_split(d, tx, ty, None, Some(&hot))).collect()
-        };
+        let split = |d: &Document| -> Vec<TileProgram> { plan_tiles(d, &frame_keys, None, Some(&hot)).0 };
         run(&mut gc, &split(&d));
         if std::env::var("ONEPAINT_BENCH_TRACE").is_ok() {
             // Alternate unsplit and split frames, so both see the same machine.
@@ -160,6 +158,22 @@ fn bench(c: &mut Criterion) {
             };
             let ((amin, amed), (bmin, bmed)) = (stats(&mut a), stats(&mut b));
             eprintln!("{name}: unsplit min {amin:.1} / median {amed:.1} ms; split min {bmin:.1} / median {bmed:.1} ms");
+            // Where a split frame's time goes.
+            let time = |f: &mut dyn FnMut()| {
+                let mut v: Vec<f64> = (0..15)
+                    .map(|_| {
+                        let t0 = std::time::Instant::now();
+                        f();
+                        t0.elapsed().as_secs_f64() * 1e3
+                    })
+                    .collect();
+                stats(&mut v).1
+            };
+            let plan = time(&mut || drop(black_box(split(&d))));
+            let progs = split(&d);
+            let mut gpu = |n: usize| time(&mut || run(&mut gc, &progs[..n.min(progs.len())]));
+            let (g1, g50, gall) = (gpu(1), gpu(50), gpu(progs.len()));
+            eprintln!("{name}: split plan {plan:.2} ms; GPU 1 tile {g1:.2} ms, 50 tiles {g50:.2} ms, {} tiles {gall:.2} ms", progs.len());
         }
         g.bench_function(format!("drag frame, split (plan + GPU), {name}"), |b| {
             b.iter(|| {

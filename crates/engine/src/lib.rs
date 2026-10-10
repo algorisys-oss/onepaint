@@ -577,18 +577,7 @@ impl Session {
         let doc = self.display_doc();
         // Spec 38: split at the layer being changed, so the rest is cached.
         let hot = ov.as_ref().map_or(self.active.as_str(), |o| o.layer_id).to_string();
-        let mut cpu = Vec::new();
-        let progs = keys
-            .iter()
-            .filter_map(|&(tx, ty)| {
-                let p = onepaint_compose::program::plan_tile_split(&doc, tx, ty, ov.as_ref(), Some(&hot));
-                if p.is_none() {
-                    cpu.push((tx, ty));
-                }
-                p
-            })
-            .collect();
-        (progs, cpu)
+        onepaint_compose::program::plan_tiles(&doc, keys, ov.as_ref(), Some(&hot))
     }
 
     /// Flattened canvas as premultiplied linear f32.
