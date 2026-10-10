@@ -72,12 +72,13 @@ fn random_adjustments_carry_their_params() {
 }
 
 #[test]
-fn sand_tone_and_pattern_fill_layers_stay_on_the_cpu() {
+fn sand_tone_and_imported_pattern_layers_stay_on_the_cpu() {
     for kind in ["tone", "pattern-fill"] {
         let mut doc = random_doc(4, 300, 300, false);
         let mut l = Layer::new("adj");
         let mut params = onepaint_filters::default_params(Kind::parse(kind).unwrap());
         params.tone_shape = Some("sand".into());
+        params.pattern_image = Some("data:image/png;base64,AAAA".into());
         l.adjustment = Some(Box::new(Adjustment { kind: kind.into(), params }));
         doc.root.push(Node::Layer(l));
         assert!(plan_tile(&doc, 0, 0, None).is_none(), "{kind}");
@@ -173,4 +174,27 @@ fn layers_under_an_opaque_tile_are_skipped_exactly() {
     }
     assert!(shorter > 0, "some programs lost the layers under an opaque one");
     assert!(hidden > 0, "some hot layers were hidden");
+}
+
+#[test]
+fn cached_plans_share_prepared_adjustments() {
+    use onepaint_compose::program::{PlanCache, plan_tiles_cached};
+    for seed in 0..12 {
+        let doc = with_adjustments(random_doc(seed, 600, 300, false), seed);
+        let keys: Vec<_> = doc.bounds().tiles().collect();
+        let cache = PlanCache::default();
+        let (progs, cpu) = plan_tiles_cached(&doc, &keys, None, None, Some(&cache));
+        assert!(cpu.is_empty());
+        let mut seen = std::collections::HashMap::new();
+        for p in &progs {
+            assert_eq!(run(p), composite_tile(&doc, p.tx, p.ty, None), "seed {seed} tile {},{}", p.tx, p.ty);
+            for op in &p.ops {
+                if let Op::Adjust { adjust, .. } = op {
+                    let key = format!("{:?} {:?}", adjust.prepared.kind, adjust.gpu.params);
+                    let ptr = std::sync::Arc::as_ptr(&adjust.gpu) as usize;
+                    assert_eq!(*seen.entry(key).or_insert(ptr), ptr, "seed {seed}: one prepared adjustment per layer");
+                }
+            }
+        }
+    }
 }

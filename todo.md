@@ -126,7 +126,8 @@ an item changes there, change it here too.
   - [x] Colour adjustment layers, pixel-only kinds (spec 42)
   - [x] Noise, solid and gradient fill layers (spec 46)
   - [x] Screentone (not the sand shape) (spec 46)
-  - [ ] Pattern fill layers and sand screentone
+  - [x] Built-in pattern fill layers (spec 46)
+  - [ ] Imported pattern fills and sand screentone
   - [ ] Spatial adjustment layers (a padded backdrop pass)
   - [x] Relief lighting (impasto height) (spec 45)
   - [x] Paper shading (spec 43)

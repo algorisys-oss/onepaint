@@ -174,22 +174,34 @@ fn over_cache(slot: u32) -> GpuOp {
 struct AdjTable {
     data: Vec<[f32; 4]>,
     seen: HashMap<u64, (u32, u32)>,
+    /// By address: tiles planned with the session's cache share one.
+    by_ptr: HashMap<usize, (u32, u32)>,
 }
 
 impl AdjTable {
     /// Where `a`'s params and LUT start (in vec4s); the LUT is `NONE` if absent.
-    fn add(&mut self, a: &onepaint_compose::program::GpuAdjust) -> (u32, u32) {
+    fn add(&mut self, a: &Arc<onepaint_compose::program::GpuAdjust>) -> (u32, u32) {
+        let ptr = Arc::as_ptr(a) as usize;
+        if let Some(&at) = self.by_ptr.get(&ptr) {
+            return at;
+        }
+        let at = self.add_new(a);
+        self.by_ptr.insert(ptr, at);
+        at
+    }
+
+    fn add_new(&mut self, a: &onepaint_compose::program::GpuAdjust) -> (u32, u32) {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         (a.code, a.params.map(f32::to_bits), &a.lut).hash(&mut h);
-        a.ramp.iter().flatten().for_each(|e| e.map(f32::to_bits).hash(&mut h));
+        a.table.iter().flatten().for_each(|e| e.map(f32::to_bits).hash(&mut h));
         *self.seen.entry(h.finish()).or_insert_with(|| {
             let at = self.data.len() as u32;
             self.data.extend(a.params.chunks_exact(4).map(|c| [c[0], c[1], c[2], c[3]]));
             let lut = self.data.len() as u32;
             if let Some(l) = &a.lut {
                 self.data.extend(l.iter().map(|e| e.map(|v| v as f32 / 255.0)));
-            } else if let Some(r) = &a.ramp {
+            } else if let Some(r) = &a.table {
                 self.data.extend_from_slice(r);
             } else {
                 return (at, NONE);

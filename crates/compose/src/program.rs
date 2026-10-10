@@ -87,8 +87,9 @@ impl Relief {
 /// and packed for the GPU.
 #[derive(Clone)]
 pub struct Adjust {
-    pub prepared: onepaint_filters::Prepared,
-    pub gpu: onepaint_filters::gpu::GpuAdjust,
+    /// Shared by every tile of the layer when planned with a cache.
+    pub prepared: Arc<onepaint_filters::Prepared>,
+    pub gpu: Arc<onepaint_filters::gpu::GpuAdjust>,
     /// The tile's origin in doc px (noise and fills depend on position).
     pub at: [i32; 2],
 }
@@ -129,10 +130,18 @@ enum Clip {
 #[derive(Default)]
 pub struct PlanCache {
     coverage: std::sync::Mutex<std::collections::HashMap<(u64, i32, i32), Clip>>,
+    /// Prepared adjustments by kind, params and document frame, so LUTs,
+    /// ramps and pattern tiles are built once, not per tile and frame.
+    adjust: std::sync::Mutex<std::collections::HashMap<u64, PreparedAdjust>>,
     /// Whether a tile is fully opaque, by its address (the `Weak` keeps the
     /// address from being reused while the entry lives).
     opaque: std::sync::Mutex<std::collections::HashMap<usize, (std::sync::Weak<Tile>, bool)>>,
 }
+
+type PreparedAdjust = (Arc<onepaint_filters::Prepared>, Arc<onepaint_filters::gpu::GpuAdjust>);
+
+/// Cached adjustments kept at most; past this the cache starts over.
+const MAX_CACHED_ADJUST: usize = 256;
 
 /// Cached coverage entries kept at most; past this the cache starts over.
 const MAX_CACHED_CLIPS: usize = 4096;
@@ -156,6 +165,19 @@ impl PlanCache {
             }
             m.insert(key, c);
         }
+    }
+
+    fn adjust(&self, key: u64, make: impl FnOnce() -> Option<PreparedAdjust>) -> Option<PreparedAdjust> {
+        if let Some(hit) = self.adjust.lock().ok().and_then(|m| m.get(&key).cloned()) {
+            return Some(hit);
+        }
+        let v = make()?;
+        let Ok(mut m) = self.adjust.lock() else { return Some(v) };
+        if m.len() >= MAX_CACHED_ADJUST {
+            m.clear();
+        }
+        // Another thread may have prepared it meanwhile: share theirs.
+        Some(m.entry(key).or_insert(v).clone())
     }
 
     /// Whether every pixel of `t` has alpha exactly 1, cached by tile.
@@ -340,7 +362,7 @@ pub fn segment_key(ops: &[Op]) -> u64 {
                 (5u8, *mode as u8, opacity.to_bits(), adjust.gpu.code).hash(&mut h);
                 adjust.gpu.params.map(f32::to_bits).hash(&mut h);
                 adjust.gpu.lut.hash(&mut h);
-                adjust.gpu.ramp.iter().flatten().for_each(|e| e.map(f32::to_bits).hash(&mut h));
+                adjust.gpu.table.iter().flatten().for_each(|e| e.map(f32::to_bits).hash(&mut h));
                 adjust.at.hash(&mut h);
                 mask.as_ref().map(ptr).hash(&mut h);
             }
@@ -522,7 +544,22 @@ impl Planner<'_> {
             return Ok(());
         }
         let Some(kind) = onepaint_filters::Kind::parse(&adj.kind).filter(|k| k.is_color()) else { return Ok(()) };
-        let gpu = onepaint_filters::gpu::gpu_adjust(kind, &adj.params, self.frame).ok_or(Unsupported)?;
+        let frame = self.frame;
+        let make = || {
+            let gpu = onepaint_filters::gpu::gpu_adjust(kind, &adj.params, frame)?;
+            Some((Arc::new(onepaint_filters::prepare_in(kind, &adj.params, frame)), Arc::new(gpu)))
+        };
+        let (prepared, gpu) = match self.cache {
+            Some(cache) => {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                (&adj.kind, serde_json::to_string(&adj.params).unwrap_or_default()).hash(&mut h);
+                (frame.doc_w, frame.doc_h, frame.dpi.to_bits()).hash(&mut h);
+                cache.adjust(h.finish(), make)
+            }
+            None => make(),
+        }
+        .ok_or(Unsupported)?;
         let mask = match (&l.mask, l.mask_enabled) {
             (Some(m), true) => match m.tile(self.tx, self.ty) {
                 Some(t) => Some(t.clone()),
@@ -530,7 +567,6 @@ impl Planner<'_> {
             },
             _ => None,
         };
-        let prepared = onepaint_filters::prepare_in(kind, &adj.params, self.frame);
         let adjust = Arc::new(Adjust { prepared, gpu, at: [self.tx * TILE, self.ty * TILE] });
         self.ops.push(Op::Adjust { adjust, mask, mode: l.blend_mode, opacity: l.opacity });
         Ok(())

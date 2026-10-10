@@ -458,6 +458,12 @@ fn tone_dist(q: vec2<f32>, cell: f32, cs: vec2<f32>, shape: u32, level: f32) -> 
     }
 }
 
+// A pattern tile's texel, wrapped (`PatternTile::sample_repeat`).
+fn pattern_at(lut: u32, i: vec2<i32>, sz: vec2<i32>) -> vec4<f32> {
+    let w = ((i % sz) + sz) % sz;
+    return adj[lut + u32(w.y * sz.x + w.x)];
+}
+
 // `pos`: the pixel in doc px (noise and fills depend on it, spec 46).
 fn adjust(op: Op, s: vec4<f32>, pos: vec2<i32>) -> vec4<f32> {
     let base = op.b.x;
@@ -568,6 +574,21 @@ fn adjust(op: Op, s: vec4<f32>, pos: vec2<i32>) -> vec4<f32> {
                 cov = 0.0;
             }
             return vec4<f32>(adj[base + 3u].xyz * cov, cov);
+        }
+        case 18u: {
+            // Pattern fill: p0 = tile size, scale; p1 = offset (doc px), angle cos, sin.
+            let d = vec2<f32>(pos) + 0.5 - p1.xy;
+            let r = vec2<f32>(p1.z * d.x - p1.w * d.y, p1.w * d.x + p1.z * d.y);
+            let sz = vec2<i32>(p0.xy);
+            let q = r / (p0.xy * p0.z) * p0.xy - 0.5;
+            let i = vec2<i32>(floor(q));
+            let f = q - floor(q);
+            let t = mix(
+                mix(pattern_at(lut, i, sz), pattern_at(lut, i + vec2<i32>(1, 0), sz), f.x),
+                mix(pattern_at(lut, i + vec2<i32>(0, 1), sz), pattern_at(lut, i + vec2<i32>(1, 1), sz), f.x),
+                f.y,
+            );
+            return vec4<f32>(vec3<f32>(srgb2lin(t.x), srgb2lin(t.y), srgb2lin(t.z)) * t.w, t.w);
         }
         case 16u: {
             let t = shape_t(u32(p0.x), vec2<f32>(pos) + 0.5 - p0.yz, vec2<f32>(p0.w, p1.x) - p0.yz);

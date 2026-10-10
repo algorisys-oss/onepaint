@@ -172,6 +172,7 @@ pub fn random_adjustment(r: &mut Rng) -> onepaint_doc::Adjustment {
         "solid-fill",
         "gradient-fill",
         "tone",
+        "pattern-fill",
     ];
     let kind = kinds[r.below(kinds.len() as u32) as usize];
     let mut c = || [r.f(), r.f(), r.f()];
@@ -208,6 +209,12 @@ pub fn random_adjustment(r: &mut Rng) -> onepaint_doc::Adjustment {
             json!({"colorSamples": samples, "showRange": c()[0] < 0.2})
         }
         "noise" => json!({"amount": c()[0], "mono": c()[1] < 0.5}),
+        "pattern-fill" => {
+            let k = c();
+            let ids = ["checker", "stripes", "dots", "grid", "brick", "crosshatch", "halftone", "weave"];
+            json!({"patternId": ids[(k[0] * 8.0) as usize % 8], "patternColorA": c(), "patternColorB": c(),
+                   "patternScale": 0.3 + k[1] * 2.0, "patternAngle": k[2] * 90.0, "patternOffX": k[0] * 0.3, "patternOffY": k[1] * 0.2})
+        }
         "tone" => {
             let k = c();
             let shape = ["dot", "line", "cross"][(k[0] * 3.0) as usize % 3];

@@ -19,8 +19,9 @@ pub struct GpuAdjust {
     pub code: u32,
     pub params: [f32; GPU_PARAMS],
     pub lut: Option<Box<Lut>>,
-    /// A gradient fill's ramp (linear premultiplied-ready RGBA, spec 46).
-    pub ramp: Option<Vec<[f32; 4]>>,
+    /// A gradient fill's ramp (linear RGBA, spec 46) or a pattern fill's
+    /// tile (straight sRGB 0..1, row-major).
+    pub table: Option<Vec<[f32; 4]>>,
 }
 
 /// The GPU form of a colour adjustment in the document `frame`, or `None`
@@ -29,7 +30,7 @@ pub struct GpuAdjust {
 pub fn gpu_adjust(kind: Kind, p: &Params, frame: Frame) -> Option<GpuAdjust> {
     let mut f = [0.0f32; GPU_PARAMS];
     let mut lut = None;
-    let mut ramp = None;
+    let mut table = None;
     let mut put = |at: usize, v: &[f32]| f[at..at + v.len()].copy_from_slice(v);
     let code = match kind {
         Kind::BrightnessContrast => {
@@ -104,7 +105,7 @@ pub fn gpu_adjust(kind: Kind, p: &Params, frame: Frame) -> Option<GpuAdjust> {
             let a = [p.grad_ax.unwrap_or(0.5) * w, p.grad_ay.unwrap_or(0.0) * h];
             let b = [p.grad_bx.unwrap_or(0.5) * w, p.grad_by.unwrap_or(1.0) * h];
             put(0, &[grad_shape_code(p.grad_shape.as_deref()) as f32, a[0], a[1], b[0], b[1]]);
-            ramp = Some(Ramp::new(&fill_stops(p)).entries().to_vec());
+            table = Some(Ramp::new(&fill_stops(p)).entries().to_vec());
             16
         }
         Kind::Tone => {
@@ -134,9 +135,24 @@ pub fn gpu_adjust(kind: Kind, p: &Params, frame: Frame) -> Option<GpuAdjust> {
             put(12, &from_work(to_work(p.target.unwrap_or([0.0; 3])).map(|v| v.clamp(0.0, 1.0))));
             17
         }
+        Kind::PatternFill => {
+            // Imported images can be 512² and stay on the CPU (divergence 15).
+            if p.pattern_image.as_deref().is_some_and(|u| !u.is_empty()) {
+                return None;
+            }
+            let id = p.pattern_id.as_deref().unwrap_or("checker");
+            let tile = crate::pattern::pattern_pixels(id, p.pattern_color_a.unwrap_or([0.0; 3]), p.pattern_color_b.unwrap_or([1.0; 3]));
+            let [w, h] = frame.size();
+            let scale = p.pattern_scale.unwrap_or(1.0).max(0.05);
+            let a = p.pattern_angle.unwrap_or(0.0).to_radians();
+            let off = [p.pattern_off_x.unwrap_or(0.0) * w, p.pattern_off_y.unwrap_or(0.0) * h];
+            put(0, &[tile.w as f32, tile.h as f32, scale, 0.0, off[0], off[1], a.cos(), a.sin()]);
+            table = Some(tile.data.chunks_exact(4).map(|px| [0, 1, 2, 3].map(|k| px[k] as f32 / 255.0)).collect());
+            18
+        }
         _ => return None,
     };
-    Some(GpuAdjust { code, params: f, lut, ramp })
+    Some(GpuAdjust { code, params: f, lut, table })
 }
 
 #[cfg(test)]
@@ -147,14 +163,16 @@ mod tests {
     fn colour_kinds_pack_and_the_rest_stay_on_the_cpu() {
         let f = Frame::default();
         let gpu: Vec<Kind> = Kind::ALL.into_iter().filter(|&k| gpu_adjust(k, &crate::default_params(k), f).is_some()).collect();
-        assert_eq!(gpu.len(), 17);
+        assert_eq!(gpu.len(), 18);
         assert!(gpu.iter().all(|k| k.is_color()));
-        for k in [Kind::PatternFill, Kind::GaussianBlur, Kind::Clouds] {
+        for k in [Kind::GaussianBlur, Kind::Clouds] {
             assert!(gpu_adjust(k, &crate::default_params(k), f).is_none(), "{k:?}");
         }
         let sand = Params { tone_shape: Some("sand".into()), ..crate::default_params(Kind::Tone) };
         assert!(gpu_adjust(Kind::Tone, &sand, f).is_none());
-        assert_eq!(gpu_adjust(Kind::GradientFill, &crate::default_params(Kind::GradientFill), f).unwrap().ramp.unwrap().len(), 1024);
+        assert_eq!(gpu_adjust(Kind::GradientFill, &crate::default_params(Kind::GradientFill), f).unwrap().table.unwrap().len(), 1024);
+        let imported = Params { pattern_image: Some("data:image/png;base64,AAAA".into()), ..crate::default_params(Kind::PatternFill) };
+        assert!(gpu_adjust(Kind::PatternFill, &imported, f).is_none());
         let curves = gpu_adjust(Kind::Curves, &crate::default_params(Kind::Curves), f).unwrap();
         assert_eq!(curves.lut.unwrap()[255][0], 255);
     }
