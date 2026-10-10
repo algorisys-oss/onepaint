@@ -59,14 +59,14 @@ pub fn from_canvas(app: &mut App) {
     app.reference.image = Some(Reference::new(w, h, rgba));
 }
 
-pub fn show(app: &mut App, ctx: &egui::Context) {
-    if !app.reference.open {
-        return;
-    }
-    let t = Tokens::get(ctx);
-    let now = ctx.input(|i| i.time);
-    let mut open = true;
-    egui::Window::new("Reference").open(&mut open).default_size([320.0, 280.0]).resizable(true).collapsible(true).show(ctx, |ui| {
+/// The window's body (hosted as the Reference panel: floating by default,
+/// dockable like the others).
+pub fn body(app: &mut App, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    let now = ui.input(|i| i.time);
+    crate::dock::fit_width(ui, 300.0);
+    ui.set_min_height(220.0);
+    {
         ui.horizontal(|ui| {
             if icons::button(ui, "image", 24.0, false, "Load a reference image").clicked() {
                 load_dialog(app, now);
@@ -136,8 +136,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         } else if resp.dragged() {
             r.pan += resp.drag_delta();
         }
-    });
-    app.reference.open = open;
+    }
 }
 
 #[cfg(test)]

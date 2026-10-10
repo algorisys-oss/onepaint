@@ -1,6 +1,7 @@
 //! Floating chrome over the canvas: top bar, side rail, popovers, toasts.
 //! Canvas-first, Procreate-like layout (docs/design-system.md).
 
+use crate::layout::PanelId;
 use crate::{App, Popover};
 use egui::{Align2, Area, Id, Order, RichText, Sense, Ui, pos2, vec2};
 use onepaint_doc::{BlendMode, Node};
@@ -13,42 +14,90 @@ const BAR_H: f32 = 44.0;
 
 pub fn show(app: &mut App, ctx: &egui::Context) {
     let screen = ctx.content_rect();
-    top_bar(app, ctx);
+    let stage_bottom = screen.bottom() - crate::status_bar::HEIGHT;
+    crate::dock::normalise(app, screen);
+    let topbar = top_bar(app, ctx);
     side_rail(app, ctx, screen);
     crate::status_bar::show(app, ctx, screen);
+    crate::dock::show(app, ctx, screen, stage_bottom);
+    let toolbar = crate::toolbar::show(app, ctx, screen, stage_bottom, topbar.right());
     crate::timeline::show(app, ctx, screen);
-    crate::reference::show(app, ctx);
     if let Some(p) = app.popover {
-        let anchor = pos2(screen.right() - M, M + BAR_H + 8.0);
+        let (anchor, side) = crate::toolbar::popover_anchor(app, screen);
         let rect = match p {
             Popover::Menu => popover_at(ctx, "menu", pos2(M, M + BAR_H + 8.0), Align2::LEFT_TOP, |ui| menu(app, ui)),
-            Popover::Brushes => popover_at(ctx, "brushes", anchor, Align2::RIGHT_TOP, |ui| brushes(app, ui)),
-            Popover::Layers => popover_at(ctx, "layers", anchor, Align2::RIGHT_TOP, |ui| layers(app, ui)),
-            Popover::Color => popover_at(ctx, "color", anchor, Align2::RIGHT_TOP, |ui| color(app, ui)),
-            Popover::Selection => popover_at(ctx, "selection", anchor, Align2::RIGHT_TOP, |ui| selection(app, ui)),
+            Popover::Brushes => popover_at(ctx, "brushes", anchor, side, |ui| {
+                crate::dock::popover_grip(app, ui, PanelId::Brush);
+                brushes(app, ui)
+            }),
+            Popover::Layers => popover_at(ctx, "layers", anchor, side, |ui| {
+                crate::dock::popover_grip(app, ui, PanelId::Layers);
+                layers(app, ui)
+            }),
+            Popover::Color => popover_at(ctx, "color", anchor, side, |ui| {
+                crate::dock::popover_grip(app, ui, PanelId::Color);
+                color(app, ui)
+            }),
+            Popover::Selection => popover_at(ctx, "selection", anchor, side, |ui| {
+                crate::dock::popover_grip(app, ui, PanelId::ToolOptions);
+                selection(app, ui)
+            }),
             Popover::CanvasSize => popover_at(ctx, "canvas-size", screen.center(), Align2::CENTER_CENTER, |ui| canvas_size(app, ui)),
             Popover::ImageSize => popover_at(ctx, "image-size", screen.center(), Align2::CENTER_CENTER, |ui| image_size(app, ui)),
-            Popover::Adjustments => popover_at(ctx, "adjustments", anchor, Align2::RIGHT_TOP, |ui| crate::adjust::list(app, ui)),
-            Popover::Filter => popover_at(ctx, "filter", anchor, Align2::RIGHT_TOP, |ui| crate::adjust::filter_panel(app, ui)),
-            Popover::AdjustLayer => popover_at(ctx, "adjust-layer", anchor, Align2::RIGHT_TOP, |ui| crate::adjust::layer_panel(app, ui)),
-            Popover::GradientOptions => popover_at(ctx, "gradient", anchor, Align2::RIGHT_TOP, |ui| gradient_options(app, ui)),
-            Popover::ShapeOptions => popover_at(ctx, "shape", anchor, Align2::RIGHT_TOP, |ui| shape_options(app, ui)),
-            Popover::SmudgeOptions => popover_at(ctx, "smudge", anchor, Align2::RIGHT_TOP, |ui| smudge_options(app, ui)),
-            Popover::MixerOptions => popover_at(ctx, "mixer", anchor, Align2::RIGHT_TOP, |ui| mixer_options(app, ui)),
-            Popover::Guides => popover_at(ctx, "guides", anchor, Align2::RIGHT_TOP, |ui| guides(app, ui)),
-            Popover::LiquifyOptions => popover_at(ctx, "liquify", anchor, Align2::RIGHT_TOP, |ui| liquify_options(app, ui)),
-            Popover::PenOptions => popover_at(ctx, "pen", anchor, Align2::RIGHT_TOP, |ui| pen_options(app, ui)),
+            Popover::Adjustments => popover_at(ctx, "adjustments", anchor, side, |ui| crate::adjust::list(app, ui)),
+            Popover::Filter => popover_at(ctx, "filter", anchor, side, |ui| crate::adjust::filter_panel(app, ui)),
+            Popover::AdjustLayer => popover_at(ctx, "adjust-layer", anchor, side, |ui| {
+                crate::dock::popover_grip(app, ui, PanelId::Properties);
+                crate::adjust::layer_panel(app, ui)
+            }),
+            Popover::GradientOptions => popover_at(ctx, "gradient", anchor, side, |ui| {
+                crate::dock::popover_grip(app, ui, PanelId::ToolOptions);
+                gradient_options(app, ui)
+            }),
+            Popover::ShapeOptions => popover_at(ctx, "shape", anchor, side, |ui| {
+                crate::dock::popover_grip(app, ui, PanelId::ToolOptions);
+                shape_options(app, ui)
+            }),
+            Popover::SmudgeOptions => popover_at(ctx, "smudge", anchor, side, |ui| {
+                crate::dock::popover_grip(app, ui, PanelId::ToolOptions);
+                smudge_options(app, ui)
+            }),
+            Popover::MixerOptions => popover_at(ctx, "mixer", anchor, side, |ui| {
+                crate::dock::popover_grip(app, ui, PanelId::ToolOptions);
+                mixer_options(app, ui)
+            }),
+            Popover::Guides => popover_at(ctx, "guides", anchor, side, |ui| {
+                crate::dock::popover_grip(app, ui, PanelId::Guides);
+                guides(app, ui)
+            }),
+            Popover::LiquifyOptions => popover_at(ctx, "liquify", anchor, side, |ui| {
+                crate::dock::popover_grip(app, ui, PanelId::ToolOptions);
+                liquify_options(app, ui)
+            }),
+            Popover::PenOptions => popover_at(ctx, "pen", anchor, side, |ui| {
+                crate::dock::popover_grip(app, ui, PanelId::ToolOptions);
+                pen_options(app, ui)
+            }),
             Popover::ClipboardMenu => popover_at(ctx, "clipboard", screen.center(), Align2::CENTER_CENTER, |ui| clipboard_menu(app, ui)),
-            Popover::PanelOptions => popover_at(ctx, "panel", anchor, Align2::RIGHT_TOP, |ui| crate::panel_ui::options(app, ui)),
+            Popover::PanelOptions => popover_at(ctx, "panel", anchor, side, |ui| {
+                crate::dock::popover_grip(app, ui, PanelId::ToolOptions);
+                crate::panel_ui::options(app, ui)
+            }),
             Popover::Gallery => popover_at(ctx, "gallery", screen.center(), Align2::CENTER_CENTER, |ui| crate::gallery::show(app, ui)),
             Popover::Help => popover_at(ctx, "help", screen.center(), Align2::CENTER_CENTER, |ui| help(ui, &app.settings.keybindings)),
             Popover::Settings => popover_at(ctx, "settings", screen.center(), Align2::CENTER_CENTER, |ui| crate::settings::dialog(app, ui)),
             Popover::Paper => popover_at(ctx, "paper", screen.center(), Align2::CENTER_CENTER, |ui| paper_dialog(app, ui)),
-            Popover::MoveOptions => popover_at(ctx, "move", anchor, Align2::RIGHT_TOP, |ui| move_options(app, ui)),
-            Popover::SmartFilters => popover_at(ctx, "smart", anchor, Align2::RIGHT_TOP, |ui| crate::adjust::smart_panel(app, ui)),
+            Popover::MoveOptions => popover_at(ctx, "move", anchor, side, |ui| {
+                crate::dock::popover_grip(app, ui, PanelId::ToolOptions);
+                move_options(app, ui)
+            }),
+            Popover::SmartFilters => popover_at(ctx, "smart", anchor, side, |ui| crate::adjust::smart_panel(app, ui)),
             Popover::Export => popover_at(ctx, "export", screen.center(), Align2::CENTER_CENTER, |ui| export_dialog(app, ui)),
             Popover::Recover => popover_at(ctx, "recover", screen.center(), Align2::CENTER_CENTER, |ui| recover(app, ui)),
-            Popover::Fill => popover_at(ctx, "fill", anchor, Align2::RIGHT_TOP, |ui| fill_options(app, ui)),
+            Popover::Fill => popover_at(ctx, "fill", anchor, side, |ui| {
+                crate::dock::popover_grip(app, ui, PanelId::ToolOptions);
+                fill_options(app, ui)
+            }),
             Popover::NewDoc => popover_at(ctx, "newdoc", screen.center(), Align2::CENTER_CENTER, |ui| new_doc(app, ui)),
             Popover::Confirm => popover_at(ctx, "confirm", screen.center(), Align2::CENTER_CENTER, |ui| confirm(app, ui)),
             Popover::BrushStudio => crate::brush_studio::show(app, ctx, screen),
@@ -58,7 +107,9 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         let pressed = ctx.input(|i| i.pointer.any_pressed().then(|| i.pointer.interact_pos()).flatten());
         if let Some(p) = pressed
             && !rect.contains(p)
-            && p.y > M + BAR_H + 4.0
+            && !toolbar.contains(p)
+            && !topbar.contains(p)
+            && app.dock.drag.is_none()
             && !matches!(app.popover, Some(Popover::Confirm | Popover::Filter | Popover::BrushStudio))
             && !crate::adjust::eyedropper_busy(ctx)
         {
@@ -124,9 +175,10 @@ fn toggle_popover(app: &mut App, p: Popover) {
     app.popover = if app.popover == Some(p) { None } else { Some(p) };
 }
 
-fn top_bar(app: &mut App, ctx: &egui::Context) {
+/// The top-left bar: menu, name and document tabs; returns its rect.
+fn top_bar(app: &mut App, ctx: &egui::Context) -> egui::Rect {
     let t = Tokens::get(ctx);
-    Area::new(Id::new("topbar-left")).order(Order::Middle).fixed_pos(pos2(M, M)).show(ctx, |ui| {
+    let r = Area::new(Id::new("topbar-left")).order(Order::Middle).fixed_pos(pos2(M, M)).show(ctx, |ui| {
         glass_frame(ui).show(ui, |ui| {
             ui.set_height(BAR_H - 12.0);
             ui.horizontal_centered(|ui| {
@@ -171,172 +223,49 @@ fn top_bar(app: &mut App, ctx: &egui::Context) {
             });
         });
     });
-    Area::new(Id::new("topbar-right"))
-        .order(Order::Middle)
-        .pivot(Align2::RIGHT_TOP)
-        .fixed_pos(pos2(ctx.content_rect().right() - M, M))
-        .show(ctx, |ui| {
-            glass_frame(ui).show(ui, |ui| {
-                ui.set_height(BAR_H - 12.0);
-                ui.horizontal_centered(|ui| {
-                    let tool = app.session.tool();
-                    if icons::button(ui, "move", 32.0, tool == Tool::Move, "Move / transform (V)").clicked() {
-                        if tool == Tool::Move {
-                            toggle_popover(app, Popover::MoveOptions);
-                        }
-                        app.set_tool(Tool::Move);
-                    }
-                    let selecting = is_select_tool(tool);
-                    let sel_icon = select_icon(app.last_select_tool);
-                    if icons::button(ui, sel_icon, 32.0, selecting, "Select (M, L, W)").clicked() {
-                        if selecting {
-                            toggle_popover(app, Popover::Selection);
-                        } else {
-                            let t = app.last_select_tool;
-                            app.set_tool(t);
-                        }
-                    }
-                    if icons::button(ui, "paint-bucket", 32.0, tool == Tool::Fill, "Fill (G)").clicked() {
-                        if tool == Tool::Fill {
-                            toggle_popover(app, Popover::Fill);
-                        }
-                        app.set_tool(Tool::Fill);
-                    }
-                    if icons::button(ui, "droplet", 32.0, tool == Tool::Gradient, "Gradient").clicked() {
-                        if tool == Tool::Gradient {
-                            toggle_popover(app, Popover::GradientOptions);
-                        }
-                        app.set_tool(Tool::Gradient);
-                    }
-                    if icons::button(ui, "square", 32.0, tool == Tool::Shape, "Shape (U)").clicked() {
-                        if tool == Tool::Shape {
-                            toggle_popover(app, Popover::ShapeOptions);
-                        }
-                        app.set_tool(Tool::Shape);
-                    }
-                    if icons::button(ui, "pen-tool", 32.0, tool == Tool::Pen, "Pen (P)").clicked() {
-                        if tool == Tool::Pen {
-                            toggle_popover(app, Popover::PenOptions);
-                        }
-                        app.set_tool(Tool::Pen);
-                    }
-                    if icons::button(ui, "layout-panel-top", 32.0, tool == Tool::Panel, "Panel (manga)").clicked() {
-                        if tool == Tool::Panel {
-                            toggle_popover(app, Popover::PanelOptions);
-                        }
-                        app.set_tool(Tool::Panel);
-                    }
-                    if icons::button(ui, "type", 32.0, tool == Tool::Text, "Text (T)").clicked() {
-                        app.set_tool(Tool::Text);
-                    }
-                    if icons::button(ui, "pipette", 32.0, tool == Tool::Eyedropper, "Eyedropper (I)").clicked() {
-                        app.set_tool(Tool::Eyedropper);
-                    }
-                    let sym_on = app.session.guides().symmetry.is_on();
-                    if icons::button(ui, "grid-3x3", 32.0, sym_on || app.popover == Some(Popover::Guides), "Guides: symmetry (Y)").clicked()
-                    {
-                        toggle_popover(app, Popover::Guides);
-                    }
-                    let anim_on = app.session.anim_settings().enabled;
-                    if icons::button(ui, "film", 32.0, anim_on, "Animation").clicked() {
-                        crate::timeline::toggle(app);
-                    }
-                    if icons::button(
-                        ui,
-                        "sparkles",
-                        32.0,
-                        matches!(app.popover, Some(Popover::Adjustments | Popover::Filter)),
-                        "Adjustments",
-                    )
-                    .clicked()
-                    {
-                        if app.session.filter_active() {
-                            app.popover = Some(Popover::Filter);
-                        } else {
-                            toggle_popover(app, Popover::Adjustments);
-                        }
-                    }
-                    widgets::vline(ui, 24.0);
-                    if icons::button(ui, "brush", 32.0, tool == Tool::Brush, "Brush (B)").clicked() {
-                        if tool == Tool::Brush {
-                            toggle_popover(app, Popover::Brushes);
-                        }
-                        app.set_tool(Tool::Brush);
-                    }
-                    if icons::button(ui, "eraser", 32.0, tool == Tool::Eraser, "Eraser (E)").clicked() {
-                        if tool == Tool::Eraser {
-                            toggle_popover(app, Popover::Brushes);
-                        }
-                        app.set_tool(Tool::Eraser);
-                    }
-                    if icons::button(ui, "fingerprint", 32.0, tool == Tool::Smudge, "Smudge (S)").clicked() {
-                        if tool == Tool::Smudge {
-                            toggle_popover(app, Popover::SmudgeOptions);
-                        }
-                        app.set_tool(Tool::Smudge);
-                    }
-                    if icons::button(ui, "palette", 32.0, tool == Tool::Mixer, "Mixer brush (Shift+B)").clicked() {
-                        if tool == Tool::Mixer {
-                            toggle_popover(app, Popover::MixerOptions);
-                        }
-                        app.set_tool(Tool::Mixer);
-                    }
-                    if icons::button(ui, "waves", 32.0, tool == Tool::Liquify, "Liquify").clicked() {
-                        if tool == Tool::Liquify {
-                            toggle_popover(app, Popover::LiquifyOptions);
-                        }
-                        app.set_tool(Tool::Liquify);
-                    }
-                    if icons::button(ui, "sliders-horizontal", 32.0, app.popover == Some(Popover::Brushes), "Brush library").clicked() {
-                        toggle_popover(app, Popover::Brushes);
-                    }
-                    widgets::vline(ui, 24.0);
-                    if icons::button(ui, "layers", 32.0, app.popover == Some(Popover::Layers), "Layers").clicked() {
-                        toggle_popover(app, Popover::Layers);
-                    }
-                    let c = app.session.color();
-                    if widgets::swatch(ui, c, 32.0, app.popover == Some(Popover::Color)).on_hover_text("Colour").clicked() {
-                        toggle_popover(app, Popover::Color);
-                    }
-                });
-            });
-        });
+    r.response.rect
 }
 
 fn side_rail(app: &mut App, ctx: &egui::Context, screen: egui::Rect) {
     let t = Tokens::get(ctx);
-    Area::new(Id::new("rail")).order(Order::Middle).pivot(Align2::LEFT_CENTER).fixed_pos(pos2(M, screen.center().y)).show(ctx, |ui| {
-        glass_frame(ui).show(ui, |ui| {
-            ui.vertical_centered(|ui| {
-                ui.spacing_mut().item_spacing.y = 4.0;
-                let size = app.session.current_brush().size;
-                // Size on a perceptual (sqrt) scale.
-                let mut s = (size as f32).sqrt();
-                if widgets::vslider(ui, &mut s, 1.0..=31.6, 150.0, "Brush size  [ ]").changed() {
-                    let _ = app.session.execute(Command::SetBrushSize { size: (s * s).round() as f64 });
-                    app.canvas.size_flash = 1.0;
-                }
-                ui.label(RichText::new(format!("{}", app.session.current_brush().size.round())).font(theme::mono(10.5)).color(t.fg_faint));
-                ui.add_space(6.0);
-                let mut o = app.session.current_brush().opacity as f32;
-                if widgets::vslider(ui, &mut o, 0.01..=1.0, 120.0, "Brush opacity").changed() {
-                    let _ = app.session.execute(Command::SetBrushOpacity { opacity: o as f64 });
-                }
-                ui.label(RichText::new(format!("{}%", (o * 100.0).round())).font(theme::mono(10.5)).color(t.fg_faint));
-                ui.add_space(6.0);
-                ui.add_enabled_ui(app.session.can_undo(), |ui| {
-                    if icons::button(ui, "undo-2", 32.0, false, "Undo (Ctrl+Z)").clicked() {
-                        let _ = app.session.execute(Command::Undo);
+    let left = screen.left() + crate::dock::reserved(app, screen).left;
+    Area::new(Id::new("rail")).order(Order::Middle).pivot(Align2::LEFT_CENTER).fixed_pos(pos2(left + M, screen.center().y)).show(
+        ctx,
+        |ui| {
+            glass_frame(ui).show(ui, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.spacing_mut().item_spacing.y = 4.0;
+                    let size = app.session.current_brush().size;
+                    // Size on a perceptual (sqrt) scale.
+                    let mut s = (size as f32).sqrt();
+                    if widgets::vslider(ui, &mut s, 1.0..=31.6, 150.0, "Brush size  [ ]").changed() {
+                        let _ = app.session.execute(Command::SetBrushSize { size: (s * s).round() as f64 });
+                        app.canvas.size_flash = 1.0;
                     }
-                });
-                ui.add_enabled_ui(app.session.can_redo(), |ui| {
-                    if icons::button(ui, "redo-2", 32.0, false, "Redo (Ctrl+Shift+Z)").clicked() {
-                        let _ = app.session.execute(Command::Redo);
+                    ui.label(
+                        RichText::new(format!("{}", app.session.current_brush().size.round())).font(theme::mono(10.5)).color(t.fg_faint),
+                    );
+                    ui.add_space(6.0);
+                    let mut o = app.session.current_brush().opacity as f32;
+                    if widgets::vslider(ui, &mut o, 0.01..=1.0, 120.0, "Brush opacity").changed() {
+                        let _ = app.session.execute(Command::SetBrushOpacity { opacity: o as f64 });
                     }
+                    ui.label(RichText::new(format!("{}%", (o * 100.0).round())).font(theme::mono(10.5)).color(t.fg_faint));
+                    ui.add_space(6.0);
+                    ui.add_enabled_ui(app.session.can_undo(), |ui| {
+                        if icons::button(ui, "undo-2", 32.0, false, "Undo (Ctrl+Z)").clicked() {
+                            let _ = app.session.execute(Command::Undo);
+                        }
+                    });
+                    ui.add_enabled_ui(app.session.can_redo(), |ui| {
+                        if icons::button(ui, "redo-2", 32.0, false, "Redo (Ctrl+Shift+Z)").clicked() {
+                            let _ = app.session.execute(Command::Redo);
+                        }
+                    });
                 });
             });
-        });
-    });
+        },
+    );
 }
 
 fn toast(app: &mut App, ctx: &egui::Context, screen: egui::Rect) {
@@ -396,6 +325,26 @@ fn menu(app: &mut App, ui: &mut Ui) {
         app.popover = Some(Popover::Export);
         return;
     }
+    // Panels: one row of toggles, and a reset.
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Panels").font(theme::medium(11.5)).color(Tokens::get(ui.ctx()).fg_muted));
+        ui.add_space(4.0);
+        for (id, icon, label) in [
+            (PanelId::Align, "align-center-horizontal", "Align & distribute layers"),
+            (PanelId::Properties, "sliders-horizontal", "Properties panel"),
+            (PanelId::ToolOptions, "settings", "Tool options panel"),
+            (PanelId::Palettes, "palette", "Palettes panel"),
+        ] {
+            let open = crate::dock::panel_open(app, id);
+            if icons::button(ui, icon, 28.0, open, label).clicked() {
+                crate::dock::set_panel_open(app, id, !open);
+            }
+        }
+        if icons::button(ui, "rotate-ccw", 28.0, false, "Reset panel layout").clicked() {
+            app.layout.reset();
+            app.layout.save();
+        }
+    });
     if widgets::menu_item(ui, Some("image"), "Reference window", "Alt+R").clicked() {
         app.popover = None;
         app.reference.open = !app.reference.open;
@@ -512,8 +461,10 @@ fn new_doc(app: &mut App, ui: &mut Ui) {
 
 fn brushes(app: &mut App, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    ui.set_width(340.0);
-    widgets::section_label(ui, if app.session.tool() == Tool::Eraser { "Eraser" } else { "Brushes" });
+    crate::dock::fit_width(ui, 340.0);
+    if !crate::dock::is_hosted(ui) {
+        widgets::section_label(ui, if app.session.tool() == Tool::Eraser { "Eraser" } else { "Brushes" });
+    }
     ui.add_space(4.0);
     let current = app.session.current_brush().id.clone();
     let eraser = app.session.tool() == Tool::Eraser;
@@ -627,8 +578,10 @@ fn brushes(app: &mut App, ui: &mut Ui) {
 fn brush_files(app: &mut App, ui: &mut Ui) {
     let now = ui.input(|i| i.time);
     ui.add_space(6.0);
+    // Two halves of whatever width the host gives.
+    let half = ((ui.available_width() - 8.0) / 2.0).clamp(100.0, 160.0);
     ui.horizontal(|ui| {
-        if widgets::secondary_button(ui, "Import brushes…", 160.0).clicked()
+        if widgets::secondary_button(ui, "Import brushes…", half).clicked()
             && let Some(path) = rfd::FileDialog::new().add_filter("Brushes", &onepaint_formats::brushes::BRUSH_EXTENSIONS).pick_file()
         {
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("brushes").to_string();
@@ -642,7 +595,7 @@ fn brush_files(app: &mut App, ui: &mut Ui) {
                 Err(e) => app.notify(format!("Couldn't import: {e}"), now),
             }
         }
-        if widgets::secondary_button(ui, "Export brush…", 160.0).clicked() {
+        if widgets::secondary_button(ui, "Export brush…", half).clicked() {
             let b = app.session.current_brush().clone();
             if let Some(path) = rfd::FileDialog::new()
                 .add_filter("happypaint brush", &["happybrush"])
@@ -663,8 +616,10 @@ fn brush_files(app: &mut App, ui: &mut Ui) {
 
 fn color(app: &mut App, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    ui.set_width(256.0);
-    widgets::section_label(ui, "Colour");
+    crate::dock::fit_width(ui, 256.0);
+    if !crate::dock::is_hosted(ui) {
+        widgets::section_label(ui, "Colour");
+    }
     ui.add_space(4.0);
     let mut hsv = app.hsv;
     if widgets::color_picker(ui, &mut hsv, 256.0) {
@@ -696,8 +651,11 @@ fn color(app: &mut App, ui: &mut Ui) {
             }
         });
     }
-    ui.add_space(8.0);
-    palette_section(app, ui);
+    // The palette shows here unless it has a panel of its own open.
+    if !crate::dock::panel_open(app, PanelId::Palettes) {
+        ui.add_space(8.0);
+        palette_section(app, ui);
+    }
 }
 
 /// The active swatch palette: pick, manage, import/export (spec 21).
@@ -882,9 +840,11 @@ fn rows(nodes: &[Node], depth: usize, out: &mut Vec<Row>) {
 
 fn layers(app: &mut App, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    ui.set_width(300.0);
+    crate::dock::fit_width(ui, 300.0);
     ui.horizontal(|ui| {
-        widgets::section_label(ui, "Layers");
+        if !crate::dock::is_hosted(ui) {
+            widgets::section_label(ui, "Layers");
+        }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if icons::button(ui, "plus", 28.0, false, "New layer").clicked() {
                 let _ = app.session.execute(Command::AddLayer);
@@ -921,8 +881,11 @@ fn layers(app: &mut App, ui: &mut Ui) {
                 let bar = egui::Rect::from_min_size(rect.left_top() + vec2(1.0, 6.0), vec2(3.0, rect.height() - 12.0));
                 ui.painter().rect_filled(bar, 1.5, c);
             }
+            let picked = app.layer_picks.contains(&r.id);
             if sel {
                 ui.painter().rect_filled(rect, t.radius, t.accent_soft);
+            } else if picked {
+                ui.painter().rect_filled(rect, t.radius, t.accent_soft.gamma_multiply(0.55));
             } else if resp.hovered() {
                 ui.painter().rect_filled(rect, t.radius, t.hover);
             }
@@ -995,8 +958,13 @@ fn layers(app: &mut App, ui: &mut Ui) {
                 }
                 ui.label(RichText::new(tags.join(" · ")).font(theme::medium(10.5)).color(t.fg_faint));
             });
-            if resp.clicked() && !sel {
-                let _ = app.session.execute(Command::SetActiveLayer { id: r.id.clone() });
+            if resp.clicked() {
+                let (ctrl, shift) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
+                let ids: Vec<String> = list.iter().map(|r| r.id.clone()).collect();
+                crate::align_ui::pick_row(app, &r.id, &ids, ctrl, shift);
+                if !sel {
+                    let _ = app.session.execute(Command::SetActiveLayer { id: r.id.clone() });
+                }
             }
         }
         // Drag-and-drop: show where the layer would land; drop on release.
@@ -1193,11 +1161,69 @@ fn confirm(app: &mut App, ui: &mut Ui) {
     });
 }
 
+/// A dockable panel's body, wherever it is hosted.
+pub fn panel_body(app: &mut App, ui: &mut Ui, id: PanelId) {
+    match id {
+        PanelId::Layers => layers(app, ui),
+        PanelId::Brush => brushes(app, ui),
+        PanelId::Color => color(app, ui),
+        PanelId::Palettes => {
+            crate::dock::fit_width(ui, 260.0);
+            palette_section(app, ui);
+        }
+        PanelId::Guides => guides(app, ui),
+        PanelId::Align => crate::align_ui::panel(app, ui),
+        PanelId::Reference => crate::reference::body(app, ui),
+        PanelId::Properties => properties(app, ui),
+        PanelId::ToolOptions => tool_options(app, ui),
+    }
+}
+
+/// The active adjustment or fill layer's settings (happypaint's
+/// Properties panel).
+fn properties(app: &mut App, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    let active = app.session.active().to_string();
+    if app.session.doc().layer(&active).is_some_and(|l| l.adjustment.is_some()) {
+        crate::adjust::layer_panel(app, ui);
+    } else {
+        crate::dock::fit_width(ui, 240.0);
+        ui.label(RichText::new("Select an adjustment layer to edit its settings.").color(t.fg_muted));
+    }
+}
+
+/// The current tool's options.
+fn tool_options(app: &mut App, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    let tool = app.session.tool();
+    match crate::dock::tool_options(tool) {
+        Some(Popover::MoveOptions) => move_options(app, ui),
+        Some(Popover::Selection) => selection(app, ui),
+        Some(Popover::Fill) => fill_options(app, ui),
+        Some(Popover::GradientOptions) => gradient_options(app, ui),
+        Some(Popover::ShapeOptions) => shape_options(app, ui),
+        Some(Popover::PenOptions) => pen_options(app, ui),
+        Some(Popover::PanelOptions) => crate::panel_ui::options(app, ui),
+        Some(Popover::SmudgeOptions) => smudge_options(app, ui),
+        Some(Popover::MixerOptions) => mixer_options(app, ui),
+        Some(Popover::LiquifyOptions) => liquify_options(app, ui),
+        _ => {
+            crate::dock::fit_width(ui, 240.0);
+            let msg = match tool {
+                Tool::Brush | Tool::Eraser => "Brush settings are in the Brushes panel.",
+                _ => "This tool has no options.",
+            };
+            ui.label(RichText::new(crate::status_bar::tool_label(tool)).font(theme::semibold(13.0)).color(t.fg));
+            ui.label(RichText::new(msg).color(t.fg_muted));
+        }
+    }
+}
+
 pub fn is_select_tool(t: Tool) -> bool {
     matches!(t, Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectPoly | Tool::SelectWand)
 }
 
-fn select_icon(t: Tool) -> &'static str {
+pub(crate) fn select_icon(t: Tool) -> &'static str {
     match t {
         Tool::SelectEllipse => "circle-dashed",
         Tool::SelectLasso => "lasso",
@@ -1228,7 +1254,7 @@ pub(crate) fn segmented(ui: &mut Ui, labels: &[&str], selected: usize) -> Option
 
 fn selection(app: &mut App, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    ui.set_width(300.0);
+    crate::dock::fit_width(ui, 300.0);
     widgets::section_label(ui, "Select");
     ui.horizontal(|ui| {
         for (tool, name) in [
@@ -1339,7 +1365,7 @@ fn saved_selections(app: &mut App, ui: &mut Ui, has: bool) {
 }
 
 fn fill_options(app: &mut App, ui: &mut Ui) {
-    ui.set_width(260.0);
+    crate::dock::fit_width(ui, 260.0);
     widgets::section_label(ui, "Fill");
     let mut tol = app.canvas.options.fill_tolerance * 100.0;
     if widgets::slider_row(ui, "Tolerance", &mut tol, 0.0..=100.0, |v| format!("{v:.0}")).changed() {
@@ -1459,7 +1485,7 @@ fn recover(app: &mut App, ui: &mut Ui) {
 fn gradient_options(app: &mut App, ui: &mut Ui) {
     use onepaint_filters::gradient::Shape as G;
     let t = Tokens::get(ui.ctx());
-    ui.set_width(330.0);
+    crate::dock::fit_width(ui, 330.0);
     widgets::section_label(ui, "Gradient");
     let shapes = G::ALL;
     let cur = shapes.iter().position(|s| *s == app.canvas.options.gradient_shape).unwrap_or(0);
@@ -1486,7 +1512,7 @@ fn gradient_options(app: &mut App, ui: &mut Ui) {
 fn shape_options(app: &mut App, ui: &mut Ui) {
     use onepaint_stroke::shape::ShapeKind as K;
     let t = Tokens::get(ui.ctx());
-    ui.set_width(300.0);
+    crate::dock::fit_width(ui, 300.0);
     widgets::section_label(ui, "Shape");
     let kinds = [K::Line, K::Rect, K::Ellipse, K::Polygon];
     let cur = kinds.iter().position(|k| *k == app.canvas.options.shape_kind).unwrap_or(0);
@@ -1516,7 +1542,7 @@ fn shape_options(app: &mut App, ui: &mut Ui) {
 
 fn smudge_options(app: &mut App, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    ui.set_width(280.0);
+    crate::dock::fit_width(ui, 280.0);
     widgets::section_label(ui, "Smudge");
     let mut v = (app.session.paint_settings().smudge_strength * 100.0) as f32;
     if widgets::slider_row(ui, "Strength", &mut v, 0.0..=100.0, |v| format!("{v:.0}%")).changed() {
@@ -1545,7 +1571,7 @@ const MIXER_PRESETS: [(&str, f64, f64, f64); 12] = [
 
 fn mixer_options(app: &mut App, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    ui.set_width(300.0);
+    crate::dock::fit_width(ui, 300.0);
     widgets::section_label(ui, "Mixer brush");
     let mut m = app.session.paint_settings().mixer;
     let pct = |v: f64| (v * 100.0).round() as i32;
@@ -1781,7 +1807,7 @@ fn help(ui: &mut Ui, keys: &crate::keymap::Overrides) {
 
 fn move_options(app: &mut App, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    ui.set_width(260.0);
+    crate::dock::fit_width(ui, 260.0);
     widgets::section_label(ui, "Transform");
     let active = app.session.transform_active();
     let mode = match app.session.transform_warp() {
@@ -1817,7 +1843,7 @@ fn pen_options(app: &mut App, ui: &mut Ui) {
     use onepaint_engine::path_ops::StrokePathTool as T;
     let t = Tokens::get(ui.ctx());
     let now = ui.input(|i| i.time);
-    ui.set_width(300.0);
+    crate::dock::fit_width(ui, 300.0);
     widgets::section_label(ui, "Pen");
     widgets::toggle(ui, &mut app.canvas.options.pen_fill, "Fill closed paths");
     ui.label(
@@ -1880,7 +1906,7 @@ fn pen_options(app: &mut App, ui: &mut Ui) {
 fn liquify_options(app: &mut App, ui: &mut Ui) {
     use onepaint_filters::liquify::LIQUIFY_MODES;
     let t = Tokens::get(ui.ctx());
-    ui.set_width(280.0);
+    crate::dock::fit_width(ui, 280.0);
     widgets::section_label(ui, "Liquify");
     let ps = app.session.paint_settings();
     let (mut mode, strength) = (ps.liquify_mode, ps.liquify_strength);
@@ -1935,7 +1961,7 @@ fn guides(app: &mut App, ui: &mut Ui) {
     use onepaint_engine::SymmetryMode as M;
     use onepaint_engine::guides::{PerspectiveSnap as PS, perspective_preset};
     let t = Tokens::get(ui.ctx());
-    ui.set_width(310.0);
+    crate::dock::fit_width(ui, 310.0);
     let mut g = app.session.guides().clone();
     let before = g.clone();
     egui::ScrollArea::vertical().max_height(ui.ctx().content_rect().height() - 140.0).show(ui, |ui| {

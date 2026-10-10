@@ -14,6 +14,9 @@
 //!   `ONEPAINT_ANIM=pegs` opens the timing ops with two frames picked and slides a ghost off its pegs.
 //! - `ONEPAINT_IMPASTO=1` paints thick, wet-impasto and oil strokes, blends one, and bevels a shape.
 //! - `ONEPAINT_WET=1` paints live watercolour (blue, then yellow into it) and leaves it wet.
+//! - `ONEPAINT_DOCK=1` docks Layers and Properties right and Brushes left, floats Align
+//!   with two layers picked, and docks the tool bar as a left rail;
+//!   `ONEPAINT_DOCK=float` floats a vertical tool bar and groups Colour with Align instead.
 //! - `ONEPAINT_EXIT=1` closes the app after the screenshot.
 
 use crate::{App, Popover};
@@ -39,6 +42,7 @@ pub struct Debug {
     pegs: bool,
     wet: bool,
     impasto: bool,
+    dock: Option<String>,
 }
 
 impl Debug {
@@ -56,6 +60,7 @@ impl Debug {
             || self.anim
             || self.impasto
             || self.wet
+            || self.dock.is_some()
     }
 
     pub fn from_env() -> Self {
@@ -93,6 +98,7 @@ impl Debug {
             pegs: var("ONEPAINT_ANIM").is_some_and(|v| v == "pegs"),
             impasto: var("ONEPAINT_IMPASTO").is_some(),
             wet: var("ONEPAINT_WET").is_some(),
+            dock: var("ONEPAINT_DOCK"),
         }
     }
 }
@@ -131,6 +137,9 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
         wave(app, h * 0.68, 40.0, hex("#1d1d1f"), "comic-inker", 14.0);
         wave(app, h * 0.82, 20.0, hex("#ddb42c"), "soft-airbrush", 120.0);
         let _ = app.session.execute(Command::SetBrush { preset_id: "hard-round".into() });
+        if let Some(mode) = app.debug.dock.clone() {
+            dock_demo(app, &mode);
+        }
         if app.debug.popover == Some(Popover::Selection) {
             let (w, h) = (app.session.doc().width as f64, app.session.doc().height as f64);
             let contour = onepaint_selection::ellipse_polygon([w * 0.3, h * 0.2], [w * 0.7, h * 0.75]);
@@ -358,5 +367,28 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         }
+    }
+}
+
+fn dock_demo(app: &mut App, mode: &str) {
+    use crate::layout::{DockSide, Orientation, PanelId, Placement};
+    let l = &mut app.layout;
+    let ids = app.session.doc().layer_ids();
+    app.layer_picks = ids.iter().rev().take(2).cloned().collect();
+    if mode == "float" {
+        l.toolbar.orientation = Orientation::Vertical;
+        l.toolbar.pos = Some([300.0, 90.0]);
+        l.set_placement(PanelId::Align, Placement::Float { x: 760.0, y: 160.0 }, None);
+        l.join_group(PanelId::Color, PanelId::Align, egui::Rect::from_min_size(egui::pos2(760.0, 160.0), egui::vec2(300.0, 420.0)));
+        l.set_open(PanelId::Align, true);
+        l.set_open(PanelId::Color, true);
+        return;
+    }
+    l.tools_dock = Some(DockSide::Left);
+    l.set_placement(PanelId::Layers, Placement::Dock { side: DockSide::Right }, Some(0));
+    l.set_placement(PanelId::Brush, Placement::Dock { side: DockSide::Left }, None);
+    l.set_placement(PanelId::Align, Placement::Float { x: 520.0, y: 120.0 }, None);
+    for id in [PanelId::Layers, PanelId::Properties, PanelId::Brush, PanelId::Align] {
+        l.set_open(id, true);
     }
 }

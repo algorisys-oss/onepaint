@@ -296,6 +296,9 @@ mod tests {
         // A corner drag reshapes that corner only.
         let (id, before) = h.state().session.panel_frames().remove(0);
         let h0 = h.state().session.history_len();
+        // Bring the page's top corner out from under the top bar.
+        h.state_mut().canvas.view.pan(0.0, 60.0);
+        h.run();
         let corner = screen(&h, before[0].to_array());
         drag(&mut h, corner, corner + vec2(30.0, 20.0));
         let after = h.state().session.panel(&id).map(|p| p.outline).unwrap_or_default();

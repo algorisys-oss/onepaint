@@ -14,8 +14,8 @@ an item changes there, change it here too.
 - [x] Text, pen (path layers), shape, panel
 - [x] Selection tools: rect, ellipse, lasso, polygon, wand
 - [ ] Mixer: Alt-click to load the reservoir from a patch
-- [ ] Pan tool button on the toolbar
-- [ ] Tool reachability test: every `Tool` has a button or a written exemption
+- [x] Pan tool button on the toolbar
+- [x] Tool reachability test: every `Tool` has a button or a written exemption
 
 ### 1.2 Brushes
 - [x] All presets (124 load with verbatim parameters, tips and grains)
@@ -103,11 +103,11 @@ an item changes there, change it here too.
 - [x] Balloons
 
 ### 1.15 Workspace and panels
-- [ ] Movable toolbar: grip drag, horizontal/vertical, dock as a left or right rail
-- [ ] Dockable panels: float, dock, tab, collapse, resize; persist the layout
-- [ ] Properties panel for adjustment and fill layers
-- [ ] Align and distribute layers (engine command plus panel)
-- [ ] No toolbar overlap on narrow windows
+- [x] Movable toolbar: grip drag, horizontal/vertical, dock as a left or right rail
+- [x] Dockable panels: float, dock, tab, collapse, resize; persist the layout
+- [x] Properties panel for adjustment and fill layers
+- [x] Align and distribute layers (engine command plus panel)
+- [x] No toolbar overlap on narrow windows
 - [x] Status bar parity (symmetry axes and move axis, zoom, rotation dial, fill mode, value check, …)
 - [x] ColorDrop from the status-bar swatch
 

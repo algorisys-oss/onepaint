@@ -1,6 +1,7 @@
 //! onepaint desktop app: a thin egui shell over `onepaint_engine::Session`.
 
 mod adjust;
+mod align_ui;
 
 /// The animation export formats (happypaint `AnimFormat`, less WebM).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -16,9 +17,11 @@ mod canvas;
 mod chrome;
 mod clip;
 mod debug;
+mod dock;
 mod gallery;
 mod gestures;
 mod keymap;
+mod layout;
 mod palettes;
 mod panel_ui;
 mod pen;
@@ -32,7 +35,10 @@ mod text_ui;
 mod thumbs;
 mod timeline;
 mod timing;
+mod toolbar;
 mod track_grid;
+#[cfg(test)]
+mod ui_tests;
 
 use canvas::Canvas;
 use egui::{Key, KeyboardShortcut, Modifiers};
@@ -223,6 +229,15 @@ pub struct App {
     pub layer_drag: Option<String>,
     /// A colour being dragged onto the canvas (ColorDrop).
     pub color_drop: Option<status_bar::ColorDropDrag>,
+    /// Where the tool bar and the panels live (saved as `layout.json`).
+    pub layout: layout::Layout,
+    pub dock: dock::DockUi,
+    pub toolbar: toolbar::ToolbarUi,
+    /// Layers picked for align & distribute (Ctrl/⌘- and Shift-click).
+    pub layer_picks: Vec<String>,
+    pub pick_anchor: Option<String>,
+    /// Align to the selection's bounds rather than the canvas.
+    pub align_to_selection: bool,
     /// Canvas/image size dialog state: size, anchor (col, row), keep aspect.
     pub size_dialog: ([u32; 2], (u8, u8), bool),
     pub autosave: autosave::Autosave,
@@ -244,6 +259,7 @@ pub struct App {
 impl App {
     fn new(cc: &eframe::CreationContext, open: Option<PathBuf>) -> Self {
         let debug = debug::Debug::from_env();
+        let scripted = debug.scripted();
         let theme = if debug.light { ThemeKind::Light } else { ThemeKind::Dark };
         onepaint_ui_kit::install(&cc.egui_ctx, theme);
         let (gpu_ok, gpu_compose) = canvas::init_gpu(cc);
@@ -302,6 +318,12 @@ impl App {
             clipboard: clip::Clipboard::default(),
             layer_drag: None,
             color_drop: None,
+            layout: layout::Layout::load(if cfg!(test) || scripted { None } else { layout::default_path() }),
+            dock: Default::default(),
+            toolbar: Default::default(),
+            layer_picks: Vec::new(),
+            pick_anchor: None,
+            align_to_selection: false,
             size_dialog: ([0, 0], (1, 1), true),
             autosave: autosave::Autosave::new(if cfg!(test) { None } else { autosave::dir() }),
             recover: None,
@@ -1040,13 +1062,13 @@ impl App {
                 self.canvas.lines_editing = false;
             }
             if on(Action::ToggleLayersPanel) {
-                self.popover = if self.popover == Some(Popover::Layers) { None } else { Some(Popover::Layers) };
+                dock::toggle(self, Popover::Layers, ctx.content_rect());
             }
             if on(Action::ToggleReference) {
                 self.reference.open = !self.reference.open;
             }
             if on(Action::ToggleBrushPanel) {
-                self.popover = if self.popover == Some(Popover::Brushes) { None } else { Some(Popover::Brushes) };
+                dock::toggle(self, Popover::Brushes, ctx.content_rect());
             }
             if on(Action::ToggleHelp) {
                 self.popover = if self.popover == Some(Popover::Help) { None } else { Some(Popover::Help) };
@@ -1307,6 +1329,16 @@ impl eframe::App for App {
         let was_stroking = self.session.is_stroking();
         let t = onepaint_ui_kit::Tokens::get(&ctx);
         ui.painter().rect_filled(rect, 0.0, t.stage);
+        // The docks, the tool rail and the status bar take their room from the stage.
+        let rect = if self.hide_ui {
+            rect
+        } else {
+            let res = dock::reserved(self, rect);
+            egui::Rect::from_min_max(
+                egui::pos2(rect.left() + res.left, rect.top()),
+                egui::pos2(rect.right() - res.right, rect.bottom() - status_bar::HEIGHT),
+            )
+        };
         let pegging = self.timing.peg_mode && self.session.anim_settings().enabled;
         self.canvas.peg_target = self.timing.peg_target.clone().filter(|_| pegging);
         self.canvas.show(ui, rect, &mut self.session, space, r, self.gpu_ok, self.gpu_compose);
@@ -1969,7 +2001,8 @@ mod tests {
         h.get_by_label("Solid Color Fill").click();
         h.run();
         let app = h.state();
-        assert_eq!(app.popover, Some(Popover::AdjustLayer));
+        assert_eq!(app.popover, None, "the settings open in the Properties panel, docked right");
+        assert!(dock::panel_open(app, layout::PanelId::Properties));
         let adj = app.session.doc().layer(app.session.active()).unwrap().adjustment.clone().unwrap();
         assert_eq!(adj.kind, "solid-fill");
     }
