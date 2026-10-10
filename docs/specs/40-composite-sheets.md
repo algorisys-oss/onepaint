@@ -78,7 +78,11 @@ under 256 px per axis per sheet.
    without the hand filter fails this test (off by 132).
 4. **No regression:** the spec 13, 38 and 39 GPU tests and the present test
    pass unchanged.
-5. **By eye:** `ONEPAINT_MAX_SHEET=256` shows the demo exactly as without it.
+5. **By eye:**
+   - `ONEPAINT_MAX_SHEET=256` shows the demo exactly as without it.
+   - A 16384 × 12000 document (`ONEPAINT_NEW=16384x12000 ONEPAINT_DEMO=1`)
+     displays as one sheet and, with `ONEPAINT_MAX_SHEET=4096`, as 4 × 3
+     sheets. The two screenshots match within 1/255.
 
 ## Out of scope
 - Documents past `max_texture_array_layers` sheets: 131072 px per side for a

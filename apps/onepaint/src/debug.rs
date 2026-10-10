@@ -18,6 +18,7 @@
 //!   with two layers picked, and docks the tool bar as a left rail;
 //!   `ONEPAINT_DOCK=float` floats a vertical tool bar and groups Colour with Align instead.
 //! - `ONEPAINT_PANELS=1` lays out a 2×2 manga page, cuts a panel, inks across a frame, and shows the Panel tool.
+//! - `ONEPAINT_NEW=16384x12000` starts with a blank document of that size (before the demo, if any).
 //! - `ONEPAINT_MAX_SHEET=256` caps the composite's sheet side, to see sheets (spec 40) on small documents.
 //! - `ONEPAINT_EXIT=1` closes the app after the screenshot.
 
@@ -46,6 +47,8 @@ pub struct Debug {
     impasto: bool,
     dock: Option<String>,
     panels: bool,
+    /// Start with a blank document of this size.
+    new: Option<(u32, u32)>,
 }
 
 impl Debug {
@@ -65,6 +68,7 @@ impl Debug {
             || self.wet
             || self.dock.is_some()
             || self.panels
+            || self.new.is_some()
     }
 
     pub fn from_env() -> Self {
@@ -104,6 +108,10 @@ impl Debug {
             wet: var("ONEPAINT_WET").is_some(),
             dock: var("ONEPAINT_DOCK"),
             panels: var("ONEPAINT_PANELS").is_some(),
+            new: var("ONEPAINT_NEW").and_then(|v| {
+                let (w, h) = v.split_once('x')?;
+                Some((w.parse().ok()?, h.parse().ok()?))
+            }),
         }
     }
 }
@@ -130,6 +138,11 @@ fn wave(app: &mut App, y: f64, amp: f64, color: Rgba, preset: &str, size: f64) {
 pub fn tick(app: &mut App, ctx: &egui::Context) {
     let frame = app.debug.frame;
     app.debug.frame += 1;
+    if frame == 1
+        && let Some((w, h)) = app.debug.new
+    {
+        app.new_document(w, h);
+    }
     if frame == 2 && app.debug.demo {
         let h = app.session.doc().height as f64;
         let hex = |s: &str| Rgba::from_hex(s).unwrap_or_default();
