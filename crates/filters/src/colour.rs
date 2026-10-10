@@ -5,6 +5,7 @@ use crate::gradient::{GradStop, Ramp, Shape, reverse_stops, shape_t};
 use crate::params::Params;
 use crate::pattern::PatternTile;
 use crate::tex::{Frame, LUMA, Px, dot3, fract, from_work, mix, repremul, smoothstep, to_work, unpremul};
+use onepaint_color::Space;
 
 /// Selective Colour+ cap (SC `MAX_COLOR_SAMPLES`).
 pub const MAX_COLOR_SAMPLES: usize = 8;
@@ -191,7 +192,7 @@ pub(crate) fn extra_for(kind: crate::Kind, p: &Params, frame: Frame) -> Extra {
     let mut e = Extra { frame, ..Default::default() };
     match kind {
         Kind::SelectiveColor => e.samples = sc_samples(p),
-        Kind::GradientFill => e.ramp = Some(std::sync::Arc::new(Ramp::new(&fill_stops(p)))),
+        Kind::GradientFill => e.ramp = Some(std::sync::Arc::new(Ramp::new_in(&fill_stops(p), frame.space))),
         Kind::PatternFill => {
             e.pattern = match p.pattern_image.as_deref().filter(|u| !u.is_empty()) {
                 Some(url) => crate::pattern::imported_tile(url),
@@ -209,21 +210,21 @@ pub(crate) fn extra_for(kind: crate::Kind, p: &Params, frame: Frame) -> Extra {
 }
 
 /// COLOR_TO_ALPHA_SRC (AR:784).
-fn color_to_alpha(s: Px, p: &Params) -> Px {
+fn color_to_alpha(s: Px, p: &Params, sp: Space) -> Px {
     let a = s[3];
-    let rgb = to_work(unpremul(s));
+    let rgb = to_work(unpremul(s), sp);
     let t = p.target.unwrap_or([1.0; 3]);
     let thr = p.threshold.unwrap_or(0.0);
     let d = [0, 1, 2].map(|c| if rgb[c] > t[c] { (rgb[c] - t[c]) / (1.0 - t[c]).max(1e-4) } else { (t[c] - rgb[c]) / t[c].max(1e-4) });
     let mut alpha = d[0].max(d[1]).max(d[2]).clamp(0.0, 1.0);
     alpha = ((alpha - thr) / (1.0 - thr).max(1e-4)).clamp(0.0, 1.0);
     let out = if alpha > 1e-4 { [0, 1, 2].map(|c| (t[c] + (rgb[c] - t[c]) / alpha).clamp(0.0, 1.0)) } else { rgb };
-    repremul(out, a * alpha)
+    repremul(out, a * alpha, sp)
 }
 
 /// REPLACE_COLOR_SRC (AR:808).
-fn replace_color(s: Px, p: &Params) -> Px {
-    let rgb = to_work(unpremul(s)).map(|v| v.clamp(0.0, 1.0));
+fn replace_color(s: Px, p: &Params, sp: Space) -> Px {
+    let rgb = to_work(unpremul(s), sp).map(|v| v.clamp(0.0, 1.0));
     let t = p.target.unwrap_or([1.0; 3]).map(|v| v.clamp(0.0, 1.0));
     let rep = p.replace.unwrap_or([0.2, 0.45, 1.0]).map(|v| v.clamp(0.0, 1.0));
     let thr = p.threshold.unwrap_or(0.3);
@@ -232,12 +233,12 @@ fn replace_color(s: Px, p: &Params) -> Px {
     let ph = rgb2hsv(rgb);
     let rh = rgb2hsv(rep);
     let recol = hsv2rgb([rh[0], rh[1], ph[2]]);
-    repremul([0, 1, 2].map(|c| mix(rgb[c], recol[c], w)), s[3])
+    repremul([0, 1, 2].map(|c| mix(rgb[c], recol[c], w)), s[3], sp)
 }
 
 /// SELECTIVE_COLOR_SRC (AR:840).
 fn selective_color(s: Px, p: &Params, e: &Extra) -> Px {
-    let rgb = to_work(unpremul(s)).map(|v| v.clamp(0.0, 1.0));
+    let rgb = to_work(unpremul(s), e.frame.space).map(|v| v.clamp(0.0, 1.0));
     let mut o = sc_apply(rgb, &e.samples);
     if p.show_range.unwrap_or(false) {
         let cov = sc_coverage(rgb, &e.samples);
@@ -245,7 +246,7 @@ fn selective_color(s: Px, p: &Params, e: &Extra) -> Px {
         let red = [1.0, 0.15, 0.15];
         o = [0, 1, 2].map(|c| mix(grey * 0.5, mix(grey, red[c], 0.75), cov));
     }
-    repremul(o, s[3])
+    repremul(o, s[3], e.frame.space)
 }
 
 /// Tone's `rand` (sin hash), ported in f32.
@@ -262,7 +263,7 @@ fn tone(s: Px, p: &Params, e: &Extra, x: i32, y: i32) -> Px {
     let lvl = p.tone_level.unwrap_or(0.5).clamp(0.0, 1.0);
     let level = match density {
         "luminance" => {
-            let rgb = to_work(unpremul(s)).map(|v| v.clamp(0.0, 1.0));
+            let rgb = to_work(unpremul(s), f.space).map(|v| v.clamp(0.0, 1.0));
             (1.0 - dot3(rgb, LUMA).clamp(0.0, 1.0)) * s[3]
         }
         "gradient" => {
@@ -303,8 +304,8 @@ fn tone(s: Px, p: &Params, e: &Extra, x: i32, y: i32) -> Px {
     if level < 0.0005 {
         cov = 0.0;
     }
-    let ink = to_work(p.target.unwrap_or([0.0; 3])).map(|v| v.clamp(0.0, 1.0));
-    let l = from_work(ink);
+    let ink = to_work(p.target.unwrap_or([0.0; 3]), f.space).map(|v| v.clamp(0.0, 1.0));
+    let l = from_work(ink, f.space);
     [l[0] * cov, l[1] * cov, l[2] * cov, cov]
 }
 
@@ -331,13 +332,13 @@ fn pattern_fill(p: &Params, e: &Extra, x: i32, y: i32) -> Px {
     let (c, s) = (a.cos(), a.sin());
     let r = [c * d[0] - s * d[1], s * d[0] + c * d[1]];
     let t = tile.sample_repeat(r[0] / (tile.w as f32 * scale), r[1] / (tile.h as f32 * scale));
-    let l = from_work([t[0], t[1], t[2]]);
+    let l = from_work([t[0], t[1], t[2]], e.frame.space);
     [l[0] * t[3], l[1] * t[3], l[2] * t[3], t[3]]
 }
 
 /// SOLID_FILL_SRC (AR:1670).
-fn solid_fill(p: &Params) -> Px {
-    let l = from_work(p.fill_color.unwrap_or([0.0; 3]));
+fn solid_fill(p: &Params, sp: Space) -> Px {
+    let l = from_work(p.fill_color.unwrap_or([0.0; 3]), sp);
     [l[0], l[1], l[2], 1.0]
 }
 
@@ -345,12 +346,12 @@ fn solid_fill(p: &Params) -> Px {
 pub(crate) fn px(kind: crate::Kind, p: &Params, e: &Extra, s: Px, x: i32, y: i32) -> Option<Px> {
     use crate::Kind;
     Some(match kind {
-        Kind::ColorToAlpha => color_to_alpha(s, p),
-        Kind::ReplaceColor => replace_color(s, p),
+        Kind::ColorToAlpha => color_to_alpha(s, p, e.frame.space),
+        Kind::ReplaceColor => replace_color(s, p, e.frame.space),
         Kind::SelectiveColor => selective_color(s, p, e),
         Kind::Tone => tone(s, p, e, x, y),
         Kind::GradientFill => gradient_fill(p, e, x, y),
-        Kind::SolidFill => solid_fill(p),
+        Kind::SolidFill => solid_fill(p, e.frame.space),
         Kind::PatternFill => pattern_fill(p, e, x, y),
         Kind::Clouds | Kind::Fog | Kind::Smoke | Kind::Nebula | Kind::Starfield => {
             crate::render::clouds_px(p, kind == Kind::Starfield, e.frame, x, y)

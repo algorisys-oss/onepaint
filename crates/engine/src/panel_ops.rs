@@ -87,7 +87,7 @@ impl Session {
         let specs = border_specs(&panels);
         let existing =
             self.doc.root.iter().position(|n| n.as_layer().is_some_and(|l| l.name == BORDER_LAYER && l.extra.contains_key("paths")));
-        let (w, h) = (self.doc.width, self.doc.height);
+        let (w, h, space) = (self.doc.width, self.doc.height, self.doc.space());
         match (existing, specs.is_empty()) {
             (Some(i), true) => {
                 let id = self.doc.root.remove(i).id().to_string();
@@ -97,12 +97,12 @@ impl Session {
             }
             (Some(i), false) => {
                 if let Some(Node::Layer(l)) = self.doc.root.get_mut(i) {
-                    path_ops::write_paths(l, &specs, w, h);
+                    path_ops::write_paths(l, &specs, w, h, space);
                 }
             }
             (None, false) => {
                 let mut l = Layer::new(BORDER_LAYER);
-                path_ops::write_paths(&mut l, &specs, w, h);
+                path_ops::write_paths(&mut l, &specs, w, h, space);
                 self.doc.root.push(Node::Layer(l));
             }
             (None, true) => {}

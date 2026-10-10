@@ -160,7 +160,7 @@ impl Session {
         let region = region.grown4(grow, base.as_deref());
         let (bx, by, bw, bh) = region.bounds()?;
         let rect = Rect::new(bx as i32, by as i32, bw as i32, bh as i32);
-        Some(Bucket { rect, region, base, color: self.color.to_linear_premul(), alpha_lock: l.alpha_lock })
+        Some(Bucket { rect, region, base, color: self.doc.space().pixel(self.color), alpha_lock: l.alpha_lock })
     }
 
     /// Source-over the current colour at the selection's coverage.
@@ -176,7 +176,7 @@ impl Session {
         let Some((bx, by, bw, bh)) = clip.bounds() else {
             return;
         };
-        let c = self.color.to_linear_premul();
+        let c = self.doc.space().pixel(self.color);
         let id = self.active.clone();
         self.modify_layer(&id, Rect::new(bx as i32, by as i32, bw as i32, bh as i32), |x, y, p| {
             let a = clip.coverage(x, y);

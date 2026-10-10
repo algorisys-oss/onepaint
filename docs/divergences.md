@@ -6,7 +6,7 @@ short by fixing entries, not by growing it.
 | # | Area | onepaint | happypaint | Why / when it goes away |
 |---|---|---|---|---|
 | 1 | Blend mode `pigment` | Composites as `normal` | Kubelka–Munk glaze (`engine/color/pigment.ts`) | The KM port is planned for slice 2+. |
-| 2 | Document depth | 8-bit documents store 8-bit tiles as happypaint does (premultiplied sRGB bytes, raw-byte masks; spec 49) but still composite in linear light. 32F documents work in RGBA16F; their `depth` is kept on save. | 8-bit documents composite in gamma space, with fixed-function multiply, screen and add (multiply drops the term that shows over transparency); 32F | Gamma-space compositing for 8-bit documents is spec 50 (next). 32F storage later. |
+| 2 | Document depth | 8-bit documents match happypaint (specs 49, 50): premultiplied sRGB bytes, gamma-space blending with its fixed-function multiply, screen and add. 32F documents work in RGBA16F; their `depth` is kept on save. | 32F | 32F storage later. |
 | 3 | Off-canvas pixels | Dropped on save. Existing `overflow` chunks are passed through unchanged. | Saved as an `overflow` PNG | Planned with the move/transform tool. |
 | 4 | Tile dedup key | PNG bytes | Hash of the GPU readback, shared between layer and mask tiles | Avoids a latent cross-namespace collision (see spec 05). Readers are unaffected. |
 | 5 | Thumbnail | JPEG composited over white | JPEG from a canvas `toBlob` | It is cosmetic only. |

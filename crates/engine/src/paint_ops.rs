@@ -37,7 +37,7 @@ impl Session {
         let doc = self.doc.bounds();
         let clip = self.clip.clone();
         let Some(st) = self.stroke.as_mut() else { return };
-        let ramp = Ramp::new(stops);
+        let ramp = Ramp::new_in(stops, self.doc.space());
         let keys: Vec<_> = doc.tiles().collect();
         let tiles: Vec<_> = keys
             .par_iter()
@@ -84,7 +84,7 @@ impl Session {
             let (w, h) = (self.doc.width, self.doc.height);
             let region = onepaint_selection::rasterize_polygons(w, h, &[poly]);
             let sel = self.clip.clone();
-            let c = self.color.to_linear_premul();
+            let c = self.doc.space().pixel(self.color);
             let op = self.current_brush().opacity as f32;
             let alpha_lock = self.doc.layer(&self.active).is_some_and(|l| l.alpha_lock);
             if let Some((bx, by, bw, bh)) = region.bounds() {

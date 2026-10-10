@@ -9,7 +9,8 @@ pub mod relief;
 #[doc(hidden)]
 pub mod testdocs;
 
-use blend::{blend_px, blend_px_alpha_lock, clip_over};
+use blend::{blend_px_alpha_lock_in, blend_px_in, clip_over};
+use onepaint_color::Space;
 use onepaint_doc::{BlendMode, Document, Layer, Node};
 use onepaint_filters::Frame;
 use onepaint_panel::coverage::{TileCoverage, tile_coverage};
@@ -29,13 +30,18 @@ pub enum StrokeMode {
 /// Apply one stroke pixel to a layer pixel (happypaint `compositor.ts:2191-2264`).
 #[inline]
 pub fn apply_stroke_px(dst: Px, src: Px, opacity: f32, mode: StrokeMode) -> Px {
+    apply_stroke_px_in(Space::Linear, dst, src, opacity, mode)
+}
+
+/// [`apply_stroke_px`] in the document's `space` (spec 50).
+pub fn apply_stroke_px_in(space: Space, dst: Px, src: Px, opacity: f32, mode: StrokeMode) -> Px {
     match mode {
-        StrokeMode::Paint(m) => blend_px(m, dst, src, opacity),
+        StrokeMode::Paint(m) => blend_px_in(space, m, dst, src, opacity),
         StrokeMode::Erase => {
             let k = 1.0 - src[3] * opacity;
             dst.map(|v| v * k)
         }
-        StrokeMode::AlphaLock(m) => blend_px_alpha_lock(m, dst, src, opacity),
+        StrokeMode::AlphaLock(m) => blend_px_alpha_lock_in(space, m, dst, src, opacity),
     }
 }
 
@@ -72,7 +78,7 @@ fn layer_content(l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, frame:
     if let Some((o, st)) = stroke {
         let s = st.to_f32();
         for i in (0..buf.len()).step_by(4) {
-            let r = apply_stroke_px(px(&buf, i), px(&s, i), o.opacity, o.mode);
+            let r = apply_stroke_px_in(frame.space, px(&buf, i), px(&s, i), o.opacity, o.mode);
             buf[i..i + 4].copy_from_slice(&r);
         }
     }
@@ -91,6 +97,7 @@ fn layer_content(l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, frame:
         if let Some((o, st)) = mask_stroke {
             let s = st.to_f32();
             for i in (0..m.len()).step_by(4) {
+                // Masks hold coverage, not colour: no space.
                 let r = apply_stroke_px(px(&m, i), px(&s, i), o.opacity, o.mode);
                 m[i..i + 4].copy_from_slice(&r);
             }
@@ -105,11 +112,11 @@ fn layer_content(l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, frame:
     Some(buf)
 }
 
-fn blend_into(target: &mut [f32], src: &[f32], mode: BlendMode, opacity: f32) {
+fn blend_into(target: &mut [f32], src: &[f32], mode: BlendMode, opacity: f32, space: Space) {
     if opacity <= 0.0 {
         return;
     }
-    if mode == BlendMode::Normal {
+    if mode == BlendMode::Normal && space == Space::Linear {
         for i in (0..target.len()).step_by(4) {
             let sa = src[i + 3] * opacity;
             if sa <= 0.0 && src[i] == 0.0 && src[i + 1] == 0.0 && src[i + 2] == 0.0 {
@@ -123,7 +130,7 @@ fn blend_into(target: &mut [f32], src: &[f32], mode: BlendMode, opacity: f32) {
         return;
     }
     for i in (0..target.len()).step_by(4) {
-        let r = blend_px(mode, px(target, i), px(src, i), opacity);
+        let r = blend_px_in(space, mode, px(target, i), px(src, i), opacity);
         target[i..i + 4].copy_from_slice(&r);
     }
 }
@@ -189,7 +196,7 @@ fn composite_nodes(nodes: &[Node], tx: i32, ty: i32, target: &mut Buf, ov: Optio
                     }
                     draw_clipped(&mut buf, &nodes[i + 1..j], tx, ty, ov, frame);
                     ghost_tint(&mut buf, g);
-                    blend_into(target, &buf, g.blend_mode, g.opacity);
+                    blend_into(target, &buf, g.blend_mode, g.opacity, frame.space);
                 }
             }
             Node::Layer(l) => {
@@ -203,7 +210,7 @@ fn composite_nodes(nodes: &[Node], tx: i32, ty: i32, target: &mut Buf, ov: Optio
                         if l.inherit_alpha {
                             clip_into(target, &fam, l.opacity);
                         } else {
-                            blend_into(target, &fam, l.blend_mode, l.opacity);
+                            blend_into(target, &fam, l.blend_mode, l.opacity, frame.space);
                         }
                     }
                 }
@@ -331,7 +338,7 @@ fn draw_adjustment(target: &mut Buf, l: &Layer, adj: &onepaint_doc::Adjustment, 
         }
         out[i..i + 4].copy_from_slice(&o);
     }
-    blend_into(target, &out, l.blend_mode, l.opacity);
+    blend_into(target, &out, l.blend_mode, l.opacity, frame.space);
 }
 
 fn draw_layer(target: &mut Buf, l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, frame: Frame) {
@@ -346,15 +353,17 @@ fn draw_layer(target: &mut Buf, l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeO
             }
         }
     }
-    blend_into(target, &c, l.blend_mode, l.opacity);
+    blend_into(target, &c, l.blend_mode, l.opacity, frame.space);
 }
 
-/// The document as a filter frame (size and DPI for tone and fill layers).
-fn doc_frame(doc: &Document) -> Frame {
-    Frame::region(0, 0, doc.width, doc.height, doc.dpi as f32)
+/// The document as a filter frame (size, DPI and space for tone and fill
+/// layers and the blends).
+pub fn doc_frame(doc: &Document) -> Frame {
+    Frame::region(0, 0, doc.width, doc.height, doc.dpi as f32).in_space(doc.space())
 }
 
-/// Composite one tile as premultiplied linear f32.
+/// Composite one tile as premultiplied f32 in the document's space (linear
+/// light, or sRGB values in 8-bit documents; spec 50).
 pub fn composite_tile(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverlay>) -> Buf {
     let mut buf = zeros();
     composite_nodes(&doc.root, tx, ty, &mut buf, ov, doc_frame(doc));
@@ -362,7 +371,7 @@ pub fn composite_tile(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverla
     if let Some(p) = doc.paper()
         && let Some(tex) = onepaint_brush::paper::PaperTexture::new(&p)
     {
-        onepaint_brush::paper::shade_tile(&mut buf, &tex, p.strength(), tx, ty);
+        onepaint_brush::paper::shade_tile(&mut buf, &tex, p.strength(), tx, ty, doc.space());
     }
     buf
 }

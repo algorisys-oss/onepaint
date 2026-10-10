@@ -19,7 +19,7 @@ mod step;
 pub use backend::{StepBackend, StepJob};
 pub use dab::{ClockState, DabAmounts, Fluid, WetClock, dab_amounts, dry_brush, dry_grain_threshold, reservoir};
 
-use onepaint_color::{fast_linear_to_srgb as l2s, fast_srgb_to_linear as s2l, pigment::pigment_mix};
+use onepaint_color::pigment::pigment_mix;
 use onepaint_raster::{Rect, Surface, TILE, Tile};
 
 /// Fixed simulation timestep (ms).
@@ -141,6 +141,8 @@ pub struct FluidSim {
     /// Which state this is: changes whenever the state does, so a backend
     /// holding a copy knows when it is stale.
     pub(crate) generation: u64,
+    /// The document's space: pigment mixing runs on sRGB values (spec 50).
+    pub space: onepaint_color::Space,
 }
 
 /// Fresh state generations, unique across every sim (backends are shared).
@@ -169,6 +171,7 @@ impl FluidSim {
             tilt: [0.0; 2],
             paper: None,
             generation: next_generation(),
+            space: onepaint_color::Space::Linear,
         }
     }
 
@@ -402,7 +405,8 @@ impl FluidSim {
             }
             let Some((x0, y0, x1, y1)) = self.quad(d.x, d.y, d.radius) else { continue };
             let (cx, cy) = local(d, self);
-            let bw = d.color.map(l2s);
+            let sp = self.space;
+            let bw = d.color.map(|v| sp.to_work(v));
             for y in y0..y1 {
                 for x in x0..x1 {
                     let (lx, ly) = ((x as f64 + 0.5 - cx) / d.radius, (y as f64 + 0.5 - cy) / d.radius);
@@ -414,10 +418,10 @@ impl FluidSim {
                     let un = under.texel(x, y);
                     let mut brush = d.color;
                     if un[3] > 0.001 && cov > 0.0005 {
-                        let uc = [un[0] / un[3], un[1] / un[3], un[2] / un[3]].map(l2s);
+                        let uc = [un[0] / un[3], un[1] / un[3], un[2] / un[3]].map(|v| sp.to_work(v));
                         let t = (un[3] / (un[3] + cov * 2.0)).clamp(0.0, 0.9);
                         if !same_color(uc, bw) {
-                            brush = pigment_mix(bw, uc, t).map(s2l);
+                            brush = pigment_mix(bw, uc, t).map(|v| sp.from_work(v));
                         }
                     }
                     let c = &mut self.col[i];

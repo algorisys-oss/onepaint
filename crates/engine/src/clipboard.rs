@@ -8,12 +8,14 @@ use onepaint_formats::DecodedImage;
 pub struct Region {
     pub rect: Rect,
     pub data: Vec<f32>,
+    /// The space of the document it came from (spec 50).
+    pub space: onepaint_color::Space,
 }
 
 impl Region {
     /// Straight sRGB RGBA8, e.g. for the system clipboard.
     pub fn to_srgb8(&self) -> Vec<u8> {
-        onepaint_formats::flatten_to_srgb8(&self.data)
+        onepaint_formats::flatten_to_srgb8_in(&self.data, self.space)
     }
 }
 
@@ -51,7 +53,7 @@ impl Session {
                 }
             }
         }
-        data.chunks_exact(4).any(|p| p[3] > 0.0).then_some(Region { rect, data })
+        data.chunks_exact(4).any(|p| p[3] > 0.0).then_some(Region { rect, data, space: self.doc.space() })
     }
 
     fn insert_layer_with(&mut self, name: &str, pixels: Surface) {
@@ -74,6 +76,8 @@ impl Session {
             let s = (row * r.rect.w * 4) as usize;
             data.extend_from_slice(&r.data[s..s + (w * 4) as usize]);
         }
+        // From a document of another depth: its values mean other colours.
+        r.space.convert(&mut data, self.doc.space());
         let mut s = Surface::new();
         s.write_rect(Rect::new(x, y, w, h), &data);
         self.insert_layer_with("Pasted", s);
@@ -87,10 +91,9 @@ impl Session {
         let s = 1f64.min(dw / iw).min(dh / ih);
         let (ox, oy) = (((dw - iw * s) / 2.0).round(), ((dh - ih * s) / 2.0).round());
         let surface = if s >= 1.0 {
-            onepaint_formats::image_to_surface(img, ox as i32, oy as i32)
+            onepaint_formats::image_to_surface_in(img, ox as i32, oy as i32, self.doc.space())
         } else {
-            let src: Vec<f32> =
-                img.rgba.chunks_exact(4).flat_map(|p| onepaint_formats::srgb8_to_premul_linear([p[0], p[1], p[2], p[3]])).collect();
+            let src: Vec<f32> = img.rgba.chunks_exact(4).flat_map(|p| self.doc.space().from_srgb8([p[0], p[1], p[2], p[3]])).collect();
             let bounds = Rect::new(0, 0, img.width as i32, img.height as i32);
             let mut f = transform::Floating {
                 layer: String::new(),

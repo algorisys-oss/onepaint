@@ -5,6 +5,7 @@
 
 use crate::params::Params;
 use crate::tex::{LUMA, Px, Src, Tex, dot3, fract, gauss_to, ign, len2, mix, render, repremul, smoothstep, to_work, unpremul};
+use onepaint_color::Space;
 
 /// BLOOM_BRIGHT_SRC (AR:1710): straight light map of what clears the threshold.
 /// Reads the linear storage value (no `toWork`), as the shader does.
@@ -20,30 +21,32 @@ pub(crate) fn bloom_bright(t: Tex, thr: f32) -> Vec<f32> {
 
 /// BLOOM_COMBINE_SRC (AR:1726): screen `glow` (any size spanning the same
 /// extent) over the source in the work space; alpha is kept.
-pub(crate) fn bloom_combine(src: Tex, glow: Tex, intensity: f32) -> Vec<f32> {
+pub(crate) fn bloom_combine(src: Tex, glow: Tex, intensity: f32, sp: Space) -> Vec<f32> {
     render(src.w, src.h, |i, j| {
         let s = src.get(i, j);
         let uv = [(i as f32 + 0.5) / src.w as f32, (j as f32 + 0.5) / src.h as f32];
         let g = glow.uv(uv[0], uv[1]);
-        let base = to_work(unpremul(s));
-        let gl = to_work([g[0], g[1], g[2]].map(|v| v.clamp(0.0, 1.0))).map(|v| v * intensity);
-        repremul([0, 1, 2].map(|k| 1.0 - (1.0 - base[k]) * (1.0 - gl[k])), s[3])
+        let base = to_work(unpremul(s), sp);
+        let gl = to_work([g[0], g[1], g[2]].map(|v| v.clamp(0.0, 1.0)), sp).map(|v| v * intensity);
+        repremul([0, 1, 2].map(|k| 1.0 - (1.0 - base[k]) * (1.0 - gl[k])), s[3], sp)
     })
 }
 
 pub(crate) fn bloom(p: &Params, s: Src) -> Vec<f32> {
+    let sp = s.f.space;
     let (w, h) = (s.t.w, s.t.h);
     let bright = bloom_bright(s.t, p.threshold.unwrap_or(0.6));
     let glow = gauss_to(Tex::new(&bright, w, h), w, h, p.radius.unwrap_or(15.0), [1.0, 1.0]);
-    bloom_combine(s.t, Tex::new(&glow, w, h), p.amount.unwrap_or(0.5))
+    bloom_combine(s.t, Tex::new(&glow, w, h), p.amount.unwrap_or(0.5), sp)
 }
 
-fn straight_work(t: Px) -> [f32; 3] {
-    to_work(unpremul(t))
+fn straight_work(t: Px, sp: Space) -> [f32; 3] {
+    to_work(unpremul(t), sp)
 }
 
 /// CHROMATIC_SRC (AR:997).
 pub(crate) fn chromatic(p: &Params, s: Src) -> Vec<f32> {
+    let sp = s.f.space;
     let amount = p.amount.unwrap_or(0.0);
     let size = s.f.size();
     render(s.t.w, s.t.h, |i, j| {
@@ -53,12 +56,13 @@ pub(crate) fn chromatic(p: &Params, s: Src) -> Vec<f32> {
         let sr = s.uv([uv[0] + sh[0], uv[1] + sh[1]]);
         let sg = s.t.get(i, j);
         let sb = s.uv([uv[0] - sh[0], uv[1] - sh[1]]);
-        repremul([straight_work(sr)[0], straight_work(sg)[1], straight_work(sb)[2]], sg[3])
+        repremul([straight_work(sr, sp)[0], straight_work(sg, sp)[1], straight_work(sb, sp)[2]], sg[3], sp)
     })
 }
 
 /// HALFTONE_SRC (AR:1016).
 pub(crate) fn halftone(p: &Params, s: Src) -> Vec<f32> {
+    let sp = s.f.space;
     let scale = p.cell_size.unwrap_or(6.0).max(2.0);
     let ang = p.angle.unwrap_or(15.0).to_radians();
     let keep_colour = !p.mono.unwrap_or(false);
@@ -69,18 +73,19 @@ pub(crate) fn halftone(p: &Params, s: Src) -> Vec<f32> {
         let rp = [c * px[0] - sn * px[1], sn * px[0] + c * px[1]];
         let ccr = [((rp[0] / scale).floor() + 0.5) * scale, ((rp[1] / scale).floor() + 0.5) * scale];
         let cell_px = [c * ccr[0] + sn * ccr[1], -sn * ccr[0] + c * ccr[1]];
-        let cell_rgb = straight_work(s.px(cell_px)).map(|v| v.clamp(0.0, 1.0));
+        let cell_rgb = straight_work(s.px(cell_px), sp).map(|v| v.clamp(0.0, 1.0));
         let l = dot3(cell_rgb, LUMA);
         let radius = (1.0 - l) * (scale * 0.72);
         let dist = len2([rp[0] - ccr[0], rp[1] - ccr[1]]);
         let ink = 1.0 - smoothstep(radius - 1.0, radius + 1.0, dist);
         let dot = if keep_colour { cell_rgb } else { [0.0; 3] };
-        repremul(dot.map(|d| mix(1.0, d, ink)), a)
+        repremul(dot.map(|d| mix(1.0, d, ink)), a, sp)
     })
 }
 
 /// GLITCH_SRC (AR:1145), seed 23.
 pub(crate) fn glitch(p: &Params, s: Src) -> Vec<f32> {
+    let sp = s.f.space;
     let amount = p.amount.unwrap_or(0.0);
     let seed = 23.0f32;
     let rand = |x: f32| fract((x * 12.9898 + seed).sin() * 43_758.547);
@@ -96,7 +101,7 @@ pub(crate) fn glitch(p: &Params, s: Src) -> Vec<f32> {
         let sr = s.uv([uv[0] + ca, uv[1]]);
         let sg = s.uv(uv);
         let sb = s.uv([uv[0] - ca, uv[1]]);
-        repremul([straight_work(sr)[0], straight_work(sg)[1], straight_work(sb)[2]], sg[3])
+        repremul([straight_work(sr, sp)[0], straight_work(sg, sp)[1], straight_work(sb, sp)[2]], sg[3], sp)
     })
 }
 
@@ -161,6 +166,7 @@ pub(crate) fn crystallize(p: &Params, s: Src) -> Vec<f32> {
 
 /// EMBOSS_SRC (AR:1348).
 pub(crate) fn emboss(p: &Params, s: Src) -> Vec<f32> {
+    let sp = s.f.space;
     let a = p.angle.unwrap_or(135.0).to_radians();
     let h = p.distance.unwrap_or(3.0).max(0.5);
     let dir = [a.cos() * h, -a.sin() * h];
@@ -168,15 +174,15 @@ pub(crate) fn emboss(p: &Params, s: Src) -> Vec<f32> {
     let mono = p.mono.unwrap_or(true);
     let height = |q: [f32; 2]| {
         let t = s.px(q);
-        dot3(to_work([t[0] + 1.0 - t[3], t[1] + 1.0 - t[3], t[2] + 1.0 - t[3]]), LUMA)
+        dot3(to_work([t[0] + 1.0 - t[3], t[1] + 1.0 - t[3], t[2] + 1.0 - t[3]], sp), LUMA)
     };
     render(s.t.w, s.t.h, |i, j| {
         let src = s.t.get(i, j);
         let q = s.centre(i, j);
         let rel = (height([q[0] - dir[0], q[1] - dir[1]]) - height([q[0] + dir[0], q[1] + dir[1]])) * amount * 3.0;
-        let c = straight_work(src);
+        let c = straight_work(src, sp);
         let o = if mono { [0.5 + rel; 3] } else { c.map(|v| v + rel) };
-        repremul(o.map(|v| v.clamp(0.0, 1.0)), src[3])
+        repremul(o.map(|v| v.clamp(0.0, 1.0)), src[3], sp)
     })
 }
 

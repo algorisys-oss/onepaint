@@ -181,3 +181,123 @@ impl Rgba {
         (h, s, mx)
     }
 }
+
+/// How a document's pixel values relate to colour (specs 49, 50): float
+/// documents hold premultiplied linear light, 8-bit documents hold
+/// premultiplied sRGB values and blend them as they are, like happypaint.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Space {
+    #[default]
+    Linear,
+    Gamma,
+}
+
+impl Space {
+    /// A straight sRGB colour as a premultiplied pixel in this space.
+    pub fn pixel(self, c: Rgba) -> Px {
+        match self {
+            Space::Linear => c.to_linear_premul(),
+            Space::Gamma => premultiply([c.r, c.g, c.b, c.a]),
+        }
+    }
+
+    /// A premultiplied pixel in this space as a straight sRGB colour.
+    pub fn color(self, p: Px) -> Rgba {
+        match self {
+            Space::Linear => Rgba::from_linear_premul(p),
+            Space::Gamma => {
+                let u = unpremultiply(p);
+                Rgba::new(u[0], u[1], u[2], u[3])
+            }
+        }
+    }
+
+    /// One channel of a straight pixel value as sRGB, exactly.
+    pub fn to_srgb(self, v: f32) -> f32 {
+        match self {
+            Space::Linear => linear_to_srgb(v),
+            Space::Gamma => v,
+        }
+    }
+
+    /// One sRGB channel as a straight pixel value, exactly.
+    pub fn from_srgb(self, v: f32) -> f32 {
+        match self {
+            Space::Linear => srgb_to_linear(v),
+            Space::Gamma => v,
+        }
+    }
+
+    /// One channel of a straight pixel value as sRGB (colour filters' "work" space).
+    pub fn to_work(self, v: f32) -> f32 {
+        match self {
+            Space::Linear => fast_linear_to_srgb(v),
+            Space::Gamma => v,
+        }
+    }
+
+    pub fn from_work(self, v: f32) -> f32 {
+        match self {
+            Space::Linear => fast_srgb_to_linear(v),
+            Space::Gamma => v,
+        }
+    }
+
+    /// Premultiplied pixels in this space (RGBA runs) to `to`, in place.
+    pub fn convert(self, px: &mut [f32], to: Space) {
+        if self == to {
+            return;
+        }
+        for p in px.chunks_exact_mut(4) {
+            let q = [p[0], p[1], p[2], p[3]];
+            let c = if to == Space::Linear { prem_srgb_to_lin(q) } else { prem_lin_to_srgb(q) };
+            p.copy_from_slice(&c);
+        }
+    }
+
+    /// A premultiplied pixel as straight sRGB bytes (PNG tiles, exports).
+    pub fn to_srgb8(self, p: Px) -> [u8; 4] {
+        let a = p[3].clamp(0.0, 1.0);
+        if a <= 0.0 {
+            return [0; 4];
+        }
+        let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let enc = |v: f32| match self {
+            Space::Linear => linear_to_srgb(v / a),
+            Space::Gamma => v / a,
+        };
+        [q(enc(p[0])), q(enc(p[1])), q(enc(p[2])), q(a)]
+    }
+
+    /// Straight sRGB bytes as a premultiplied pixel in this space.
+    pub fn from_srgb8(self, c: [u8; 4]) -> Px {
+        let a = c[3] as f32 / 255.0;
+        let dec = |v: u8| match self {
+            Space::Linear => srgb_to_linear(v as f32 / 255.0),
+            Space::Gamma => v as f32 / 255.0,
+        };
+        [dec(c[0]) * a, dec(c[1]) * a, dec(c[2]) * a, a]
+    }
+}
+
+#[cfg(test)]
+mod space_tests {
+    use super::*;
+
+    #[test]
+    fn gamma_keeps_srgb_values_and_linear_is_unchanged() {
+        let c = Rgba::new(0.5, 0.25, 1.0, 0.5);
+        assert_eq!(Space::Gamma.pixel(c), [0.25, 0.125, 0.5, 0.5]);
+        assert_eq!(Space::Linear.pixel(c), c.to_linear_premul());
+        let back = Space::Gamma.color(Space::Gamma.pixel(c));
+        assert!((back.r - 0.5).abs() < 1e-6 && (back.g - 0.25).abs() < 1e-6);
+        assert_eq!(Space::Gamma.to_work(0.3), 0.3);
+        // 8-bit straight bytes survive a gamma round trip exactly.
+        for a in [255u8, 200, 128, 17, 1] {
+            for v in 0..=255u8 {
+                let px = [v, 255 - v, v / 2, a];
+                assert_eq!(Space::Gamma.to_srgb8(Space::Gamma.from_srgb8(px)), px, "{px:?}");
+            }
+        }
+    }
+}

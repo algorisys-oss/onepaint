@@ -57,6 +57,9 @@ struct Params {
     /// Sheets across, and the sheet size at this level (spec 40).
     cols: u32,
     sheet: [u32; 2],
+    /// 1 when pixel values are sRGB and blend as they are (spec 50).
+    gamma: u32,
+    _pad: [u32; 3],
 }
 
 #[repr(C)]
@@ -251,6 +254,8 @@ pub struct GpuCompositor {
     mipper: crate::mip::Mipper,
     /// The level the current run composites at (spec 39).
     level: u32,
+    /// The current run's programs hold sRGB values (spec 50).
+    gamma: bool,
     /// The paper grain (spec 43), held so its identity stays unique, and a stand-in.
     paper: Option<(Arc<onepaint_brush::TipMask>, wgpu::TextureView)>,
     paper_dummy: wgpu::TextureView,
@@ -443,6 +448,7 @@ impl GpuCompositor {
             reverse: false,
             mipper: crate::mip::Mipper::new(device),
             level: 0,
+            gamma: false,
             paper: None,
             paper_dummy: device
                 .create_texture(&wgpu::TextureDescriptor {
@@ -638,6 +644,7 @@ impl GpuCompositor {
         level: u32,
     ) {
         self.level = level.min(crate::mip::L_MAX);
+        self.gamma = programs.first().is_some_and(|p| p.space == onepaint_color::Space::Gamma);
         let cap = self.capacity();
         // Each program may need two cache slots; keep a batch within the cache.
         let cache_cap = (self.cache_layers as usize / 2).max(1);
@@ -870,6 +877,8 @@ impl GpuCompositor {
             level: self.level,
             sheet: sheets.sheet_at(self.level),
             cols: sheets.grid[0],
+            gamma: u32::from(self.gamma),
+            _pad: [0; 3],
         };
         let bind = self.bind(device, queue, (&jobs, &ops, &adj), params, target, fill);
         let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -983,6 +992,7 @@ impl GpuCompositor {
     /// [`GpuCompositor::warm`] for the cache images at `level` (spec 39).
     pub fn warm_level(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, programs: &[TileProgram], sheets: &Sheets, level: u32) {
         self.level = level.min(crate::mip::L_MAX);
+        self.gamma = programs.first().is_some_and(|p| p.space == onepaint_color::Space::Gamma);
         if !self.split_cache {
             return;
         }

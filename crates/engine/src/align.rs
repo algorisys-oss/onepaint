@@ -182,7 +182,7 @@ impl Session {
         if moves.is_empty() {
             return Ok(());
         }
-        let (w, h) = (self.doc.width, self.doc.height);
+        let (w, h, space) = (self.doc.width, self.doc.height, self.doc.space());
         self.tree_edit(None, move |s| {
             for m in &moves {
                 let paths = s.paths(&m.id);
@@ -192,11 +192,11 @@ impl Session {
                 if !paths.is_empty() {
                     let pm = onepaint_stroke::bezier::Affine { a: 1.0, b: 0.0, c: 0.0, d: 1.0, e: dx, f: dy };
                     let mapped: Vec<_> = paths.iter().map(|p| onepaint_stroke::bezier::affine(p, &pm)).collect();
-                    crate::path_ops::write_paths(l, &mapped, w, h);
+                    crate::path_ops::write_paths(l, &mapped, w, h, space);
                 } else if !texts.is_empty() {
                     let a = transform::Affine::translate(dx, dy);
                     let mapped: Vec<_> = texts.iter().map(|t| transform::transform_text(t, &a)).collect();
-                    crate::text_ops::write_texts(l, &mapped, w, h);
+                    crate::text_ops::write_texts(l, &mapped, w, h, space);
                 } else {
                     l.pixels = l.pixels.translated(m.dx, m.dy);
                     l.height = l.height.as_ref().map(|h| h.translated(m.dx, m.dy));

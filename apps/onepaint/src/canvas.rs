@@ -96,6 +96,8 @@ struct CanvasCallback {
     /// Present-only view modes and the press they proof on (spec 48).
     view: onepaint_color::cmyk::ViewModes,
     press: Option<Arc<onepaint_color::cmyk::Press>>,
+    /// What the composite's values mean (spec 50).
+    space: onepaint_color::Space,
 }
 
 impl CallbackTrait for CanvasCallback {
@@ -119,6 +121,7 @@ impl CallbackTrait for CanvasCallback {
                 gpu.set_selection(queue, sel.as_deref().map(|v| v.as_slice()));
             }
             gpu.set_view_modes(device, queue, &self.view, self.press.as_ref());
+            gpu.set_space(self.space);
             gpu.set_view(queue, &self.params);
         }
         Vec::new()
@@ -1327,6 +1330,7 @@ impl Canvas {
                     params,
                     view: self.view_modes,
                     press: self.press.clone(),
+                    space: session.doc().space(),
                 },
             ));
         }

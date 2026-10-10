@@ -184,10 +184,6 @@ fn hex(c: &str) -> Rgba {
     Rgba::from_hex(&runs::normalize_color(c)).unwrap_or(Rgba::BLACK)
 }
 
-fn lin(c: Rgba) -> [f32; 3] {
-    [c.r, c.g, c.b].map(onepaint_color::srgb_to_linear)
-}
-
 /// Local premultiplied-linear canvas for one spec.
 struct Local {
     w: usize,
@@ -259,11 +255,23 @@ fn deco_rect(fill: &mut Local, cover: &mut [f32], (ox, oy): (i64, i64), b: Bar, 
 
 /// Shared text renderer (system fonts are loaded once per process).
 #[derive(Clone, Copy, Default)]
-pub struct Renderer;
+pub struct Renderer {
+    /// The document's space: text colours enter as its pixel values (spec 50).
+    space: onepaint_color::Space,
+}
 
 impl Renderer {
     pub fn new() -> Self {
-        Renderer
+        Renderer::default()
+    }
+
+    /// Render for a document in `space`.
+    pub fn in_space(space: onepaint_color::Space) -> Self {
+        Renderer { space }
+    }
+
+    fn lin(&self, c: Rgba) -> [f32; 3] {
+        [c.r, c.g, c.b].map(|v| self.space.from_srgb(v))
     }
 
     /// Render all specs (later on top) into a `w × h` document surface.
@@ -397,7 +405,7 @@ impl Renderer {
             if a <= 0.0 {
                 return;
             }
-            let c = lin(Rgba::new(color.r() as f32 / 255.0, color.g() as f32 / 255.0, color.b() as f32 / 255.0, 1.0));
+            let c = self.lin(Rgba::new(color.r() as f32 / 255.0, color.g() as f32 / 255.0, color.b() as f32 / 255.0, 1.0));
             for yy in 0..gh as i64 {
                 for xx in 0..gw as i64 {
                     let (px, py) = (x as i64 + xx + off.0, y as i64 + yy + off.1);
@@ -415,7 +423,7 @@ impl Renderer {
                 let Some(r) = runs.get(i) else { continue };
                 let rs = r.font_size_px.unwrap_or(s.font_size_px).max(1.0) as f32;
                 let th = (rs * 0.06).max(1.0);
-                let c = lin(hex(r.color.as_deref().unwrap_or(&s.color)));
+                let c = self.lin(hex(r.color.as_deref().unwrap_or(&s.color)));
                 if r.underline == Some(true) {
                     let y0 = base + rs * 0.10;
                     deco_rect(&mut fill, &mut cover, off, Bar { x0, x1, y0, y1: y0 + th }, c);
@@ -426,7 +434,7 @@ impl Renderer {
                 }
             }
         } else if s.underline.unwrap_or(false) {
-            let fc = lin(hex(&s.color));
+            let fc = self.lin(hex(&s.color));
             for &(top, lh, x0, lw) in &lines {
                 let half = (lh - size) / 2.0;
                 let y0 = top + half + size * 0.92;
@@ -437,7 +445,7 @@ impl Renderer {
         // Compose: background, balloon, then the outline under the fill.
         let mut local = Local { w, h, px: vec![[0.0; 4]; w * h] };
         if let Some(bg) = s.bg_color.as_deref() {
-            let c = lin(hex(bg));
+            let c = self.lin(hex(bg));
             let bp = max_size * 0.18;
             let (bx0, by0) = ((ox - bp).floor() as i64, (oy - bp).floor() as i64);
             let (bx1, by1) = ((ox + bw + bp).ceil() as i64, (oy + bh + bp).ceil() as i64);
@@ -449,8 +457,8 @@ impl Renderer {
         }
         if let Some(b) = &s.balloon {
             let cov = balloon::coverage(&paths, stroke_w, w, h, ox, oy);
-            let fc = lin(hex(&b.fill));
-            let sc = b.stroke.as_deref().map(|c| lin(hex(c)));
+            let fc = self.lin(hex(&b.fill));
+            let sc = b.stroke.as_deref().map(|c| self.lin(hex(c)));
             for i in 0..w * h {
                 let (x, y) = ((i % w) as i64, (i / w) as i64);
                 local.over(x, y, fc, cov.fill[i]);
@@ -460,7 +468,7 @@ impl Renderer {
             }
         }
         if outline > 0.0 {
-            let oc = lin(hex(s.outline_color.as_deref().unwrap_or("#000000")));
+            let oc = self.lin(hex(s.outline_color.as_deref().unwrap_or("#000000")));
             let r = outline.ceil() as i64;
             let r2 = outline * outline;
             let mut dil = vec![0.0f32; w * h];

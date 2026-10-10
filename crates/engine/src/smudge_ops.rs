@@ -98,7 +98,7 @@ impl Session {
             },
         };
         let paints = params.wet.is_some();
-        let lin = self.color.to_linear_premul();
+        let lin = self.doc.space().pixel(self.color);
         let color = paints.then_some([lin[0], lin[1], lin[2]]);
         let key = mixer.then(|| self.color.to_hex());
         let held = match (&self.mixer_held, mixer && m.keep) {
@@ -110,7 +110,8 @@ impl Session {
         // Relief: impasto builds a field; a blender only levels an existing one.
         let relief = !to_mask && (params.impasto > 0.0 || (params.blend > 0.0 && layer.height.is_some()));
         let height = if relief { self.height_begin(&self.active) } else { None };
-        let engine = Smudge::new(params, color, held, self.symmetry_transforms(), self.doc.bounds(), alpha_lock, p);
+        let mut engine = Smudge::new(params, color, held, self.symmetry_transforms(), self.doc.bounds(), alpha_lock, p);
+        engine.set_space(if to_mask { onepaint_color::Space::Linear } else { self.doc.space() });
         self.smudge =
             Some(ActiveSmudge { layer: self.active.clone(), mask: to_mask, engine, before: target, dirty: Rect::default(), key, height });
     }

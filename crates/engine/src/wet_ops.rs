@@ -121,6 +121,7 @@ impl Session {
             let r = size / 2.0 + 8.0;
             let seed = Rect::covering((first.x - r) as f32, (first.y - r) as f32, (first.x + r) as f32, (first.y + r) as f32);
             let mut sim = FluidSim::new(doc, seed, fl.oil);
+            sim.space = self.doc.space();
             sim.set_tilt(self.wet_tilt[0], self.wet_tilt[1]);
             sim.set_paper(self.doc.paper().as_ref());
             let before = self.doc.layer(&self.active).map(|l| l.pixels.clone()).unwrap_or_default();
@@ -146,7 +147,7 @@ impl Session {
                 s.height = edit;
             }
         }
-        let lin = self.color.to_linear_premul();
+        let lin = self.doc.space().pixel(self.color);
         let mut smoother = onepaint_stroke::Smoother::new(0.35);
         let mut sampler = onepaint_stroke::Sampler::new();
         let gap = (size * 0.06).max(1.5);

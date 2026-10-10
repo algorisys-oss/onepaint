@@ -64,7 +64,7 @@ fn composite_mode(dst: &mut Surface, src: &Surface, opacity: f32, mode: BlendMod
 }
 
 /// Render path objects: each fill (even-odd, under), then its stroke through the brush.
-pub fn render_paths(specs: &[PathSpec], w: u32, h: u32) -> Surface {
+pub fn render_paths(specs: &[PathSpec], w: u32, h: u32, space: onepaint_color::Space) -> Surface {
     let mut out = Surface::new();
     for spec in specs {
         if let Some(f) = &spec.fill {
@@ -77,7 +77,7 @@ pub fn render_paths(specs: &[PathSpec], w: u32, h: u32) -> Surface {
                 .collect();
             if !contours.is_empty() {
                 let cov = rasterize_polygons(w, h, &contours);
-                let c = Rgba::new(f.color[0], f.color[1], f.color[2], 1.0).to_linear_premul();
+                let c = space.pixel(Rgba::new(f.color[0], f.color[1], f.color[2], 1.0));
                 let mut buf = Surface::new();
                 let data: Vec<f32> = cov
                     .data()
@@ -98,13 +98,14 @@ pub fn render_paths(specs: &[PathSpec], w: u32, h: u32) -> Surface {
         brush.opacity = 1.0;
         brush.smoothing = 0.0;
         brush.stabilizer = None;
-        let lin = Rgba::new(st.color[0], st.color[1], st.color[2], 1.0).to_linear_premul();
+        let lin = space.pixel(Rgba::new(st.color[0], st.color[1], st.color[2], 1.0));
         for sub in &spec.subpaths {
             let poly = flatten_subpath(sub, 2.0);
             if poly.len() < 2 {
                 continue;
             }
             let mut eng = StrokeEngine::new(brush.clone(), [lin[0], lin[1], lin[2]], st.seed.unwrap_or(PATH_DEFAULT_SEED));
+            eng.set_space(space);
             let pt = |p: [f64; 2]| StrokePoint { x: p[0], y: p[1], pressure: 1.0, ..Default::default() };
             let mut dabs = eng.begin(pt(poly[0]));
             for p in &poly[1..] {
@@ -122,13 +123,13 @@ pub fn render_paths(specs: &[PathSpec], w: u32, h: u32) -> Surface {
     out
 }
 
-pub(crate) fn write_paths(l: &mut Layer, specs: &[PathSpec], w: u32, h: u32) {
+pub(crate) fn write_paths(l: &mut Layer, specs: &[PathSpec], w: u32, h: u32, space: onepaint_color::Space) {
     if specs.is_empty() {
         l.extra.remove("paths");
     } else {
         l.extra.insert("paths".into(), serde_json::to_value(specs).unwrap_or_default());
     }
-    l.pixels = render_paths(specs, w, h);
+    l.pixels = render_paths(specs, w, h, space);
 }
 
 impl Session {
@@ -141,9 +142,9 @@ impl Session {
     }
 
     pub(crate) fn create_path_layer(&mut self, spec: PathSpec) -> Result<(), EngineError> {
-        let (w, h) = (self.doc.width, self.doc.height);
+        let (w, h, space) = (self.doc.width, self.doc.height, self.doc.space());
         let mut l = Layer::new("Path");
-        write_paths(&mut l, &[spec], w, h);
+        write_paths(&mut l, &[spec], w, h, space);
         self.insert_above_active(Node::Layer(l))
     }
 
@@ -151,12 +152,12 @@ impl Session {
         if !self.is_path_layer(id) {
             return Err(EngineError::NoSuchLayer(id.into()));
         }
-        let (w, h) = (self.doc.width, self.doc.height);
+        let (w, h, space) = (self.doc.width, self.doc.height, self.doc.space());
         self.tree_edit(None, |s| {
             if let Some(l) = s.doc.layer_mut(id) {
                 let mut specs = read_paths(l);
                 specs.push(spec);
-                write_paths(l, &specs, w, h);
+                write_paths(l, &specs, w, h, space);
             }
             Ok(())
         })
@@ -167,7 +168,7 @@ impl Session {
         if self.paths(id).len() <= index {
             return Err(EngineError::NoSuchLayer(format!("{id} path {index}")));
         }
-        let (w, h) = (self.doc.width, self.doc.height);
+        let (w, h, space) = (self.doc.width, self.doc.height, self.doc.space());
         let key = spec.is_some().then(|| format!("path:{id}:{index}"));
         self.tree_edit(key, |s| {
             if let Some(l) = s.doc.layer_mut(id) {
@@ -178,7 +179,7 @@ impl Session {
                         specs.remove(index);
                     }
                 }
-                write_paths(l, &specs, w, h);
+                write_paths(l, &specs, w, h, space);
             }
             Ok(())
         })
@@ -223,7 +224,7 @@ impl Session {
         let target = self.path_op_target().ok_or_else(|| EngineError::Invalid("no paint layer below the path".into()))?;
         let Some(cov) = self.path_coverage() else { return Ok(()) };
         let sel = self.selection.clone();
-        let c = self.color.to_linear_premul();
+        let c = self.doc.space().pixel(self.color);
         let (w, h) = (self.doc.width, self.doc.height);
         self.tree_edit(None, |s| {
             let Some(l) = s.doc.layer_mut(&target).filter(|l| !l.locked) else { return Ok(()) };
@@ -356,7 +357,7 @@ impl Session {
             cov.iter_mut().zip(m.data()).for_each(|(c, &v)| *c = (*c).max(v));
         }
         let sel = self.selection.clone();
-        let c = self.color.to_linear_premul();
+        let c = self.doc.space().pixel(self.color);
         let id = self.active.clone();
         self.tree_edit(None, |s| {
             let Some(l) = s.doc.layer_mut(&id) else { return Ok(()) };

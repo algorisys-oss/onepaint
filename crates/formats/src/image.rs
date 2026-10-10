@@ -73,11 +73,21 @@ pub fn encode_jpeg_rgb8(w: u16, h: u16, rgb: &[u8], quality: u8) -> Result<Vec<u
 
 /// A flattened premultiplied-linear canvas as straight sRGB RGBA8.
 pub fn flatten_to_srgb8(px: &[f32]) -> Vec<u8> {
-    px.chunks_exact(4).flat_map(|p| premul_linear_to_srgb8([p[0], p[1], p[2], p[3]])).collect()
+    flatten_to_srgb8_in(px, onepaint_color::Space::Linear)
+}
+
+/// [`flatten_to_srgb8`] for pixels in a document `space` (spec 50).
+pub fn flatten_to_srgb8_in(px: &[f32], space: onepaint_color::Space) -> Vec<u8> {
+    px.chunks_exact(4).flat_map(|p| space.to_srgb8([p[0], p[1], p[2], p[3]])).collect()
 }
 
 /// Downscaled thumbnail fitted inside `max_w × max_h` (never upscaled), over white, as JPEG q80.
 pub fn thumbnail_jpeg(px: &[f32], w: u32, h: u32, max_w: u32, max_h: u32) -> Result<Vec<u8>, FormatError> {
+    thumbnail_jpeg_in(px, w, h, max_w, max_h, onepaint_color::Space::Linear)
+}
+
+/// [`thumbnail_jpeg`] for pixels in a document `space` (spec 50).
+pub fn thumbnail_jpeg_in(px: &[f32], w: u32, h: u32, max_w: u32, max_h: u32, space: onepaint_color::Space) -> Result<Vec<u8>, FormatError> {
     let scale = (max_w as f64 / w as f64).min(max_h as f64 / h as f64).min(1.0);
     let (tw, th) = (((w as f64 * scale).round() as u32).max(1), ((h as f64 * scale).round() as u32).max(1));
     let mut rgb = Vec::with_capacity((tw * th * 3) as usize);
@@ -100,7 +110,7 @@ pub fn thumbnail_jpeg(px: &[f32], w: u32, h: u32, max_w: u32, max_h: u32) -> Res
             }
             let p = acc.map(|v| v / n);
             let over = [p[0] + 1.0 - p[3], p[1] + 1.0 - p[3], p[2] + 1.0 - p[3], 1.0];
-            let s = premul_linear_to_srgb8(over);
+            let s = space.to_srgb8(over);
             rgb.extend_from_slice(&s[..3]);
         }
     }
@@ -148,10 +158,15 @@ pub fn fit_image(img: DecodedImage, max: u32) -> DecodedImage {
 /// Place a decoded image into a new surface with its top-left at (x, y),
 /// converting to premultiplied linear light.
 pub fn image_to_surface(img: &DecodedImage, x: i32, y: i32) -> onepaint_raster::Surface {
+    image_to_surface_in(img, x, y, onepaint_color::Space::Linear)
+}
+
+/// [`image_to_surface`] for a document in `space` (spec 50).
+pub fn image_to_surface_in(img: &DecodedImage, x: i32, y: i32, space: onepaint_color::Space) -> onepaint_raster::Surface {
     let mut s = onepaint_raster::Surface::new();
     let mut data = Vec::with_capacity(img.rgba.len());
     for p in img.rgba.chunks_exact(4) {
-        data.extend_from_slice(&srgb8_to_premul_linear([p[0], p[1], p[2], p[3]]));
+        data.extend_from_slice(&space.from_srgb8([p[0], p[1], p[2], p[3]]));
     }
     s.write_rect(onepaint_raster::Rect::new(x, y, img.width as i32, img.height as i32), &data);
     s

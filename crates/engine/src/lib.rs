@@ -611,7 +611,16 @@ impl Session {
         onepaint_compose::program::plan_tiles_cached(&doc, keys, ov.as_ref(), Some(&hot), Some(&self.plan_cache))
     }
 
-    /// Flattened canvas as premultiplied linear f32.
+    /// [`Self::flatten`] as premultiplied linear light, whatever the
+    /// document's depth (exports, thumbnails, recordings).
+    pub fn flatten_linear(&self) -> Vec<f32> {
+        let mut f = self.flatten();
+        self.doc.space().convert(&mut f, onepaint_color::Space::Linear);
+        f
+    }
+
+    /// Flattened canvas as premultiplied f32 in the document's space
+    /// (linear light, or sRGB values in 8-bit documents; spec 50).
     pub fn flatten(&self) -> Vec<f32> {
         if self.has_smart_filters() || Self::has_spatial_adjustments(&self.doc.root) {
             let mut d = self.doc.clone();
@@ -634,7 +643,7 @@ impl Session {
         if b[i + 3] <= 0.0 {
             return None;
         }
-        let mut c = Rgba::from_linear_premul([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+        let mut c = self.doc.space().color([b[i], b[i + 1], b[i + 2], b[i + 3]]);
         c.a = 1.0;
         Some(c)
     }
@@ -644,7 +653,7 @@ impl Session {
         let (tx, ty) = onepaint_raster::tile_of(x, y);
         let b = composite_tile(&self.doc, tx, ty, self.overlay().as_ref());
         let i = (((y - ty * TILE) * TILE + (x - tx * TILE)) * 4) as usize;
-        let mut c = Rgba::from_linear_premul([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+        let mut c = self.doc.space().color([b[i], b[i + 1], b[i + 2], b[i + 3]]);
         c.a = 1.0;
         c
     }
@@ -703,7 +712,7 @@ impl Session {
         self.store_saved_selections();
         self.store_anim();
         self.doc.touch();
-        let flat = self.flatten();
+        let flat = self.flatten_linear();
         let thumb = onepaint_formats::thumbnail_jpeg(&flat, self.doc.width, self.doc.height, 320, 240).ok();
         Ok(onepaint_formats::write_happypaint(&self.doc, thumb.as_deref(), APP_VERSION)?)
     }
@@ -724,9 +733,11 @@ impl Session {
             let mut v = anim::view_document(&self.doc, &self.anim, self.anim_slot, false, &self.active);
             self.apply_smart_filters(&mut v.root);
             self.render_spatial_adjustments(&mut v.root, true);
-            onepaint_compose::flatten(&v, None)
+            let mut f = onepaint_compose::flatten(&v, None);
+            self.doc.space().convert(&mut f, onepaint_color::Space::Linear);
+            f
         } else {
-            self.flatten()
+            self.flatten_linear()
         };
         let o = onepaint_formats::export::ExportOptions { dpi: self.doc.dpi, display_p3: self.doc.color_space == "display-p3", ..*o };
         Ok(onepaint_formats::export::export_flat_with(&flat, self.doc.width, self.doc.height, &o, press)?.0)
@@ -734,7 +745,7 @@ impl Session {
 
     /// The flattened canvas as an 8-bit straight-alpha sRGB PNG.
     pub fn export_png(&self) -> Result<Vec<u8>, EngineError> {
-        let rgba = onepaint_formats::flatten_to_srgb8(&self.flatten());
+        let rgba = onepaint_formats::flatten_to_srgb8(&self.flatten_linear());
         Ok(onepaint_formats::encode_png_rgba8(self.doc.width, self.doc.height, &rgba)?)
     }
 
@@ -789,7 +800,7 @@ impl Session {
             let l = if erase { 1.0 } else { 0.299 * c.r + 0.587 * c.g + 0.114 * c.b };
             [l, l, l, 1.0]
         } else {
-            self.color.to_linear_premul()
+            self.doc.space().pixel(self.color)
         };
         self.seed = self.seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
         // Pigment thins a paint stroke to a glaze (`pigmentOpacity`, PE:825).
@@ -802,6 +813,8 @@ impl Session {
         // The paper bites paint going on, never an erase or a mask (PE:805).
         let paper = self.doc.paper().filter(|_| paint).map(|p| (p, brush.paper_response.unwrap_or(1.0)));
         let mut engine = StrokeEngine::new(brush, [lin[0], lin[1], lin[2]], self.seed);
+        // Masks hold coverage, which no space changes.
+        engine.set_space(if to_mask { onepaint_color::Space::Linear } else { self.doc.space() });
         engine.set_symmetry(self.symmetry_transforms());
         let mut st = ActiveStroke {
             layer: self.active.clone(),

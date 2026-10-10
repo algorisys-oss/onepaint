@@ -335,10 +335,17 @@ impl Document {
     /// A Background layer (filled, clipped to the canvas) plus "Layer 1";
     /// only "Layer 1" when `background` is `None` (`document.ts:28-46`).
     pub fn new(width: u32, height: u32, background: Option<Rgba>) -> Self {
+        Self::new_in(width, height, background, Depth::Rgba16F)
+    }
+
+    /// [`Document::new`] at `depth`: an 8-bit document's background holds
+    /// sRGB values (spec 50).
+    pub fn new_in(width: u32, height: u32, background: Option<Rgba>, depth: Depth) -> Self {
+        let space = if depth == Depth::Rgba8 { onepaint_color::Space::Gamma } else { onepaint_color::Space::Linear };
         let mut root = Vec::new();
         if let Some(bg) = background {
             let mut l = Layer::new("Background");
-            l.pixels = Self::filled(width, height, bg.to_linear_premul());
+            l.pixels = Self::filled(width, height, space.pixel(bg));
             root.push(Node::Layer(l));
         }
         root.push(Node::Layer(Layer::new("Layer 1")));
@@ -350,7 +357,7 @@ impl Document {
             height,
             dpi: 300.0,
             color_space: "srgb".into(),
-            depth: Depth::Rgba16F,
+            depth,
             created_at: now,
             updated_at: now,
             root,
@@ -373,6 +380,12 @@ impl Document {
             root: Vec::new(),
             extra: Extra::new(),
         }
+    }
+
+    /// What the pixel values mean: 8-bit documents hold sRGB values and
+    /// blend them as they are (spec 50); float documents hold linear light.
+    pub fn space(&self) -> onepaint_color::Space {
+        if self.depth == Depth::Rgba8 { onepaint_color::Space::Gamma } else { onepaint_color::Space::Linear }
     }
 
     pub fn bounds(&self) -> Rect {

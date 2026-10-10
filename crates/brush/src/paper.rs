@@ -108,8 +108,10 @@ pub fn visible_amount(strength: f64) -> f32 {
 }
 
 /// The factor the visible tooth multiplies rgb by at doc position (x, y)
-/// (pixel centres), for amount `amt` (`compositor.ts:214-233`).
-pub fn shade_at(paper: &PaperTexture, amt: f32, x: f64, y: f64) -> f32 {
+/// (pixel centres), for amount `amt` (`compositor.ts:214-233`). Linear
+/// documents raise the shade to 2.2; 8-bit documents use it as it is
+/// (`u_paperLinear`, spec 50).
+pub fn shade_at(paper: &PaperTexture, amt: f32, x: f64, y: f64, space: onepaint_color::Space) -> f32 {
     let l = {
         let v = [-0.45f32, -0.6, 0.66];
         let n = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
@@ -122,12 +124,12 @@ pub fn shade_at(paper: &PaperTexture, amt: f32, x: f64, y: f64) -> f32 {
     let lambert = ((nx * l[0] + ny * l[1] + l[2]) / len).clamp(0.0, 1.0);
     let h = paper.height(x, y);
     let shade = 1.0 + (0.55 + 0.45 * (0.35 + 0.65 * lambert) * (0.4 + 0.6 * h) - 1.0) * amt;
-    shade.powf(2.2)
+    if space == onepaint_color::Space::Gamma { shade } else { shade.powf(2.2) }
 }
 
 /// The visible tooth over a composited tile (premultiplied linear): rgb ×
 /// shade^2.2, darken-only, alpha untouched (`compositor.ts:214-233`).
-pub fn shade_tile(buf: &mut [f32], paper: &PaperTexture, strength: f64, tx: i32, ty: i32) {
+pub fn shade_tile(buf: &mut [f32], paper: &PaperTexture, strength: f64, tx: i32, ty: i32, space: onepaint_color::Space) {
     let amt = visible_amount(strength);
     if amt <= 0.0 {
         return;
@@ -138,7 +140,7 @@ pub fn shade_tile(buf: &mut [f32], paper: &PaperTexture, strength: f64, tx: i32,
             if buf[i] == 0.0 && buf[i + 1] == 0.0 && buf[i + 2] == 0.0 {
                 continue;
             }
-            let k = shade_at(paper, amt, (tx * TILE + lx) as f64 + 0.5, (ty * TILE + ly) as f64 + 0.5);
+            let k = shade_at(paper, amt, (tx * TILE + lx) as f64 + 0.5, (ty * TILE + ly) as f64 + 0.5, space);
             for c in 0..3 {
                 buf[i + c] *= k;
             }
@@ -180,14 +182,14 @@ mod tests {
     fn the_visible_tooth_darkens_only_and_keeps_alpha() {
         let tex = PaperTexture::new(&rough()).unwrap();
         let mut buf = [0.8f32, 0.8, 0.8, 1.0].repeat((TILE * TILE) as usize);
-        shade_tile(&mut buf, &tex, 0.85, 0, 0);
+        shade_tile(&mut buf, &tex, 0.85, 0, 0, onepaint_color::Space::Linear);
         let rs: Vec<f32> = buf.chunks_exact(4).map(|p| p[0]).collect();
         let (lo, hi) = rs.iter().fold((1.0f32, 0.0f32), |(l, h), &v| (l.min(v), h.max(v)));
         assert!(hi <= 0.8 + 1e-6 && lo < 0.75 && lo > 0.3, "darken only, a few %: {lo}..{hi}");
         assert!(buf.chunks_exact(4).all(|p| p[3] == 1.0));
         // Transparent pixels stay transparent.
         let mut clear = vec![0.0f32; (TILE * TILE * 4) as usize];
-        shade_tile(&mut clear, &tex, 0.85, 0, 0);
+        shade_tile(&mut clear, &tex, 0.85, 0, 0, onepaint_color::Space::Linear);
         assert!(clear.iter().all(|v| *v == 0.0));
     }
 }

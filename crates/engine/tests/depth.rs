@@ -7,9 +7,7 @@ use onepaint_raster::{Store, Surface};
 use onepaint_stroke::StrokePoint;
 
 fn session(depth: Depth) -> Session {
-    let mut d = Document::new(600, 400, Some(Rgba::WHITE));
-    d.depth = depth;
-    Session::from_document(d)
+    Session::from_document(Document::new_in(600, 400, Some(Rgba::WHITE), depth))
 }
 
 fn draw_line(s: &mut Session, y: f64) {
@@ -45,12 +43,12 @@ fn all_stored(s: &Session, pixels: Store, mask: Store) {
 #[test]
 fn edits_in_an_8bit_document_land_as_8bit_tiles() {
     let mut s = session(Depth::Rgba8);
-    all_stored(&s, Store::Srgb8, Store::Unorm8);
+    all_stored(&s, Store::Unorm8, Store::Unorm8);
     s.execute(Command::SetColor { rgba: Rgba::new(0.9, 0.3, 0.1, 1.0) }).unwrap();
     draw_line(&mut s, 120.0);
     let id = s.active().to_string();
     assert!(s.doc().layer(&id).unwrap().pixels.tile_count() > 0);
-    all_stored(&s, Store::Srgb8, Store::Unorm8);
+    all_stored(&s, Store::Unorm8, Store::Unorm8);
     // Bucket fill, a filter, a mask stroke, a transform and a merge.
     s.execute(Command::Fill { x: 300, y: 350, tolerance: 0.1, grow: 0 }).unwrap();
     s.execute(Command::BeginFilter { kind: "invert".into() }).unwrap();
@@ -62,13 +60,13 @@ fn edits_in_an_8bit_document_land_as_8bit_tiles() {
     s.execute(Command::SetTransform { matrix: transform::Affine::translate(17.0, 9.0) }).unwrap();
     s.execute(Command::CommitTransform).unwrap();
     s.execute(Command::MergeDown { id: s.active().to_string() }).unwrap();
-    all_stored(&s, Store::Srgb8, Store::Unorm8);
+    all_stored(&s, Store::Unorm8, Store::Unorm8);
     // Undo and redo restore exactly.
     let after = s.flatten();
     for _ in 0..3 {
         s.execute(Command::Undo).unwrap();
     }
-    all_stored(&s, Store::Srgb8, Store::Unorm8);
+    all_stored(&s, Store::Unorm8, Store::Unorm8);
     for _ in 0..3 {
         s.execute(Command::Redo).unwrap();
     }
@@ -85,23 +83,30 @@ fn float_documents_keep_f16_tiles() {
 }
 
 #[test]
-fn an_8bit_stroke_looks_like_the_float_one_within_rounding() {
+fn an_8bit_stroke_core_matches_the_float_one() {
+    // Soft edges blend in gamma space in 8-bit documents (spec 50); where the
+    // paint is opaque the two agree to the byte.
     let (mut a, mut b) = (session(Depth::Rgba8), session(Depth::Rgba16F));
     for s in [&mut a, &mut b] {
         s.execute(Command::SetColor { rgba: Rgba::new(0.2, 0.5, 0.8, 1.0) }).unwrap();
         draw_line(s, 150.0);
     }
-    let (fa, fb) = (a.flatten(), b.flatten());
-    let enc = |v: f32| onepaint_color::linear_to_srgb(v);
-    let errs: Vec<f32> = fa
-        .chunks_exact(4)
-        .zip(fb.chunks_exact(4))
-        .map(|(p, q)| (0..3).map(|c| (enc(p[c]) - enc(q[c])).abs()).fold(0.0f32, f32::max))
-        .collect();
-    let worst = errs.iter().copied().fold(0.0f32, f32::max);
-    let mean = errs.iter().sum::<f32>() / errs.len() as f32;
-    // Soft edges round both alpha and premultiplied colour: up to ~2 steps over white.
-    assert!(worst <= 2.5 / 255.0 && mean <= 0.3 / 255.0, "worst {worst}, mean {mean}");
+    let (fa, fb) = (a.flatten_linear(), b.flatten_linear());
+    let id = b.active().to_string();
+    let layer = b.doc().layer(&id).unwrap();
+    let mut checked = 0;
+    for (i, (p, q)) in fa.chunks_exact(4).zip(fb.chunks_exact(4)).enumerate() {
+        let (x, y) = ((i % 600) as i32, (i / 600) as i32);
+        if layer.pixels.get(x, y)[3] < 1.0 {
+            continue;
+        }
+        checked += 1;
+        let enc = onepaint_color::linear_to_srgb;
+        for c in 0..3 {
+            assert!((enc(p[c]) - enc(q[c])).abs() <= 1.0 / 255.0, "{x},{y}");
+        }
+    }
+    assert!(checked > 100);
 }
 
 #[test]
@@ -134,7 +139,7 @@ fn an_8bit_document_saves_and_reopens_as_8bit() {
     let mut t = Session::new(10, 10, None);
     t.open_happypaint(&bytes).unwrap();
     assert_eq!(t.doc().depth, Depth::Rgba8);
-    all_stored(&t, Store::Srgb8, Store::Unorm8);
+    all_stored(&t, Store::Unorm8, Store::Unorm8);
     let (fa, fb) = (s.flatten(), t.flatten());
     let worst = fa.iter().zip(&fb).map(|(p, q)| (p - q).abs()).fold(0.0f32, f32::max);
     assert!(worst <= 1.0 / 255.0, "{worst}");

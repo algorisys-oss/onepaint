@@ -14,23 +14,30 @@ pub struct Frame {
     pub doc_h: u32,
     /// Document resolution (screentone cells are `dpi / lpi`).
     pub dpi: f32,
+    /// What the pixel values mean: linear light, or sRGB in 8-bit documents (spec 50).
+    pub space: onepaint_color::Space,
 }
 
 impl Default for Frame {
     fn default() -> Self {
-        Frame { x: 0, y: 0, doc_w: 1, doc_h: 1, dpi: 300.0 }
+        Frame { x: 0, y: 0, doc_w: 1, doc_h: 1, dpi: 300.0, space: onepaint_color::Space::Linear }
     }
 }
 
 impl Frame {
     /// A buffer that is the whole `w × h` document.
     pub fn whole(w: usize, h: usize) -> Frame {
-        Frame { x: 0, y: 0, doc_w: w.max(1) as u32, doc_h: h.max(1) as u32, dpi: 300.0 }
+        Frame { x: 0, y: 0, doc_w: w.max(1) as u32, doc_h: h.max(1) as u32, dpi: 300.0, space: onepaint_color::Space::Linear }
     }
 
     /// A region of a `doc_w × doc_h` document.
     pub fn region(x: i32, y: i32, doc_w: u32, doc_h: u32, dpi: f32) -> Frame {
-        Frame { x, y, doc_w: doc_w.max(1), doc_h: doc_h.max(1), dpi }
+        Frame { x, y, doc_w: doc_w.max(1), doc_h: doc_h.max(1), dpi, space: onepaint_color::Space::Linear }
+    }
+
+    /// The same frame in `space`.
+    pub fn in_space(self, space: onepaint_color::Space) -> Frame {
+        Frame { space, ..self }
     }
 
     pub fn size(&self) -> [f32; 2] {
@@ -195,17 +202,19 @@ pub(crate) fn unpremul(s: Px) -> [f32; 3] {
     if s[3] > 0.0 { [s[0] / s[3], s[1] / s[3], s[2] / s[3]] } else { [s[0], s[1], s[2]] }
 }
 
-pub(crate) fn to_work(c: [f32; 3]) -> [f32; 3] {
-    c.map(onepaint_color::fast_linear_to_srgb)
+/// Straight pixel values to sRGB (the colour kinds' "work" space); 8-bit
+/// documents already hold sRGB values (spec 50).
+pub(crate) fn to_work(c: [f32; 3], space: onepaint_color::Space) -> [f32; 3] {
+    c.map(|v| space.to_work(v))
 }
 
-pub(crate) fn from_work(c: [f32; 3]) -> [f32; 3] {
-    c.map(onepaint_color::fast_srgb_to_linear)
+pub(crate) fn from_work(c: [f32; 3], space: onepaint_color::Space) -> [f32; 3] {
+    c.map(|v| space.from_work(v))
 }
 
 /// `vec4(fromWork(o) * a, a)`.
-pub(crate) fn repremul(o: [f32; 3], a: f32) -> Px {
-    let l = from_work(o);
+pub(crate) fn repremul(o: [f32; 3], a: f32, space: onepaint_color::Space) -> Px {
+    let l = from_work(o, space);
     [l[0] * a, l[1] * a, l[2] * a, a]
 }
 

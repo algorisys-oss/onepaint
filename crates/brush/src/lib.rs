@@ -129,6 +129,9 @@ pub struct StrokeEngine {
     /// Dual brush and colour-tip rendering.
     mask_tip: Option<(Arc<TipMask>, f32)>,
     color_tip: Option<ColorTipMode>,
+    /// The document's space (spec 50): colour dynamics and colour tips work
+    /// on sRGB values, which 8-bit documents already hold.
+    space: onepaint_color::Space,
 }
 
 /// How a colour (RGBA) tip colours its dabs (`stamp-renderer.ts:138-148, 247-268`).
@@ -145,6 +148,8 @@ pub struct ColorTipMode {
 pub struct TipExtras<'a> {
     pub mask: Option<(&'a TipMask, f32)>,
     pub color: Option<&'a ColorTipMode>,
+    /// The document's space: colour tips mix in sRGB (spec 50).
+    pub space: onepaint_color::Space,
 }
 
 impl TipExtras<'_> {
@@ -164,6 +169,12 @@ fn jittered_gap(b: &BrushPreset, s: &StrokePoint, rng: &mut Mulberry32) -> f64 {
 }
 
 impl StrokeEngine {
+    /// Paint in a document `space`: the colour given to `new` is a pixel
+    /// colour in that space (spec 50).
+    pub fn set_space(&mut self, space: onepaint_color::Space) {
+        self.space = space;
+    }
+
     pub fn new(brush: BrushPreset, color_linear: [f32; 3], seed: u32) -> Self {
         let stabilizer = brush.stabilizer.as_ref().filter(|s| s.enabled && s.strength > 0.0).map(|s| Stabilizer::new(s.strength));
         Self {
@@ -171,6 +182,7 @@ impl StrokeEngine {
             stabilizer,
             brush,
             color: color_linear,
+            space: onepaint_color::Space::Linear,
             rng: Mulberry32::new(seed),
             sampler: Sampler::new(),
             prev_pos: None,
@@ -262,7 +274,7 @@ impl StrokeEngine {
     }
 
     fn extras(&self) -> TipExtras<'_> {
-        TipExtras { mask: self.mask_tip.as_ref().map(|(m, k)| (&**m, *k)), color: self.color_tip.as_ref() }
+        TipExtras { mask: self.mask_tip.as_ref().map(|(m, k)| (&**m, *k)), color: self.color_tip.as_ref(), space: self.space }
     }
 
     /// [`StrokeEngine::rasterize`] on the document paper.
@@ -437,7 +449,8 @@ impl StrokeEngine {
             }
             let mut color = self.color;
             if let Some(cd) = dynamics.and_then(|d| d.color.as_ref()) {
-                let mut srgb = color.map(onepaint_color::linear_to_srgb);
+                let space = self.space;
+                let mut srgb = color.map(|v| space.to_srgb(v));
                 // Two-colour load and hue shift follow fade (dab count) or pressure.
                 let drive = if cd.hue_shift_source.as_deref() == Some("pressure") { state.pressure } else { state.fade };
                 if let Some(to) = cd.to_color {
@@ -452,7 +465,7 @@ impl StrokeEngine {
                 val = (val + ((self.rng.next_f64() * 2.0 - 1.0) * cd.val.unwrap_or(0.0)) as f32).clamp(0.0, 1.0);
                 val *= (1.0 - cd.pressure_darken.unwrap_or(0.0) * state.pressure) as f32;
                 let c = onepaint_color::Rgba::from_hsv(h, sat, val, 1.0);
-                color = [c.r, c.g, c.b].map(onepaint_color::srgb_to_linear);
+                color = [c.r, c.g, c.b].map(|v| space.from_srgb(v));
             }
             // The grain rolls with the brush from the first dab (pre-scatter).
             let grain_off = if self.grain_move > 0.0 {
@@ -557,7 +570,7 @@ pub fn rasterize_dab_full(
 /// paint their own colour, others tint the brush colour by the tip's
 /// relative luma and chroma (`stamp-renderer.ts:247-268`).
 #[inline]
-fn color_tip_rgb(mode: &ColorTipMode, u: f64, v: f64, brush_srgb: [f32; 3], brush_sat: f32) -> [f32; 3] {
+fn color_tip_rgb(mode: &ColorTipMode, u: f64, v: f64, brush_srgb: [f32; 3], brush_sat: f32, space: onepaint_color::Space) -> [f32; 3] {
     let mut t = mode.tip.sample(u, v);
     if let Some([hue, sat, val]) = mode.recolor {
         let (h, s, vv) = onepaint_color::Rgba::new(t[0], t[1], t[2], 1.0).to_hsv();
@@ -573,7 +586,7 @@ fn color_tip_rgb(mode: &ColorTipMode, u: f64, v: f64, brush_srgb: [f32; 3], brus
         let chroma = VARIATION * 0.5 * (0.25 + 0.75 * brush_sat);
         std::array::from_fn(|k| (brush_srgb[k] * (1.0 + (rel - 1.0) * VARIATION) + (t[k] - l) * chroma).clamp(0.0, 1.0))
     };
-    base.map(onepaint_color::fast_srgb_to_linear)
+    base.map(|c| space.from_work(c))
 }
 
 #[inline(always)]
@@ -599,7 +612,7 @@ fn rasterize_impl<const PAPER: bool, const EXTRA: bool>(
     let (c, sn) = (d.rotation.cos(), d.rotation.sin());
     // The brush colour as the colour-tip formula sees it (sRGB, and its saturation).
     let (brush_srgb, brush_sat) = if EXTRA && extras.color.is_some() {
-        let v = d.color.map(onepaint_color::fast_linear_to_srgb);
+        let v = d.color.map(|c| extras.space.to_work(c));
         let (mx, mn) = (v[0].max(v[1]).max(v[2]), v[0].min(v[1]).min(v[2]));
         (v, (mx - mn) / mx.max(1e-4))
     } else {
@@ -664,7 +677,7 @@ fn rasterize_impl<const PAPER: bool, const EXTRA: bool>(
                 let (lxi, lyi) = ((x - tx * TILE) as usize, (y - ty * TILE) as usize);
                 let dst = tile.get(lxi, lyi);
                 let col = match extras.color.filter(|_| EXTRA) {
-                    Some(mode) => color_tip_rgb(mode, lx * 0.5 + 0.5, ly * 0.5 + 0.5, brush_srgb, brush_sat),
+                    Some(mode) => color_tip_rgb(mode, lx * 0.5 + 0.5, ly * 0.5 + 0.5, brush_srgb, brush_sat, extras.space),
                     None => d.color,
                 };
                 let src = [col[0] * a, col[1] * a, col[2] * a, a];

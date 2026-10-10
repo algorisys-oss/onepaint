@@ -408,9 +408,8 @@ impl App {
     pub fn new_document(&mut self, w: u32, h: u32) {
         let id = self.session.doc().id.clone();
         self.autosave.clear(&id);
-        let mut doc = onepaint_doc::Document::new(w, h, Some(Rgba::WHITE));
+        let mut doc = onepaint_doc::Document::new_in(w, h, Some(Rgba::WHITE), self.new_depth);
         doc.set_paper(onepaint_doc::PAPER_PRESETS.get(self.new_paper).and_then(|p| p.paper()));
-        doc.depth = self.new_depth;
         self.session.replace_document(doc);
         self.canvas.reset_for([w, h]);
         self.path = None;
@@ -1446,6 +1445,11 @@ impl eframe::App for App {
             && self.xform_layer.as_deref() != Some(self.session.active())
         {
             self.begin_transform();
+        }
+        let space = self.session.doc().space();
+        if self.thumbs.space != space {
+            self.thumbs.space = space;
+            self.thumbs.clear();
         }
         if !self.hide_ui {
             chrome::show(self, &ctx);

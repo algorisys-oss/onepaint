@@ -55,7 +55,7 @@ pub fn load_dialog(app: &mut App, now: f64) {
 pub fn from_canvas(app: &mut App) {
     let d = app.session.doc();
     let (w, h) = (d.width, d.height);
-    let rgba = onepaint_formats::flatten_to_srgb8(&app.session.flatten());
+    let rgba = onepaint_formats::flatten_to_srgb8(&app.session.flatten_linear());
     app.reference.image = Some(Reference::new(w, h, rgba));
 }
 

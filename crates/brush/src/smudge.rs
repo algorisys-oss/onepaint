@@ -4,7 +4,7 @@
 use crate::height::{HeightDab, WET_RATE};
 use crate::symmetry::SymTransform;
 use crate::tips::Tip;
-use onepaint_color::{fast_linear_to_srgb as l2s, fast_srgb_to_linear as s2l, pigment::pigment_mix};
+use onepaint_color::{Space, pigment::pigment_mix};
 use onepaint_raster::{Rect, Surface, TILE};
 use onepaint_selection::Mask;
 use onepaint_stroke::{Sampler, Smoother, StrokePoint};
@@ -64,6 +64,8 @@ pub struct Smudge {
     /// Height and blender dabs since the last [`Smudge::take_height`].
     height_dabs: Vec<HeightDab>,
     blend_dabs: Vec<HeightDab>,
+    /// The document's space: the pigment mix runs on sRGB values (spec 50).
+    space: Space,
 }
 
 fn smoothstep(e0: f64, e1: f64, x: f64) -> f64 {
@@ -143,7 +145,14 @@ impl Smudge {
             last_pickup: None,
             height_dabs: Vec::new(),
             blend_dabs: Vec::new(),
+            space: Space::Linear,
         }
+    }
+
+    /// Smudge in a document `space` (spec 50); the reservoir colour is a
+    /// pixel colour in that space.
+    pub fn set_space(&mut self, space: Space) {
+        self.space = space;
     }
 
     pub fn reservoir(&self) -> Reservoir {
@@ -240,7 +249,8 @@ impl Smudge {
         let (wet, mix) = self.p.wet.map_or((1.0, 1.0), |w| (w.wetness.clamp(0.0, 1.0), w.mix));
         let res_w = ((1.0 - mix) * deposit * self.reservoir[3] as f64) as f32;
         let rc = [self.reservoir[0], self.reservoir[1], self.reservoir[2]];
-        let rc_w = rc.map(l2s);
+        let sp = self.space;
+        let rc_w = rc.map(|v| sp.to_work(v));
         let (tc, ts) = (self.tip_angle.cos(), self.tip_angle.sin());
         let bounds = Rect::covering(
             (to.0 - radius - 1.0) as f32,
@@ -281,14 +291,14 @@ impl Smudge {
                     let col = if res_w <= 0.0 {
                         pc
                     } else {
-                        let pc_w = pc.map(l2s);
+                        let pc_w = pc.map(|v| sp.to_work(v));
                         let w = if pigment {
                             let key = pc_w.iter().fold(0u32, |k, v| (k << 8) | (v.clamp(0.0, 1.0) * 255.0).round() as u32);
                             *memo.entry(key).or_insert_with(|| pigment_mix(pc_w, rc_w, res_w))
                         } else {
                             mix3(pc_w, rc_w, res_w)
                         };
-                        w.map(s2l)
+                        w.map(|v| sp.from_work(v))
                     };
                     let al = p[3] * wet as f32 + (1.0 - p[3] * wet as f32) * res_w;
                     let k = al * cov;
@@ -328,7 +338,8 @@ impl Smudge {
         let got = pa[3] > 0.001;
         let avg = if got { [pa[0] / pa[3], pa[1] / pa[3], pa[2] / pa[3]] } else { prev };
         let rate = (1.0 + (rate - 1.0) * smoothstep(0.0, 0.05, pv[3] as f64)) as f32;
-        let col = self.mixer(prev.map(l2s), avg.map(l2s), rate).map(s2l);
+        let sp = self.space;
+        let col = self.mixer(prev.map(|v| sp.to_work(v)), avg.map(|v| sp.to_work(v)), rate).map(|v| sp.from_work(v));
         let a = if got { pv[3] + (1.0 - pv[3]) * (self.contam as f32 * pa[3].min(1.0)) } else { pv[3] };
         self.reservoir = [col[0], col[1], col[2], a];
     }

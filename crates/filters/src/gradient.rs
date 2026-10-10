@@ -124,7 +124,14 @@ pub struct Ramp(Vec<[f32; 4]>);
 
 impl Ramp {
     pub fn new(stops: &[GradStop]) -> Self {
-        let lin: Vec<GradStop> = stops.iter().map(|s| GradStop { color: s.color.map(|c| srgb_to_linear(c as f32) as f64), ..*s }).collect();
+        Self::new_in(stops, onepaint_color::Space::Linear)
+    }
+
+    /// The ramp in a document `space`: 8-bit documents interpolate the sRGB
+    /// stop colours as they are (spec 50).
+    pub fn new_in(stops: &[GradStop], space: onepaint_color::Space) -> Self {
+        let conv = |c: f64| if space == onepaint_color::Space::Linear { srgb_to_linear(c as f32) as f64 } else { c };
+        let lin: Vec<GradStop> = stops.iter().map(|s| GradStop { color: s.color.map(conv), ..*s }).collect();
         Ramp((0..RAMP_SIZE).map(|i| sample_stops(&lin, i as f64 / (RAMP_SIZE - 1) as f64).map(|v| v as f32)).collect())
     }
 

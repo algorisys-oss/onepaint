@@ -25,7 +25,7 @@ fn all_layers(nodes: &[Node], out: &mut Vec<String>) {
 }
 
 fn sources(ops: &[Op]) -> usize {
-    TileProgram { tx: 0, ty: 0, ops: ops.to_vec(), split: None }.sources().count()
+    TileProgram { tx: 0, ty: 0, ops: ops.to_vec(), split: None, space: Default::default() }.sources().count()
 }
 
 #[test]

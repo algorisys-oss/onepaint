@@ -4,7 +4,7 @@
 //! Normal and add composite in linear; every other mode is computed on
 //! premultiplied sRGB and converted back, exactly as happypaint's shader does.
 
-use onepaint_color::{Px, prem_lin_to_srgb, prem_srgb_to_lin};
+use onepaint_color::{Px, Space, prem_lin_to_srgb, prem_srgb_to_lin};
 use onepaint_doc::BlendMode;
 
 /// Separable per-channel blend `B(b, s)` on straight colour, with happypaint's
@@ -153,6 +153,65 @@ pub fn blend_px(m: BlendMode, bp: Px, src: Px, opacity: f32) -> Px {
             prem_srgb_to_lin(o)
         }
     }
+}
+
+/// [`blend_px`] in `space` (spec 50). In gamma space (8-bit documents) every
+/// mode blends the stored sRGB values as they are; multiply, screen and add
+/// are happypaint's fixed-function GL blends there, and an 8-bit target
+/// clamps the result.
+#[inline]
+pub fn blend_px_in(space: Space, m: BlendMode, bp: Px, src: Px, opacity: f32) -> Px {
+    if space == Space::Linear {
+        return blend_px(m, bp, src, opacity);
+    }
+    let sp = src.map(|v| v * opacity);
+    if sp[3] <= 0.0 && sp[0] == 0.0 && sp[1] == 0.0 && sp[2] == 0.0 {
+        return bp;
+    }
+    let o = match m {
+        BlendMode::Normal => {
+            let k = 1.0 - sp[3];
+            [sp[0] + bp[0] * k, sp[1] + bp[1] * k, sp[2] + bp[2] * k, sp[3] + bp[3] * k]
+        }
+        // ONE, ONE (colour); ONE, ONE_MINUS_SRC_ALPHA (alpha).
+        BlendMode::Add => [sp[0] + bp[0], sp[1] + bp[1], sp[2] + bp[2], sp[3] + bp[3] * (1.0 - sp[3])],
+        // DST_COLOR, ONE_MINUS_SRC_ALPHA: alpha stays the backdrop's, and the
+        // source adds nothing over transparency (happypaint's multiply).
+        BlendMode::Multiply => [0, 1, 2, 3].map(|i| sp[i] * bp[i] + bp[i] * (1.0 - sp[3])),
+        // ONE, ONE_MINUS_SRC_COLOR, alpha included.
+        BlendMode::Screen => [0, 1, 2, 3].map(|i| sp[i] + bp[i] * (1.0 - sp[i])),
+        _ => {
+            let (a_s, ab) = (sp[3], bp[3]);
+            let (cs, cb) = (straight(sp), straight(bp));
+            let bl = blend_color(m, cb, cs);
+            let mut o = [0.0, 0.0, 0.0, a_s + ab * (1.0 - a_s)];
+            for i in 0..3 {
+                o[i] = a_s * (1.0 - ab) * cs[i] + a_s * ab * bl[i] + (1.0 - a_s) * ab * cb[i];
+            }
+            o
+        }
+    };
+    o.map(|v| v.clamp(0.0, 1.0))
+}
+
+/// [`blend_px_alpha_lock`] in `space` (spec 50): gamma blends the stored values.
+#[inline]
+pub fn blend_px_alpha_lock_in(space: Space, m: BlendMode, bp: Px, src: Px, opacity: f32) -> Px {
+    if space == Space::Linear || m == BlendMode::Normal {
+        return blend_px_alpha_lock(m, bp, src, opacity);
+    }
+    let sp = src.map(|v| v * opacity);
+    if sp[3] <= 0.0 {
+        return bp;
+    }
+    let (a_s, ab) = (sp[3], bp[3]);
+    let (cs, cb) = (straight(sp), straight(bp));
+    let bl = blend_color(m, cb, cs);
+    let mut o = [0.0, 0.0, 0.0, ab];
+    for i in 0..3 {
+        o[i] = ((a_s * bl[i] + (1.0 - a_s) * cb[i]) * ab).clamp(0.0, 1.0);
+    }
+    o
 }
 
 /// Alpha-locked recolour with mode `m`: colour changes, backdrop alpha is kept.

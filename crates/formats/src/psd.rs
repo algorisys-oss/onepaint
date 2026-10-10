@@ -1,6 +1,6 @@
 //! PSD import/export (spec 15), following ag-psd's byte layout (big-endian).
 
-use crate::{FormatError, premul_linear_to_srgb8};
+use crate::FormatError;
 use onepaint_color::srgb_to_linear;
 use onepaint_doc::{BlendMode, Document, Group, Layer, Node};
 use onepaint_raster::{Rect, Surface};
@@ -160,14 +160,14 @@ fn rle_channel(rows: &[Vec<u8>]) -> Vec<u8> {
     w.0
 }
 
-fn layer_record(l: &Layer, doc: Rect) -> Record {
+fn layer_record(l: &Layer, doc: Rect, space: onepaint_color::Space) -> Record {
     let rect = l.pixels.content_bounds().and_then(|b| b.intersect(&doc)).filter(|_| l.adjustment.is_none());
     let mut channels = Vec::new();
     let rect = match rect {
         Some(r) => {
             let px = l.pixels.read_rect(r);
             let (w, h) = (r.w as usize, r.h as usize);
-            let srgb: Vec<[u8; 4]> = px.chunks_exact(4).map(|p| premul_linear_to_srgb8([p[0], p[1], p[2], p[3]])).collect();
+            let srgb: Vec<[u8; 4]> = px.chunks_exact(4).map(|p| space.to_srgb8([p[0], p[1], p[2], p[3]])).collect();
             // Channel order: alpha (-1), then R, G, B.
             for (id, ch) in [(-1i16, 3usize), (0, 0), (1, 1), (2, 2)] {
                 let rows: Vec<Vec<u8>> = (0..h).map(|y| srgb[y * w..(y + 1) * w].iter().map(|c| c[ch]).collect()).collect();
@@ -245,13 +245,13 @@ fn empty_record(name: &str, key: [u8; 4], opacity: u8, flags: u8, lsct: Vec<u8>)
     }
 }
 
-fn flatten(nodes: &[Node], doc: Rect, out: &mut Vec<Record>) {
+fn flatten(nodes: &[Node], doc: Rect, space: onepaint_color::Space, out: &mut Vec<Record>) {
     for n in nodes {
         match n {
-            Node::Layer(l) => out.push(layer_record(l, doc)),
+            Node::Layer(l) => out.push(layer_record(l, doc, space)),
             Node::Group(g) => {
                 out.push(empty_record("</Layer group>", *b"norm", 255, 0x08 | 0x10, 3u32.to_be_bytes().to_vec()));
-                flatten(&g.children, doc, out);
+                flatten(&g.children, doc, space, out);
                 let mut lsct = 1u32.to_be_bytes().to_vec();
                 lsct.extend_from_slice(b"8BIM");
                 lsct.extend_from_slice(key_of(g.blend_mode));
@@ -282,9 +282,9 @@ pub fn write_psd(doc: &Document, composite: &[f32]) -> Result<Vec<u8>, FormatErr
     }
     let bounds = doc.bounds();
     let mut records = Vec::new();
-    flatten(&doc.root, bounds, &mut records);
+    flatten(&doc.root, bounds, doc.space(), &mut records);
     let (w, h) = (doc.width as usize, doc.height as usize);
-    let comp: Vec<[u8; 4]> = composite.chunks_exact(4).map(|p| premul_linear_to_srgb8([p[0], p[1], p[2], p[3]])).collect();
+    let comp: Vec<[u8; 4]> = composite.chunks_exact(4).map(|p| doc.space().to_srgb8([p[0], p[1], p[2], p[3]])).collect();
     let has_alpha = comp.iter().any(|c| c[3] < 255);
     let mut o = W(Vec::new());
     o.bytes(b"8BPS");

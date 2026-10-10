@@ -317,7 +317,7 @@ impl Replay {
             let o = opts(s);
             let (w, h) = onepaint_formats::export::output_size(d.width, d.height, o.scale);
             size = (w, h);
-            let flat = s.flatten();
+            let flat = s.flatten_linear();
             out.push(scaled_rgba(&flat, d.width, d.height, w, h));
         };
         for f in 1..=frames {
@@ -355,7 +355,7 @@ impl Replay {
             };
             self.step(upto - self.pos);
             let d = self.session.doc();
-            video.push(&scaled_rgba(&self.session.flatten(), d.width, d.height, ow, oh))?;
+            video.push(&scaled_rgba(&self.session.flatten_linear(), d.width, d.height, ow, oh))?;
         }
         Ok(video.finish()?)
     }

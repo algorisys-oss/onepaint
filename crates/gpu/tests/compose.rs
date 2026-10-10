@@ -586,3 +586,30 @@ fn warmed_segments_keep_their_relief() {
         assert!(e <= TOL, "seed {seed}: error {e} at {at:?}");
     }
 }
+
+#[test]
+fn eight_bit_documents_blend_in_gamma_space_like_the_cpu() {
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let mut gc = GpuCompositor::new(&device, 64 << 20);
+    let (w, h) = (300, 300);
+    let tex = target(&device, w, h);
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
+    for seed in 0..24 {
+        let mut doc = with_adjustments(random_doc(seed, w, h, seed % 2 == 0), seed);
+        doc.depth = onepaint_doc::Depth::Rgba8;
+        if seed % 3 == 0 {
+            doc.set_paper(Some(onepaint_doc::Paper { grain_id: "linen".into(), scale: Some(0.8), strength: 0.7 }));
+        }
+        gc.run(&device, &queue, &programs(&doc, None), &view, [w, h]);
+        assert_adjusted(&doc, &read(&device, &queue, &tex), &format!("seed {seed}"));
+        let ids = layer_ids(&doc);
+        let hot = ids[seed as usize % ids.len()].clone();
+        for pass in ["cold", "warm"] {
+            gc.run(&device, &queue, &split_programs(&doc, None, &hot), &view, [w, h]);
+            assert_adjusted(&doc, &read(&device, &queue, &tex), &format!("seed {seed} split at {hot} ({pass})"));
+        }
+    }
+}

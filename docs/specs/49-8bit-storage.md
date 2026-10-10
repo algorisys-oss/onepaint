@@ -23,27 +23,31 @@ Paths are under `happypaint/frontend/src`.
 
 ## Model
 ### Tile storage (`raster`)
-`Tile` has private storage in one of three forms:
+`Tile` keeps its pixels private, in one of two stores:
 
-| Store | Bytes / px | Holds | Decode to premultiplied linear f32 |
-|---|---|---|---|
-| `F16` | 8 | premultiplied linear (as before) | as is |
-| `Srgb8` | 4 | premultiplied sRGB bytes `c8 = round(l2s(c/a)·a·255)`, `a8 = round(a·255)` | `a = a8/255`, `c = s2l(c8/a8)·a` (a 256 × 256 table) |
-| `Unorm8` | 4 | raw bytes `round(v·255)` (masks) | `v = b/255` |
+| Store | Bytes / px | Holds |
+|---|---|---|
+| `F16` | 8 | the pixel values (as before) |
+| `Unorm8` | 4 | `round(v · 255)` of each value |
 
+- Spec 50 made an 8-bit document's colour values premultiplied sRGB, so
+  `Unorm8` holds exactly happypaint's `RGBA8` bytes for pixels and masks
+  alike.
+- (Before spec 50 this spec kept 8-bit pixels as an `Srgb8` store that
+  decoded to linear light. That store is gone.)
 - **Reads** (`get`, `to_f32`, `f16_data`, `is_empty`, `is_opaque`) work on
-  every store.
+  either store.
 - **Writes** (`set`) encode into the tile's own store.
 - `from_f32`, `filled` and `default` make `F16` tiles.
-- `to_srgb8()` and `to_unorm8()` make 8-bit copies.
-- Decode then encode gives back the same bytes, so storing a tile again
+- `to_store()` converts.
+- Widening to f16 and storing back gives the same bytes, so storing again
   never drifts.
 
 ### When tiles become 8-bit (`engine`)
 - In an 8-bit document, every history entry is quantized as it is
   recorded:
-  - its after-state tiles become `Srgb8` (layer pixels) or `Unorm8`
-    (masks), both in the entry and in the live document;
+  - its after-state pixel and mask tiles become `Unorm8`, both in the
+    entry and in the live document;
   - height fields (impasto) stay `F16`, because they are not colour;
   - a document- or tree-wide entry quantizes all its layers.
 - In between, a stroke in progress works in `F16`. So does its buffer, as
@@ -67,22 +71,18 @@ Paths are under `happypaint/frontend/src`.
 
 ## Acceptance criteria
 1. **raster:**
-   - `Srgb8` and `Unorm8` round-trip any byte pattern exactly
-     (decode → encode);
-   - `F16 → Srgb8` errs by less than half a byte step in sRGB;
+   - `Unorm8` round-trips any byte pattern through f32 and f16 exactly;
    - `set` on an 8-bit tile stores the encoded pixel;
    - `f16_data` and `to_f32` agree.
 2. **engine:**
-   - in an 8-bit document, layer pixels are `Srgb8` and masks `Unorm8`
-     after a stroke, a fill, a filter, a transform, liquify, smudge and a
+   - in an 8-bit document, layer pixels and masks are `Unorm8` after a
+     stroke, a fill, a filter, a transform, liquify, smudge and a
      merge;
    - undo and redo restore exactly;
    - a 16-bit-float document keeps `F16` everywhere;
    - an 8-bit document saved and reopened keeps its pixels and depth.
-3. A stroke in an 8-bit document composites within 2.5/255 (sRGB; mean
-   0.3/255) of the same stroke in a 16-bit-float document. Soft edges
-   round both alpha and premultiplied colour, and over white each costs up
-   to half a step; happypaint's 8-bit layers do the same.
+3. Where a stroke is opaque, an 8-bit document matches a 16-bit-float one
+   to the byte. Soft edges blend in gamma space (spec 50).
 4. The New Document dialog creates 8-bit documents (kittest).
 5. Memory: a 2048² 8-bit page with 10 painted layers holds half the tile
    bytes of the same page at 16-bit float.

@@ -56,7 +56,8 @@ struct Params {
     paper_tile_px: f32,
     paper_size: u32,
     blocks_w: u32,
-    _pad: f32,
+    /// 1 when colours are sRGB values (8-bit documents, spec 50).
+    gamma: f32,
 }
 
 /// Buffers for one allocation size.
@@ -215,7 +216,7 @@ impl StepBackend for WetGpu {
             paper_tile_px: job.paper.map_or(1.0, |p| p.1 as f32),
             paper_size: job.paper.map_or(1, |p| p.0.size as u32),
             blocks_w: (w as u32).div_ceil(BLOCK),
-            _pad: 0.0,
+            gamma: if job.space == onepaint_color::Space::Gamma { 1.0 } else { 0.0 },
         };
         let active = active_blocks(&job, BLOCK);
         let active_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

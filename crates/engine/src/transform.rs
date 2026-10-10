@@ -468,7 +468,7 @@ impl Session {
         if let Some(l) = self.doc.layer_mut(&f.layer) {
             l.pixels = f.original.clone();
         }
-        let (w, h) = (self.doc.width, self.doc.height);
+        let (w, h, space) = (self.doc.width, self.doc.height, self.doc.space());
         let id = f.layer.clone();
         let uniform = (m.a - m.d).abs() < 1e-6 && (m.b + m.c).abs() < 1e-6 && m.a * m.d - m.b * m.c > 0.0;
         let _ = self.tree_edit(None, move |s| {
@@ -478,10 +478,10 @@ impl Session {
             if f.warp.is_none() && !paths.is_empty() {
                 let pm = onepaint_stroke::bezier::Affine { a: m.a, b: m.b, c: m.c, d: m.d, e: m.e, f: m.f };
                 let mapped: Vec<_> = paths.iter().map(|p| onepaint_stroke::bezier::affine(p, &pm)).collect();
-                path_ops::write_paths(l, &mapped, w, h);
+                path_ops::write_paths(l, &mapped, w, h, space);
             } else if f.warp.is_none() && !texts.is_empty() && uniform {
                 let mapped: Vec<_> = texts.iter().map(|t| transform_text(t, &m)).collect();
-                text_ops::write_texts(l, &mapped, w, h);
+                text_ops::write_texts(l, &mapped, w, h, space);
             } else {
                 // Bake: the objects can't express this map.
                 l.extra.remove("paths");

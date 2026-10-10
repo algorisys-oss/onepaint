@@ -62,6 +62,8 @@ struct Uniforms {
     /// simulated).
     lo: [f32; 4],
     hi: [f32; 4],
+    /// x: 1 when the composite holds sRGB values (8-bit documents, spec 50).
+    space: [f32; 4],
 }
 
 struct DocTextures {
@@ -94,6 +96,8 @@ pub struct CanvasGpu {
     view: [[f32; 4]; 3],
     proof: Option<(Option<Arc<Press>>, wgpu::TextureView)>,
     proof_dummy: wgpu::TextureView,
+    /// The document's pixel values are sRGB (spec 50).
+    gamma: bool,
 }
 
 impl CanvasGpu {
@@ -206,6 +210,7 @@ impl CanvasGpu {
             mipper: mip::Mipper::new(device),
             lod: 0,
             view: [[0.0; 4]; 3],
+            gamma: false,
             proof: None,
             proof_dummy: device
                 .create_texture(&wgpu::TextureDescriptor {
@@ -220,6 +225,12 @@ impl CanvasGpu {
                 })
                 .create_view(&Default::default()),
         }
+    }
+
+    /// What the composite's values mean (spec 50): sRGB in 8-bit documents,
+    /// decoded for display. Takes effect at the next `set_view`.
+    pub fn set_space(&mut self, space: onepaint_color::Space) {
+        self.gamma = space == onepaint_color::Space::Gamma;
     }
 
     /// Present-only view modes (spec 48): grayscale, soft proof on `press`
@@ -499,6 +510,7 @@ impl CanvasGpu {
             view: self.view[0],
             lo: self.view[1],
             hi: self.view[2],
+            space: [if self.gamma { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
     }

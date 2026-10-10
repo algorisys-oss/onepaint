@@ -148,3 +148,24 @@ fn pigment_glazes_subtractively() {
     let same = blend_color(BlendMode::Pigment, [0.9, 0.3, 0.1], [0.9, 0.3, 0.1]);
     assert!((same[0] - 0.9).abs() < 1e-3 && (same[1] - 0.3).abs() < 1e-3);
 }
+
+#[test]
+fn gamma_space_uses_happypaints_fixed_function_blends() {
+    use onepaint_color::Space::Gamma;
+    use onepaint_compose::blend::blend_px_in;
+    let (d, s) = ([0.2, 0.4, 0.1, 0.5], [0.3, 0.1, 0.25, 0.6]);
+    // Screen: s + d·(1 − s), alpha included.
+    let o = blend_px_in(Gamma, BlendMode::Screen, d, s, 1.0);
+    for i in 0..4 {
+        assert!((o[i] - (s[i] + d[i] * (1.0 - s[i]))).abs() < 1e-6);
+    }
+    // Add: clamped like an 8-bit target.
+    let o = blend_px_in(Gamma, BlendMode::Add, [0.9, 0.5, 0.5, 1.0], [0.4, 0.2, 0.1, 0.5], 1.0);
+    assert_eq!(o, [1.0, 0.7, 0.6, 1.0]);
+    // Multiply keeps the backdrop's alpha.
+    let o = blend_px_in(Gamma, BlendMode::Multiply, d, s, 1.0);
+    assert!((o[3] - d[3]).abs() < 1e-6);
+    // Other modes: the W3C formula on the stored values.
+    let o = blend_px_in(Gamma, BlendMode::Overlay, [0.5, 0.5, 0.5, 1.0], [0.25, 0.25, 0.25, 1.0], 1.0);
+    assert!((o[0] - 0.25).abs() < 1e-6, "{o:?}");
+}

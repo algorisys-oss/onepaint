@@ -60,3 +60,4 @@ The happypaint references are relative to `../happypaint/frontend/src/`.
 | 47 | [Skip layers under an opaque tile](47-opaque-skip.md) | compose, engine |
 | 48 | [View modes in the present pass](48-gpu-view-modes.md) | gpu, app |
 | 49 | [8-bit documents store 8-bit tiles](49-8bit-storage.md) | raster, engine, app |
+| 50 | [8-bit documents composite in gamma space](50-8bit-gamma.md) | color, compose, filters, brush, engine, formats, gpu, app |

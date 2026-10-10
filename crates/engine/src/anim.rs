@@ -342,8 +342,8 @@ fn ghost_group(node: &Node, tint: Option<[f32; 3]>, opacity: f32, peg: Option<&P
     Node::Group(g)
 }
 
-fn tint_of(hex: &str) -> [f32; 3] {
-    let c = Rgba::from_hex(hex).unwrap_or(Rgba::BLACK).to_linear_premul();
+fn tint_of(hex: &str, space: onepaint_color::Space) -> [f32; 3] {
+    let c = space.pixel(Rgba::from_hex(hex).unwrap_or(Rgba::BLACK));
     [c[0], c[1], c[2]]
 }
 
@@ -370,7 +370,7 @@ pub fn view_document(doc: &Document, s: &AnimSettings, column: usize, ghosts: bo
             out
         };
         let style = |d: i32| {
-            let tint = s.onion_tint.then(|| tint_of(if d < 0 { &s.onion_color_before } else { &s.onion_color_after }));
+            let tint = s.onion_tint.then(|| tint_of(if d < 0 { &s.onion_color_before } else { &s.onion_color_after }, doc.space()));
             (tint, s.onion_opacity / d.unsigned_abs() as f32)
         };
         if tracks {
@@ -584,7 +584,7 @@ impl Session {
         self.render_spatial_adjustments(&mut view.root, true);
         let mut flat = onepaint_compose::flatten(&view, None);
         if let Some(bg) = background {
-            let b = bg.to_linear_premul();
+            let b = self.doc.space().pixel(bg);
             for p in flat.chunks_exact_mut(4) {
                 let k = 1.0 - p[3];
                 for c in 0..4 {
@@ -592,7 +592,7 @@ impl Session {
                 }
             }
         }
-        onepaint_formats::flatten_to_srgb8(&flat)
+        onepaint_formats::flatten_to_srgb8_in(&flat, self.doc.space())
     }
 
     /// Every timeline slot as RGBA8 (holds expanded); with `range_only`, just

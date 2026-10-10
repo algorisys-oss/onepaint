@@ -16,6 +16,7 @@ pub mod zip;
 pub use image::*;
 pub use progress::Progress;
 
+use onepaint_color::Space;
 use onepaint_doc::{BlendMode, Depth, Document, Extra, Group, Layer, Node};
 use onepaint_raster::{Rect, Surface, TILE, pack_key, unpack_key};
 use serde_json::{Map, Value, json};
@@ -156,14 +157,15 @@ fn f(o: &Map<String, Value>, k: &str, d: f64) -> f64 {
 }
 
 /// Paste a decoded straight-sRGB RGBA8 image into a surface at (x, y), premultiplied linear.
-fn paste_color(s: &mut Surface, x: i32, y: i32, w: u32, h: u32, rgba: &[u8], clip: Rect) {
+#[allow(clippy::too_many_arguments)]
+fn paste_color(s: &mut Surface, x: i32, y: i32, w: u32, h: u32, rgba: &[u8], clip: Rect, space: Space) {
     let r = Rect::new(x, y, w as i32, h as i32);
     let Some(ix) = r.intersect(&clip) else { return };
     let mut data = vec![0.0f32; (ix.w * ix.h * 4) as usize];
     for yy in 0..ix.h {
         for xx in 0..ix.w {
             let si = (((ix.y - y + yy) as u32 * w + (ix.x - x + xx) as u32) * 4) as usize;
-            let p = srgb8_to_premul_linear([rgba[si], rgba[si + 1], rgba[si + 2], rgba[si + 3]]);
+            let p = space.from_srgb8([rgba[si], rgba[si + 1], rgba[si + 2], rgba[si + 3]]);
             let o = ((yy * ix.w + xx) * 4) as usize;
             data[o..o + 4].copy_from_slice(&p);
         }
@@ -173,7 +175,7 @@ fn paste_color(s: &mut Surface, x: i32, y: i32, w: u32, h: u32, rgba: &[u8], cli
 
 /// The layer's pixels outside the canvas as a trimmed straight-sRGB PNG (zero
 /// inside the canvas), or `None` when everything is on the canvas.
-fn overflow_png(s: &Surface, doc: Rect) -> Result<Option<(Rect, Vec<u8>)>, FormatError> {
+fn overflow_png(s: &Surface, doc: Rect, space: Space) -> Result<Option<(Rect, Vec<u8>)>, FormatError> {
     let Some(cb) = s.content_bounds() else { return Ok(None) };
     if cb.x >= doc.x && cb.y >= doc.y && cb.right() <= doc.right() && cb.bottom() <= doc.bottom() {
         return Ok(None);
@@ -196,7 +198,7 @@ fn overflow_png(s: &Surface, doc: Rect) -> Result<Option<(Rect, Vec<u8>)>, Forma
     let mut rgba = Vec::with_capacity(data.len());
     for (i, p) in data.chunks_exact(4).enumerate() {
         let (x, y) = (r.x + (i as i32 % r.w), r.y + (i as i32 / r.w));
-        rgba.extend_from_slice(&if doc.contains(x, y) { [0; 4] } else { premul_linear_to_srgb8([p[0], p[1], p[2], p[3]]) });
+        rgba.extend_from_slice(&if doc.contains(x, y) { [0; 4] } else { space.to_srgb8([p[0], p[1], p[2], p[3]]) });
     }
     Ok(Some((r, encode_png_rgba8(r.w as u32, r.h as u32, &rgba)?)))
 }
@@ -215,7 +217,7 @@ fn paste_mask(s: &mut Surface, x: i32, y: i32, w: u32, h: u32, rgba: &[u8], clip
 }
 
 /// Decode a layer's tile PNGs in parallel (spec 41), counting each on `progress`.
-fn read_tiles(chunks: &[u8], tiles: &[Value], doc: Rect, mask: bool, progress: &Progress) -> Result<Surface, FormatError> {
+fn read_tiles(chunks: &[u8], tiles: &[Value], doc: Rect, mask: bool, progress: &Progress, space: Space) -> Result<Surface, FormatError> {
     use rayon::prelude::*;
     let decoded: Vec<Option<Surface>> = tiles
         .par_iter()
@@ -233,7 +235,7 @@ fn read_tiles(chunks: &[u8], tiles: &[Value], doc: Rect, mask: bool, progress: &
             if mask {
                 paste_mask(&mut s, tx * TILE, ty * TILE, w, h, &rgba, clip);
             } else {
-                paste_color(&mut s, tx * TILE, ty * TILE, w, h, &rgba, clip);
+                paste_color(&mut s, tx * TILE, ty * TILE, w, h, &rgba, clip, space);
             }
             progress.advance(1);
             Ok(Some(s))
@@ -260,7 +262,7 @@ fn count_tiles(nodes: &[Value]) -> u64 {
         .sum()
 }
 
-fn read_node(v: &Value, chunks: &[u8], doc: Rect, progress: &Progress) -> Result<Node, FormatError> {
+fn read_node(v: &Value, chunks: &[u8], doc: Rect, progress: &Progress, space: Space) -> Result<Node, FormatError> {
     let o = v.as_object().ok_or_else(|| corrupt("node is not an object"))?;
     if let Some(children) = o.get("children").and_then(Value::as_array) {
         let mut g = Group::new(&s(o, "name"));
@@ -271,7 +273,7 @@ fn read_node(v: &Value, chunks: &[u8], doc: Rect, progress: &Progress) -> Result
         g.collapsed = b(o, "collapsed", false);
         g.extra = extras(o, GROUP_KNOWN);
         for c in children {
-            g.children.push(read_node(c, chunks, doc, progress)?);
+            g.children.push(read_node(c, chunks, doc, progress, space)?);
         }
         return Ok(Node::Group(g));
     }
@@ -291,15 +293,15 @@ fn read_node(v: &Value, chunks: &[u8], doc: Rect, progress: &Progress) -> Result
         l.adjustment = Some(Box::new(onepaint_doc::Adjustment { kind, params }));
     }
     if let Some(tiles) = o.get("tiles").and_then(Value::as_array) {
-        l.pixels = read_tiles(chunks, tiles, doc, false, progress)?;
+        l.pixels = read_tiles(chunks, tiles, doc, false, progress, space)?;
     } else if let (Some(bb), Some(c)) = (o.get("bbox"), o.get("chunk")) {
         let (w, h, rgba) = decode_png_rgba8(chunk(chunks, c)?)?;
         let x = bb.get("x").and_then(Value::as_i64).unwrap_or(0) as i32;
         let y = bb.get("y").and_then(Value::as_i64).unwrap_or(0) as i32;
-        paste_color(&mut l.pixels, x, y, w, h, &rgba, doc);
+        paste_color(&mut l.pixels, x, y, w, h, &rgba, doc, space);
     }
     if let Some(tiles) = o.get("maskTiles").and_then(Value::as_array) {
-        l.mask = Some(read_tiles(chunks, tiles, doc, true, progress)?);
+        l.mask = Some(read_tiles(chunks, tiles, doc, true, progress, space)?);
     } else if let Some(c) = o.get("mask") {
         let (w, h, rgba) = decode_png_rgba8(chunk(chunks, c)?)?;
         let mut m = Surface::new();
@@ -331,7 +333,7 @@ fn read_node(v: &Value, chunks: &[u8], doc: Rect, progress: &Progress) -> Result
                 }
                 let i = ((yy as u32 * w + xx as u32) * 4) as usize;
                 if rgba[i + 3] > 0 {
-                    l.pixels.set(x, y, srgb8_to_premul_linear([rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3]]));
+                    l.pixels.set(x, y, space.from_srgb8([rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3]]));
                 }
             }
         }
@@ -369,7 +371,7 @@ pub fn read_happypaint_with(bytes: &[u8], progress: &Progress) -> Result<Documen
     let nodes = p.manifest.get("nodes").and_then(Value::as_array).ok_or_else(|| corrupt("manifest without nodes"))?;
     progress.set_total(count_tiles(nodes));
     for n in nodes {
-        doc.root.push(read_node(n, p.chunks, bounds, progress)?);
+        doc.root.push(read_node(n, p.chunks, bounds, progress, doc.space())?);
     }
     Ok(doc)
 }
@@ -380,6 +382,8 @@ fn num(v: f64) -> Value {
 }
 
 struct Writer {
+    /// The document's space: colour tiles are saved as straight sRGB (spec 50).
+    space: Space,
     chunks: Vec<u8>,
     dedup: HashMap<Vec<u8>, Value>,
 }
@@ -417,7 +421,7 @@ impl Writer {
                     let m = (p[0].clamp(0.0, 1.0) * 255.0).round_ties_even() as u8;
                     rgba.extend_from_slice(&[m, m, m, 255]);
                 } else {
-                    rgba.extend_from_slice(&premul_linear_to_srgb8([p[0], p[1], p[2], p[3]]));
+                    rgba.extend_from_slice(&self.space.to_srgb8([p[0], p[1], p[2], p[3]]));
                 }
             }
             let (hash, chunk) = self.push_dedup(encode_png_rgba8(r.w as u32, r.h as u32, &rgba)?);
@@ -483,7 +487,7 @@ impl Writer {
                     o.insert("height".into(), r);
                 }
                 if l.adjustment.is_none()
-                    && let Some((rect, png)) = overflow_png(&l.pixels, doc)?
+                    && let Some((rect, png)) = overflow_png(&l.pixels, doc, self.space)?
                 {
                     let r = self.push(&png);
                     o.insert("overflow".into(), json!({"rect": {"x": rect.x, "y": rect.y, "width": rect.w, "height": rect.h}, "chunk": r}));
@@ -496,7 +500,7 @@ impl Writer {
 
 /// Write a v9 `.happypaint`. `thumbnail_jpeg` becomes the first chunk.
 pub fn write_happypaint(doc: &Document, thumbnail_jpeg: Option<&[u8]>, app_version: &str) -> Result<Vec<u8>, FormatError> {
-    let mut w = Writer { chunks: Vec::new(), dedup: HashMap::new() };
+    let mut w = Writer { space: doc.space(), chunks: Vec::new(), dedup: HashMap::new() };
     let thumb = thumbnail_jpeg.map(|t| w.push(t));
     let bounds = doc.bounds();
     let nodes = doc.root.iter().map(|n| w.node(n, bounds)).collect::<Result<Vec<_>, _>>()?;

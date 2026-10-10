@@ -4,7 +4,7 @@
 
 use super::dab::{EVAP, WATER_MAX};
 use super::{BLOCK, Field, FluidSim, V_MAX, blocks, smoothstep};
-use onepaint_color::{fast_linear_to_srgb as l2s, fast_srgb_to_linear as s2l, pigment::pigment_mix};
+use onepaint_color::pigment::pigment_mix;
 use onepaint_raster::{Rect, Surface, TILE};
 use rayon::prelude::*;
 
@@ -106,6 +106,7 @@ impl FluidSim {
         self.generation = super::next_generation();
         let Some(rect) = rect.intersect(&self.rect) else { return Rect::default() };
         let oil = if self.oil { 1.0 } else { 0.0 };
+        let space = self.space;
         let origin = (self.rect.x, self.rect.y);
         let w = self.rect.w;
         let (bw, bh) = blocks(self.rect);
@@ -201,7 +202,7 @@ impl FluidSim {
                     if active[b] {
                         for x in x0..x1 {
                             let f = finger[(y * w + x) as usize];
-                            let (sv, cv) = update_px(&fs, &fc, x, y, oil, tilt, f, paper);
+                            let (sv, cv) = update_px(&fs, &fc, x, y, oil, tilt, f, paper, space);
                             *flag |= sv[0] != 0.0 || sv[2] != 0.0 || sv[3] != 0.0 || cv[3] != 0.0;
                             srow[x as usize] = sv;
                             crow[x as usize] = cv;
@@ -250,6 +251,7 @@ fn update_px(
     tilt: [f32; 2],
     finger: f32,
     paper: (PaperTap, f32),
+    sp: onepaint_color::Space,
 ) -> ([f32; 4], [f32; 4]) {
     let (u, v) = (x as f32 + 0.5, y as f32 + 0.5);
     // Advect along the velocity, adopting the fastest wet neighbour heading here.
@@ -275,7 +277,7 @@ fn update_px(
     let mut w_avg = 0.0;
     let mut a_new = col[3];
     let mut n1 = [[0.0f32; 4]; 4];
-    let mut c = if col[3] > 0.0005 { [col[0] / col[3], col[1] / col[3], col[2] / col[3]] } else { [1.0; 3] }.map(l2s);
+    let mut c = if col[3] > 0.0005 { [col[0] / col[3], col[1] / col[3], col[2] / col[3]] } else { [1.0; 3] }.map(|v| sp.to_work(v));
     let mut mass = col[3];
     for (i, (ox, oy)) in OFFS.iter().enumerate() {
         let snb = fs.sample(ou + ox, ov + oy);
@@ -289,7 +291,7 @@ fn update_px(
         a_new += lam * (cn[3] - col[3]);
         if cn[3] > 0.0005 {
             let inc = lam * cn[3];
-            let nc = [cn[0] / cn[3], cn[1] / cn[3], cn[2] / cn[3]].map(l2s);
+            let nc = [cn[0] / cn[3], cn[1] / cn[3], cn[2] / cn[3]].map(|v| sp.to_work(v));
             if mass <= 0.0005 {
                 c = nc;
             } else if inc > 0.0 && !super::same_color(nc, c) {
@@ -309,7 +311,7 @@ fn update_px(
     let mut col_new = if a_new <= 0.0005 {
         [0.0; 4]
     } else {
-        let lin = c.map(s2l);
+        let lin = c.map(|v| sp.from_work(v));
         [lin[0] * a_new, lin[1] * a_new, lin[2] * a_new, a_new]
     };
     let (dc, _) = settle_rate(fs, w, ou, ov, oil, paper);

@@ -18,6 +18,8 @@ pub struct StepJob<'a> {
     /// The fingering factor per pixel.
     pub finger: &'a [f32],
     pub oil: bool,
+    /// Pigment mixing runs on sRGB values: 8-bit documents hold them (spec 50).
+    pub space: onepaint_color::Space,
     pub tilt: [f32; 2],
     /// Paper: the grain tile, doc px per tile, strength (none = smooth).
     pub paper: Option<(&'a TipMask, f64, f32)>,
@@ -54,6 +56,7 @@ impl FluidSim {
             col: &mut self.col,
             finger: &self.finger,
             oil: self.oil,
+            space: self.space,
             tilt,
             paper,
             steps,

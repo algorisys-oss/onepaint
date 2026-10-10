@@ -198,3 +198,25 @@ fn cached_plans_share_prepared_adjustments() {
         }
     }
 }
+
+#[test]
+fn programs_match_the_tree_compositor_in_8bit_documents() {
+    use onepaint_compose::program::{PlanCache, plan_tiles_cached, run_split};
+    for seed in 0..40 {
+        let mut doc = with_adjustments(random_doc(seed, 300, 300, seed % 2 == 0), seed);
+        doc.depth = onepaint_doc::Depth::Rgba8;
+        if seed % 3 == 0 {
+            doc.set_paper(Some(onepaint_doc::Paper { grain_id: "canvas".into(), scale: Some(1.0), strength: 0.6 }));
+        }
+        let keys: Vec<_> = doc.bounds().tiles().collect();
+        let hot = doc.layer_ids()[seed as usize % doc.layer_ids().len()].clone();
+        let (progs, cpu) = plan_tiles_cached(&doc, &keys, None, Some(&hot), Some(&PlanCache::default()));
+        assert!(cpu.is_empty());
+        for p in &progs {
+            let want = composite_tile(&doc, p.tx, p.ty, None);
+            assert_eq!(run(p), want, "seed {seed} tile {},{}", p.tx, p.ty);
+            let split = run_split(p);
+            assert!(split.iter().zip(&want).all(|(a, b)| (a - b).abs() <= 1e-5), "seed {seed} split");
+        }
+    }
+}

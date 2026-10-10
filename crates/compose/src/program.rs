@@ -7,8 +7,9 @@
 //! on the CPU. [`run`] interprets a program on the CPU, which tests the
 //! flattening against [`crate::composite_tile`].
 
-use crate::blend::{blend_px, clip_over};
-use crate::{GHOST_PEG_KEY, GHOST_TINT_KEY, StrokeMode, StrokeOverlay, apply_stroke_px, panel_clip, riders};
+use crate::blend::{blend_px_in, clip_over};
+use crate::{GHOST_PEG_KEY, GHOST_TINT_KEY, StrokeMode, StrokeOverlay, apply_stroke_px, apply_stroke_px_in, panel_clip, riders};
+use onepaint_color::Space;
 use onepaint_doc::{BlendMode, Document, Layer, Node};
 pub use onepaint_filters::gpu::GpuAdjust;
 use onepaint_panel::coverage::TileCoverage;
@@ -251,6 +252,8 @@ pub struct TileProgram {
     pub ops: Vec<Op>,
     /// The same ops cut at the hot layer (spec 38), when one was given.
     pub split: Option<Split>,
+    /// What the pixel values mean (spec 50): every blend happens in it.
+    pub space: Space,
 }
 
 /// A run of the program's ops whose result is cached as one image (spec 38).
@@ -464,7 +467,7 @@ pub fn plan_tile_split(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverl
 }
 
 fn plan(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, hot: Option<&str>, cache: Option<&PlanCache>) -> Option<TileProgram> {
-    let frame = onepaint_filters::Frame::region(0, 0, doc.width, doc.height, doc.dpi as f32);
+    let frame = crate::doc_frame(doc);
     let mut p = Planner { tx, ty, ov, ops: Vec::new(), depth: 1, units: Vec::new(), hot, cache, frame, regs: vec![0], cut: None };
     p.nodes(&doc.root).ok()?;
     // The paper shades the finished composite (spec 43), after every unit.
@@ -475,7 +478,7 @@ fn plan(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, hot: Optio
         }
     }
     let split = hot.and_then(|_| split(&p.ops, &p.units));
-    let prog = TileProgram { tx, ty, ops: p.ops, split };
+    let prog = TileProgram { tx, ty, ops: p.ops, split, space: doc.space() };
     let mut seen: Vec<*const Tile> = prog.sources().map(Arc::as_ptr).collect();
     seen.sort_unstable();
     seen.dedup();
@@ -737,10 +740,10 @@ fn load(t: &Tile, i: usize) -> Px {
     t.get(i % TILE as usize, i / TILE as usize)
 }
 
-fn eval(c: &Content, i: usize) -> Px {
+fn eval(c: &Content, i: usize, space: Space) -> Px {
     let mut p = c.base.as_ref().map_or([0.0; 4], |t| load(t, i));
     if let Some(s) = &c.stroke {
-        p = apply_stroke_px(p, load(&s.tile, i), s.opacity, s.mode);
+        p = apply_stroke_px_in(space, p, load(&s.tile, i), s.opacity, s.mode);
     }
     if let Some(r) = &c.relief {
         let (x, y) = (r.tx * TILE + (i % TILE as usize) as i32, r.ty * TILE + (i / TILE as usize) as i32);
@@ -760,7 +763,7 @@ fn eval(c: &Content, i: usize) -> Px {
 }
 
 /// Run `ops` on one pixel, starting from the register `init`.
-fn exec(ops: &[Op], init: Px, i: usize, stack: &mut Vec<Px>) -> Px {
+fn exec(ops: &[Op], init: Px, i: usize, stack: &mut Vec<Px>, space: Space) -> Px {
     stack.clear();
     stack.push(init);
     for op in ops {
@@ -768,19 +771,19 @@ fn exec(ops: &[Op], init: Px, i: usize, stack: &mut Vec<Px>) -> Px {
         let Some(top) = stack.last_mut() else { break };
         match op {
             Op::Layer { content, mode, opacity, inherit_alpha } => {
-                let mut c = eval(content, i);
+                let mut c = eval(content, i, space);
                 if *inherit_alpha {
                     let a = top[3];
                     c = c.map(|v| v * a);
                 }
-                *top = blend_px(*mode, *top, c, *opacity);
+                *top = blend_px_in(space, *mode, *top, c, *opacity);
             }
             Op::PushZero => stack.push([0.0; 4]),
             Op::PushContent(c) => {
-                let v = eval(c, i);
+                let v = eval(c, i, space);
                 stack.push(v);
             }
-            Op::Clip { content, opacity } => *top = clip_over(*top, eval(content, i), *opacity),
+            Op::Clip { content, opacity } => *top = clip_over(*top, eval(content, i, space), *opacity),
             Op::Adjust { adjust, mask, mode, opacity } => {
                 let (x, y) = (adjust.at[0] + (i % TILE as usize) as i32, adjust.at[1] + (i / TILE as usize) as i32);
                 let mut o = adjust.prepared.color_px(*top, x, y);
@@ -788,7 +791,7 @@ fn exec(ops: &[Op], init: Px, i: usize, stack: &mut Vec<Px>) -> Px {
                     let k = load(m, i)[0];
                     o = o.map(|v| v * k);
                 }
-                *top = blend_px(*mode, *top, o, *opacity);
+                *top = blend_px_in(space, *mode, *top, o, *opacity);
             }
             Op::Coverage(c) => {
                 let k = c.values[i];
@@ -798,7 +801,7 @@ fn exec(ops: &[Op], init: Px, i: usize, stack: &mut Vec<Px>) -> Px {
                 if top[..3].iter().any(|v| *v != 0.0) {
                     let (lx, ly) = ((i % TILE as usize) as i32, (i / TILE as usize) as i32);
                     let (x, y) = ((tx * TILE + lx) as f64 + 0.5, (ty * TILE + ly) as f64 + 0.5);
-                    let k = onepaint_brush::paper::shade_at(&shade.tex, shade.amt, x, y);
+                    let k = onepaint_brush::paper::shade_at(&shade.tex, shade.amt, x, y, space);
                     top[..3].iter_mut().for_each(|v| *v *= k);
                 }
             }
@@ -810,7 +813,7 @@ fn exec(ops: &[Op], init: Px, i: usize, stack: &mut Vec<Px>) -> Px {
                     }
                 }
                 let Some(dst) = stack.last_mut() else { break };
-                *dst = if *clip { clip_over(*dst, v, *opacity) } else { blend_px(*mode, *dst, v, *opacity) };
+                *dst = if *clip { clip_over(*dst, v, *opacity) } else { blend_px_in(space, *mode, *dst, v, *opacity) };
             }
         }
     }
@@ -822,7 +825,7 @@ pub fn run(prog: &TileProgram) -> Vec<f32> {
     let mut out = vec![0.0; TILE_PX * 4];
     let mut stack: Vec<Px> = Vec::with_capacity(MAX_STACK);
     for i in 0..TILE_PX {
-        let v = exec(&prog.ops, [0.0; 4], i, &mut stack);
+        let v = exec(&prog.ops, [0.0; 4], i, &mut stack, prog.space);
         out[i * 4..i * 4 + 4].copy_from_slice(&v);
     }
     out
@@ -835,13 +838,13 @@ pub fn run_split(prog: &TileProgram) -> Vec<f32> {
     let mut out = vec![0.0; TILE_PX * 4];
     let mut stack: Vec<Px> = Vec::with_capacity(MAX_STACK);
     for i in 0..TILE_PX {
-        let base = s.prefix.as_ref().map_or([0.0; 4], |p| exec(prog.at(&p.range), [0.0; 4], i, &mut stack));
-        let mut v = exec(prog.at(&s.hot), base, i, &mut stack);
+        let base = s.prefix.as_ref().map_or([0.0; 4], |p| exec(prog.at(&p.range), [0.0; 4], i, &mut stack, prog.space));
+        let mut v = exec(prog.at(&s.hot), base, i, &mut stack, prog.space);
         if let Some(sfx) = &s.suffix {
-            let img = exec(prog.at(&sfx.range), [0.0; 4], i, &mut stack);
-            v = blend_px(BlendMode::Normal, v, img, 1.0);
+            let img = exec(prog.at(&sfx.range), [0.0; 4], i, &mut stack, prog.space);
+            v = blend_px_in(prog.space, BlendMode::Normal, v, img, 1.0);
         }
-        v = exec(prog.at(&s.tail), v, i, &mut stack);
+        v = exec(prog.at(&s.tail), v, i, &mut stack, prog.space);
         out[i * 4..i * 4 + 4].copy_from_slice(&v);
     }
     out

@@ -30,7 +30,7 @@ pub(crate) fn quantize_nodes(nodes: &mut [Node], done: &mut Converted) {
         match n {
             Node::Group(g) => quantize_nodes(&mut g.children, done),
             Node::Layer(l) => {
-                quantize_surface(&mut l.pixels, Store::Srgb8, done);
+                quantize_surface(&mut l.pixels, Store::Unorm8, done);
                 if let Some(m) = &mut l.mask {
                     quantize_surface(m, Store::Unorm8, done);
                 }
@@ -58,7 +58,7 @@ impl Session {
         match change {
             Change::Tiles { layer, plane, tiles } => {
                 let store = match plane {
-                    Plane::Pixels => Store::Srgb8,
+                    Plane::Pixels => Store::Unorm8,
                     Plane::Mask => Store::Unorm8,
                     Plane::Height => return,
                 };

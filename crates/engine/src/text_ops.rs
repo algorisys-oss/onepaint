@@ -12,14 +12,14 @@ fn read_texts(l: &Layer) -> Vec<TextSpec> {
     l.extra.get("text").and_then(|v| serde_json::from_value::<TextSpec>(v.clone()).ok()).into_iter().collect()
 }
 
-pub(crate) fn write_texts(l: &mut Layer, specs: &[TextSpec], w: u32, h: u32) {
+pub(crate) fn write_texts(l: &mut Layer, specs: &[TextSpec], w: u32, h: u32, space: onepaint_color::Space) {
     l.extra.remove("text");
     if specs.is_empty() {
         l.extra.remove("texts");
     } else {
         l.extra.insert("texts".into(), serde_json::to_value(specs).unwrap_or_default());
     }
-    l.pixels = Renderer::new().render(specs, w, h);
+    l.pixels = Renderer::in_space(space).render(specs, w, h);
 }
 
 impl Session {
@@ -48,25 +48,25 @@ impl Session {
     }
 
     pub(crate) fn add_text(&mut self, spec: TextSpec) -> Result<(), EngineError> {
-        let (w, h) = (self.doc.width, self.doc.height);
+        let (w, h, space) = (self.doc.width, self.doc.height, self.doc.space());
         let active = self.active.clone();
         if self.is_text_layer(&active) {
             return self.tree_edit(None, |s| {
                 if let Some(l) = s.doc.layer_mut(&active) {
                     let mut specs = read_texts(l);
                     specs.push(spec);
-                    write_texts(l, &specs, w, h);
+                    write_texts(l, &specs, w, h, space);
                 }
                 Ok(())
             });
         }
         let mut l = Layer::new("Text");
-        write_texts(&mut l, &[spec], w, h);
+        write_texts(&mut l, &[spec], w, h, space);
         self.insert_above_active(Node::Layer(l))
     }
 
     pub(crate) fn update_text(&mut self, id: &str, index: usize, spec: Option<TextSpec>) -> Result<(), EngineError> {
-        let (w, h) = (self.doc.width, self.doc.height);
+        let (w, h, space) = (self.doc.width, self.doc.height, self.doc.space());
         if self.texts(id).len() <= index {
             return Err(EngineError::NoSuchLayer(format!("{id} text {index}")));
         }
@@ -81,7 +81,7 @@ impl Session {
                         specs.remove(index);
                     }
                 }
-                write_texts(l, &specs, w, h);
+                write_texts(l, &specs, w, h, space);
             }
             Ok(())
         })

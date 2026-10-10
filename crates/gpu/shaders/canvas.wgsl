@@ -27,6 +27,8 @@ struct Uniforms {
     view: vec4<f32>,
     lo: vec4<f32>,
     hi: vec4<f32>,
+    // Spec 50: x = 1 when the composite holds premultiplied sRGB values.
+    space: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -165,6 +167,9 @@ fn fs_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
         let odd = (i32(cell.x) + i32(cell.y)) % 2 != 0;
         let chk = select(u.checker_a.rgb, u.checker_b.rgb, odd);
         var p = sample_doc(d);
+        if (u.space.x > 0.5 && p.a > 0.0) {
+            p = vec4<f32>(srgb2lin(p.rgb / p.a) * p.a, p.a);
+        }
         if (u.view.w > 0.5) {
             p = view_modes(p);
         }

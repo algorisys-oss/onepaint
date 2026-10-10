@@ -14,7 +14,15 @@ struct Params {
     paper_tile_px: f32,   // doc px per paper tile
     paper_size: u32,      // paper tile texels per side
     blocks_w: u32,        // active-block grid width (16-px blocks)
-    _pad: f32,
+    gamma: f32,           // 1: colours are sRGB values (8-bit documents, spec 50)
+}
+
+fn to_work3(c: vec3<f32>) -> vec3<f32> {
+    return select(l2s3(c), c, p.gamma > 0.5);
+}
+
+fn from_work3(c: vec3<f32>) -> vec3<f32> {
+    return select(s2l3(c), c, p.gamma > 0.5);
 }
 
 @group(0) @binding(0) var<uniform> p: Params;
@@ -222,7 +230,7 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>) {
     var w_avg = 0.0;
     var a_new = col.w;
     var n1: array<vec4<f32>, 4>;
-    var c = l2s3(select(vec3<f32>(1.0), col.xyz / col.w, col.w > 0.0005));
+    var c = to_work3(select(vec3<f32>(1.0), col.xyz / col.w, col.w > 0.0005));
     var mass = col.w;
     for (var k = 0; k < 8; k++) {
         let snb = sample_sim(ou + offs[k].x, ov + offs[k].y);
@@ -236,7 +244,7 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>) {
         a_new += lam * (cn.w - col.w);
         if (cn.w > 0.0005) {
             let inc = lam * cn.w;
-            let nc = l2s3(cn.xyz / cn.w);
+            let nc = to_work3(cn.xyz / cn.w);
             if (mass <= 0.0005) {
                 c = nc;
             } else if (inc > 0.0 && !same_color(nc, c)) {
@@ -253,7 +261,7 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>) {
     let w_new = clamp(w + DIFF_W * resist * (1.0 + (0.06 - 1.0) * p.oil) * (w_avg - w) - EVAP * soak * (1.0 - p.oil), 0.0, WATER_MAX);
     var col_new = vec4<f32>(0.0);
     if (a_new > 0.0005) {
-        col_new = vec4<f32>(s2l3(c) * a_new, a_new);
+        col_new = vec4<f32>(from_work3(c) * a_new, a_new);
     }
     let dc = settle_rate(w, ou, ov).x;
     col_new = clamp(col_new * (1.0 - dc), vec4<f32>(0.0), vec4<f32>(1.0));

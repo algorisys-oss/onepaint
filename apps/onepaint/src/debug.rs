@@ -19,7 +19,8 @@
 //!   `ONEPAINT_DOCK=float` floats a vertical tool bar and groups Colour with Align instead.
 //! - `ONEPAINT_PANELS=1` lays out a 2×2 manga page, cuts a panel, inks across a frame, and shows the Panel tool.
 //! - `ONEPAINT_VIEW=gray|proof|warn` turns on a present-only view mode (spec 48).
-//! - `ONEPAINT_NEW=16384x12000` starts with a blank document of that size (before the demo, if any).
+//! - `ONEPAINT_NEW=16384x12000` starts with a blank document of that size (before the demo, if any);
+//!   `@8` after the size makes it 8-bit (`2048x1536@8`).
 //! - `ONEPAINT_MAX_SHEET=256` caps the composite's sheet side, to see sheets (spec 40) on small documents.
 //! - `ONEPAINT_EXIT=1` closes the app after the screenshot.
 
@@ -48,8 +49,8 @@ pub struct Debug {
     impasto: bool,
     dock: Option<String>,
     panels: bool,
-    /// Start with a blank document of this size.
-    new: Option<(u32, u32)>,
+    /// Start with a blank document of this size, 8-bit when set.
+    new: Option<(u32, u32, bool)>,
     view: Option<String>,
 }
 
@@ -113,8 +114,9 @@ impl Debug {
             panels: var("ONEPAINT_PANELS").is_some(),
             view: var("ONEPAINT_VIEW"),
             new: var("ONEPAINT_NEW").and_then(|v| {
-                let (w, h) = v.split_once('x')?;
-                Some((w.parse().ok()?, h.parse().ok()?))
+                let (size, depth) = v.split_once('@').unwrap_or((&v, ""));
+                let (w, h) = size.split_once('x')?;
+                Some((w.parse().ok()?, h.parse().ok()?, depth == "8"))
             }),
         }
     }
@@ -143,8 +145,11 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
     let frame = app.debug.frame;
     app.debug.frame += 1;
     if frame == 1
-        && let Some((w, h)) = app.debug.new
+        && let Some((w, h, eight)) = app.debug.new
     {
+        if eight {
+            app.new_depth = onepaint_doc::Depth::Rgba8;
+        }
         app.new_document(w, h);
     }
     if frame == 3

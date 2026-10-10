@@ -152,13 +152,18 @@ fn blur_cov(cov: &[f32], w: usize, h: usize, sigma: f64) -> Vec<f32> {
 
 /// Render the bolt into a premultiplied linear `w × h` buffer.
 pub fn render_lightning(w: usize, h: usize, p: &Params) -> Vec<f32> {
+    render_lightning_in(w, h, p, onepaint_color::Space::Linear)
+}
+
+/// [`render_lightning`] for a document in `space` (8-bit documents keep sRGB, spec 50).
+pub fn render_lightning_in(w: usize, h: usize, p: &Params, space: onepaint_color::Space) -> Vec<f32> {
     let mut out = vec![0.0f32; w * h * 4];
     if w == 0 || h == 0 {
         return out;
     }
     let shadow = p.gen_color_b.unwrap_or([0.7, 0.85, 1.0]);
     let over = |out: &mut [f32], cov: &[f32], col: [f32; 3], alpha: f32| {
-        let lin = col.map(onepaint_color::srgb_to_linear);
+        let lin = col.map(|c| space.from_work(c));
         out.par_chunks_mut(4).zip(cov.par_iter()).for_each(|(o, &c)| {
             let a = c * alpha;
             if a > 0.0 {

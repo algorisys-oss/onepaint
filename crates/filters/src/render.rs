@@ -156,5 +156,5 @@ pub(crate) fn light_rays(p: &Params, s: Src) -> Vec<f32> {
         let o = [0, 1, 2].map(|ch| sum[ch] / wsum * tint[ch] * 3.0);
         [o[0], o[1], o[2], 1.0]
     });
-    bloom_combine(s.t, Tex::new(&rays, hw, hh), p.amount.unwrap_or(0.6).max(0.0))
+    bloom_combine(s.t, Tex::new(&rays, hw, hh), p.amount.unwrap_or(0.6).max(0.0), s.f.space)
 }

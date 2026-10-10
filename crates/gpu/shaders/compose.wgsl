@@ -30,6 +30,11 @@ struct Params {
     // across, of size `sheet` at this level.
     cols: u32,
     sheet: vec2<u32>,
+    // Spec 50: 1 when pixel values are sRGB (8-bit documents) and blend as they are.
+    gamma: u32,
+    _p0: u32,
+    _p1: u32,
+    _p2: u32,
 }
 
 struct Job {
@@ -271,10 +276,32 @@ fn blend_color(m: u32, b: vec3<f32>, s: vec3<f32>) -> vec3<f32> {
     }
 }
 
+// Gamma space (spec 50): every mode on the stored sRGB values; multiply,
+// screen and add are happypaint's fixed-function GL blends, clamped like an
+// 8-bit target (compose blend.rs `blend_px_in`).
+fn blend_gamma(m: u32, bp: vec4<f32>, sp: vec4<f32>) -> vec4<f32> {
+    switch m {
+        case M_NORMAL: { return sp + bp * (1.0 - sp.w); }
+        case M_ADD: { return vec4<f32>(sp.xyz + bp.xyz, sp.w + bp.w * (1.0 - sp.w)); }
+        case M_MULTIPLY: { return sp * bp + bp * (1.0 - sp.w); }
+        case M_SCREEN: { return sp + bp * (1.0 - sp); }
+        default: {
+            let cs = straight(sp);
+            let cb = straight(bp);
+            let bl = blend_color(m, cb, cs);
+            let o = sp.w * (1.0 - bp.w) * cs + sp.w * bp.w * bl + (1.0 - sp.w) * bp.w * cb;
+            return vec4<f32>(o, sp.w + bp.w * (1.0 - sp.w));
+        }
+    }
+}
+
 fn blend_px(m: u32, bp: vec4<f32>, src: vec4<f32>, opacity: f32) -> vec4<f32> {
     let sp = src * opacity;
     if (sp.w <= 0.0 && sp.x == 0.0 && sp.y == 0.0 && sp.z == 0.0) {
         return bp;
+    }
+    if (prm.gamma != 0u) {
+        return clamp(blend_gamma(m, bp, sp), vec4<f32>(0.0), vec4<f32>(1.0));
     }
     if (m == M_NORMAL) {
         return sp + bp * (1.0 - sp.w);
@@ -301,6 +328,10 @@ fn blend_px_alpha_lock(m: u32, bp: vec4<f32>, src: vec4<f32>, opacity: f32) -> v
     }
     if (m == M_NORMAL) {
         return vec4<f32>(sp.xyz * bp.w + bp.xyz * (1.0 - sp.w), bp.w);
+    }
+    if (prm.gamma != 0u) {
+        let bl = blend_color(m, straight(bp), straight(sp));
+        return clamp(vec4<f32>((sp.w * bl + (1.0 - sp.w) * straight(bp)) * bp.w, bp.w), vec4<f32>(0.0), vec4<f32>(1.0));
     }
     let s = prem_lin_to_srgb(sp);
     let b = prem_lin_to_srgb(bp);
@@ -353,11 +384,21 @@ fn hsv2rgb(c: vec3<f32>) -> vec3<f32> {
 }
 
 fn to_work(c: vec3<f32>) -> vec3<f32> {
+    if (prm.gamma != 0u) {
+        return c;
+    }
     return vec3<f32>(lin2srgb(c.x), lin2srgb(c.y), lin2srgb(c.z));
 }
 
+fn from_work(c: vec3<f32>) -> vec3<f32> {
+    if (prm.gamma != 0u) {
+        return c;
+    }
+    return vec3<f32>(srgb2lin(c.x), srgb2lin(c.y), srgb2lin(c.z));
+}
+
 fn repremul(o: vec3<f32>, a: f32) -> vec4<f32> {
-    return vec4<f32>(vec3<f32>(srgb2lin(o.x), srgb2lin(o.y), srgb2lin(o.z)) * a, a);
+    return vec4<f32>(from_work(o) * a, a);
 }
 
 // Bilinear 256 × 1 LUT lookup with texel centres at (i + 0.5) / 256.
@@ -588,7 +629,7 @@ fn adjust(op: Op, s: vec4<f32>, pos: vec2<i32>) -> vec4<f32> {
                 mix(pattern_at(lut, i + vec2<i32>(0, 1), sz), pattern_at(lut, i + vec2<i32>(1, 1), sz), f.x),
                 f.y,
             );
-            return vec4<f32>(vec3<f32>(srgb2lin(t.x), srgb2lin(t.y), srgb2lin(t.z)) * t.w, t.w);
+            return vec4<f32>(from_work(t.xyz) * t.w, t.w);
         }
         case 16u: {
             let t = shape_t(u32(p0.x), vec2<f32>(pos) + 0.5 - p0.yz, vec2<f32>(p0.w, p1.x) - p0.yz);
@@ -629,7 +670,8 @@ fn paper_k(d: vec2<f32>, tile_px: f32, amt: f32) -> f32 {
     let lambert = clamp((nx * l.x + ny * l.y + l.z) / sqrt(nx * nx + ny * ny + 1.0), 0.0, 1.0);
     let h = paper_h(d, tile_px);
     let shade = 1.0 + (0.55 + 0.45 * (0.35 + 0.65 * lambert) * (0.4 + 0.6 * h) - 1.0) * amt;
-    return pow(shade, 2.2);
+    // 8-bit documents use the shade as it is (`u_paperLinear`, spec 50).
+    return select(pow(shade, 2.2), shade, prm.gamma != 0u);
 }
 
 // ── Impasto relief (spec 45; crates/compose relief.rs `light_px`) ──

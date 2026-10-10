@@ -11,34 +11,24 @@ pub const THUMB: [usize; 2] = [44, 34];
 
 #[derive(Default)]
 pub struct Thumbs {
+    /// The document's space, for turning layer pixels into colours (spec 50).
+    pub space: onepaint_color::Space,
     layers: HashMap<String, TextureHandle>,
     brushes: HashMap<String, TextureHandle>,
     masks: HashMap<String, TextureHandle>,
 }
 
-fn to_image(s: &Surface, area: Rect, w: usize, h: usize) -> ColorImage {
+fn to_image(s: &Surface, area: Rect, w: usize, h: usize, space: onepaint_color::Space) -> ColorImage {
     let mut px = Vec::with_capacity(w * h);
     for y in 0..h {
         for x in 0..w {
             let sx = area.x + ((x as f32 + 0.5) / w as f32 * area.w as f32) as i32;
             let sy = area.y + ((y as f32 + 0.5) / h as f32 * area.h as f32) as i32;
-            let [r, g, b, a] = onepaint_formats_free::to_srgb8(s.get(sx, sy));
+            let [r, g, b, a] = space.to_srgb8(s.get(sx, sy));
             px.push(egui::Color32::from_rgba_unmultiplied(r, g, b, a));
         }
     }
     ColorImage::new([w, h], px)
-}
-
-/// Tiny local helper so the app doesn't need the formats crate for one conversion.
-mod onepaint_formats_free {
-    pub fn to_srgb8(p: [f32; 4]) -> [u8; 4] {
-        let a = p[3].clamp(0.0, 1.0);
-        if a <= 0.0 {
-            return [0, 0, 0, 0];
-        }
-        let q = |v: f32| (onepaint_color::linear_to_srgb(v / a).clamp(0.0, 1.0) * 255.0).round() as u8;
-        [q(p[0]), q(p[1]), q(p[2]), (a * 255.0).round() as u8]
-    }
 }
 
 impl Thumbs {
@@ -87,7 +77,7 @@ impl Thumbs {
         let (dw, dh) = (doc[0] as f32, doc[1] as f32);
         let s = (THUMB[0] as f32 / dw).min(THUMB[1] as f32 / dh);
         let (w, h) = (((dw * s).round() as usize).max(1), ((dh * s).round() as usize).max(1));
-        let img = to_image(&l.pixels, Rect::new(0, 0, doc[0] as i32, doc[1] as i32), w, h);
+        let img = to_image(&l.pixels, Rect::new(0, 0, doc[0] as i32, doc[1] as i32), w, h, self.space);
         let tex = ctx.load_texture(format!("layer-thumb-{}", l.id), img, TextureOptions::LINEAR);
         self.layers.insert(l.id.clone(), tex.clone());
         tex

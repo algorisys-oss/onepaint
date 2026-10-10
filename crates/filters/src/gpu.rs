@@ -97,7 +97,7 @@ pub fn gpu_adjust(kind: Kind, p: &Params, frame: Frame) -> Option<GpuAdjust> {
             14
         }
         Kind::SolidFill => {
-            put(0, &from_work(p.fill_color.unwrap_or([0.0; 3])));
+            put(0, &from_work(p.fill_color.unwrap_or([0.0; 3]), frame.space));
             15
         }
         Kind::GradientFill => {
@@ -105,7 +105,7 @@ pub fn gpu_adjust(kind: Kind, p: &Params, frame: Frame) -> Option<GpuAdjust> {
             let a = [p.grad_ax.unwrap_or(0.5) * w, p.grad_ay.unwrap_or(0.0) * h];
             let b = [p.grad_bx.unwrap_or(0.5) * w, p.grad_by.unwrap_or(1.0) * h];
             put(0, &[grad_shape_code(p.grad_shape.as_deref()) as f32, a[0], a[1], b[0], b[1]]);
-            table = Some(Ramp::new(&fill_stops(p)).entries().to_vec());
+            table = Some(Ramp::new_in(&fill_stops(p), frame.space).entries().to_vec());
             16
         }
         Kind::Tone => {
@@ -132,7 +132,7 @@ pub fn gpu_adjust(kind: Kind, p: &Params, frame: Frame) -> Option<GpuAdjust> {
             let end = p.tone_level_end.unwrap_or(0.0).clamp(0.0, 1.0);
             put(0, &[density, lvl, end, shape, dir[0], dir[1], denom, cell, ang.cos(), ang.sin()]);
             put(10, &[if p.hard_dots.unwrap_or(false) { 1.0 } else { 0.0 }]);
-            put(12, &from_work(to_work(p.target.unwrap_or([0.0; 3])).map(|v| v.clamp(0.0, 1.0))));
+            put(12, &from_work(to_work(p.target.unwrap_or([0.0; 3]), frame.space).map(|v| v.clamp(0.0, 1.0)), frame.space));
             17
         }
         Kind::PatternFill => {

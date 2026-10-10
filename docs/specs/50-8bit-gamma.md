@@ -1,8 +1,14 @@
 # 50: 8-bit documents composite in gamma space
 
 ## Status
-Planned (B of the 8-bit work; spec 49 is A). Closes divergence 2 for 8-bit
+Built (B of the 8-bit work; spec 49 is A). Closes divergence 2 for 8-bit
 documents.
+
+Not covered here:
+- Merge down still composites with the layer's real blend mode. happypaint
+  merges advanced modes as Normal; onepaint keeps divergence 8 here.
+- The GPU still holds 8-bit tiles as f16 in its atlases (VRAM is not
+  halved yet).
 
 ## happypaint (the spec)
 Paths are under `happypaint/frontend/src`.
@@ -50,8 +56,8 @@ from `Document::space()`. It owns every boundary:
 | `to_work` / `from_work` (colour filters) | the curve | identity |
 
 ### Storage
-8-bit pixel tiles are `Unorm8`: raw bytes of premultiplied sRGB, the same
-bytes as spec 49's `Srgb8`, now read as they are.
+8-bit pixel tiles are `Unorm8`: raw bytes of premultiplied sRGB, which spec
+49's former `Srgb8` store held too, now read as they are.
 
 ### Compositing
 `blend_px` and the alpha-lock variant take the space.
@@ -75,6 +81,14 @@ bytes as spec 49's `Srgb8`, now read as they are.
   `to_work` and `from_work`, on the CPU and on the GPU.
 - Gradient ramps are built without linearising.
 - Pigment (Kubelka–Munk) skips its sRGB wrap.
+
+### Exports
+- `Session::flatten()` stays in the document's space; the magic wand
+  compares those values.
+- `flatten_linear()` decodes for exports, thumbnails, recordings and the
+  reference snapshot.
+- A copied region carries its space, and pasting it into a document of
+  another depth converts it.
 
 ### Files and the outside
 - `.happypaint` reading and writing use `space` for the 8-bit PNG tiles,

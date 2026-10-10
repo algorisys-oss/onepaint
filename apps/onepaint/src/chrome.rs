@@ -792,7 +792,7 @@ fn canvas_palette(app: &App) -> Vec<String> {
     for y in (0..h).step_by(step) {
         for x in (0..w).step_by(step) {
             let i = (y * w + x) * 4;
-            let c = onepaint_color::Rgba::from_linear_premul([flat[i], flat[i + 1], flat[i + 2], flat[i + 3]]);
+            let c = d.space().color([flat[i], flat[i + 1], flat[i + 2], flat[i + 3]]);
             let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
             px.extend([b(c.r), b(c.g), b(c.b), b(c.a)]);
         }
@@ -1599,7 +1599,7 @@ fn mixer_options(app: &mut App, ui: &mut Ui) {
             let _ = app.session.execute(Command::CleanMixer);
         }
         if let Some(r) = app.session.mixer_reservoir() {
-            let c = onepaint_color::Rgba::from_linear_premul([r[0], r[1], r[2], 1.0]);
+            let c = app.session.doc().space().color([r[0], r[1], r[2], 1.0]);
             widgets::swatch(ui, c, 22.0, false).on_hover_text("The colour the brush holds");
         }
     });

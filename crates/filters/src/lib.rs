@@ -26,7 +26,6 @@ pub use params::{BlurPin, ColorSample, FillStop, Params, Stop};
 pub use tex::Frame;
 
 use colour::{hsv2rgb, rgb2hsv};
-use onepaint_color::{fast_linear_to_srgb as linear_to_srgb, fast_srgb_to_linear as srgb_to_linear};
 use onepaint_stroke::{CurvePoint, Interp, eval_curve};
 use rayon::prelude::*;
 
@@ -165,7 +164,8 @@ impl Prepared {
         }
         let a = s[3];
         let un = if a > 0.0 { [s[0] / a, s[1] / a, s[2] / a] } else { [s[0], s[1], s[2]] };
-        let w = un.map(linear_to_srgb);
+        let space = self.ex.frame.space;
+        let w = un.map(|v| space.to_work(v));
         let p = &self.p;
         let c01 = |v: f32| v.clamp(0.0, 1.0);
         let o: [f32; 3] = match self.kind {
@@ -232,7 +232,7 @@ impl Prepared {
             }
             _ => w,
         };
-        let l = o.map(srgb_to_linear);
+        let l = o.map(|v| space.from_work(v));
         [l[0] * a, l[1] * a, l[2] * a, a]
     }
 }
@@ -303,7 +303,7 @@ pub fn apply_spatial_in(kind: Kind, p: &Params, buf: &[f32], w: usize, h: usize,
         });
     }
     if kind == Kind::Lightning {
-        return lightning::render_lightning(w, h, p);
+        return lightning::render_lightning_in(w, h, p, frame.space);
     }
     if is_identity(kind, p) {
         return buf.to_vec();
