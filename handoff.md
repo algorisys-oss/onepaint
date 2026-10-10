@@ -57,6 +57,12 @@ Items 1–5 from the earlier list; every step pushed as it landed.
   adjustment layers and ghost pegs (`todo.md` §2.1). The last two need a
   multi-pass design: a padded backdrop pass, and intermediate images
   resampled through the peg transform.
+- **A review of the evening's commits** found four bugs, all fixed with
+  tests where possible:
+  - warm-up filled relief segments with a 1 × 1 document size;
+  - a background load could land on a document opened after it started;
+  - the proof LUT and paper grain textures were cached by an address
+    that could be reused.
 - **Debug hooks:** `ONEPAINT_NEW=WxH` (a blank document of that size;
   16384 × 12000 checked, one sheet and 4 × 3) and
   `ONEPAINT_VIEW=gray|proof|warn`.

@@ -48,6 +48,9 @@ order. The output is the same as decoding them one by one.
   the gallery entry, the save path for native files, and the clean state.
 - A recovered autosave (`recover_path`) opens as unsaved work with no path,
   and stays out of the gallery.
+- A load remembers the tab and document it replaces. If either changed
+  before it finished (a book opened, a new drawing, a tab switch), the
+  result is dropped. Opening a book cancels a pending load.
 - A cancelled load leaves the current drawing alone and is silent. A failed
   load shows "Couldn't open …".
 - After 150 ms the load shows a modal card: "Opening <name>", a ui_kit

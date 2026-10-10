@@ -22,7 +22,8 @@ already does it on the CPU.
   the suffix image.
 - GPU (`compose.wgsl`):
   - the grain is an R32Float texture at binding 16, uploaded when the
-    batch's paper grain changes (keyed on the grain's pixels);
+    batch's paper grain changes. The cache holds the grain's `Arc`, so a
+    freed user grain's address can't alias a new one;
   - `paper_h` is `TipMask::sample_repeat` by hand: wrap, then bilinear;
   - `paper_k` is `shade_at`;
   - the op carries the tile size in doc px and the amount;

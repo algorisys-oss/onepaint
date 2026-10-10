@@ -17,7 +17,8 @@ This is also how happypaint does it: its present shader applies them
   - the proof's black and white points in linear light (media-relative
     unless paper white or black ink is simulated).
 - It uploads the press's 33³ proof LUT as an `Rgba8Unorm` 3D texture,
-  rebuilt when the press changes (keyed on the LUT's address).
+  rebuilt when the press changes. It holds the press's `Arc`, compared
+  with `ptr_eq`; `None` is the built-in press.
 - `view_modes()` in the present shader follows `apply_view_with` step by
   step:
   - encode to premultiplied sRGB;
