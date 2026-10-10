@@ -15,6 +15,9 @@ pub struct Gallery {
     pub recent: Vec<PathBuf>,
     store: Option<PathBuf>,
     thumbs: HashMap<PathBuf, Option<TextureHandle>>,
+    /// Files here never join the gallery (the autosave folder: a recovered
+    /// autosave is deleted once the work is saved).
+    skip: Option<PathBuf>,
 }
 
 pub fn default_path() -> Option<PathBuf> {
@@ -22,13 +25,31 @@ pub fn default_path() -> Option<PathBuf> {
 }
 
 impl Gallery {
-    pub fn load(store: Option<PathBuf>) -> Self {
+    /// The saved list, without files that are gone or that live in `skip`.
+    pub fn load(store: Option<PathBuf>, skip: Option<PathBuf>) -> Self {
         let recent = store
             .as_ref()
             .and_then(|p| std::fs::read(p).ok())
             .and_then(|b| serde_json::from_slice::<Vec<PathBuf>>(&b).ok())
             .unwrap_or_default();
-        Self { recent, store, thumbs: HashMap::new() }
+        let mut g = Self { recent, store, thumbs: HashMap::new(), skip };
+        g.prune();
+        g
+    }
+
+    fn skipped(&self, p: &Path) -> bool {
+        self.skip.as_ref().is_some_and(|d| p.starts_with(d) || p.starts_with(d.canonicalize().unwrap_or_else(|_| d.clone())))
+    }
+
+    /// Drop entries whose file was deleted or moved (and autosaves).
+    pub fn prune(&mut self) {
+        let before = self.recent.len();
+        let skip = self.skip.clone();
+        self.recent.retain(|p| p.exists() && !skip.as_ref().is_some_and(|d| p.starts_with(d)));
+        if self.recent.len() != before {
+            self.thumbs.retain(|p, _| p.exists());
+            self.save();
+        }
     }
 
     fn save(&self) {
@@ -44,6 +65,9 @@ impl Gallery {
     /// Put `p` first (opened or saved just now).
     pub fn touch(&mut self, p: &Path) {
         let p = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        if self.skipped(&p) {
+            return;
+        }
         self.recent.retain(|q| q != &p);
         self.recent.insert(0, p.clone());
         self.recent.truncate(MAX_RECENT);
@@ -99,6 +123,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         });
     });
     ui.add_space(8.0);
+    // A file deleted or moved since it was listed leaves the gallery.
+    if ui.ctx().cumulative_frame_nr() % 30 == 0 {
+        app.gallery.prune();
+    }
     let list = app.gallery.recent.clone();
     if list.is_empty() {
         ui.label(egui::RichText::new("Drawings you open or save appear here.").color(t.fg_muted));
@@ -166,13 +194,42 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap_or_default();
         let store = dir.join("recent.json");
         let (a, b) = (dir.join("a.png"), dir.join("b.png"));
-        let mut g = Gallery::load(Some(store.clone()));
+        std::fs::write(&a, b"a").unwrap_or_default();
+        std::fs::write(&b, b"b").unwrap_or_default();
+        let mut g = Gallery::load(Some(store.clone()), None);
         g.touch(&a);
         g.touch(&b);
         g.touch(&a);
         assert_eq!(g.recent, vec![a.clone(), b.clone()]);
-        let back = Gallery::load(Some(store));
+        let back = Gallery::load(Some(store), None);
         assert_eq!(back.recent, vec![a.clone(), b]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn deleted_files_and_autosaves_leave_the_gallery() {
+        let dir = std::env::temp_dir().join(format!("onepaint-gallery-{}", onepaint_doc::new_id()));
+        let autosaves = dir.join("autosave");
+        std::fs::create_dir_all(&autosaves).unwrap_or_default();
+        let dir = dir.canonicalize().unwrap_or(dir);
+        let autosaves = dir.join("autosave");
+        let store = dir.join("recent.json");
+        let (kept, gone, auto) = (dir.join("kept.png"), dir.join("gone.png"), autosaves.join("x.happypaint"));
+        for f in [&kept, &gone, &auto] {
+            std::fs::write(f, b"x").unwrap_or_default();
+        }
+        let mut g = Gallery::load(Some(store.clone()), Some(autosaves.clone()));
+        g.touch(&gone);
+        g.touch(&kept);
+        g.touch(&auto);
+        assert_eq!(g.recent, vec![kept.clone(), gone.clone()], "a recovered autosave is not listed");
+        // An old list that still names the autosave (and a file since deleted).
+        std::fs::write(&store, serde_json::to_vec(&vec![&auto, &gone, &kept]).unwrap_or_default()).unwrap_or_default();
+        let _ = std::fs::remove_file(&gone);
+        let g = Gallery::load(Some(store.clone()), Some(autosaves));
+        assert_eq!(g.recent, vec![kept.clone()]);
+        let saved: Vec<PathBuf> = serde_json::from_slice(&std::fs::read(&store).unwrap_or_default()).unwrap_or_default();
+        assert_eq!(saved, vec![kept], "the cleaned list is saved");
         let _ = std::fs::remove_dir_all(dir);
     }
 }

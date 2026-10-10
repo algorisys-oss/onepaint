@@ -295,7 +295,7 @@ impl App {
             settings: settings::Settings::load(if cfg!(test) || debug.scripted() { None } else { settings::default_path() }),
             playback: Default::default(),
             reference: Default::default(),
-            gallery: gallery::Gallery::load(if cfg!(test) || debug.scripted() { None } else { gallery::default_path() }),
+            gallery: gallery::Gallery::load(if cfg!(test) || scripted { None } else { gallery::default_path() }, autosave::dir()),
             export_opts: Default::default(),
             export_psd: false,
             smart_edit: None,
