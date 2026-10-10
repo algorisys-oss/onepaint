@@ -13,6 +13,10 @@ loaded: load average 7–9 and browsers on the GPU) gave, in one run:
 | Level 0 (full resolution) | 77 ms |
 | Level 3 (about fit-to-window) | 7.1 ms |
 
+On the quiet re-measurement (spec 38's conditions: iGPU held at 500–650
+MHz by its governor), the level-3 split drag frame took 6.2 ms when the
+tiles fit the atlas and 4.6 ms past it, against 54 ms at level 0.
+
 About 2 ms of the level-3 frame is planning. On a quieter run, level 0 had
 measured 19.7 ms.
 

@@ -148,7 +148,10 @@ an item changes there, change it here too.
   - [x] Composite zoomed-out views at reduced resolution (spec 39): a
         level-3 drag frame is ~10× cheaper than level 0; previews refine
         to exact when idle
-  - [ ] Re-measure spec 38/39 on a quiet machine (browsers closed)
+  - [x] Re-measure spec 38/39 on a quiet machine (browsers closed); the iGPU
+        clock stays at 500–650 MHz under the bench, so the numbers are relative
+  - [ ] Bench with the GPU clock pinned (needs root), or keep the GPU busy
+        between samples, for absolute numbers
   - [x] Stop the cyclic LRU thrash past the budget: batches already keep
         each dispatch within the atlas; over-budget frames now alternate
         direction (spec 38)

@@ -15,6 +15,22 @@ treat these as upper bounds):
 | Distinct tiles fit the atlas | 150 ms | 19.7 / 16.8 ms |
 | Past the atlas budget | 336 ms | 28 / 23 ms |
 
+Re-measured on a quiet machine (2026-10-10 evening: no browsers or other
+GPU clients, load average 1.4 before and 2.0 during the run, AC power,
+"balanced" profile):
+
+| Drag frame, 8192² × 100 layers | Unsplit (median) | Split (median / min) | Split, criterion |
+|---|---|---|---|
+| Distinct tiles fit the atlas | 144 ms | 54 / 42 ms | 54 ms (GPU only 44 ms) |
+| Past the atlas budget | 522 ms | 165 / 54 ms | 52 ms (GPU only 50 ms) |
+
+The iGPU stayed at 500–650 MHz throughout (its maximum is 1200). The
+bench waits for the GPU after every frame, so the GPU idles between
+submits and the frequency governor never raises the clock. The earlier
+19.7 ms was taken while browsers kept the GPU busy and its clock higher.
+Pinning the clock needs root, so these numbers compare variants within a
+run, not absolute speed; the split is 2.7× faster than unsplit here.
+
 Planning takes 1.8 ms of the split frame; the GPU part (three reads and a
 write per pixel over 205 full-resolution tiles) is the rest, near this
 iGPU's bandwidth. The next lever is compositing zoomed-out views at
