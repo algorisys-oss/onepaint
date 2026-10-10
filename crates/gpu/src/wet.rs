@@ -79,8 +79,9 @@ pub struct WetGpu {
     km: wgpu::Buffer,
     params: wgpu::Buffer,
     buffers: Option<Buffers>,
-    /// The paper tile on the GPU, keyed by its data pointer and size.
-    paper: Option<(usize, usize, wgpu::Buffer)>,
+    /// The paper tile on the GPU and the grain it came from, held so a
+    /// freed grain's address can't stand for a new one.
+    paper: Option<(std::sync::Arc<onepaint_brush::TipMask>, wgpu::Buffer)>,
     blank_paper: wgpu::Buffer,
     /// The state generation the buffers hold, and which ping-pong half.
     resident: Option<(u64, usize)>,
@@ -193,16 +194,15 @@ impl StepBackend for WetGpu {
         // Paper tile (cached while the same tile is in use).
         let paper_buf = match job.paper {
             Some((m, _, _)) => {
-                let key = (m.data.as_ptr() as usize, m.size);
-                if self.paper.as_ref().is_none_or(|p| (p.0, p.1) != key) {
+                if self.paper.as_ref().is_none_or(|p| !std::sync::Arc::ptr_eq(&p.0, m)) {
                     let buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                         label: Some("paper"),
                         contents: bytemuck::cast_slice(&m.data),
                         usage: wgpu::BufferUsages::STORAGE,
                     });
-                    self.paper = Some((key.0, key.1, buf));
+                    self.paper = Some((m.clone(), buf));
                 }
-                self.paper.as_ref().map(|p| p.2.clone())
+                self.paper.as_ref().map(|p| p.1.clone())
             }
             None => None,
         }

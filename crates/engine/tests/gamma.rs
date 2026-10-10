@@ -74,3 +74,20 @@ fn pasting_between_depths_keeps_the_colour() {
     b.paste_region(&region);
     assert_eq!(b.sample_color(20, 20).unwrap().to_hex(), "#40a0c0");
 }
+
+#[test]
+fn merging_down_in_an_8bit_document_blends_in_gamma_space() {
+    for (depth, want) in [(Depth::Rgba8, 0.75), (Depth::Rgba16F, 0.80)] {
+        let mut d = Document::new_in(300, 200, Some(Rgba::WHITE), depth);
+        d.root.retain(|n| n.name() == "Background");
+        let mut l = filled("grey", Rgba::new(0.5, 0.5, 0.5, 1.0), depth);
+        l.opacity = 0.5;
+        let id = l.id.clone();
+        d.root.push(Node::Layer(l));
+        let mut s = Session::from_document(d);
+        s.execute(Command::MergeDown { id }).unwrap();
+        assert_eq!(s.doc().root.len(), 1);
+        let c = s.sample_color(10, 10).unwrap();
+        assert!((c.r - want).abs() < 0.006, "{depth:?}: {}", c.r);
+    }
+}

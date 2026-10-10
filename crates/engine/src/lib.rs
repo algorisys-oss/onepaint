@@ -1563,10 +1563,17 @@ impl Session {
         *below_path.last_mut().ok_or(EngineError::NothingBelow)? = idx - 1;
         let below = self.doc.node_at(&below_path).and_then(Node::as_layer).ok_or(EngineError::NothingBelow)?.clone();
         let upper = self.doc.node_at(&path).cloned().ok_or(EngineError::NothingBelow)?;
+        // Nothing merges into an adjustment layer: it has no pixels (PE:7614).
+        if below.adjustment.is_some() {
+            return Err(EngineError::NothingBelow);
+        }
+        // The upper layer goes onto the lower one's raw pixels: its opacity,
+        // blend mode and mask stay on the layer, not baked (PE:7665).
         let mut base = below.clone();
         base.opacity = 1.0;
         base.blend_mode = BlendMode::Normal;
         base.clipped = false;
+        base.mask = None;
         let mut upper = upper;
         if let Node::Layer(l) = &mut upper {
             l.clipped = false;
@@ -1591,7 +1598,8 @@ impl Session {
         }
         base.height = None;
         unlit(&mut upper);
-        let mut tmp = Document::new(self.doc.width, self.doc.height, None);
+        // In the document's depth, so 8-bit documents merge in gamma space.
+        let mut tmp = Document::new_in(self.doc.width, self.doc.height, None, self.doc.depth);
         tmp.root = vec![Node::Layer(base), upper];
         let mut keys: BTreeSet<(i32, i32)> = below.pixels.tile_keys().into_iter().collect();
         fn collect(n: &Node, out: &mut BTreeSet<(i32, i32)>) {

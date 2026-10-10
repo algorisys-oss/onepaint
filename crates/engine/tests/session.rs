@@ -279,3 +279,31 @@ fn tool_all_lists_every_tool_once_in_index_order() {
         assert_eq!(t.index(), i, "{t:?}");
     }
 }
+
+#[test]
+fn merging_keeps_the_lower_layers_mask_off_its_pixels() {
+    // happypaint draws onto the lower layer's raw pixels (`drawTextureOnto`).
+    use onepaint_raster::Surface;
+    let mut d = onepaint_doc::Document::new(300, 200, None);
+    let lower_id = d.layer_ids()[0].clone();
+    if let Some(l) = d.layer_mut(&lower_id) {
+        l.pixels = onepaint_doc::Document::filled(300, 200, [0.5, 0.25, 0.125, 1.0]);
+        let mut m = Surface::new();
+        for y in 0..200 {
+            for x in 0..300 {
+                m.set(x, y, [0.25, 0.25, 0.25, 1.0]);
+            }
+        }
+        l.mask = Some(m);
+    }
+    let mut up = onepaint_doc::Layer::new("up");
+    up.pixels.set(5, 5, [0.1, 0.1, 0.1, 1.0]);
+    let up_id = up.id.clone();
+    d.root.push(onepaint_doc::Node::Layer(up));
+    let mut s = Session::from_document(d);
+    s.execute(Command::MergeDown { id: up_id }).unwrap();
+    let l = s.doc().layer(&lower_id).unwrap();
+    // The mask stays on the layer; its pixels stay as they were.
+    assert!(l.mask.is_some());
+    assert_eq!(l.pixels.get(100, 100), [0.5, 0.25, 0.125, 1.0]);
+}

@@ -5,8 +5,9 @@ Built (B of the 8-bit work; spec 49 is A). Closes divergence 2 for 8-bit
 documents.
 
 Not covered here:
-- Merge down still composites with the layer's real blend mode. happypaint
-  merges advanced modes as Normal; onepaint keeps divergence 8 here.
+- Merge down composites in the document's space, as happypaint does. The
+  earlier note that happypaint merges advanced modes as Normal was wrong:
+  `drawTextureOnto` takes a shader path for them.
 - The GPU still holds 8-bit tiles as f16 in its atlases (VRAM is not
   halved yet).
 

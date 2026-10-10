@@ -22,7 +22,9 @@ pub struct StepJob<'a> {
     pub space: onepaint_color::Space,
     pub tilt: [f32; 2],
     /// Paper: the grain tile, doc px per tile, strength (none = smooth).
-    pub paper: Option<(&'a TipMask, f64, f32)>,
+    /// The grain's handle (a backend may keep it to cache the upload), doc
+    /// px per tile, and strength.
+    pub paper: Option<(&'a std::sync::Arc<TipMask>, f64, f32)>,
     pub steps: usize,
     /// The state's generation: a backend still holding this generation from
     /// its last run may skip the upload.
@@ -49,7 +51,7 @@ impl FluidSim {
         let mut settled = vec![[0.0f32; 4]; (r.w * r.h) as usize];
         let tilt = self.tilt();
         let next = super::next_generation();
-        let paper = self.paper.as_ref().map(|(t, s)| (t.mask(), t.tile_px(), *s));
+        let paper = self.paper.as_ref().map(|(t, s)| (t.mask_arc(), t.tile_px(), *s));
         let job = StepJob {
             rect: r,
             sim: &mut self.sim,
