@@ -39,13 +39,27 @@ Items 1–5 from the earlier list; every step pushed as it landed.
     the session's `PlanCache`);
   - spec 45: impasto relief (the height tiles of the tile and its four edge
     neighbours);
-  - spec 46: noise, screentone (not the "sand" shape), solid and gradient
-    fills.
+  - spec 46: noise, screentone (not the "sand" shape), solid, gradient
+    and built-in pattern fills. With the session's `PlanCache`, each
+    adjustment is prepared once per layer and shared by every tile;
+  - spec 48: grayscale, print preview and the gamut warning, applied in the
+    present pass with the proof LUT as a 3D texture (as happypaint does).
+    They no longer force the CPU path or recomposite when toggled.
   - Spec 46 also adds a rule: a tile with an adjustment layer at or above
     the hot layer is not split. The f16 cached image under it, amplified by
     hue near grey, threshold or levels, was visibly off.
-- **Still on the CPU:** pattern fills, sand screentone, spatial adjustment
-  layers, ghost pegs and present-only view modes (`todo.md` §2.1).
+- **Spec 47:** the planner skips layers under a fully opaque normal tile,
+  exactly, using an opacity flag cached per tile.
+- **Segment cache at 384 MiB** (it was 256): a 205-tile drag had been
+  refilling 76 segments a frame. On the quiet machine the split drag frame
+  went from 54 to 16.5 ms, and to 14.5 ms back to back (spec 38).
+- **Still on the CPU:** imported pattern images, sand screentone, spatial
+  adjustment layers and ghost pegs (`todo.md` §2.1). The last two need a
+  multi-pass design: a padded backdrop pass, and intermediate images
+  resampled through the peg transform.
+- **Debug hooks:** `ONEPAINT_NEW=WxH` (a blank document of that size;
+  16384 × 12000 checked, one sheet and 4 × 3) and
+  `ONEPAINT_VIEW=gray|proof|warn`.
 - **Item 1, quiet measurements** (specs 38 and 39 have them):
   - the split drag frame was 54 ms against 144 ms unsplit. That exposed a
     segment-cache thrash; with the cache at 384 MiB it is **16.5 ms**,
@@ -60,7 +74,7 @@ Items 1–5 from the earlier list; every step pushed as it landed.
 ## Next up (suggested order)
 1. **Your decision on 8-bit storage** (below), then build it.
 2. **Spatial adjustment layers on the GPU** (a padded backdrop pass), then
-   pattern fills, ghost pegs and present-only view modes.
+   ghost pegs.
 3. **The rest of the photocraft list** (`todo.md` §2.1):
    - working-set checks before a full refresh;
    - bounded submits and device-loss handling;
