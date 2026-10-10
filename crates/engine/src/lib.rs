@@ -1033,10 +1033,14 @@ impl Session {
                 | Command::SetMixer { .. }
                 | Command::CleanMixer
                 | Command::SetLiquify { .. } => {}
-                // Undo while transforming just abandons the transform.
+                // Undo abandons a pending transform; an untouched box (the
+                // Move tool keeps one open) steps aside and the undo goes ahead.
                 Command::Undo => {
+                    let pending = self.transform.as_ref().is_some_and(|f| f.matrix != transform::Affine::IDENTITY || f.warp.is_some());
                     self.cancel_transform();
-                    return Ok(());
+                    if pending {
+                        return Ok(());
+                    }
                 }
                 _ => self.commit_transform(),
             }

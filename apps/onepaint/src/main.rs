@@ -1774,6 +1774,43 @@ mod tests {
     }
 
     #[test]
+    fn transform_bar_apply_and_cancel_buttons() {
+        let mut h = harness();
+        h.run();
+        drag_stroke(&mut h, pos2(560.0, 400.0), pos2(640.0, 400.0));
+        h.get_by_label("Move / transform (V)").click();
+        h.run();
+        assert!(h.state().session.transform_active());
+        let n = h.state().session.history_len();
+        // Apply commits the move as one undo step and starts a fresh box.
+        drag_stroke(&mut h, pos2(578.0, 400.0), pos2(578.0, 500.0));
+        assert!(active_alpha(&h, [600.0, 400.0]) < 1e-3, "lifted content follows the drag");
+        h.get_by_label("Apply").click();
+        h.run();
+        assert!(active_alpha(&h, [600.0, 500.0]) > 0.5, "moved");
+        assert!(active_alpha(&h, [600.0, 400.0]) < 1e-3, "left its old place");
+        assert_eq!(h.state().session.history_len(), n + 1);
+        assert!(h.state().session.transform_active(), "the Move tool keeps a box on the layer");
+        assert_eq!(h.state().canvas.xform, onepaint_engine::transform::TransformParams::default(), "the new box starts clean");
+        // Cancel puts a pending move back and records nothing.
+        drag_stroke(&mut h, pos2(578.0, 500.0), pos2(578.0, 300.0));
+        h.get_by_label("Rotate +15°").click();
+        h.run();
+        h.get_by_label("Cancel").click();
+        h.run();
+        assert!(active_alpha(&h, [600.0, 500.0]) > 0.5, "back where Apply left it");
+        assert!(active_alpha(&h, [600.0, 300.0]) < 1e-3);
+        assert_eq!(h.state().session.history_len(), n + 1, "cancel adds no undo step");
+        // Cancel with nothing pending is harmless; undo reverts the applied move.
+        h.get_by_label("Cancel").click();
+        h.run();
+        assert!(active_alpha(&h, [600.0, 500.0]) > 0.5);
+        key(&mut h, egui::Key::Z, egui::Modifiers::COMMAND);
+        assert!(active_alpha(&h, [600.0, 400.0]) > 0.5, "undo puts the stroke back");
+        assert!(active_alpha(&h, [600.0, 500.0]) < 1e-3);
+    }
+
+    #[test]
     fn copy_paste_and_layer_via_copy() {
         let mut h = harness();
         h.run();

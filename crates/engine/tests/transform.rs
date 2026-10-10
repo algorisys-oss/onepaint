@@ -279,3 +279,24 @@ mod overflow {
         assert_eq!(l.pixels.get(5, 20)[3], 0.0);
     }
 }
+
+#[test]
+fn undo_with_an_untouched_box_undoes_and_with_a_pending_move_abandons_it() {
+    let mut s = session_with_block();
+    // A committed move, then a fresh box (the Move tool keeps one open).
+    s.execute(Command::BeginTransform).unwrap();
+    s.execute(Command::SetTransform { matrix: Affine::translate(100.0, 0.0) }).unwrap();
+    s.execute(Command::CommitTransform).unwrap();
+    s.execute(Command::BeginTransform).unwrap();
+    // A pending move: undo drops it and nothing else.
+    s.execute(Command::SetTransform { matrix: Affine::translate(0.0, 50.0) }).unwrap();
+    s.execute(Command::Undo).unwrap();
+    assert!(!s.transform_active());
+    assert_eq!(px(&s, 125, 25), RED, "the committed move survives");
+    // An untouched box: undo goes through to the committed move.
+    s.execute(Command::BeginTransform).unwrap();
+    s.execute(Command::Undo).unwrap();
+    assert!(!s.transform_active());
+    assert_eq!(px(&s, 25, 25), RED, "back where it started");
+    assert_eq!(px(&s, 125, 25)[3], 0.0);
+}
