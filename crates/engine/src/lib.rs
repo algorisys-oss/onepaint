@@ -44,6 +44,7 @@ use onepaint_brush::{BrushPreset, StrokeEngine};
 use onepaint_color::Rgba;
 use onepaint_compose::{StrokeMode, StrokeOverlay, apply_stroke_px, composite_tile};
 use onepaint_doc::{BlendMode, Document, Group, Layer, Node, NodeId};
+pub use onepaint_formats::Progress;
 use onepaint_history::History;
 use onepaint_raster::{Rect, Surface, TILE, TILE_PX, Tile};
 use onepaint_stroke::StrokePoint;
@@ -388,6 +389,31 @@ fn tile_bytes(t: &Option<Arc<Tile>>) -> usize {
     t.as_ref().map_or(0, |_| TILE_PX * 8)
 }
 
+/// Decode a `.happypaint` file without a session, so it can run on a worker
+/// thread (spec 41); hand the result to [`Session::open_document`].
+pub fn decode_happypaint(bytes: &[u8], progress: &Progress) -> Result<Document, EngineError> {
+    Ok(onepaint_formats::read_happypaint_with(bytes, progress)?)
+}
+
+/// Decode a PSD/PSB as [`decode_happypaint`] does.
+pub fn decode_psd(bytes: &[u8], name: &str, progress: &Progress) -> Result<Document, EngineError> {
+    let mut doc = onepaint_formats::psd::read_psd_with(bytes, progress)?;
+    doc.name = name.to_string();
+    Ok(doc)
+}
+
+/// Decode an image as a single-layer document, as [`decode_happypaint`] does.
+pub fn decode_image(bytes: &[u8], name: &str) -> Result<Document, EngineError> {
+    let img = onepaint_formats::decode_image(bytes)?;
+    let mut doc = Document::new(img.width, img.height, None);
+    doc.name = name.to_string();
+    if let Some(l) = doc.root.first_mut().and_then(Node::as_layer_mut) {
+        l.name = name.to_string();
+        l.pixels = onepaint_formats::image_to_surface(&img, 0, 0);
+    }
+    Ok(doc)
+}
+
 impl Session {
     pub fn new(width: u32, height: u32, background: Option<Rgba>) -> Self {
         Self::from_document(Document::new(width, height, background))
@@ -622,30 +648,29 @@ impl Session {
 
     /// Open a `.happypaint` file, replacing the current document.
     pub fn open_happypaint(&mut self, bytes: &[u8]) -> Result<(), EngineError> {
-        let doc = onepaint_formats::read_happypaint(bytes)?;
+        let doc = decode_happypaint(bytes, &Progress::default())?;
         self.replace_document(doc);
         Ok(())
     }
 
     /// Open a PNG/JPEG/WebP/BMP/GIF/TIFF as a new single-layer document.
     pub fn open_image(&mut self, bytes: &[u8], name: &str) -> Result<(), EngineError> {
-        let img = onepaint_formats::decode_image(bytes)?;
-        let mut doc = Document::new(img.width, img.height, None);
-        doc.name = name.to_string();
-        if let Some(l) = doc.root.first_mut().and_then(Node::as_layer_mut) {
-            l.name = name.to_string();
-            l.pixels = onepaint_formats::image_to_surface(&img, 0, 0);
-        }
+        let doc = decode_image(bytes, name)?;
         self.replace_document(doc);
         Ok(())
     }
 
     /// Open a PSD/PSB (8/16-bit RGB or grey) as layers, replacing the current document.
     pub fn open_psd(&mut self, bytes: &[u8], name: &str) -> Result<(), EngineError> {
-        let mut doc = onepaint_formats::psd::read_psd(bytes)?;
-        doc.name = name.to_string();
+        let doc = decode_psd(bytes, name, &Progress::default())?;
         self.replace_document(doc);
         Ok(())
+    }
+
+    /// Open a document decoded off the UI thread by one of the `decode_*`
+    /// functions (spec 41), replacing the current document.
+    pub fn open_document(&mut self, doc: Document) {
+        self.replace_document(doc);
     }
 
     /// The document as an 8-bit RGB PSD with layers, groups, masks and a merged composite.

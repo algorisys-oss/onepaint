@@ -1,6 +1,6 @@
 // Adapted from photocraft (MIT/Apache-2.0): crates/ui-egui/src/widgets.rs
 //! onepaint widgets: glass panels, thin sliders with round knobs, value fields,
-//! toggles, buttons, swatches and an HSV colour picker.
+//! toggles, buttons, progress bars, swatches and an HSV colour picker.
 
 use crate::theme::{self, Tokens};
 use egui::{Align2, Color32, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
@@ -230,6 +230,34 @@ pub fn rotation_dial(ui: &mut Ui, angle: &mut f32, size: f32, tooltip: &str) -> 
     p.line_segment([c, tip], egui::Stroke::new(1.5, if hot { t.accent } else { t.fg_muted }));
     p.circle_filled(c, 1.5, t.fg_muted);
     if tooltip.is_empty() { resp } else { resp.on_hover_text(tooltip) }
+}
+
+/// A thin progress track: filled to `fraction`, or an accent segment
+/// sweeping across while the amount is unknown (`None`).
+pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>, width: f32) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, 4.0), Sense::hover());
+    resp.widget_info(|| {
+        let mut info = egui::WidgetInfo::new(egui::WidgetType::ProgressIndicator);
+        info.value = fraction.map(|f| f as f64);
+        info
+    });
+    let r = rect.height() / 2.0;
+    ui.painter().rect_filled(rect, r, t.border);
+    let fill = match fraction {
+        Some(f) => Rect::from_min_size(rect.min, vec2(rect.width() * f.clamp(0.0, 1.0), rect.height())),
+        None => {
+            let phase = (ui.input(|i| i.time) * 0.8).fract() as f32;
+            let w = rect.width() * 0.3;
+            let x = rect.left() - w + (rect.width() + w) * phase;
+            ui.ctx().request_repaint();
+            Rect::from_x_y_ranges(x.max(rect.left())..=(x + w).min(rect.right()), rect.y_range())
+        }
+    };
+    if fill.width() > 0.0 {
+        ui.painter().rect_filled(fill, r, t.accent);
+    }
+    resp
 }
 
 /// Accent-filled primary button.

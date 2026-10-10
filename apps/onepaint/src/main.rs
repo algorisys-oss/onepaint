@@ -24,6 +24,7 @@ mod help;
 mod keymap;
 mod layout;
 mod levels;
+mod loading;
 mod palettes;
 mod panel_ui;
 mod pen;
@@ -265,6 +266,8 @@ pub struct App {
     pub autosave: autosave::Autosave,
     /// A leftover autosave offered for recovery at launch.
     pub recover: Option<PathBuf>,
+    /// A file being opened in the background (spec 41).
+    pub loading: Option<loading::Loading>,
     /// Selected tab in the curves editor.
     pub curve_tab: usize,
     /// Category shown in the brush library.
@@ -349,6 +352,7 @@ impl App {
             size_dialog: ([0, 0], (1, 1), true),
             autosave: autosave::Autosave::new(if cfg!(test) { None } else { autosave::dir() }),
             recover: None,
+            loading: None,
             curve_tab: 0,
             brush_category: String::new(),
             brush_library,
@@ -470,32 +474,49 @@ impl App {
         }
     }
 
+    /// Open `p` in the background (spec 41); books open at once. A load
+    /// already running is cancelled.
     pub fn open_path(&mut self, p: PathBuf) {
-        let now = 0.0;
-        if kind_of(&p) == FileKind::Book {
+        let kind = kind_of(&p);
+        if kind == FileKind::Book {
             return self.open_book(p);
         }
-        let kind = kind_of(&p);
-        let native = kind == FileKind::Native;
-        let name = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Image").to_string();
-        match std::fs::read(&p).map_err(|e| e.to_string()).and_then(|b| {
-            match kind {
-                FileKind::Native => self.session.open_happypaint(&b),
-                FileKind::Psd => self.session.open_psd(&b, &name),
-                FileKind::Image | FileKind::Book => self.session.open_image(&b, &name),
-            }
-            .map_err(|e| e.to_string())
-        }) {
-            Ok(()) => {
+        if let Some(old) = self.loading.take() {
+            old.progress.cancel();
+        }
+        self.loading = Some(loading::Loading::start(p, kind));
+    }
+
+    /// Open an autosave as unsaved work, in the background.
+    pub fn recover_path(&mut self, p: PathBuf) {
+        self.open_path(p);
+        if let Some(l) = &mut self.loading {
+            l.recovered = true;
+        }
+    }
+
+    /// Install a finished background load, or report why it didn't finish.
+    fn finish_loading(&mut self, outcome: loading::Outcome, now: f64) {
+        let Some(l) = self.loading.take() else { return };
+        match outcome {
+            loading::Outcome::Loaded(doc) => {
+                self.session.open_document(doc);
                 let d = self.session.doc();
                 self.canvas.reset_for([d.width, d.height]);
-                self.gallery.touch(&p);
-                // An imported image saves as a new .happypaint, never over the source file.
-                self.path = native.then_some(p);
-                self.saved_history_len = Some(0);
                 self.thumbs.clear();
+                if l.recovered {
+                    // Recovered work is unsaved: Save asks for a location.
+                    self.path = None;
+                    self.saved_history_len = None;
+                    return;
+                }
+                self.gallery.touch(&l.path);
+                // An imported image saves as a new .happypaint, never over the source file.
+                self.path = (l.kind == FileKind::Native).then_some(l.path);
+                self.saved_history_len = Some(0);
             }
-            Err(e) => self.notify(format!("Couldn't open {}: {e}", p.display()), now),
+            loading::Outcome::Cancelled => {}
+            loading::Outcome::Failed(e) => self.notify(format!("Couldn't open {}: {e}", l.path.display()), now),
         }
     }
 
@@ -1340,6 +1361,9 @@ impl eframe::App for App {
         {
             self.session.set_wet_backend(Some(Box::new(w.clone())));
         }
+        if let Some(outcome) = self.loading.as_ref().and_then(loading::Loading::poll) {
+            self.finish_loading(outcome, ctx.input(|i| i.time));
+        }
         let (space, r) = self.shortcuts(&ctx);
         let rect = ui.max_rect();
         let prefs = self.settings.preferences(self.canvas.view.scale);
@@ -1418,6 +1442,7 @@ impl eframe::App for App {
             chrome::show(self, &ctx);
         }
         text_ui::show(self, &ctx);
+        loading::show(self, &ctx);
         let title = format!("{}{} — onepaint", if self.dirty() { "• " } else { "" }, self.session.doc().name);
         if title != self.title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
@@ -2861,12 +2886,96 @@ mod tests {
         let png = dir.join("sky.png");
         std::fs::write(&png, onepaint_formats::encode_png_rgba8(4, 4, &[90u8; 64]).unwrap()).unwrap();
         h.state_mut().open_path(png.clone());
-        h.run();
+        wait_loaded(&mut h);
         assert_eq!(h.state().gallery.recent.first(), Some(&png.canonicalize().unwrap()));
         h.state_mut().popover = Some(Popover::Gallery);
         h.run();
         assert!(h.query_by_label("New drawing").is_some());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Finish the background load in progress (spec 41).
+    fn wait_loaded(h: &mut Harness<'_, App>) {
+        let outcome = h.state().loading.as_ref().expect("a load in progress").wait();
+        let now = h.ctx.input(|i| i.time);
+        h.state_mut().finish_loading(outcome, now);
+        h.step();
+    }
+
+    #[test]
+    fn files_open_in_the_background() {
+        let mut h = harness();
+        h.run();
+        let dir = std::env::temp_dir().join(format!("onepaint-load-{}", onepaint_doc::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("page.happypaint");
+        std::fs::write(&path, Session::new(640, 480, Some(Rgba::WHITE)).save_happypaint().unwrap()).unwrap();
+        h.state_mut().open_path(path.clone());
+        assert!(h.state().loading.is_some());
+        let progress = h.state().loading.as_ref().unwrap().progress.clone();
+        wait_loaded(&mut h);
+        assert_eq!(progress.fraction(), Some(1.0));
+        assert!(h.state().loading.is_none());
+        assert_eq!((h.state().session.doc().width, h.state().session.doc().height), (640, 480));
+        assert_eq!(h.state().path.as_deref(), Some(path.as_path()));
+        // Cancelled: the drawing stays as it was.
+        let before = h.state().session.doc().id.clone();
+        std::fs::write(&path, Session::new(320, 200, None).save_happypaint().unwrap()).unwrap();
+        h.state_mut().open_path(path.clone());
+        h.state().loading.as_ref().unwrap().progress.cancel();
+        wait_loaded(&mut h);
+        assert_eq!(h.state().session.doc().id, before);
+        // A file that can't be read says so.
+        h.state_mut().open_path(dir.join("missing.happypaint"));
+        wait_loaded(&mut h);
+        assert!(h.state().toast.as_ref().is_some_and(|(m, _)| m.starts_with("Couldn't open")));
+        assert_eq!(h.state().session.doc().id, before);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_recovered_autosave_opens_as_unsaved_work() {
+        let mut h = harness();
+        h.run();
+        let dir = std::env::temp_dir().join(format!("onepaint-recover-{}", onepaint_doc::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("autosave.happypaint");
+        std::fs::write(&path, Session::new(500, 400, None).save_happypaint().unwrap()).unwrap();
+        h.state_mut().recover_path(path.clone());
+        wait_loaded(&mut h);
+        assert_eq!(h.state().session.doc().width, 500);
+        assert_eq!(h.state().path, None);
+        assert!(h.state().dirty());
+        assert!(!h.state().gallery.recent.contains(&path));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_slow_open_shows_progress_and_cancels() {
+        for theme in ["dark", "light"] {
+            let mut h = harness();
+            h.run();
+            if theme == "light" {
+                let ctx = h.ctx.clone();
+                h.state_mut().toggle_theme(&ctx);
+            }
+            let (l, tx) = loading::Loading::stalled("Big page");
+            l.progress.set_total(4);
+            l.progress.advance(1);
+            let progress = l.progress.clone();
+            h.state_mut().loading = Some(l);
+            for _ in 0..3 {
+                h.step();
+            }
+            assert!(h.query_by_label("Opening Big page").is_some(), "{theme}");
+            h.get_by_label("Cancel").click();
+            h.step();
+            assert!(progress.is_cancelled(), "{theme}");
+            drop(tx);
+            h.step();
+            assert!(h.state().loading.is_none(), "{theme}");
+            assert!(h.state().toast.is_none(), "{theme}: a cancel is silent");
+        }
     }
 
     #[test]

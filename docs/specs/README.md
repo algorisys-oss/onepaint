@@ -51,3 +51,4 @@ The happypaint references are relative to `../happypaint/frontend/src/`.
 | 38 | [Cached composite below and above the active layer](38-composite-cache.md) | compose, gpu, engine, app |
 | 39 | [Level-of-detail compositing](39-lod-compositing.md) | gpu, app |
 | 40 | [Composite sheets past the GPU texture limit](40-composite-sheets.md) | gpu, app |
+| 41 | [Opening files in the background](41-background-open.md) | formats, engine, app |

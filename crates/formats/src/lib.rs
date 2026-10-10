@@ -7,12 +7,14 @@ pub mod export;
 pub mod icc_embed;
 mod image;
 pub mod palette;
+mod progress;
 pub mod psd;
 pub mod tiff_cmyk;
 pub mod video;
 pub mod zip;
 
 pub use image::*;
+pub use progress::Progress;
 
 use onepaint_doc::{BlendMode, Depth, Document, Extra, Group, Layer, Node};
 use onepaint_raster::{Rect, Surface, TILE, pack_key, unpack_key};
@@ -40,6 +42,8 @@ pub enum FormatError {
     Io(#[from] std::io::Error),
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("cancelled")]
+    Cancelled,
 }
 
 fn corrupt(s: impl Into<String>) -> FormatError {
@@ -210,26 +214,53 @@ fn paste_mask(s: &mut Surface, x: i32, y: i32, w: u32, h: u32, rgba: &[u8], clip
     }
 }
 
-fn read_tiles(chunks: &[u8], tiles: &[Value], doc: Rect, mask: bool) -> Result<Surface, FormatError> {
+/// Decode a layer's tile PNGs in parallel (spec 41), counting each on `progress`.
+fn read_tiles(chunks: &[u8], tiles: &[Value], doc: Rect, mask: bool, progress: &Progress) -> Result<Surface, FormatError> {
+    use rayon::prelude::*;
+    let decoded: Vec<Option<Surface>> = tiles
+        .par_iter()
+        .map(|t| {
+            progress.check()?;
+            let key = t.get("key").and_then(Value::as_i64).ok_or_else(|| corrupt("tile without key"))?;
+            let (tx, ty) = unpack_key((key & 0xffff_ffff) as u32);
+            let Some(clip) = doc.intersect(&Rect::from_tile(tx, ty)) else {
+                progress.advance(1);
+                return Ok(None);
+            };
+            let c = chunk(chunks, t.get("chunk").ok_or_else(|| corrupt("tile without chunk"))?)?;
+            let (w, h, rgba) = decode_png_rgba8(c)?;
+            let mut s = Surface::new();
+            if mask {
+                paste_mask(&mut s, tx * TILE, ty * TILE, w, h, &rgba, clip);
+            } else {
+                paste_color(&mut s, tx * TILE, ty * TILE, w, h, &rgba, clip);
+            }
+            progress.advance(1);
+            Ok(Some(s))
+        })
+        .collect::<Result<_, FormatError>>()?;
+    // Each part holds one tile; later tiles win, as when pasted in order.
     let mut s = Surface::new();
-    for t in tiles {
-        let key = t.get("key").and_then(Value::as_i64).ok_or_else(|| corrupt("tile without key"))?;
-        let (tx, ty) = unpack_key((key & 0xffff_ffff) as u32);
-        let Some(clip) = doc.intersect(&Rect::from_tile(tx, ty)) else {
-            continue;
-        };
-        let c = chunk(chunks, t.get("chunk").ok_or_else(|| corrupt("tile without chunk"))?)?;
-        let (w, h, rgba) = decode_png_rgba8(c)?;
-        if mask {
-            paste_mask(&mut s, tx * TILE, ty * TILE, w, h, &rgba, clip);
-        } else {
-            paste_color(&mut s, tx * TILE, ty * TILE, w, h, &rgba, clip);
+    for part in decoded.into_iter().flatten() {
+        for (tx, ty) in part.tile_keys() {
+            s.set_tile(tx, ty, part.tile(tx, ty).cloned());
         }
     }
     Ok(s)
 }
 
-fn read_node(v: &Value, chunks: &[u8], doc: Rect) -> Result<Node, FormatError> {
+/// Tile entries under `nodes`, for the progress total.
+fn count_tiles(nodes: &[Value]) -> u64 {
+    nodes
+        .iter()
+        .map(|n| {
+            let len = |k: &str| n.get(k).and_then(Value::as_array).map_or(0, |a| a.len() as u64);
+            len("tiles") + len("maskTiles") + n.get("children").and_then(Value::as_array).map_or(0, |c| count_tiles(c))
+        })
+        .sum()
+}
+
+fn read_node(v: &Value, chunks: &[u8], doc: Rect, progress: &Progress) -> Result<Node, FormatError> {
     let o = v.as_object().ok_or_else(|| corrupt("node is not an object"))?;
     if let Some(children) = o.get("children").and_then(Value::as_array) {
         let mut g = Group::new(&s(o, "name"));
@@ -240,7 +271,7 @@ fn read_node(v: &Value, chunks: &[u8], doc: Rect) -> Result<Node, FormatError> {
         g.collapsed = b(o, "collapsed", false);
         g.extra = extras(o, GROUP_KNOWN);
         for c in children {
-            g.children.push(read_node(c, chunks, doc)?);
+            g.children.push(read_node(c, chunks, doc, progress)?);
         }
         return Ok(Node::Group(g));
     }
@@ -260,7 +291,7 @@ fn read_node(v: &Value, chunks: &[u8], doc: Rect) -> Result<Node, FormatError> {
         l.adjustment = Some(Box::new(onepaint_doc::Adjustment { kind, params }));
     }
     if let Some(tiles) = o.get("tiles").and_then(Value::as_array) {
-        l.pixels = read_tiles(chunks, tiles, doc, false)?;
+        l.pixels = read_tiles(chunks, tiles, doc, false, progress)?;
     } else if let (Some(bb), Some(c)) = (o.get("bbox"), o.get("chunk")) {
         let (w, h, rgba) = decode_png_rgba8(chunk(chunks, c)?)?;
         let x = bb.get("x").and_then(Value::as_i64).unwrap_or(0) as i32;
@@ -268,7 +299,7 @@ fn read_node(v: &Value, chunks: &[u8], doc: Rect) -> Result<Node, FormatError> {
         paste_color(&mut l.pixels, x, y, w, h, &rgba, doc);
     }
     if let Some(tiles) = o.get("maskTiles").and_then(Value::as_array) {
-        l.mask = Some(read_tiles(chunks, tiles, doc, true)?);
+        l.mask = Some(read_tiles(chunks, tiles, doc, true, progress)?);
     } else if let Some(c) = o.get("mask") {
         let (w, h, rgba) = decode_png_rgba8(chunk(chunks, c)?)?;
         let mut m = Surface::new();
@@ -310,6 +341,12 @@ fn read_node(v: &Value, chunks: &[u8], doc: Rect) -> Result<Node, FormatError> {
 
 /// Read any `.happypaint` (v1–v9) by key presence, never by version number.
 pub fn read_happypaint(bytes: &[u8]) -> Result<Document, FormatError> {
+    read_happypaint_with(bytes, &Progress::default())
+}
+
+/// [`read_happypaint`], counting tiles on `progress` and stopping with
+/// [`FormatError::Cancelled`] once it is cancelled (spec 41).
+pub fn read_happypaint_with(bytes: &[u8], progress: &Progress) -> Result<Document, FormatError> {
     let p = parse(bytes)?;
     let d = p.manifest.get("doc").and_then(Value::as_object).ok_or_else(|| corrupt("manifest without doc"))?;
     let width = d.get("width").and_then(Value::as_u64).ok_or_else(|| corrupt("doc without width"))? as u32;
@@ -329,8 +366,10 @@ pub fn read_happypaint(bytes: &[u8]) -> Result<Document, FormatError> {
     doc.created_at = f(d, "createdAt", doc.updated_at);
     doc.extra = extras(d, &["id", "name", "width", "height", "dpi", "bitDepth", "colorSpace", "depth", "createdAt", "updatedAt"]);
     let bounds = doc.bounds();
-    for n in p.manifest.get("nodes").and_then(Value::as_array).ok_or_else(|| corrupt("manifest without nodes"))? {
-        doc.root.push(read_node(n, p.chunks, bounds)?);
+    let nodes = p.manifest.get("nodes").and_then(Value::as_array).ok_or_else(|| corrupt("manifest without nodes"))?;
+    progress.set_total(count_tiles(nodes));
+    for n in nodes {
+        doc.root.push(read_node(n, p.chunks, bounds, progress)?);
     }
     Ok(doc)
 }

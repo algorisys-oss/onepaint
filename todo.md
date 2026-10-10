@@ -158,7 +158,7 @@ an item changes there, change it here too.
   - [ ] Check a full refresh's working set fits before starting; route the
         rest to the CPU instead of skipping (photocraft `gpu/src/lib.rs:663-687`)
   - [ ] Bounded submits and GPU device-loss handling (`gpu/src/health.rs`)
-  - [ ] Open files in the background with progress and cancel
+  - [x] Open files in the background with progress and cancel (spec 41)
   - [ ] Perf budgets with a baseline and a regression gate (`perf/budgets.toml`)
   - [ ] Skip layers under fully opaque tiles when planning
 - [ ] Decide the GPU memory budget on integrated GPUs

@@ -522,6 +522,12 @@ fn surface_from(planes: &[(i16, Vec<u8>)], rect: Rect, gray: bool, doc: Rect) ->
 
 /// Read a PSD/PSB into a document.
 pub fn read_psd(bytes: &[u8]) -> Result<Document, FormatError> {
+    read_psd_with(bytes, &crate::Progress::default())
+}
+
+/// [`read_psd`], counting layer records on `progress` and stopping with
+/// [`FormatError::Cancelled`] once it is cancelled (spec 41).
+pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Document, FormatError> {
     let mut c = Cur { b: bytes, p: 0 };
     if c.take(4)? != b"8BPS" {
         return Err(FormatError::BadMagic);
@@ -701,7 +707,9 @@ pub fn read_psd(bytes: &[u8]) -> Result<Document, FormatError> {
             }
             // Channel image data, record by record.
             let mut nodes_flat: Vec<(RRec, Option<Surface>, Option<Surface>)> = Vec::new();
+            progress.set_total(recs.len() as u64);
             for rec in recs {
+                progress.check()?;
                 let mut planes = Vec::new();
                 let mut mask_px = None;
                 for &(id, l) in &rec.channels {
@@ -733,6 +741,7 @@ pub fn read_psd(bytes: &[u8]) -> Result<Document, FormatError> {
                     m
                 });
                 nodes_flat.push((rec, pixels, mask));
+                progress.advance(1);
             }
             // Rebuild the tree bottom-up: dividers open a child list, folders close it.
             let mut stack: Vec<Vec<Node>> = vec![Vec::new()];

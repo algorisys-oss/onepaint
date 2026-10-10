@@ -23,6 +23,7 @@ png = { workspace = true }
 image = { workspace = true }
 jpeg-encoder = { workspace = true }
 openh264 = { workspace = true }
+rayon = { workspace = true }
 
 [dev-dependencies]
 openh264 = { workspace = true }

@@ -2810,6 +2810,7 @@ dependencies = [
  "onepaint-stroke",
  "openh264",
  "png 0.18.1",
+ "rayon",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

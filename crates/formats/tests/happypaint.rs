@@ -204,3 +204,29 @@ fn impasto_height_round_trips_as_a_16_bit_png() {
     let got = r.root.iter().filter_map(|n| n.as_layer()).find(|l| l.name == "Thick").unwrap().height.as_ref().unwrap();
     assert!((got.get(3, 4)[0] - 1.25).abs() < 0.01);
 }
+
+#[test]
+fn reads_count_progress_and_stop_when_cancelled() {
+    let mut d = Document::new(600, 520, Some(Rgba::WHITE));
+    let mut l = Layer::new("ink");
+    fill(&mut l.pixels, 10, 10, 500, 400, [0.2, 0.1, 0.0, 0.5]);
+    let mut m = Surface::new();
+    fill(&mut m, 0, 0, 600, 520, [0.5, 0.5, 0.5, 1.0]);
+    l.mask = Some(m);
+    d.root.push(Node::Group(Group { children: vec![Node::Layer(l)], ..Group::new("g") }));
+    let bytes = write_happypaint(&d, None, "t").unwrap();
+    let p = Progress::default();
+    let back = read_happypaint_with(&bytes, &p).unwrap();
+    // Every tile and mask tile is counted, inside the group too.
+    assert_eq!(p.fraction(), Some(1.0));
+    assert_eq!(back.root.len(), d.root.len());
+    let c = Progress::default();
+    c.cancel();
+    assert!(matches!(read_happypaint_with(&bytes, &c), Err(FormatError::Cancelled)));
+    let flat = vec![1.0f32; 600 * 520 * 4];
+    let psd = psd::write_psd(&d, &flat).unwrap();
+    let p = Progress::default();
+    psd::read_psd_with(&psd, &p).unwrap();
+    assert_eq!(p.fraction(), Some(1.0));
+    assert!(matches!(psd::read_psd_with(&psd, &c), Err(FormatError::Cancelled)));
+}

@@ -1444,10 +1444,7 @@ fn recover(app: &mut App, ui: &mut Ui) {
         if widgets::primary_button(ui, "Recover", 110.0).clicked()
             && let Some(p) = app.recover.take()
         {
-            app.open_path(p);
-            // Recovered work is unsaved: Save asks for a location.
-            app.path = None;
-            app.saved_history_len = None;
+            app.recover_path(p);
             app.popover = None;
         }
         if widgets::secondary_button(ui, "Discard", 90.0).clicked() {
