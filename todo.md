@@ -128,7 +128,7 @@ an item changes there, change it here too.
   - [ ] Spatial adjustment layers (a padded backdrop pass)
   - [ ] Relief lighting (impasto height)
   - [x] Paper shading (spec 43)
-  - [ ] Partial panel clips
+  - [x] Partial panel clips (spec 44)
   - [ ] Ghost pegs (out-of-pegs onion offsets)
   - [ ] Present-only view modes
 - [x] Opacity-drag bench (`cargo bench -p onepaint-gpu --bench opacity_drag`)

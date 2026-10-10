@@ -335,6 +335,8 @@ impl Preferences {
 }
 
 pub struct Session {
+    /// Panel coverage kept between frames' plans (spec 44).
+    plan_cache: onepaint_compose::program::PlanCache,
     prefs: Preferences,
     doc: Document,
     active: NodeId,
@@ -462,6 +464,7 @@ impl Session {
             wet_tilt: [0.0; 2],
             wet_backend: None,
             mixer_held: None,
+            plan_cache: Default::default(),
         };
         s.load_saved_selections();
         s.load_anim();
@@ -603,7 +606,7 @@ impl Session {
         let doc = self.display_doc();
         // Spec 38: split at the layer being changed, so the rest is cached.
         let hot = ov.as_ref().map_or(self.active.as_str(), |o| o.layer_id).to_string();
-        onepaint_compose::program::plan_tiles(&doc, keys, ov.as_ref(), Some(&hot))
+        onepaint_compose::program::plan_tiles_cached(&doc, keys, ov.as_ref(), Some(&hot), Some(&self.plan_cache))
     }
 
     /// Flattened canvas as premultiplied linear f32.

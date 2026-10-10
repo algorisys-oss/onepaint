@@ -468,3 +468,38 @@ fn paper_shading_matches_the_cpu_oracle() {
         assert!(e <= TOL, "seed {seed} ({grain}) split at {hot}: error {e} at {at:?}");
     }
 }
+
+#[test]
+fn partial_panel_clips_match_the_cpu_oracle() {
+    use onepaint_panel::geometry::{Pt, rect_outline};
+    use onepaint_panel::{PanelSpec, set_panel};
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let mut gc = GpuCompositor::new(&device, 64 << 20);
+    let (w, h) = (600, 300);
+    let tex = target(&device, w, h);
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
+    let cache = onepaint_compose::program::PlanCache::default();
+    for seed in 0..12 {
+        let mut art = random_doc(seed, w, h, seed % 2 == 0);
+        let mut g = onepaint_doc::Group::new("Panel");
+        let outline = vec![Pt::new(40.5, 30.0), Pt::new(560.0, 12.25), Pt::new(530.0, 280.0), Pt::new(60.0, 270.5)];
+        set_panel(&mut g, Some(PanelSpec::new(outline, 12.0, 0.0)));
+        let mut inner = onepaint_doc::Group::new("Inner");
+        set_panel(&mut inner, Some(PanelSpec::new(rect_outline(Pt::new(300.0, 100.0), Pt::new(450.5, 230.0)), 6.0, 0.0)));
+        inner.children = art.root.split_off(art.root.len() / 2);
+        g.children = std::mem::take(&mut art.root);
+        g.children.push(Node::Group(inner));
+        art.root = vec![Node::Group(g)];
+        let keys: Vec<_> = art.bounds().tiles().collect();
+        for pass in ["cold", "cached"] {
+            let (progs, cpu) = onepaint_compose::program::plan_tiles_cached(&art, &keys, None, None, Some(&cache));
+            assert!(cpu.is_empty());
+            gc.run(&device, &queue, &progs, &view, [w, h]);
+            let (e, at) = max_error(&art, None, &read(&device, &queue, &tex));
+            assert!(e <= TOL, "seed {seed} ({pass}): error {e} at {at:?}");
+        }
+    }
+}

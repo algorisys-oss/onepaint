@@ -54,3 +54,4 @@ The happypaint references are relative to `../happypaint/frontend/src/`.
 | 41 | [Opening files in the background](41-background-open.md) | formats, engine, app |
 | 42 | [Colour adjustment layers on the GPU](42-gpu-colour-adjustments.md) | filters, compose, gpu |
 | 43 | [Paper shading on the GPU](43-gpu-paper.md) | brush, compose, gpu |
+| 44 | [Partial panel clips on the GPU](44-gpu-panel-clips.md) | compose, gpu, engine |

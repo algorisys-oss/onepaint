@@ -2829,6 +2829,7 @@ dependencies = [
  "onepaint-compose",
  "onepaint-doc",
  "onepaint-engine",
+ "onepaint-panel",
  "onepaint-raster",
  "onepaint-stroke",
  "pollster 0.4.0",

@@ -39,6 +39,7 @@ const NONE: u32 = u32::MAX;
 const OP_OVER_CACHE: u32 = 5;
 const OP_ADJUST: u32 = 6;
 const OP_PAPER: u32 = 7;
+const OP_COVERAGE: u32 = 8;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -137,7 +138,7 @@ fn uses_pigment(ops: &[&Op]) -> bool {
         Op::Layer { content, mode, .. } => pig(*mode) || stroke(&content.stroke) || stroke(&content.mask_stroke),
         Op::PushContent(c) | Op::Clip { content: c, .. } => stroke(&c.stroke) || stroke(&c.mask_stroke),
         Op::Pop { mode, .. } | Op::Adjust { mode, .. } => pig(*mode),
-        Op::PushZero | Op::Paper { .. } => false,
+        Op::PushZero | Op::Paper { .. } | Op::Coverage(_) => false,
     })
 }
 
@@ -539,6 +540,7 @@ impl GpuCompositor {
     fn encode(&self, op: &Op, adj: &mut AdjTable) -> GpuOp {
         let mut o = [0u32; 16];
         match op {
+            Op::Coverage(c) => (o[0], o[8]) = (OP_COVERAGE, self.slot(&c.tile)),
             Op::Paper { shade, .. } => {
                 o[0] = OP_PAPER;
                 (o[4], o[5]) = ((shade.tex.tile_px() as f32).to_bits(), shade.amt.to_bits());

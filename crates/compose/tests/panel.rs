@@ -90,3 +90,54 @@ fn nested_panel_groups_clip_too() {
     assert_eq!(composite_px(&d, 50, 150), [0.0; 4]);
     assert_eq!(composite_px(&d, 300, 150), RED);
 }
+
+/// A page with a slanted panel, a nested one, a rider and random art (spec 44).
+fn panel_page(seed: u64) -> Document {
+    use onepaint_compose::testdocs::random_doc;
+    let mut art = random_doc(seed, 600, 300, false);
+    let mut g = Group::new("Panel");
+    let outline = vec![Pt::new(40.5, 30.0), Pt::new(560.0, 12.25), Pt::new(530.0, 280.0), Pt::new(60.0, 270.5)];
+    set_panel(&mut g, Some(PanelSpec::new(outline, 12.0, 0.0)));
+    let mut inner = panel_group(Pt::new(300.0, 100.0), Pt::new(450.5, 230.0), 6.0, GREEN);
+    inner.opacity = 0.7;
+    g.children = std::mem::take(&mut art.root);
+    g.children.push(Node::Group(inner));
+    let mut rider = Layer::new("tone");
+    fill(&mut rider.pixels, Rect::new(0, 0, 600, 300), [0.1, 0.2, 0.3, 0.5]);
+    rider.clipped = true;
+    doc(vec![Node::Group(g), Node::Layer(rider)])
+}
+
+#[test]
+fn partial_panel_clips_plan_and_match_the_tree_compositor() {
+    use onepaint_compose::program::{Op, PlanCache, plan_tile, plan_tiles_cached, run};
+    for seed in 0..12 {
+        let d = panel_page(seed);
+        let keys: Vec<_> = d.bounds().tiles().collect();
+        for &(tx, ty) in &keys {
+            let prog = plan_tile(&d, tx, ty, None).unwrap();
+            assert_eq!(run(&prog), composite_tile(&d, tx, ty, None), "seed {seed} tile {tx},{ty}");
+        }
+        assert!(keys.iter().any(|&(tx, ty)| plan_tile(&d, tx, ty, None).unwrap().ops.iter().any(|op| matches!(op, Op::Coverage(_)))));
+        // With a cache, the next plan reuses the coverage tiles themselves.
+        let cache = PlanCache::default();
+        let tiles = |progs: &[onepaint_compose::program::TileProgram]| -> Vec<usize> {
+            progs
+                .iter()
+                .flat_map(|p| p.ops.iter())
+                .filter_map(|op| match op {
+                    Op::Coverage(c) => Some(std::sync::Arc::as_ptr(&c.tile) as usize),
+                    _ => None,
+                })
+                .collect()
+        };
+        let (a, cpu) = plan_tiles_cached(&d, &keys, None, None, Some(&cache));
+        assert!(cpu.is_empty());
+        let (b, _) = plan_tiles_cached(&d, &keys, None, None, Some(&cache));
+        assert!(!cache.is_empty());
+        assert_eq!(tiles(&a), tiles(&b));
+        for (p, q) in a.iter().zip(&b) {
+            assert_eq!(run(p), run(q));
+        }
+    }
+}

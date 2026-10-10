@@ -63,6 +63,65 @@ impl std::fmt::Debug for Adjust {
     }
 }
 
+/// A panel frame's partial clip over one tile (spec 44): exact for the CPU
+/// interpreter, as an f16 tile (coverage in every channel) for the GPU.
+#[derive(Debug)]
+pub struct Coverage {
+    pub values: Vec<f32>,
+    pub tile: Arc<Tile>,
+}
+
+impl Coverage {
+    pub fn new(values: Vec<f32>) -> Self {
+        let rgba: Vec<f32> = values.iter().flat_map(|&c| [c; 4]).collect();
+        Self { tile: Arc::new(Tile::from_f32(&rgba)), values }
+    }
+}
+
+/// A panel clip as the planner caches it.
+#[derive(Clone)]
+enum Clip {
+    Full,
+    Empty,
+    Partial(Arc<Coverage>),
+}
+
+/// State the planner keeps between frames (spec 44): panel coverage by panel
+/// spec and tile, so a panel border isn't rasterized, nor its coverage tile
+/// uploaded, on every frame. Owned by the session; plans without one
+/// recompute everything.
+#[derive(Default)]
+pub struct PlanCache {
+    coverage: std::sync::Mutex<std::collections::HashMap<(u64, i32, i32), Clip>>,
+}
+
+/// Cached coverage entries kept at most; past this the cache starts over.
+const MAX_CACHED_CLIPS: usize = 4096;
+
+impl PlanCache {
+    fn get(&self, key: &(u64, i32, i32)) -> Option<Clip> {
+        self.coverage.lock().ok()?.get(key).cloned()
+    }
+
+    fn put(&self, key: (u64, i32, i32), c: Clip) {
+        if let Ok(mut m) = self.coverage.lock() {
+            if m.len() >= MAX_CACHED_CLIPS {
+                m.clear();
+            }
+            m.insert(key, c);
+        }
+    }
+
+    /// Coverage entries held (tests).
+    pub fn len(&self) -> usize {
+        self.coverage.lock().map_or(0, |m| m.len())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
 /// The document paper's visible tooth (spec 43).
 #[derive(Clone)]
 pub struct PaperShade {
@@ -94,6 +153,8 @@ pub enum Op {
     Adjust { adjust: Arc<Adjust>, mask: Option<Arc<Tile>>, mode: BlendMode, opacity: f32 },
     /// Shade the finished tile `(tx, ty)` with the paper's tooth (spec 43).
     Paper { shade: Arc<PaperShade>, tx: i32, ty: i32 },
+    /// Multiply the top register by a panel frame's coverage (spec 44).
+    Coverage(Arc<Coverage>),
 }
 
 #[derive(Clone, Debug)]
@@ -133,6 +194,7 @@ pub fn op_sources(ops: &[Op]) -> impl Iterator<Item = &Arc<Tile>> {
         let (c, adjust_mask) = match op {
             Op::Layer { content, .. } | Op::PushContent(content) | Op::Clip { content, .. } => (Some(content), None),
             Op::Adjust { mask, .. } => (None, mask.as_ref()),
+            Op::Coverage(c) => (None, Some(&c.tile)),
             _ => (None, None),
         };
         let content = c.into_iter().flat_map(|c| {
@@ -213,6 +275,7 @@ pub fn segment_key(ops: &[Op]) -> u64 {
                 (6u8, *tx, *ty, shade.amt.to_bits(), shade.tex.tile_px().to_bits()).hash(&mut h);
                 (shade.tex.mask().data.as_ptr() as usize).hash(&mut h);
             }
+            Op::Coverage(c) => (7u8, ptr(&c.tile)).hash(&mut h),
         }
     }
     h.finish()
@@ -230,6 +293,7 @@ struct Planner<'a> {
     /// Top-level units: (op range start, end, holds the hot layer, folds).
     units: Vec<Unit>,
     hot: Option<&'a str>,
+    cache: Option<&'a PlanCache>,
 }
 
 /// A top-level node (with its clip family) and the ops it produced.
@@ -262,9 +326,20 @@ pub fn plan_tiles(
     ov: Option<&StrokeOverlay>,
     hot: Option<&str>,
 ) -> (Vec<TileProgram>, Vec<(i32, i32)>) {
+    plan_tiles_cached(doc, keys, ov, hot, None)
+}
+
+/// [`plan_tiles`], reusing what `cache` kept from earlier frames.
+pub fn plan_tiles_cached(
+    doc: &Document,
+    keys: &[(i32, i32)],
+    ov: Option<&StrokeOverlay>,
+    hot: Option<&str>,
+    cache: Option<&PlanCache>,
+) -> (Vec<TileProgram>, Vec<(i32, i32)>) {
     use rayon::prelude::*;
     let planned: Vec<Result<TileProgram, (i32, i32)>> =
-        keys.par_iter().map(|&(tx, ty)| plan_tile_split(doc, tx, ty, ov, hot).ok_or((tx, ty))).collect();
+        keys.par_iter().map(|&(tx, ty)| plan(doc, tx, ty, ov, hot, cache).ok_or((tx, ty))).collect();
     let mut progs = Vec::with_capacity(planned.len());
     let mut cpu = Vec::new();
     for p in planned {
@@ -281,7 +356,11 @@ const MIN_SEGMENT_SOURCES: usize = 2;
 
 /// [`plan_tile`], plus the ops cut at `hot` (a layer id) for spec 38.
 pub fn plan_tile_split(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, hot: Option<&str>) -> Option<TileProgram> {
-    let mut p = Planner { tx, ty, ov, ops: Vec::new(), depth: 1, units: Vec::new(), hot };
+    plan(doc, tx, ty, ov, hot, None)
+}
+
+fn plan(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, hot: Option<&str>, cache: Option<&PlanCache>) -> Option<TileProgram> {
+    let mut p = Planner { tx, ty, ov, ops: Vec::new(), depth: 1, units: Vec::new(), hot, cache };
     p.nodes(&doc.root).ok()?;
     // The paper shades the finished composite (spec 43), after every unit.
     if let Some(paper) = doc.paper() {
@@ -324,6 +403,29 @@ impl Planner<'_> {
             c.mask_stroke = mask_stroke;
         }
         Ok(Some(c))
+    }
+
+    /// A panel group's clip over this tile (`panel_clip`), through the cache.
+    fn panel_clip(&self, g: &onepaint_doc::Group) -> Option<Clip> {
+        let spec = g.extra.get("panel")?;
+        let (tx, ty) = (self.tx, self.ty);
+        let make = || match panel_clip(g, tx, ty)? {
+            TileCoverage::Full => Some(Clip::Full),
+            TileCoverage::Empty => Some(Clip::Empty),
+            TileCoverage::Partial(v) => Some(Clip::Partial(Arc::new(Coverage::new(v)))),
+        };
+        let Some(cache) = self.cache else { return make() };
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        spec.to_string().hash(&mut h);
+        let key = (h.finish(), tx, ty);
+        if let Some(c) = cache.get(&key) {
+            return Some(c);
+        }
+        // `panel_clip` is `None` for a spec it can't read: never cached, never clipped.
+        let c = make()?;
+        cache.put(key, c.clone());
+        Some(c)
     }
 
     /// An adjustment layer (`draw_adjustment`): pixel-only colour kinds run
@@ -398,13 +500,17 @@ impl Planner<'_> {
             let start = self.ops.len();
             match &nodes[i] {
                 Node::Group(g) => {
-                    let clip = panel_clip(g, self.tx, self.ty);
-                    if g.visible && g.opacity > 0.0 && !g.children.is_empty() && clip != Some(TileCoverage::Empty) {
-                        if matches!(clip, Some(TileCoverage::Partial(_))) || g.extra.contains_key(GHOST_PEG_KEY) {
+                    let clip = self.panel_clip(g);
+                    if g.visible && g.opacity > 0.0 && !g.children.is_empty() && !matches!(clip, Some(Clip::Empty)) {
+                        if g.extra.contains_key(GHOST_PEG_KEY) {
                             return Err(Unsupported);
                         }
                         self.push(Op::PushZero)?;
                         self.nodes(&g.children)?;
+                        // A panel's frame clips the group before its riders go on.
+                        if let Some(Clip::Partial(c)) = clip {
+                            self.ops.push(Op::Coverage(c));
+                        }
                         self.clipped(&nodes[i + 1..j])?;
                         let tint = g.extra.get(GHOST_TINT_KEY).and_then(|v| serde_json::from_value::<[f32; 3]>(v.clone()).ok());
                         self.pop(g.blend_mode, g.opacity, false, tint);
@@ -523,6 +629,10 @@ fn exec(ops: &[Op], init: Px, i: usize, stack: &mut Vec<Px>) -> Px {
                     o = o.map(|v| v * k);
                 }
                 *top = blend_px(*mode, *top, o, *opacity);
+            }
+            Op::Coverage(c) => {
+                let k = c.values[i];
+                top.iter_mut().for_each(|v| *v *= k);
             }
             Op::Paper { shade, tx, ty } => {
                 if top[..3].iter().any(|v| *v != 0.0) {

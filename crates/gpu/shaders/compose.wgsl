@@ -83,6 +83,7 @@ const OP_POP: u32 = 4u;
 const OP_OVER_CACHE: u32 = 5u;
 const OP_ADJUST: u32 = 6u;
 const OP_PAPER: u32 = 7u;
+const OP_COVERAGE: u32 = 8u;
 
 const F_INHERIT: u32 = 1u;     // Layer: inherit alpha; Pop: clip instead of blend
 const F_TINT: u32 = 2u;
@@ -620,6 +621,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     v *= load(o.c.x, p).x;
                 }
                 top = blend_px(o.a.y, top, v, opacity);
+            }
+            case OP_COVERAGE: {
+                // A panel frame's partial clip (spec 44), coverage in the slot's channels.
+                top *= load(o.c.x, p).x;
             }
             case OP_PAPER: {
                 if (any(top.xyz != vec3<f32>(0.0))) {
