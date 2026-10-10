@@ -130,7 +130,17 @@ an item changes there, change it here too.
   - [ ] Partial panel clips
   - [ ] Ghost pegs (out-of-pegs onion offsets)
   - [ ] Present-only view modes
-- [ ] Opacity-drag bench: 60 fps on 8k × 100 layers
+- [x] Opacity-drag bench (`cargo bench -p onepaint-gpu --bench opacity_drag`)
+- [ ] Opacity drag at 60 fps on 8k × 100 layers. Baseline on Iris Xe
+      (2026-10-10): 128 ms a frame when the distinct tiles fit the 1 GiB
+      budget, 2.4 s when they don't (the LRU evicts and re-uploads every
+      frame); planning is 2–3 ms of it
+  - [ ] Cache the composite below and above the active layer per tile, so a
+        drag blends three inputs instead of ~30 layers
+  - [ ] Stop the cyclic LRU thrash past the budget: pin a frame's working
+        set, alternate traversal order, and check the working set fits first
+  - [ ] Profile the per-tile GPU cost (≈20 µs per tile-layer; far from the
+        memory bandwidth limit)
 - [ ] Decide the GPU memory budget on integrated GPUs
 - [ ] Decide whether to drop the CPU tile copy once GPU-resident
 

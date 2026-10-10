@@ -30,3 +30,7 @@ wgpu = { workspace = true, default-features = true }
 [[bench]]
 name = "compose"
 harness = false
+
+[[bench]]
+name = "opacity_drag"
+harness = false
