@@ -66,25 +66,108 @@ pub struct TileProgram {
     pub tx: i32,
     pub ty: i32,
     pub ops: Vec<Op>,
+    /// The same ops cut at the hot layer (spec 38), when one was given.
+    pub split: Option<Split>,
+}
+
+/// A run of ops whose result is cached as one image (spec 38).
+#[derive(Clone, Debug)]
+pub struct Segment {
+    /// Changes whenever anything the segment reads changes.
+    pub key: u64,
+    pub ops: Vec<Op>,
+}
+
+/// A program cut at the hot unit: the prefix and suffix images are cached,
+/// only `hot` and `tail` run every frame.
+#[derive(Clone, Debug)]
+pub struct Split {
+    /// Everything below the hot unit; the frame starts from its image.
+    pub prefix: Option<Segment>,
+    pub hot: Vec<Op>,
+    /// Normal, backdrop-independent units above: applied as one image `S`
+    /// over the result (`S + (1 − S.a) · x`).
+    pub suffix: Option<Segment>,
+    /// Units above that can't fold; they run every frame.
+    pub tail: Vec<Op>,
+}
+
+/// Every source tile `ops` read, in op order (with repeats).
+pub fn op_sources(ops: &[Op]) -> impl Iterator<Item = &Arc<Tile>> {
+    ops.iter().flat_map(|op| {
+        let c = match op {
+            Op::Layer { content, .. } | Op::PushContent(content) | Op::Clip { content, .. } => Some(content),
+            _ => None,
+        };
+        c.into_iter().flat_map(|c| {
+            let mask = match &c.mask {
+                MaskSrc::Tile(t) => Some(t),
+                _ => None,
+            };
+            c.base.iter().chain(c.stroke.iter().map(|s| &s.tile)).chain(mask).chain(c.mask_stroke.iter().map(|s| &s.tile))
+        })
+    })
 }
 
 impl TileProgram {
     /// Every source tile the program reads, in op order (with repeats).
     pub fn sources(&self) -> impl Iterator<Item = &Arc<Tile>> {
-        self.ops.iter().flat_map(|op| {
-            let c = match op {
-                Op::Layer { content, .. } | Op::PushContent(content) | Op::Clip { content, .. } => Some(content),
-                _ => None,
-            };
-            c.into_iter().flat_map(|c| {
-                let mask = match &c.mask {
-                    MaskSrc::Tile(t) => Some(t),
-                    _ => None,
-                };
-                c.base.iter().chain(c.stroke.iter().map(|s| &s.tile)).chain(mask).chain(c.mask_stroke.iter().map(|s| &s.tile))
-            })
-        })
+        op_sources(&self.ops)
     }
+}
+
+impl Segment {
+    pub fn sources(&self) -> impl Iterator<Item = &Arc<Tile>> {
+        op_sources(&self.ops)
+    }
+}
+
+/// A content key for `ops`: their kinds and parameters, and the address of
+/// every source tile (copy-on-write moves an edited tile to a new address).
+pub fn segment_key(ops: &[Op]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let ptr = |t: &Arc<Tile>| Arc::as_ptr(t) as usize;
+    let content = |c: &Content, h: &mut std::collections::hash_map::DefaultHasher| {
+        c.base.as_ref().map(ptr).hash(h);
+        for s in [&c.stroke, &c.mask_stroke] {
+            if let Some(s) = s {
+                ptr(&s.tile).hash(h);
+                s.opacity.to_bits().hash(h);
+                let (code, mode) = stroke_code(s.mode);
+                (code, mode as u8).hash(h);
+            } else {
+                0usize.hash(h);
+            }
+        }
+        match &c.mask {
+            MaskSrc::None => 0usize.hash(h),
+            MaskSrc::Zero => 1usize.hash(h),
+            MaskSrc::Tile(t) => (2usize, ptr(t)).hash(h),
+        }
+    };
+    for op in ops {
+        match op {
+            Op::Layer { content: c, mode, opacity, inherit_alpha } => {
+                (0u8, *mode as u8, opacity.to_bits(), *inherit_alpha).hash(&mut h);
+                content(c, &mut h);
+            }
+            Op::PushZero => 1u8.hash(&mut h),
+            Op::PushContent(c) => {
+                2u8.hash(&mut h);
+                content(c, &mut h);
+            }
+            Op::Clip { content: c, opacity } => {
+                (3u8, opacity.to_bits()).hash(&mut h);
+                content(c, &mut h);
+            }
+            Op::Pop { mode, opacity, clip, tint } => {
+                (4u8, *mode as u8, opacity.to_bits(), *clip).hash(&mut h);
+                tint.map(|t| t.map(f32::to_bits)).hash(&mut h);
+            }
+        }
+    }
+    h.finish()
 }
 
 /// Why a tile cannot run on the GPU; any of these keeps it on the CPU.
@@ -96,17 +179,46 @@ struct Planner<'a> {
     ov: Option<&'a StrokeOverlay<'a>>,
     ops: Vec<Op>,
     depth: usize,
+    /// Top-level units: (op range start, end, holds the hot layer, folds).
+    units: Vec<Unit>,
+    hot: Option<&'a str>,
+}
+
+/// A top-level node (with its clip family) and the ops it produced.
+struct Unit {
+    start: usize,
+    end: usize,
+    hot: bool,
+    /// Its result does not depend on what lies below (spec 38).
+    folds: bool,
+}
+
+/// Whether `id` is `n` or anything inside it.
+fn contains(n: &Node, id: &str) -> bool {
+    match n {
+        Node::Layer(l) => l.id == id,
+        Node::Group(g) => g.id == id || g.children.iter().any(|c| contains(c, id)),
+    }
 }
 
 /// Plan one output tile, or `None` when it needs the CPU compositor.
 pub fn plan_tile(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverlay>) -> Option<TileProgram> {
+    plan_tile_split(doc, tx, ty, ov, None)
+}
+
+/// Segments reading fewer sources than this aren't worth a cache image.
+const MIN_SEGMENT_SOURCES: usize = 2;
+
+/// [`plan_tile`], plus the ops cut at `hot` (a layer id) for spec 38.
+pub fn plan_tile_split(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, hot: Option<&str>) -> Option<TileProgram> {
     // The paper shades the finished composite on the CPU.
     if doc.paper().is_some() {
         return None;
     }
-    let mut p = Planner { tx, ty, ov, ops: Vec::new(), depth: 1 };
+    let mut p = Planner { tx, ty, ov, ops: Vec::new(), depth: 1, units: Vec::new(), hot };
     p.nodes(&doc.root).ok()?;
-    let prog = TileProgram { tx, ty, ops: p.ops };
+    let split = hot.and_then(|_| split(&p.ops, &p.units));
+    let prog = TileProgram { tx, ty, ops: p.ops, split };
     let mut seen: Vec<*const Tile> = prog.sources().map(Arc::as_ptr).collect();
     seen.sort_unstable();
     seen.dedup();
@@ -181,6 +293,8 @@ impl Planner<'_> {
                 continue;
             }
             let j = riders(nodes, i);
+            let top = self.depth == 1;
+            let start = self.ops.len();
             match &nodes[i] {
                 Node::Group(g) => {
                     let clip = panel_clip(g, self.tx, self.ty);
@@ -219,10 +333,48 @@ impl Planner<'_> {
                     }
                 }
             }
+            if top {
+                let hot = self.hot.is_some_and(|id| nodes[i..j].iter().any(|n| contains(n, id)));
+                let folds = match &nodes[i] {
+                    Node::Group(g) => g.blend_mode == BlendMode::Normal,
+                    Node::Layer(l) => l.blend_mode == BlendMode::Normal && !l.inherit_alpha,
+                };
+                self.units.push(Unit { start, end: self.ops.len(), hot, folds });
+            }
             i = j;
         }
         Ok(())
     }
+}
+
+/// Cut `ops` at the hot unit (spec 38): `None` when no unit holds it.
+fn split(ops: &[Op], units: &[Unit]) -> Option<Split> {
+    let h = units.iter().position(|u| u.hot)?;
+    let hot_unit = &units[h];
+    let mut prefix_ops = ops[..hot_unit.start].to_vec();
+    let mut hot = ops[hot_unit.start..hot_unit.end].to_vec();
+    let after = &units[h + 1..];
+    // Units are contiguous: every top-level op belongs to one.
+    let folds = after.iter().take_while(|u| u.folds).count();
+    let fold_end = if folds == 0 { hot_unit.end } else { after[folds - 1].end };
+    let mut suffix_ops = ops[hot_unit.end..fold_end].to_vec();
+    let mut tail = ops[fold_end..].to_vec();
+    let worth = |o: &[Op]| op_sources(o).count() >= MIN_SEGMENT_SOURCES;
+    let prefix = if worth(&prefix_ops) {
+        Some(Segment { key: segment_key(&prefix_ops), ops: prefix_ops })
+    } else {
+        prefix_ops.append(&mut hot);
+        hot = prefix_ops;
+        None
+    };
+    let suffix = if worth(&suffix_ops) {
+        Some(Segment { key: segment_key(&suffix_ops), ops: suffix_ops })
+    } else {
+        suffix_ops.append(&mut tail);
+        tail = suffix_ops;
+        None
+    };
+    Some(Split { prefix, hot, suffix, tail })
 }
 
 // ── CPU interpreter (the encoding's own oracle) ──
@@ -248,44 +400,69 @@ fn eval(c: &Content, i: usize) -> Px {
     p.map(|v| v * m[0])
 }
 
+/// Run `ops` on one pixel, starting from the register `init`.
+fn exec(ops: &[Op], init: Px, i: usize, stack: &mut Vec<Px>) -> Px {
+    stack.clear();
+    stack.push(init);
+    for op in ops {
+        // The stack is never empty: the planner pairs every push with a pop.
+        let Some(top) = stack.last_mut() else { break };
+        match op {
+            Op::Layer { content, mode, opacity, inherit_alpha } => {
+                let mut c = eval(content, i);
+                if *inherit_alpha {
+                    let a = top[3];
+                    c = c.map(|v| v * a);
+                }
+                *top = blend_px(*mode, *top, c, *opacity);
+            }
+            Op::PushZero => stack.push([0.0; 4]),
+            Op::PushContent(c) => {
+                let v = eval(c, i);
+                stack.push(v);
+            }
+            Op::Clip { content, opacity } => *top = clip_over(*top, eval(content, i), *opacity),
+            Op::Pop { mode, opacity, clip, tint } => {
+                let Some(mut v) = stack.pop() else { break };
+                if let Some(t) = tint {
+                    for c in 0..3 {
+                        v[c] += (t[c] * v[3] - v[c]) * 0.65;
+                    }
+                }
+                let Some(dst) = stack.last_mut() else { break };
+                *dst = if *clip { clip_over(*dst, v, *opacity) } else { blend_px(*mode, *dst, v, *opacity) };
+            }
+        }
+    }
+    stack[0]
+}
+
 /// Run a program on the CPU: premultiplied linear f32, `TILE × TILE`.
 pub fn run(prog: &TileProgram) -> Vec<f32> {
     let mut out = vec![0.0; TILE_PX * 4];
     let mut stack: Vec<Px> = Vec::with_capacity(MAX_STACK);
     for i in 0..TILE_PX {
-        stack.clear();
-        stack.push([0.0; 4]);
-        for op in &prog.ops {
-            // The stack is never empty: the planner pairs every push with a pop.
-            let Some(top) = stack.last_mut() else { break };
-            match op {
-                Op::Layer { content, mode, opacity, inherit_alpha } => {
-                    let mut c = eval(content, i);
-                    if *inherit_alpha {
-                        let a = top[3];
-                        c = c.map(|v| v * a);
-                    }
-                    *top = blend_px(*mode, *top, c, *opacity);
-                }
-                Op::PushZero => stack.push([0.0; 4]),
-                Op::PushContent(c) => {
-                    let v = eval(c, i);
-                    stack.push(v);
-                }
-                Op::Clip { content, opacity } => *top = clip_over(*top, eval(content, i), *opacity),
-                Op::Pop { mode, opacity, clip, tint } => {
-                    let Some(mut v) = stack.pop() else { break };
-                    if let Some(t) = tint {
-                        for c in 0..3 {
-                            v[c] += (t[c] * v[3] - v[c]) * 0.65;
-                        }
-                    }
-                    let Some(dst) = stack.last_mut() else { break };
-                    *dst = if *clip { clip_over(*dst, v, *opacity) } else { blend_px(*mode, *dst, v, *opacity) };
-                }
-            }
+        let v = exec(&prog.ops, [0.0; 4], i, &mut stack);
+        out[i * 4..i * 4 + 4].copy_from_slice(&v);
+    }
+    out
+}
+
+/// Run a program through its split (spec 38): the prefix image, the hot
+/// ops, the suffix image over that, then the tail. Without a split, [`run`].
+pub fn run_split(prog: &TileProgram) -> Vec<f32> {
+    let Some(s) = &prog.split else { return run(prog) };
+    let mut out = vec![0.0; TILE_PX * 4];
+    let mut stack: Vec<Px> = Vec::with_capacity(MAX_STACK);
+    for i in 0..TILE_PX {
+        let base = s.prefix.as_ref().map_or([0.0; 4], |p| exec(&p.ops, [0.0; 4], i, &mut stack));
+        let mut v = exec(&s.hot, base, i, &mut stack);
+        if let Some(sfx) = &s.suffix {
+            let img = exec(&sfx.ops, [0.0; 4], i, &mut stack);
+            v = blend_px(BlendMode::Normal, v, img, 1.0);
         }
-        out[i * 4..i * 4 + 4].copy_from_slice(&stack[0]);
+        v = exec(&s.tail, v, i, &mut stack);
+        out[i * 4..i * 4 + 4].copy_from_slice(&v);
     }
     out
 }
