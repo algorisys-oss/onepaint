@@ -205,9 +205,9 @@ painter with path layers.
 
 ## happypaint v0.188 → v0.201.7 parity delta (2026-10-10)
 See `docs/parity-delta-2026-10-10.md`.
-- [ ] Bugs: new blend modes lost on save; untouched transform fades a soft
-      selection; fill layers export to PSD empty; damp veil 0.12 in 8-bit;
-      granulation sign
+- [x] Bugs: new blend modes lost on save (kept by name until implemented);
+      untouched transform fades a soft selection; fill layers export to PSD
+      empty; damp veil 0.12 in 8-bit; granulation sign
 - [ ] 8 blend modes + Pass Through groups
 - [ ] Layer styles (v0.196.x)
 - [ ] New adjustments: Exposure, Vibrance, Photo Filter, Channel Mixer, CMYK
@@ -217,5 +217,5 @@ See `docs/parity-delta-2026-10-10.md`.
 - [ ] Ten procedural papers, sheet colour, flecks and mottle
 - [ ] Workspace: menu bar, options row, left tool rail, side-slider extras,
       scrollbars, angle dial, in-app dialogs, manual, brush search
-- [ ] Refresh stale divergences (1, 3, 6, 15, 41-44), spec 15, feature-parity.md
+- [x] Refresh stale divergences (1, 3, 6, 15, 41), spec 15, feature-parity.md
 

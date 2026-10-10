@@ -57,7 +57,9 @@ The sources are under `../happypaint/frontend/src/`:
 - **What the sim gets:** the raw paper strength.
 - **Absorption:** `soak = 1 + s·1.6·p` scales evaporation.
 - **Resistance:** `resist = 1 − s·0.5·p` scales water diffusion.
-- **Granulation:** `dc *= 1 + s·1.2·(2p − 1)`, re-applied once on force-dry.
+- **Granulation:** `dc *= 1 + s·1.2·(1 − 2p)`, re-applied once on force-dry:
+  valleys (low `p`) collect pigment, ridges shed it (happypaint 0.195.3
+  flipped the old `(2p − 1)`).
 - **Dry-brush gate:** on water and pigment deposits,
   `smoothstep(thr ± .08, p)` with `thr = grainThr − .6·(1 − dry·s)`.
 - **Changing paper mid-session:** it updates the live wet paint at once.

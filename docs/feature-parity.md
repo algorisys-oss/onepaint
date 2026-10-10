@@ -7,6 +7,11 @@ matches happypaint. If a feature changes in happypaint, update its item here.
 Legend: `[x]` done, `[~]` partly done (the note says what is missing), `[ ]`
 not started.
 
+This list covers happypaint up to v0.188. What v0.188–v0.201.7 added (layer
+styles, 8 blend modes and Pass Through, six adjustments, the new PSD codec,
+absorbing paper, the menu bar and more) is in
+`docs/parity-delta-2026-10-10.md`; fold it in here as each item lands.
+
 Sources, all under `../happypaint/frontend/src/`:
 
 - `state/tool-store.ts` (tools)
@@ -161,7 +166,7 @@ screentone are added as live layers.
 - [x] Autosave and the gallery (crash-recovery autosave; a gallery of recent drawings with thumbnails, shown at launch)
 - [x] `.happypaint-book` (open as tabs; save all tabs as a book)
 - [ ] `.happypaint-rec`
-- [~] PSD: read and write layers, groups, masks, blend modes, clipping, DPI and simple adjustments (8/16-bit RGB/grey read, PSB read; text exported as pixels)
+- [~] PSD: read and write layers, groups, masks, blend modes, clipping, DPI, fill layers as pixels, and invert/posterize/threshold/brightness-contrast adjustments (8/16-bit RGB/grey read, PSB read; text exported as pixels). Missing against happypaint's v0.201 codec: other colour modes, 32-bit, PSB export, untouched round trips, live Levels/Curves/Hue-Sat/Gradient Map and the new kinds, fill recipes, layer styles, locks, labels and guides.
 - [x] PNG, JPEG, WebP, TIFF and Netpbm, keeping ICC profiles and DPI (import all, converting embedded RGB profiles; export PNG/JPEG/TIFF/PPM with scale, DPI and ICC tags)
 - [x] GIF, MP4, WebM and PNG-zip export (GIF, MP4 and PNG-zip; WebM is covered by MP4, divergence 20)
 - [x] Clipboard: copy and paste images (in-place paste, the system clipboard, layer via copy/cut)

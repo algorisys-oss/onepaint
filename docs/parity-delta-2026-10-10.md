@@ -7,6 +7,9 @@ onepaint's code. Where a feature is *missing*, see the cited happypaint
 commit for the spec.
 
 ## Bugs and data loss in onepaint (fix first)
+
+All five are fixed (2026-10-10). Item 1 keeps the mode by name until
+the modes are implemented.
 1. **New blend modes are lost on save.** `.happypaint` files with
    `pass-through`, `dissolve`, `darker-color`, `lighter-color`,
    `vivid-light`, `linear-light`, `pin-light`, `hard-mix` or `subtract`
@@ -81,13 +84,10 @@ commit for the spec.
 - The gradient stop editor, presets and on-canvas handles for gradient
   and pattern fills.
 
-## onepaint docs now stale
-- Divergences:
-  - 1 (pigment is implemented), 3 (overflow is saved), 15 (pattern images
-    import) and 6 (a tablet backend exists) no longer hold;
-  - 41 to 44 describe happypaint's old layout.
-- Spec 15:
-  - "pass-through becomes normal" is an old happypaint bug;
-  - its notes on 16-bit and DPI are out of date;
-  - its claim of `hue2`/`levl`/`curv` export overstates the code.
-- `feature-parity.md` hasn't been updated for anything since v0.190.
+## onepaint docs (refreshed 2026-10-10)
+- Divergences 1, 3 and 6 were stale (pigment, overflow and the Wayland
+  tablet are implemented); 1 and 3 are gone, 6 and 15 are narrowed, and 41
+  notes happypaint's new left rail. 42–44 still hold.
+- Spec 15 no longer claims `hue2`/`levl`/`curv` export, the 16-bit and DPI
+  notes are current, and pass-through is kept by name.
+- `feature-parity.md` points here for everything after v0.188.
