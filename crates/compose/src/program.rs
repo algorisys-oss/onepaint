@@ -10,6 +10,7 @@
 use crate::blend::{blend_px, clip_over};
 use crate::{GHOST_PEG_KEY, GHOST_TINT_KEY, StrokeMode, StrokeOverlay, apply_stroke_px, panel_clip, riders};
 use onepaint_doc::{BlendMode, Document, Layer, Node};
+pub use onepaint_filters::gpu::GpuAdjust;
 use onepaint_panel::coverage::TileCoverage;
 use onepaint_raster::{Px, TILE_PX, Tile};
 use std::ops::Range;
@@ -48,6 +49,20 @@ pub struct Content {
     pub mask_stroke: Option<StrokeSrc>,
 }
 
+/// A colour adjustment layer (spec 42): prepared for the CPU interpreter
+/// and packed for the GPU.
+#[derive(Clone)]
+pub struct Adjust {
+    pub prepared: onepaint_filters::Prepared,
+    pub gpu: onepaint_filters::gpu::GpuAdjust,
+}
+
+impl std::fmt::Debug for Adjust {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Adjust({:?})", self.prepared.kind)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Op {
     /// Blend content onto the top register (`draw_layer`).
@@ -60,6 +75,9 @@ pub enum Op {
     Clip { content: Content, opacity: f32 },
     /// Pop the top register, tint it, and blend (or clip) it onto the next.
     Pop { mode: BlendMode, opacity: f32, clip: bool, tint: Option<[f32; 3]> },
+    /// Adjust the top register, mask the result and blend it back
+    /// (`draw_adjustment`, spec 42).
+    Adjust { adjust: Arc<Adjust>, mask: Option<Arc<Tile>>, mode: BlendMode, opacity: f32 },
 }
 
 #[derive(Clone, Debug)]
@@ -96,17 +114,19 @@ pub struct Split {
 /// Every source tile `ops` read, in op order (with repeats).
 pub fn op_sources(ops: &[Op]) -> impl Iterator<Item = &Arc<Tile>> {
     ops.iter().flat_map(|op| {
-        let c = match op {
-            Op::Layer { content, .. } | Op::PushContent(content) | Op::Clip { content, .. } => Some(content),
-            _ => None,
+        let (c, adjust_mask) = match op {
+            Op::Layer { content, .. } | Op::PushContent(content) | Op::Clip { content, .. } => (Some(content), None),
+            Op::Adjust { mask, .. } => (None, mask.as_ref()),
+            _ => (None, None),
         };
-        c.into_iter().flat_map(|c| {
+        let content = c.into_iter().flat_map(|c| {
             let mask = match &c.mask {
                 MaskSrc::Tile(t) => Some(t),
                 _ => None,
             };
             c.base.iter().chain(c.stroke.iter().map(|s| &s.tile)).chain(mask).chain(c.mask_stroke.iter().map(|s| &s.tile))
-        })
+        });
+        content.chain(adjust_mask)
     })
 }
 
@@ -166,6 +186,12 @@ pub fn segment_key(ops: &[Op]) -> u64 {
             Op::Pop { mode, opacity, clip, tint } => {
                 (4u8, *mode as u8, opacity.to_bits(), *clip).hash(&mut h);
                 tint.map(|t| t.map(f32::to_bits)).hash(&mut h);
+            }
+            Op::Adjust { adjust, mask, mode, opacity } => {
+                (5u8, *mode as u8, opacity.to_bits(), adjust.gpu.code).hash(&mut h);
+                adjust.gpu.params.map(f32::to_bits).hash(&mut h);
+                adjust.gpu.lut.hash(&mut h);
+                mask.as_ref().map(ptr).hash(&mut h);
             }
         }
     }
@@ -277,6 +303,29 @@ impl Planner<'_> {
         Ok(Some(c))
     }
 
+    /// An adjustment layer (`draw_adjustment`): pixel-only colour kinds run
+    /// on the GPU (spec 42), other colour kinds keep the tile on the CPU, and
+    /// anything else draws nothing.
+    fn adjust(&mut self, l: &Layer) -> Result<(), Unsupported> {
+        let Some(adj) = &l.adjustment else { return Ok(()) };
+        if !l.visible || l.opacity <= 0.0 {
+            return Ok(());
+        }
+        let Some(kind) = onepaint_filters::Kind::parse(&adj.kind).filter(|k| k.is_color()) else { return Ok(()) };
+        let gpu = onepaint_filters::gpu::gpu_adjust(kind, &adj.params).ok_or(Unsupported)?;
+        let mask = match (&l.mask, l.mask_enabled) {
+            (Some(m), true) => match m.tile(self.tx, self.ty) {
+                Some(t) => Some(t.clone()),
+                None => return Ok(()), // fully masked out on this tile
+            },
+            _ => None,
+        };
+        let prepared = onepaint_filters::prepare(kind, &adj.params);
+        let adjust = Arc::new(Adjust { prepared, gpu });
+        self.ops.push(Op::Adjust { adjust, mask, mode: l.blend_mode, opacity: l.opacity });
+        Ok(())
+    }
+
     fn push(&mut self, op: Op) -> Result<(), Unsupported> {
         self.depth += 1;
         if self.depth > MAX_STACK {
@@ -307,11 +356,16 @@ impl Planner<'_> {
     fn nodes(&mut self, nodes: &[Node]) -> Result<(), Unsupported> {
         let mut i = 0;
         while i < nodes.len() {
+            // An adjustment layer is never a clip base (as in `composite_nodes`).
             if let Node::Layer(l) = &nodes[i]
                 && l.adjustment.is_some()
             {
-                if l.visible && l.opacity > 0.0 {
-                    return Err(Unsupported); // adjustment layers run on the CPU for now
+                let start = self.ops.len();
+                self.adjust(l)?;
+                if self.depth == 1 {
+                    let hot = self.hot.is_some_and(|id| id == l.id);
+                    // It reads the backdrop, so it never folds into a suffix image.
+                    self.units.push(Unit { start, end: self.ops.len(), hot, folds: false });
                 }
                 i += 1;
                 continue;
@@ -438,6 +492,15 @@ fn exec(ops: &[Op], init: Px, i: usize, stack: &mut Vec<Px>) -> Px {
                 stack.push(v);
             }
             Op::Clip { content, opacity } => *top = clip_over(*top, eval(content, i), *opacity),
+            Op::Adjust { adjust, mask, mode, opacity } => {
+                // Pixel-only kinds: the position doesn't matter.
+                let mut o = adjust.prepared.color_px(*top, 0, 0);
+                if let Some(m) = mask {
+                    let k = load(m, i)[0];
+                    o = o.map(|v| v * k);
+                }
+                *top = blend_px(*mode, *top, o, *opacity);
+            }
             Op::Pop { mode, opacity, clip, tint } => {
                 let Some(mut v) = stack.pop() else { break };
                 if let Some(t) = tint {

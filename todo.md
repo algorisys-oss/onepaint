@@ -123,7 +123,8 @@ an item changes there, change it here too.
 - [x] Lean pipeline for plain normal layers (4096² × 20 layers: 130 ms → 60 ms on Iris Xe)
 - [x] Oracle tests and a criterion bench
 - [ ] Remaining CPU fallbacks on the GPU
-  - [ ] Colour adjustment layers (LUTs for curves and gradient maps)
+  - [x] Colour adjustment layers, pixel-only kinds (spec 42)
+  - [ ] Noise, screentone and fill layers
   - [ ] Spatial adjustment layers (a padded backdrop pass)
   - [ ] Relief lighting (impasto height)
   - [ ] Paper shading

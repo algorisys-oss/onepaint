@@ -37,6 +37,7 @@ pub const DEFAULT_CACHE_BUDGET: u64 = 256 << 20;
 /// "Not used" in a job's `init` and `dest`.
 const NONE: u32 = u32::MAX;
 const OP_OVER_CACHE: u32 = 5;
+const OP_ADJUST: u32 = 6;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -97,6 +98,8 @@ struct PassBuffers {
     params: wgpu::Buffer,
     jobs: wgpu::Buffer,
     ops: wgpu::Buffer,
+    /// Colour adjustment params and LUTs (spec 42).
+    adj: wgpu::Buffer,
 }
 
 impl PassBuffers {
@@ -110,6 +113,7 @@ impl PassBuffers {
             }),
             jobs: storage(device, "compose jobs", 64 * std::mem::size_of::<Job>() as u64),
             ops: storage(device, "compose ops", 1024 * std::mem::size_of::<GpuOp>() as u64),
+            adj: storage(device, "compose adjust", 4096),
         }
     }
 }
@@ -131,7 +135,7 @@ fn uses_pigment(ops: &[&Op]) -> bool {
     ops.iter().any(|op| match op {
         Op::Layer { content, mode, .. } => pig(*mode) || stroke(&content.stroke) || stroke(&content.mask_stroke),
         Op::PushContent(c) | Op::Clip { content: c, .. } => stroke(&c.stroke) || stroke(&c.mask_stroke),
-        Op::Pop { mode, .. } => pig(*mode),
+        Op::Pop { mode, .. } | Op::Adjust { mode, .. } => pig(*mode),
         Op::PushZero => false,
     })
 }
@@ -156,6 +160,33 @@ fn over_cache(slot: u32) -> GpuOp {
     let mut o = [0u32; 16];
     (o[0], o[1]) = (OP_OVER_CACHE, slot);
     GpuOp(o)
+}
+
+/// A batch's colour adjustment params and LUTs (spec 42), each distinct
+/// adjustment stored once.
+#[derive(Default)]
+struct AdjTable {
+    data: Vec<[f32; 4]>,
+    seen: HashMap<u64, (u32, u32)>,
+}
+
+impl AdjTable {
+    /// Where `a`'s params and LUT start (in vec4s); the LUT is `NONE` if absent.
+    fn add(&mut self, a: &onepaint_compose::program::GpuAdjust) -> (u32, u32) {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (a.code, a.params.map(f32::to_bits), &a.lut).hash(&mut h);
+        *self.seen.entry(h.finish()).or_insert_with(|| {
+            let at = self.data.len() as u32;
+            self.data.extend(a.params.chunks_exact(4).map(|c| [c[0], c[1], c[2], c[3]]));
+            let lut = a.lut.as_ref().map_or(NONE, |l| {
+                let lut = self.data.len() as u32;
+                self.data.extend(l.iter().map(|e| e.map(|v| v as f32 / 255.0)));
+                lut
+            });
+            (at, lut)
+        })
+    }
 }
 
 fn key(t: &Arc<Tile>) -> usize {
@@ -278,6 +309,7 @@ impl GpuCompositor {
             },
             count: None,
         });
+        entries.push(buffer(15, wgpu::BufferBindingType::Storage { read_only: true }));
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("compose"), entries: &entries });
         let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("compose"),
@@ -477,9 +509,18 @@ impl GpuCompositor {
         }
     }
 
-    fn encode(&self, op: &Op) -> GpuOp {
+    fn encode(&self, op: &Op, adj: &mut AdjTable) -> GpuOp {
         let mut o = [0u32; 16];
         match op {
+            Op::Adjust { adjust, mask, mode, opacity } => {
+                (o[0], o[1], o[2]) = (OP_ADJUST, *mode as u32, opacity.to_bits());
+                (o[4], o[5]) = adj.add(&adjust.gpu);
+                o[6] = adjust.gpu.code;
+                if let Some(m) = mask {
+                    o[3] |= F_MASK;
+                    o[8] = self.slot(m);
+                }
+            }
             Op::Layer { content, mode, opacity, inherit_alpha } => {
                 (o[0], o[1], o[2]) = (0, *mode as u32, opacity.to_bits());
                 if *inherit_alpha {
@@ -730,7 +771,7 @@ impl GpuCompositor {
         if works.is_empty() {
             return;
         }
-        let (jobs, ops, simple) = self.encode_jobs(works);
+        let (jobs, ops, simple, adj) = self.encode_jobs(works);
         let general = works.len() - simple;
         let pigment = works.iter().filter(|w| !is_simple(&w.ops)).any(|w| uses_pigment(&w.ops));
         let params = Params {
@@ -741,7 +782,7 @@ impl GpuCompositor {
             sheet: sheets.sheet_at(self.level),
             cols: sheets.grid[0],
         };
-        let bind = self.bind(device, queue, &jobs, &ops, params, target, fill);
+        let bind = self.bind(device, queue, (&jobs, &ops, &adj), params, target, fill);
         let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some(if fill { "compose fill" } else { "compose" }),
             timestamp_writes: None,
@@ -759,10 +800,11 @@ impl GpuCompositor {
     }
 
     /// Jobs and ops for `works`, the lean ones first; returns how many are lean.
-    fn encode_jobs(&self, works: &[Work]) -> (Vec<Job>, Vec<GpuOp>, usize) {
+    fn encode_jobs(&self, works: &[Work]) -> (Vec<Job>, Vec<GpuOp>, usize, Vec<[f32; 4]>) {
         let (simple, general): (Vec<&Work>, Vec<&Work>) = works.iter().partition(|w| is_simple(&w.ops));
         let mut jobs = Vec::with_capacity(works.len());
         let mut ops = Vec::new();
+        let mut adj = AdjTable::default();
         for w in simple.iter().chain(&general) {
             let op_start = ops.len() as u32;
             for (i, op) in w.ops.iter().enumerate() {
@@ -771,7 +813,7 @@ impl GpuCompositor {
                 {
                     ops.push(over_cache(slot));
                 }
-                ops.push(self.encode(op));
+                ops.push(self.encode(op, &mut adj));
             }
             if let Some((at, slot)) = w.over
                 && at == w.ops.len()
@@ -783,7 +825,10 @@ impl GpuCompositor {
         if ops.is_empty() {
             ops.push(GpuOp::default());
         }
-        (jobs, ops, simple.len())
+        if adj.data.is_empty() {
+            adj.data.push([0.0; 4]);
+        }
+        (jobs, ops, simple.len(), adj.data)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -791,8 +836,7 @@ impl GpuCompositor {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        jobs: &[Job],
-        ops: &[GpuOp],
+        (jobs, ops, adj): (&[Job], &[GpuOp], &[[f32; 4]]),
         params: Params,
         target: Option<&wgpu::TextureView>,
         fill: bool,
@@ -807,8 +851,13 @@ impl GpuCompositor {
         if b.ops.size() < ops_bytes.len() as u64 {
             b.ops = storage(device, "compose ops", (ops_bytes.len() as u64).next_power_of_two());
         }
+        let adj_bytes: &[u8] = bytemuck::cast_slice(adj);
+        if b.adj.size() < adj_bytes.len() as u64 {
+            b.adj = storage(device, "compose adjust", (adj_bytes.len() as u64).next_power_of_two());
+        }
         queue.write_buffer(&b.jobs, 0, jobs_bytes);
         queue.write_buffer(&b.ops, 0, ops_bytes);
+        queue.write_buffer(&b.adj, 0, adj_bytes);
         queue.write_buffer(&b.params, 0, bytemuck::bytes_of(&params));
         let b = &self.bufs[usize::from(!fill)];
         let mut entries = vec![
@@ -829,6 +878,7 @@ impl GpuCompositor {
         };
         entries.push(wgpu::BindGroupEntry { binding: 13, resource: wgpu::BindingResource::TextureView(read) });
         entries.push(wgpu::BindGroupEntry { binding: 14, resource: wgpu::BindingResource::TextureView(write) });
+        entries.push(wgpu::BindGroupEntry { binding: 15, resource: b.adj.as_entire_binding() });
         device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("compose"), layout: &self.layout, entries: &entries })
     }
 

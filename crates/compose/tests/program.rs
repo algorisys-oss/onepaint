@@ -1,9 +1,10 @@
 #![allow(clippy::unwrap_used)]
 //! The flattened tile programs reproduce the tree compositor exactly.
 use onepaint_compose::program::{Op, plan_tile, run};
-use onepaint_compose::testdocs::{random_doc, random_stroke};
+use onepaint_compose::testdocs::{Rng, random_adjustment, random_doc, random_stroke, with_adjustments};
 use onepaint_compose::{GHOST_PEG_KEY, StrokeOverlay, composite_tile};
-use onepaint_doc::{Group, Node};
+use onepaint_doc::{Adjustment, Group, Layer, Node};
+use onepaint_filters::Kind;
 
 const TILES: [(i32, i32); 4] = [(0, 0), (1, 0), (0, 1), (1, 1)];
 
@@ -47,4 +48,37 @@ fn empty_tiles_plan_to_nothing() {
     let prog = plan_tile(&doc, 7, 7, None).unwrap();
     assert!(prog.ops.iter().all(|op| matches!(op, Op::PushZero | Op::Pop { .. })));
     assert!(run(&prog).iter().all(|v| *v == 0.0));
+}
+
+#[test]
+fn colour_adjustment_layers_plan_and_match_the_tree_compositor() {
+    for seed in 0..60 {
+        let doc = with_adjustments(random_doc(seed, 300, 300, false), seed);
+        for (tx, ty) in TILES {
+            let prog = plan_tile(&doc, tx, ty, None).unwrap();
+            assert_eq!(run(&prog), composite_tile(&doc, tx, ty, None), "seed {seed} tile {tx},{ty}");
+        }
+    }
+}
+
+#[test]
+fn random_adjustments_carry_their_params() {
+    let mut r = Rng::new(9);
+    for _ in 0..100 {
+        let a = random_adjustment(&mut r);
+        let v = serde_json::to_value(&a.params).unwrap();
+        assert!(a.kind == "invert" || v.as_object().is_some_and(|o| !o.is_empty()), "{} parsed to defaults", a.kind);
+    }
+}
+
+#[test]
+fn noise_tone_and_fill_layers_stay_on_the_cpu() {
+    for kind in ["noise", "tone", "solid-fill"] {
+        let mut doc = random_doc(4, 300, 300, false);
+        let mut l = Layer::new("adj");
+        l.adjustment =
+            Some(Box::new(Adjustment { kind: kind.into(), params: onepaint_filters::default_params(Kind::parse(kind).unwrap()) }));
+        doc.root.push(Node::Layer(l));
+        assert!(plan_tile(&doc, 0, 0, None).is_none(), "{kind}");
+    }
 }

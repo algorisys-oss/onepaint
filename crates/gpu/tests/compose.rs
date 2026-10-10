@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used)]
 //! The GPU compositor against the CPU oracle (spec 13); skipped without an adapter.
 use onepaint_compose::program::{TileProgram, plan_tile, plan_tile_split};
-use onepaint_compose::testdocs::{Rng, random_doc, random_stroke};
+use onepaint_compose::testdocs::{Rng, random_doc, random_stroke, with_adjustments};
 use onepaint_compose::{StrokeOverlay, composite_tile};
 use onepaint_doc::{Document, Layer, Node};
 use onepaint_gpu::compose::GpuCompositor;
@@ -410,5 +410,34 @@ fn an_over_budget_frame_alternates_and_stays_exact() {
         gc.run(&device, &queue, &progs, &view, [512, 512]);
         let (e, at) = max_error(&d, None, &read(&device, &queue, &tex));
         assert!(e <= TOL, "error {e} at {at:?}");
+    }
+}
+
+#[test]
+fn colour_adjustment_layers_match_the_cpu_oracle() {
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let mut gc = GpuCompositor::new(&device, 64 << 20);
+    let (w, h) = (300, 300);
+    let tex = target(&device, w, h);
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
+    for seed in 0..40 {
+        let doc = with_adjustments(random_doc(seed, w, h, seed % 2 == 0), seed);
+        gc.run(&device, &queue, &programs(&doc, None), &view, [w, h]);
+        let (e, at) = max_error(&doc, None, &read(&device, &queue, &tex));
+        assert!(e <= TOL, "seed {seed}: error {e} at {at:?}");
+        // Split at an adjustment layer and at a plain one (spec 38), cold and warm.
+        let ids = layer_ids(&doc);
+        let hots = [ids.iter().find(|id| id.starts_with("adj")), ids.get(seed as usize % ids.len())];
+        for hot in hots.into_iter().flatten() {
+            let progs = split_programs(&doc, None, hot);
+            for pass in ["cold", "warm"] {
+                gc.run(&device, &queue, &progs, &view, [w, h]);
+                let (e, at) = max_error(&doc, None, &read(&device, &queue, &tex));
+                assert!(e <= TOL, "seed {seed} hot {hot} ({pass}): error {e} at {at:?}");
+            }
+        }
     }
 }

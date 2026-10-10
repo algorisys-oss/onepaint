@@ -8,6 +8,7 @@
 mod blur;
 mod colour;
 mod distort;
+pub mod gpu;
 pub mod gradient;
 mod kind;
 pub mod lightning;

@@ -150,3 +150,95 @@ pub fn random_stroke(seed: u64, doc: &Document) -> Option<(Surface, String, f32,
     };
     Some((s, id, r.f(), mode, r.chance(0.25)))
 }
+
+/// The colour adjustment kinds the GPU runs (spec 42), with random params.
+pub fn random_adjustment(r: &mut Rng) -> onepaint_doc::Adjustment {
+    use serde_json::json;
+    let kinds = [
+        "brightness-contrast",
+        "hue-saturation",
+        "black-white",
+        "invert",
+        "threshold",
+        "posterize",
+        "levels",
+        "curves",
+        "color-balance",
+        "gradient-map",
+        "color-to-alpha",
+        "replace-color",
+        "selective-color",
+    ];
+    let kind = kinds[r.below(kinds.len() as u32) as usize];
+    let mut c = || [r.f(), r.f(), r.f()];
+    let v = match kind {
+        "brightness-contrast" => json!({"brightness": c()[0] - 0.5, "contrast": c()[1] - 0.5}),
+        "hue-saturation" => json!({"hue": (c()[0] - 0.5) * 360.0, "saturation": c()[1] * 2.0 - 1.0, "brightness": c()[2] - 0.5}),
+        "black-white" => json!({"amount": c()[0]}),
+        "threshold" => json!({"threshold": c()[0]}),
+        "posterize" => json!({"levels": 2.0 + (c()[0] * 10.0).floor()}),
+        "levels" => {
+            let k = c();
+            json!({"inBlack": k[0] * 0.3, "inWhite": 0.7 + k[1] * 0.3, "gamma": 0.5 + k[2], "outBlack": 0.1, "outWhite": 0.9})
+        }
+        "curves" => {
+            let k = c();
+            json!({"curve": [{"x": 0.0, "y": 0.0}, {"x": 0.4, "y": k[0]}, {"x": 1.0, "y": 1.0}],
+                   "curveR": [{"x": 0.0, "y": k[1] * 0.3}, {"x": 1.0, "y": 1.0}],
+                   "curveMode": if k[2] < 0.5 { "linear" } else { "smooth" }})
+        }
+        "color-balance" => {
+            let k = c();
+            json!({"cyanRed": k[0] * 2.0 - 1.0, "magentaGreen": k[1] * 2.0 - 1.0, "yellowBlue": k[2] * 2.0 - 1.0})
+        }
+        "gradient-map" => json!({"gradientStops": [{"pos": 0.0, "color": c()}, {"pos": 0.5, "color": c()}, {"pos": 1.0, "color": c()}]}),
+        "color-to-alpha" => json!({"target": c(), "threshold": c()[0] * 0.5}),
+        "replace-color" => json!({"target": c(), "replace": c(), "threshold": c()[0] * 0.6}),
+        "selective-color" => {
+            let samples: Vec<_> = (0..3)
+                .map(|_| {
+                    let k = c();
+                    json!({"target": c(), "reach": k[0] * 0.3, "falloff": k[1] * 0.3, "dh": (k[2] - 0.5) * 120.0, "ds": k[0] - 0.5, "dv": k[1] - 0.5})
+                })
+                .collect();
+            json!({"colorSamples": samples, "showRange": c()[0] < 0.2})
+        }
+        _ => json!({}),
+    };
+    onepaint_doc::Adjustment { kind: kind.into(), params: serde_json::from_value(v).unwrap_or_default() }
+}
+
+/// `doc` with colour adjustment layers dropped into its top level and its
+/// groups (spec 42), some masked, in random modes and opacities.
+pub fn with_adjustments(mut doc: Document, seed: u64) -> Document {
+    fn walk(nodes: &mut Vec<Node>, r: &mut Rng, id: &mut u32, w: u32, h: u32) {
+        for n in nodes.iter_mut() {
+            if let Node::Group(g) = n {
+                walk(&mut g.children, r, id, w, h);
+            }
+        }
+        for _ in 0..1 + r.below(2) {
+            *id += 1;
+            let mut l = Layer::new(&format!("adj{id}"));
+            l.id = format!("adj{id}");
+            l.adjustment = Some(Box::new(random_adjustment(r)));
+            l.blend_mode = if r.chance(0.6) { BlendMode::Normal } else { mode(r, false) };
+            l.opacity = if r.chance(0.5) { 1.0 } else { r.f() };
+            l.visible = !r.chance(0.1);
+            if r.chance(0.3) {
+                let mut m = Surface::default();
+                let a = rect(r, w, h);
+                noise(&mut m, r, a);
+                l.mask = Some(m);
+                l.mask_enabled = !r.chance(0.2);
+            }
+            let at = r.below(nodes.len() as u32 + 1) as usize;
+            nodes.insert(at, Node::Layer(l));
+        }
+    }
+    let mut r = Rng::new(seed ^ 0xad1);
+    let (w, h) = (doc.width, doc.height);
+    let mut id = 0;
+    walk(&mut doc.root, &mut r, &mut id, w, h);
+    doc
+}

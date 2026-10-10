@@ -63,6 +63,13 @@ pub(crate) struct ScSample {
     range: [f32; 2],
 }
 
+impl ScSample {
+    /// Target, delta and (reach, falloff), for the GPU packing (spec 42).
+    pub(crate) fn parts(&self) -> ([f32; 3], [f32; 3], [f32; 2]) {
+        (self.target, self.delta, self.range)
+    }
+}
+
 pub(crate) fn sc_samples(p: &Params) -> Vec<ScSample> {
     p.color_samples
         .as_deref()

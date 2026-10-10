@@ -10,6 +10,10 @@
 //   d: ghost tint rgb (f32 bits)
 // A stroke code is `kind | mode << 8` (kind 0 paint, 1 erase, 2 alpha lock).
 //
+// Spec 42: an adjust op (a colour adjustment layer) has its params at
+// `adj[b.x..]` (vec4s), its LUT at `adj[b.y..]` (256 entries, or NONE), its
+// kind code in b.z, and its mask slot in c.x when F_MASK is set.
+//
 // Spec 38: a job may start from a cached segment image (`init`), lay a
 // cached image over its result (`OP_OVER_CACHE`, slot in a.y), and write to
 // a cache slot instead of the canvas (`dest`). NONE means "not used".
@@ -64,6 +68,8 @@ struct Km {
 // pass (each pass binds a stand-in for the other).
 @group(0) @binding(13) var cache_tex: texture_2d_array<f32>;
 @group(0) @binding(14) var cache_out: texture_storage_2d_array<rgba16float, write>;
+// Colour adjustment params and LUTs (spec 42).
+@group(0) @binding(15) var<storage, read> adj: array<vec4<f32>>;
 
 const NONE: u32 = 0xffffffffu;
 
@@ -73,6 +79,7 @@ const OP_PUSH_CONTENT: u32 = 2u;
 const OP_CLIP: u32 = 3u;
 const OP_POP: u32 = 4u;
 const OP_OVER_CACHE: u32 = 5u;
+const OP_ADJUST: u32 = 6u;
 
 const F_INHERIT: u32 = 1u;     // Layer: inherit alpha; Pop: clip instead of blend
 const F_TINT: u32 = 2u;
@@ -312,6 +319,175 @@ fn apply_stroke(dst: vec4<f32>, src: vec4<f32>, opacity: f32, code: u32) -> vec4
     }
 }
 
+// ── Colour adjustment layers (spec 42; crates/filters `Prepared::color_px`) ──
+
+const LUMA: vec3<f32> = vec3<f32>(0.299, 0.587, 0.114);
+
+fn luma(c: vec3<f32>) -> f32 {
+    return dot(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)), LUMA);
+}
+
+fn c01(c: vec3<f32>) -> vec3<f32> {
+    return clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+// GLSL rgb2hsv / hsv2rgb, hue in turns (filters colour.rs).
+fn rgb2hsv(c: vec3<f32>) -> vec3<f32> {
+    let k = vec4<f32>(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+    let p = mix(vec4<f32>(c.b, c.g, k.w, k.z), vec4<f32>(c.g, c.b, k.x, k.y), step(c.b, c.g));
+    let q = mix(vec4<f32>(p.x, p.y, p.w, c.r), vec4<f32>(c.r, p.y, p.z, p.x), step(p.x, c.r));
+    let d = q.x - min(q.w, q.y);
+    return vec3<f32>(abs(q.z + (q.w - q.y) / (6.0 * d + 1e-10)), d / (q.x + 1e-10), q.x);
+}
+
+fn hsv2rgb(c: vec3<f32>) -> vec3<f32> {
+    let k = vec4<f32>(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+    let p = abs(fract(c.xxx + k.xyz) * 6.0 - k.www);
+    return c.z * (k.xxx + (clamp(p - k.xxx, vec3<f32>(0.0), vec3<f32>(1.0)) - k.xxx) * c.y);
+}
+
+fn to_work(c: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(lin2srgb(c.x), lin2srgb(c.y), lin2srgb(c.z));
+}
+
+fn repremul(o: vec3<f32>, a: f32) -> vec4<f32> {
+    return vec4<f32>(vec3<f32>(srgb2lin(o.x), srgb2lin(o.y), srgb2lin(o.z)) * a, a);
+}
+
+// Bilinear 256 × 1 LUT lookup with texel centres at (i + 0.5) / 256.
+fn lut_at(lut: u32, v: f32, ch: u32) -> f32 {
+    let t = clamp(v * 256.0 - 0.5, 0.0, 255.0);
+    let i0 = u32(floor(t));
+    let i1 = min(i0 + 1u, 255u);
+    return mix(adj[lut + i0][ch], adj[lut + i1][ch], t - floor(t));
+}
+
+fn lut3(lut: u32, v: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(lut_at(lut, v.x, 0u), lut_at(lut, v.y, 1u), lut_at(lut, v.z, 2u));
+}
+
+fn sc_weight(px: vec3<f32>, t: vec3<f32>, reach: f32, falloff: f32) -> f32 {
+    let chroma = min(px.y, t.y);
+    let d = abs(px.x - t.x);
+    let dh = chroma * min(d, 1.0 - d) * 2.0;
+    let ds = 0.7 * (px.y - t.y);
+    let dv = 0.45 * (px.z - t.z);
+    let dist = sqrt(dh * dh + ds * ds + dv * dv) / sqrt(1.0 + 0.49 + 0.2025);
+    let edge = reach + falloff;
+    if (dist <= reach) {
+        return 1.0;
+    }
+    if (dist >= edge) {
+        return 0.0;
+    }
+    return 1.0 - sstep(reach, edge, dist);
+}
+
+// Selective Colour+: the weighted H/S/V shift, or the range preview.
+fn selective(rgb: vec3<f32>, base: u32) -> vec3<f32> {
+    let head = adj[base];
+    let px = rgb2hsv(rgb);
+    var w_sum = 0.0;
+    var delta = vec3<f32>(0.0);
+    for (var i = 0u; i < u32(head.y); i++) {
+        let t = adj[base + 1u + 2u * i];
+        let d = adj[base + 2u + 2u * i];
+        let w = sc_weight(px, t.xyz, t.w, d.w);
+        if (w > 0.0) {
+            w_sum += w;
+            delta += w * d.xyz;
+        }
+    }
+    var o = rgb;
+    if (w_sum > 0.0) {
+        let dd = delta * select(1.0, 1.0 / w_sum, w_sum > 1.0);
+        o = hsv2rgb(vec3<f32>(fract(px.x + dd.x), clamp(px.y * (1.0 + dd.y), 0.0, 1.0), clamp(px.z * (1.0 + dd.z), 0.0, 1.0)));
+    }
+    if (head.x > 0.5) {
+        let cov = clamp(w_sum, 0.0, 1.0);
+        let grey = dot(rgb, LUMA) * 0.55;
+        o = mix(vec3<f32>(grey * 0.5), mix(vec3<f32>(grey), vec3<f32>(1.0, 0.15, 0.15), 0.75), cov);
+    }
+    return o;
+}
+
+fn adjust(op: Op, s: vec4<f32>) -> vec4<f32> {
+    let base = op.b.x;
+    let lut = op.b.y;
+    let a = s.w;
+    let w = to_work(select(s.xyz, s.xyz / a, a > 0.0));
+    let p0 = adj[base];
+    let p1 = adj[base + 1u];
+    var o = w;
+    switch op.b.z {
+        case 1u: {
+            let k = select(1.0 / max(1.0 - p0.y, 1e-3), 1.0 + p0.y, p0.y <= 0.0);
+            o = c01((w + p0.x - 0.5) * k + 0.5);
+        }
+        case 2u: {
+            var h = rgb2hsv(c01(w));
+            h.x = fract(h.x + p0.x / 360.0);
+            h.y = clamp(h.y * (1.0 + p0.y), 0.0, 1.0);
+            h.z = clamp(h.z * (1.0 + p0.z), 0.0, 1.0);
+            o = hsv2rgb(h);
+        }
+        case 3u: {
+            o = w + (luma(w) - w) * p0.x;
+        }
+        case 4u: {
+            o = c01(1.0 - w);
+        }
+        case 5u: {
+            o = vec3<f32>(select(0.0, 1.0, luma(w) >= p0.x));
+        }
+        case 6u: {
+            let n = max(p0.x, 2.0) - 1.0;
+            o = floor(c01(w) * n + 0.5) / n;
+        }
+        case 7u: {
+            let n = pow(c01((c01(w) - p0.x) / max(p0.y - p0.x, 1e-4)), vec3<f32>(1.0 / max(p0.z, 1e-3)));
+            o = c01(p0.w + n * (p1.x - p0.w));
+        }
+        case 8u: {
+            o = lut3(lut, c01(w));
+        }
+        case 9u: {
+            let l = luma(w);
+            o = c01(w + p0.xyz * 0.5 * (1.0 - abs(2.0 * l - 1.0)));
+        }
+        case 10u: {
+            o = lut3(lut, vec3<f32>(luma(w)));
+        }
+        case 11u: {
+            let t = p0.xyz;
+            let up = (w - t) / max(1.0 - t, vec3<f32>(1e-4));
+            let down = (t - w) / max(t, vec3<f32>(1e-4));
+            let d = select(down, up, w > t);
+            var alpha = clamp(max(d.x, max(d.y, d.z)), 0.0, 1.0);
+            alpha = clamp((alpha - p0.w) / max(1.0 - p0.w, 1e-4), 0.0, 1.0);
+            var c = w;
+            if (alpha > 1e-4) {
+                c = c01(t + (w - t) / alpha);
+            }
+            return repremul(c, a * alpha);
+        }
+        case 12u: {
+            let rgb = c01(w);
+            let t = c01(p0.xyz);
+            let dist = length(rgb - t) / 1.732;
+            let k = 1.0 - sstep(p0.w, p0.w + 0.12, dist);
+            let rh = rgb2hsv(c01(p1.xyz));
+            let recol = hsv2rgb(vec3<f32>(rh.x, rh.y, rgb2hsv(rgb).z));
+            return repremul(mix(rgb, recol, k), a);
+        }
+        case 13u: {
+            return repremul(selective(c01(w), base), a);
+        }
+        default: {}
+    }
+    return repremul(o, a);
+}
+
 // `layer_content`: pixels, then the live stroke, then the mask.
 fn content(o: Op, p: vec2<i32>) -> vec4<f32> {
     let flags = o.a.w;
@@ -404,6 +580,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case OP_OVER_CACHE: {
                 let c = load_cache(o.a.y, p);
                 top = c + top * (1.0 - c.w);
+            }
+            case OP_ADJUST: {
+                var v = adjust(o, top);
+                if ((o.a.w & F_MASK) != 0u) {
+                    v *= load(o.c.x, p).x;
+                }
+                top = blend_px(o.a.y, top, v, opacity);
             }
             default: {
                 var v = top;
