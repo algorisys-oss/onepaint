@@ -7,7 +7,10 @@
 //! `docs/specs/07-canvas-ui.md` and `docs/specs/13-gpu-compositor.md`.
 
 pub mod compose;
+pub mod mip;
 pub mod wet;
+
+pub use mip::L_MAX;
 
 use onepaint_raster::{TILE, Tile};
 
@@ -48,8 +51,8 @@ struct Uniforms {
 
 struct DocTextures {
     texture: wgpu::Texture,
-    /// The composite as a compute-pass storage target.
-    storage: wgpu::TextureView,
+    /// The composite as a compute-pass storage target, one view per level.
+    storage: Vec<wgpu::TextureView>,
     selection: wgpu::Texture,
     bind: wgpu::BindGroup,
     size: [u32; 2],
@@ -65,6 +68,9 @@ pub struct CanvasGpu {
     srgb_target: bool,
     max_dim: u32,
     compositor: Option<compose::GpuCompositor>,
+    mipper: mip::Mipper,
+    /// The level the present pass samples (spec 39).
+    lod: u32,
 }
 
 impl CanvasGpu {
@@ -163,6 +169,8 @@ impl CanvasGpu {
             srgb_target: target.is_srgb(),
             max_dim: device.limits().max_texture_dimension_2d,
             compositor: None,
+            mipper: mip::Mipper::new(device),
+            lod: 0,
         }
     }
 
@@ -175,22 +183,53 @@ impl CanvasGpu {
         self.compositor.is_some()
     }
 
-    /// Run tile programs straight into the composite texture.
-    pub fn composite(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, programs: &[onepaint_compose::program::TileProgram]) {
+    /// Run tile programs straight into the composite texture at `level`
+    /// (spec 39), then downsample those tiles into the coarser levels.
+    pub fn composite(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        programs: &[onepaint_compose::program::TileProgram],
+        level: u32,
+    ) {
         let (Some(c), Some(t)) = (&mut self.compositor, &self.texture) else {
             return;
         };
-        if !programs.is_empty() {
-            c.run(device, queue, programs, &t.storage, t.size);
+        if programs.is_empty() {
+            return;
         }
+        let level = level.min(t.storage.len() as u32 - 1);
+        let size = [(t.size[0] >> level).max(1), (t.size[1] >> level).max(1)];
+        c.run_level(device, queue, programs, &t.storage[level as usize], size, level);
+        let keys: Vec<(i32, i32)> = programs.iter().map(|p| (p.tx, p.ty)).collect();
+        self.mip_tiles(device, queue, &keys, level);
+    }
+
+    /// Downsample tiles from `from` into every coarser level.
+    pub fn mip_tiles(&self, device: &wgpu::Device, queue: &wgpu::Queue, keys: &[(i32, i32)], from: u32) {
+        let Some(t) = &self.texture else { return };
+        if keys.is_empty() {
+            return;
+        }
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("composite mips") });
+        for chunk in keys.chunks(65_535) {
+            self.mipper.tiles(device, &mut enc, &t.texture, chunk, from);
+        }
+        queue.submit([enc.finish()]);
+    }
+
+    /// The level the present pass samples.
+    pub fn set_lod(&mut self, level: u32) {
+        let top = self.texture.as_ref().map_or(0, |t| t.storage.len() as u32 - 1);
+        self.lod = level.min(top);
     }
 
     /// Fill the cache images `programs` will need (spec 38 warm-up).
-    pub fn warm(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, programs: &[onepaint_compose::program::TileProgram]) {
+    pub fn warm(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, programs: &[onepaint_compose::program::TileProgram], level: u32) {
         if let Some(c) = &mut self.compositor
             && !programs.is_empty()
         {
-            c.warm(device, queue, programs);
+            c.warm_level(device, queue, programs, level);
         }
     }
 
@@ -204,10 +243,12 @@ impl CanvasGpu {
             self.texture = None;
             return false;
         }
+        // Levels of detail (spec 39), as many as the size allows.
+        let levels = mip::LEVELS.min(32 - w.max(h).leading_zeros());
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("onepaint_composite"),
             size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-            mip_level_count: 1,
+            mip_level_count: levels,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba16Float,
@@ -215,7 +256,7 @@ impl CanvasGpu {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let storage = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let storage = (0..levels).map(|l| mip::level_view(&texture, l, false)).collect();
         let selection = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("onepaint_selection"),
             size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
@@ -307,7 +348,7 @@ impl CanvasGpu {
             stage: v.stage,
             checker_a: v.checker_a,
             checker_b: v.checker_b,
-            sel: [if self.has_selection { 1.0 } else { 0.0 }, v.time, 0.0, 0.0],
+            sel: [if self.has_selection { 1.0 } else { 0.0 }, v.time, self.lod as f32, 0.0],
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
     }

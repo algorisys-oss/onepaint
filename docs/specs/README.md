@@ -49,3 +49,4 @@ The happypaint references are relative to `../happypaint/frontend/src/`.
 | 36 | [Document paper](36-paper.md) | doc, brush, compose, engine, app |
 | 37 | [Dual brush, colour tips, grain movement](37-brush-extras.md) | brush, app |
 | 38 | [Cached composite below and above the active layer](38-composite-cache.md) | compose, gpu, engine, app |
+| 39 | [Level-of-detail compositing](39-lod-compositing.md) | gpu, app |

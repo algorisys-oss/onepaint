@@ -18,7 +18,7 @@ struct Uniforms {
     stage: vec4<f32>,
     checker_a: vec4<f32>,
     checker_b: vec4<f32>,
-    // x: has selection, y: time (s).
+    // x: has selection, y: time (s), z: level of detail to sample.
     sel: vec4<f32>,
 };
 
@@ -53,22 +53,10 @@ fn to_doc(px: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(q.x * c + q.y * s, -q.x * s + q.y * c) / u.scale + u.doc_size * 0.5;
 }
 
-// Composite sample; box-filters when zoomed out so thin lines don't shimmer.
+// Composite sample at the display level (spec 39): the composite keeps a
+// box-filtered pyramid, so zoomed-out views read one level, bilinearly.
 fn sample_doc(d: vec2<f32>) -> vec4<f32> {
-    let uv = d / u.doc_size;
-    if (u.scale >= 0.75) {
-        return textureSampleLevel(tex, samp, uv, 0.0);
-    }
-    let n = i32(clamp(ceil(1.0 / u.scale), 2.0, 6.0));
-    let step = 1.0 / (u.scale * f32(n));
-    var acc = vec4<f32>(0.0);
-    for (var y = 0; y < n; y = y + 1) {
-        for (var x = 0; x < n; x = x + 1) {
-            let o = (vec2<f32>(f32(x), f32(y)) + 0.5) * step - 0.5 / u.scale;
-            acc = acc + textureSampleLevel(tex, samp, (d + o) / u.doc_size, 0.0);
-        }
-    }
-    return acc / f32(n * n);
+    return textureSampleLevel(tex, samp, d / u.doc_size, u.sel.z);
 }
 
 fn sel_at(p: vec2<i32>) -> f32 {

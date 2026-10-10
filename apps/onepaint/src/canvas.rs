@@ -52,6 +52,8 @@ pub fn init_gpu(cc: &eframe::CreationContext) -> (bool, bool) {
 
 /// Tiles handed to the GPU compositor per frame, visible ones first.
 const GPU_TILES_PER_FRAME: usize = 256;
+/// The cap on tiles a frame composites at a coarse level (spec 39).
+const MAX_GPU_TILES_PER_FRAME: usize = 4096;
 /// Tiles whose cache images an idle frame warms (spec 38).
 const WARM_TILES_PER_FRAME: usize = 64;
 
@@ -81,6 +83,9 @@ struct CanvasCallback {
     doc_size: [u32; 2],
     uploads: Arc<Vec<((i32, i32), Tile)>>,
     programs: Arc<Vec<TileProgram>>,
+    /// The level `programs` composite at, and the level shown (spec 39).
+    level: u32,
+    lod: u32,
     /// Programs whose cache images to fill on an idle frame (spec 38).
     warm: Arc<Vec<TileProgram>>,
     selection: SelectionUpload,
@@ -99,8 +104,11 @@ impl CallbackTrait for CanvasCallback {
         if let Some(gpu) = res.get_mut::<CanvasGpu>() {
             gpu.ensure_size(device, self.doc_size[0], self.doc_size[1]);
             gpu.upload(queue, &self.uploads);
-            gpu.composite(device, queue, &self.programs);
-            gpu.warm(device, queue, &self.warm);
+            let uploaded: Vec<(i32, i32)> = self.uploads.iter().map(|(k, _)| *k).collect();
+            gpu.mip_tiles(device, queue, &uploaded, 0);
+            gpu.composite(device, queue, &self.programs, self.level);
+            gpu.warm(device, queue, &self.warm, self.lod);
+            gpu.set_lod(self.lod);
             if let Some(sel) = &self.selection {
                 gpu.set_selection(queue, sel.as_deref().map(|v| v.as_slice()));
             }
@@ -318,7 +326,10 @@ pub struct Canvas {
     pub xform: TransformParams,
     hold: HoldTracker,
     /// Composite tiles still waiting for a frame's budget.
-    pending: std::collections::BTreeSet<(i32, i32)>,
+    /// Tiles stale per level of detail (spec 39).
+    levels: crate::levels::Levels,
+    /// The level shown, from the zoom.
+    lod: usize,
     /// Spec 38 warm-up: the layer it is for, and its tiles still to warm.
     warm_layer: Option<String>,
     warm_queue: Vec<(i32, i32)>,
@@ -373,7 +384,8 @@ impl Canvas {
             uploaded_selection: None,
             xform: TransformParams::default(),
             hold: HoldTracker::default(),
-            pending: Default::default(),
+            levels: Default::default(),
+            lod: 0,
             warm_layer: None,
             warm_queue: Vec::new(),
             view_modes: Default::default(),
@@ -416,7 +428,7 @@ impl Canvas {
             self.press = press;
             if self.view_modes.any() {
                 let [w, h] = self.doc_size;
-                self.pending.extend(onepaint_raster::Rect::new(0, 0, w as i32, h as i32).tiles());
+                self.levels.dirty(onepaint_raster::Rect::new(0, 0, w as i32, h as i32).tiles());
             }
         }
     }
@@ -426,7 +438,7 @@ impl Canvas {
         if v != self.view_modes {
             self.view_modes = v;
             let [w, h] = self.doc_size;
-            self.pending.extend(onepaint_raster::Rect::new(0, 0, w as i32, h as i32).tiles());
+            self.levels.dirty(onepaint_raster::Rect::new(0, 0, w as i32, h as i32).tiles());
         }
     }
 
@@ -436,7 +448,7 @@ impl Canvas {
         self.view.fit();
         self.poly = None;
         self.uploaded_selection = None;
-        self.pending.clear();
+        self.levels.clear();
         self.warm_layer = None;
         self.warm_queue.clear();
         self.persp_editing = false;
@@ -1282,8 +1294,11 @@ impl Canvas {
         self.hover_doc = hover.map(|p| self.doc_pt(local(p)));
 
         // ── Display ──
-        self.pending.extend(session.take_dirty_tiles());
-        let (programs, uploads) = self.composite_budgeted(session, ui.ctx(), gpu && gpu_compose);
+        self.levels.dirty(session.take_dirty_tiles());
+        // The level shown; without the GPU compositor tiles are composited at
+        // full size and downsampled, so every level stays exact.
+        self.lod = crate::levels::display_level(self.view.scale * ppp as f64);
+        let (programs, level, uploads) = self.composite_budgeted(session, ui.ctx(), gpu && gpu_compose);
         let warm = if gpu && gpu_compose { self.warm_up(session, ui.ctx()) } else { Vec::new() };
         let key = (session.selection_version(), self.doc_size);
         let selection = if self.uploaded_selection != Some(key) {
@@ -1312,6 +1327,8 @@ impl Canvas {
                     doc_size: self.doc_size,
                     uploads: Arc::new(uploads),
                     programs: Arc::new(programs),
+                    level: level as u32,
+                    lod: self.lod as u32,
                     warm: Arc::new(warm),
                     selection,
                     params,
@@ -1350,7 +1367,8 @@ impl Canvas {
             self.warm_queue = crate::progressive::prioritize(&keys, visible, centre);
             self.warm_queue.reverse();
         }
-        if !self.pending.is_empty() || self.warm_queue.is_empty() || session.is_stroking() || self.view_modes.any() {
+        let busy = !self.levels.stale_at(self.lod).is_empty() || (self.lod > 0 && !self.levels.rough().is_empty());
+        if busy || self.warm_queue.is_empty() || session.is_stroking() || self.view_modes.any() {
             return Vec::new();
         }
         let n = self.warm_queue.len().min(WARM_TILES_PER_FRAME);
@@ -1379,23 +1397,33 @@ impl Canvas {
         (visible, v.screen_to_doc([v.view_size[0] / 2.0, v.view_size[1] / 2.0]))
     }
 
-    /// Composite pending tiles, visible ones first: up to a frame's worth as
-    /// GPU programs, and the tiles the GPU can't do on the CPU within the
-    /// frame budget.
-    fn composite_budgeted(&mut self, session: &Session, ctx: &egui::Context, gpu_compose: bool) -> (Vec<TileProgram>, TileUploads) {
-        if self.pending.is_empty() {
-            return (Vec::new(), Vec::new());
+    /// Composite stale tiles at the display level, visible ones first: up to
+    /// a frame's worth as GPU programs, and the tiles the GPU can't do on the
+    /// CPU within the frame budget. With nothing stale, refine previews at
+    /// level 0 (spec 39). Returns the programs and the level they run at.
+    fn composite_budgeted(&mut self, session: &Session, ctx: &egui::Context, gpu_compose: bool) -> (Vec<TileProgram>, usize, TileUploads) {
+        let modes = self.view_modes;
+        let gpu = gpu_compose && !modes.any();
+        // The present-only view modes run on CPU tiles, at full size.
+        let mut level = if gpu { self.lod } else { 0 };
+        let mut todo = self.levels.stale_at(level).clone();
+        if todo.is_empty() && gpu && !session.is_stroking() {
+            // Idle: refine the reduced-resolution previews at full size.
+            todo = self.levels.rough().clone();
+            level = 0;
+        }
+        if todo.is_empty() {
+            return (Vec::new(), level, Vec::new());
         }
         let (visible, centre) = self.visible_and_centre();
-        let mut order = crate::progressive::prioritize(&self.pending, visible, centre);
-        let modes = self.view_modes;
-        // The present-only view modes run on CPU tiles.
+        let mut order = crate::progressive::prioritize(&todo, visible, centre);
         let mut programs = Vec::new();
-        if gpu_compose && !modes.any() {
-            let n = order.len().min(GPU_TILES_PER_FRAME);
+        if gpu {
+            // A tile at level L is 4^L times cheaper, so a frame does more of them.
+            let n = order.len().min((GPU_TILES_PER_FRAME << (2 * level)).min(MAX_GPU_TILES_PER_FRAME));
             let (progs, cpu) = session.plan(&order[..n]);
             for p in &progs {
-                self.pending.remove(&(p.tx, p.ty));
+                self.levels.composited((p.tx, p.ty), level);
             }
             programs = progs;
             order = cpu;
@@ -1405,14 +1433,15 @@ impl Canvas {
         let mut out = Vec::new();
         for chunk in order.chunks(batch) {
             out.extend(session.composite(chunk));
+            // CPU tiles upload at full size and are downsampled: exact everywhere.
             for k in chunk {
-                self.pending.remove(k);
+                self.levels.composited(*k, 0);
             }
             if start.elapsed().as_secs_f64() * 1000.0 >= crate::progressive::BUDGET_MS {
                 break;
             }
         }
-        if !self.pending.is_empty() {
+        if !self.levels.stale_at(self.lod).is_empty() || (gpu && !self.levels.rough().is_empty()) {
             ctx.request_repaint();
         }
         if modes.any() {
@@ -1424,7 +1453,7 @@ impl Canvas {
                 *t = Tile::from_f32(&px);
             });
         }
-        (programs, out)
+        (programs, level, out)
     }
 
     fn move_symmetry_centre(session: &mut Session, d: Pt, doc: [u32; 2]) {

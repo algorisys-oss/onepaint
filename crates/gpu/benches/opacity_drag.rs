@@ -74,19 +74,17 @@ fn document(distinct: usize) -> Document {
     d
 }
 
-fn target(device: &wgpu::Device) -> wgpu::TextureView {
-    device
-        .create_texture(&wgpu::TextureDescriptor {
-            label: None,
-            size: wgpu::Extent3d { width: SIZE, height: SIZE, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba16Float,
-            usage: wgpu::TextureUsages::STORAGE_BINDING,
-            view_formats: &[],
-        })
-        .create_view(&Default::default())
+fn target(device: &wgpu::Device) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size: wgpu::Extent3d { width: SIZE, height: SIZE, depth_or_array_layers: 1 },
+        mip_level_count: onepaint_gpu::mip::LEVELS,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba16Float,
+        usage: wgpu::TextureUsages::STORAGE_BINDING,
+        view_formats: &[],
+    })
 }
 
 fn set_opacity(d: &mut Document, i: usize, o: f32) {
@@ -104,7 +102,10 @@ fn bench(c: &mut Criterion) {
         eprintln!("skipping: the GPU's textures stop short of {SIZE} px");
         return;
     }
-    let view = target(&device);
+    let tex = target(&device);
+    let view = onepaint_gpu::mip::level_view(&tex, 0, false);
+    // Level 3 (1/8 scale): about what an 8k page shows at fit-to-window (spec 39).
+    let view3 = onepaint_gpu::mip::level_view(&tex, 3, false);
     let mut g = c.benchmark_group("opacity drag 8192² × 100 layers");
     g.sample_size(10);
     let full = std::env::var("ONEPAINT_BENCH_FULL").is_ok();
@@ -174,6 +175,15 @@ fn bench(c: &mut Criterion) {
             let mut gpu = |n: usize| time(&mut || run(&mut gc, &progs[..n.min(progs.len())]));
             let (g1, g50, gall) = (gpu(1), gpu(50), gpu(progs.len()));
             eprintln!("{name}: split plan {plan:.2} ms; GPU 1 tile {g1:.2} ms, 50 tiles {g50:.2} ms, {} tiles {gall:.2} ms", progs.len());
+            // The same drag frame at level 3.
+            gc.warm_level(&device, &queue, &progs, 3);
+            let l3 = time(&mut || {
+                set_opacity(&mut d, DRAGGED, 0.5);
+                let progs = split(&d);
+                gc.run_level(&device, &queue, &progs, &view3, [SIZE >> 3, SIZE >> 3], 3);
+                device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            });
+            eprintln!("{name}: split drag frame at level 3 (plan + GPU) {l3:.2} ms");
         }
         g.bench_function(format!("drag frame, split (plan + GPU), {name}"), |b| {
             b.iter(|| {

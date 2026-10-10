@@ -23,6 +23,7 @@ mod gestures;
 mod help;
 mod keymap;
 mod layout;
+mod levels;
 mod palettes;
 mod panel_ui;
 mod pen;

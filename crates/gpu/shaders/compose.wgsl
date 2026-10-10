@@ -15,9 +15,15 @@
 // a cache slot instead of the canvas (`dest`). NONE means "not used".
 
 struct Params {
+    // The target's size at this level.
     doc_size: vec2<u32>,
     per_atlas: u32,
     general_base: u32,
+    // Level of detail (spec 39): tiles are 256 >> level pixels, read from mip `level`.
+    level: u32,
+    _p0: u32,
+    _p1: u32,
+    _p2: u32,
 }
 
 struct Job {
@@ -115,20 +121,21 @@ fn sstep(e0: f32, e1: f32, x: f32) -> f32 {
 
 fn load(slot: u32, p: vec2<i32>) -> vec4<f32> {
     let l = i32(slot % prm.per_atlas);
+    let m = i32(prm.level);
     switch slot / prm.per_atlas {
-        case 0u: { return textureLoad(atlas0, p, l, 0); }
-        case 1u: { return textureLoad(atlas1, p, l, 0); }
-        case 2u: { return textureLoad(atlas2, p, l, 0); }
-        case 3u: { return textureLoad(atlas3, p, l, 0); }
-        case 4u: { return textureLoad(atlas4, p, l, 0); }
-        case 5u: { return textureLoad(atlas5, p, l, 0); }
-        case 6u: { return textureLoad(atlas6, p, l, 0); }
-        default: { return textureLoad(atlas7, p, l, 0); }
+        case 0u: { return textureLoad(atlas0, p, l, m); }
+        case 1u: { return textureLoad(atlas1, p, l, m); }
+        case 2u: { return textureLoad(atlas2, p, l, m); }
+        case 3u: { return textureLoad(atlas3, p, l, m); }
+        case 4u: { return textureLoad(atlas4, p, l, m); }
+        case 5u: { return textureLoad(atlas5, p, l, m); }
+        case 6u: { return textureLoad(atlas6, p, l, m); }
+        default: { return textureLoad(atlas7, p, l, m); }
     }
 }
 
 fn load_cache(slot: u32, p: vec2<i32>) -> vec4<f32> {
-    return textureLoad(cache_tex, p, i32(slot), 0);
+    return textureLoad(cache_tex, p, i32(slot), i32(prm.level));
 }
 
 // ── sRGB transfer (crates/color/src/lib.rs) ──
@@ -338,6 +345,9 @@ fn finish(job: Job, g: vec2<u32>, p: vec2<i32>, top: vec4<f32>) {
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let job = jobs[gid.z + select(0u, prm.general_base, GENERAL)];
+    if (gid.x >= (256u >> prm.level) || gid.y >= (256u >> prm.level)) {
+        return;
+    }
     let g = job.origin + gid.xy;
     // A cache image covers its whole tile: it may be reused by any tile.
     if (job.dest == NONE && (g.x >= prm.doc_size.x || g.y >= prm.doc_size.y)) {

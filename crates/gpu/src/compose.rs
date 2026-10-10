@@ -27,7 +27,8 @@ pub const COMPOSE_WGSL: &str = include_str!("../shaders/compose.wgsl");
 const ATLASES: usize = 8;
 /// Tiles per dispatch (the z workgroup count limit).
 const MAX_JOBS: usize = 65_535;
-const TILE_BYTES: u64 = (TILE as u64) * (TILE as u64) * 8;
+/// A slot with its mip levels (a third more than level 0).
+const TILE_BYTES: u64 = (TILE as u64) * (TILE as u64) * 8 * 4 / 3;
 /// Default GPU memory for resident layer tiles (spec 13).
 pub const DEFAULT_BUDGET: u64 = 1 << 30;
 /// Default GPU memory for cached segment images (spec 38).
@@ -39,10 +40,14 @@ const OP_OVER_CACHE: u32 = 5;
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Params {
+    /// The target's size at this level.
     doc_size: [u32; 2],
     per_atlas: u32,
     /// Index of the first general job (the simple ones come first).
     general_base: u32,
+    /// Level of detail (spec 39): sources are read from this mip.
+    level: u32,
+    _pad: [u32; 3],
 }
 
 #[repr(C)]
@@ -73,6 +78,8 @@ struct Slot {
     idx: u32,
     _tile: Weak<Tile>,
     used: u64,
+    /// Its levels 1..=L_MAX are filled (spec 39; done when first needed).
+    mipped: bool,
 }
 
 /// A cached segment image. The `Weak`s keep its sources' addresses from
@@ -172,7 +179,8 @@ pub struct GpuCompositor {
     pub uploads: u64,
     /// Segment images: one texture array, read in the composite pass and
     /// written in the fill pass.
-    cache: Option<(wgpu::Texture, wgpu::TextureView, wgpu::TextureView)>,
+    /// The cache texture, its all-levels read view, and a write view per level.
+    cache: Option<(wgpu::Texture, wgpu::TextureView, Vec<wgpu::TextureView>)>,
     cache_layers: u32,
     cache_slots: HashMap<u64, CacheSlot>,
     cache_free: Vec<u32>,
@@ -184,6 +192,9 @@ pub struct GpuCompositor {
     pub split_cache: bool,
     /// Walk the next over-budget frame backwards.
     reverse: bool,
+    mipper: crate::mip::Mipper,
+    /// The level the current run composites at (spec 39).
+    level: u32,
     /// Segment images computed since creation (for tests and stats).
     pub fills: u64,
 }
@@ -360,6 +371,8 @@ impl GpuCompositor {
             dummy_target,
             split_cache: cache_layers >= 2,
             reverse: false,
+            mipper: crate::mip::Mipper::new(device),
+            level: 0,
             fills: 0,
         }
     }
@@ -376,11 +389,11 @@ impl GpuCompositor {
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("compose atlas"),
             size: wgpu::Extent3d { width: TILE as u32, height: TILE as u32, depth_or_array_layers: self.per_atlas },
-            mip_level_count: 1,
+            mip_level_count: crate::mip::LEVELS,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba16Float,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::STORAGE_BINDING,
             view_formats: &[],
         });
         let view =
@@ -425,7 +438,7 @@ impl GpuCompositor {
             wgpu::Extent3d { width: TILE as u32, height: TILE as u32, depth_or_array_layers: 1 },
         );
         self.uploads += 1;
-        self.slots.insert(k, Slot { idx, _tile: Arc::downgrade(t), used: self.clock });
+        self.slots.insert(k, Slot { idx, _tile: Arc::downgrade(t), used: self.clock, mipped: false });
         Some(idx)
     }
 
@@ -504,6 +517,22 @@ impl GpuCompositor {
         target: &wgpu::TextureView,
         doc_size: [u32; 2],
     ) {
+        self.run_level(device, queue, programs, target, doc_size, 0);
+    }
+
+    /// [`GpuCompositor::run`] at level of detail `level` (spec 39): `target`
+    /// is that level's view and `size` its size; tiles are `256 >> level`
+    /// pixels and read their sources' mip `level`.
+    pub fn run_level(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        programs: &[TileProgram],
+        target: &wgpu::TextureView,
+        doc_size: [u32; 2],
+        level: u32,
+    ) {
+        self.level = level.min(crate::mip::L_MAX);
         let cap = self.capacity();
         // Each program may need two cache slots; keep a batch within the cache.
         let cache_cap = (self.cache_layers as usize / 2).max(1);
@@ -543,7 +572,10 @@ impl GpuCompositor {
         match (&p.split, self.split_cache) {
             (Some(s), true) => {
                 let missing = |seg: &'a Option<Segment>| {
-                    seg.as_ref().filter(|g| !self.cache_slots.contains_key(&g.key)).into_iter().flat_map(|g| op_sources(p.at(&g.range)))
+                    seg.as_ref()
+                        .filter(|g| !self.cache_slots.contains_key(&self.level_key(g.key)))
+                        .into_iter()
+                        .flat_map(|g| op_sources(p.at(&g.range)))
                 };
                 Box::new(op_sources(p.at(&s.hot)).chain(op_sources(p.at(&s.tail))).chain(missing(&s.prefix)).chain(missing(&s.suffix)))
             }
@@ -558,15 +590,16 @@ impl GpuCompositor {
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("compose segment cache"),
             size: wgpu::Extent3d { width: TILE as u32, height: TILE as u32, depth_or_array_layers: self.cache_layers },
-            mip_level_count: 1,
+            mip_level_count: crate::mip::LEVELS,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba16Float,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
             view_formats: &[],
         });
-        let array = || wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() };
-        let (read, write) = (tex.create_view(&array()), tex.create_view(&array()));
+        let read =
+            tex.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() });
+        let write = (0..crate::mip::LEVELS).map(|l| crate::mip::level_view(&tex, l, true)).collect();
         self.cache = Some((tex, read, write));
         self.cache_free = (0..self.cache_layers).rev().collect();
     }
@@ -574,7 +607,8 @@ impl GpuCompositor {
     /// The cache slot for a segment this batch: `(slot, needs a fill)`.
     fn cache_slot(&mut self, seg: &Segment, ops: &[Op]) -> Option<(u32, bool)> {
         let clock = self.clock;
-        if let Some(c) = self.cache_slots.get_mut(&seg.key) {
+        let key = self.level_key(seg.key);
+        if let Some(c) = self.cache_slots.get_mut(&key) {
             c.used = clock;
             return Some((c.idx, false));
         }
@@ -588,8 +622,13 @@ impl GpuCompositor {
             }
         };
         let sources = op_sources(ops).map(Arc::downgrade).collect();
-        self.cache_slots.insert(seg.key, CacheSlot { idx, _sources: sources, used: clock });
+        self.cache_slots.insert(key, CacheSlot { idx, _sources: sources, used: clock });
         Some((idx, true))
+    }
+
+    /// A segment's image at the current level (spec 39) has its own key.
+    fn level_key(&self, key: u64) -> u64 {
+        key ^ u64::from(self.level).wrapping_mul(0x9E37_79B9_7F4A_7C15)
     }
 
     /// Plan a batch's jobs: segment fills first, then the composites.
@@ -597,7 +636,8 @@ impl GpuCompositor {
         let mut fills: Vec<Work<'a>> = Vec::new();
         let mut main: Vec<Work<'a>> = Vec::new();
         for &p in batch {
-            let origin = [(p.tx * TILE) as u32, (p.ty * TILE) as u32];
+            let edge = (TILE as u32) >> self.level;
+            let origin = [p.tx as u32 * edge, p.ty as u32 * edge];
             let split = p.split.as_ref().filter(|_| self.split_cache);
             let Some(s) = split else {
                 main.push(Work { origin, ops: p.ops.iter().collect(), over: None, init: NONE, dest: NONE });
@@ -645,11 +685,35 @@ impl GpuCompositor {
             }
         }
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("compose") });
+        self.mip_sources(device, &mut enc, fills.iter().chain(&main));
         // Fills and composites can't share a dispatch: one writes the cache, the other reads it.
         self.dispatch(device, queue, &mut enc, &fills, doc_size, Some(target), true);
         self.dispatch(device, queue, &mut enc, &main, doc_size, Some(target), false);
         // Submit per batch: the next batch's uploads may evict slots this one reads.
         queue.submit([enc.finish()]);
+    }
+
+    /// Above level 0, fill the mips of the slots `works` read that lack them.
+    fn mip_sources<'a>(&mut self, device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, works: impl Iterator<Item = &'a Work<'a>>) {
+        if self.level == 0 {
+            return;
+        }
+        let mut per_atlas: Vec<Vec<u32>> = vec![Vec::new(); self.atlases.len()];
+        for w in works {
+            for t in w.ops.iter().flat_map(|op| op_sources(std::slice::from_ref(*op))) {
+                if let Some(s) = self.slots.get_mut(&key(t))
+                    && !s.mipped
+                {
+                    s.mipped = true;
+                    per_atlas[(s.idx / self.per_atlas) as usize].push(s.idx % self.per_atlas);
+                }
+            }
+        }
+        for (i, layers) in per_atlas.iter().enumerate() {
+            for chunk in layers.chunks(MAX_JOBS) {
+                self.mipper.slots(device, enc, &self.atlases[i].0, chunk);
+            }
+        }
     }
 
     /// Record one pass over `works`: the fill pass writes cache slots, the
@@ -671,14 +735,14 @@ impl GpuCompositor {
         let (jobs, ops, simple) = self.encode_jobs(works);
         let general = works.len() - simple;
         let pigment = works.iter().filter(|w| !is_simple(&w.ops)).any(|w| uses_pigment(&w.ops));
-        let params = Params { doc_size, per_atlas: self.per_atlas, general_base: simple as u32 };
+        let params = Params { doc_size, per_atlas: self.per_atlas, general_base: simple as u32, level: self.level, _pad: [0; 3] };
         let bind = self.bind(device, queue, &jobs, &ops, params, target, fill);
         let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some(if fill { "compose fill" } else { "compose" }),
             timestamp_writes: None,
         });
         pass.set_bind_group(0, &bind, &[]);
-        let n = (TILE as u32) / 8;
+        let n = ((TILE as u32) >> self.level).div_ceil(8);
         if simple > 0 {
             pass.set_pipeline(&self.simple);
             pass.dispatch_workgroups(n, n, simple as u32);
@@ -754,7 +818,7 @@ impl GpuCompositor {
             entries.push(wgpu::BindGroupEntry { binding: 5 + i as u32, resource: wgpu::BindingResource::TextureView(view) });
         }
         let (read, write) = match (&self.cache, fill) {
-            (Some((_, _, w)), true) => (&self.dummy, w),
+            (Some((_, _, w)), true) => (&self.dummy, &w[self.level as usize]),
             (Some((_, r, _)), false) => (r, &self.dummy_store),
             (None, _) => (&self.dummy, &self.dummy_store),
         };
@@ -766,6 +830,12 @@ impl GpuCompositor {
     /// Fill the cache images `programs` will need, without compositing
     /// (spec 38 warm-up, run on idle frames after the active layer changes).
     pub fn warm(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, programs: &[TileProgram]) {
+        self.warm_level(device, queue, programs, 0);
+    }
+
+    /// [`GpuCompositor::warm`] for the cache images at `level` (spec 39).
+    pub fn warm_level(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, programs: &[TileProgram], level: u32) {
+        self.level = level.min(crate::mip::L_MAX);
         if !self.split_cache {
             return;
         }
@@ -786,6 +856,7 @@ impl GpuCompositor {
                 }
             }
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("compose warm") });
+            self.mip_sources(device, &mut enc, fills.iter());
             self.dispatch(device, queue, &mut enc, &fills, [0, 0], None, true);
             queue.submit([enc.finish()]);
         }

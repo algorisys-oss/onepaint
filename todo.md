@@ -142,8 +142,10 @@ an item changes there, change it here too.
   - [x] Cheaper planning: ranges instead of copies, parallel planning
         (5 → 1.8 ms). Drag frame now 19.7 ms median (16.8 min) when the
         tiles fit, 28 ms past the budget
-  - [ ] Composite zoomed-out views at reduced resolution (the GPU part is
-        now near the iGPU's bandwidth at full resolution)
+  - [x] Composite zoomed-out views at reduced resolution (spec 39): a
+        level-3 drag frame is ~10× cheaper than level 0; previews refine
+        to exact when idle
+  - [ ] Re-measure spec 38/39 on a quiet machine (browsers closed)
   - [x] Stop the cyclic LRU thrash past the budget: batches already keep
         each dispatch within the atlas; over-budget frames now alternate
         direction (spec 38)
