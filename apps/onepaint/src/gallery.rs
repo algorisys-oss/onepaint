@@ -124,7 +124,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     });
     ui.add_space(8.0);
     // A file deleted or moved since it was listed leaves the gallery.
-    if ui.ctx().cumulative_frame_nr() % 30 == 0 {
+    if ui.ctx().cumulative_frame_nr().is_multiple_of(30) {
         app.gallery.prune();
     }
     let list = app.gallery.recent.clone();
