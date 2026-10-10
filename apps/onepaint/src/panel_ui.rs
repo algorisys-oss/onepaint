@@ -175,7 +175,7 @@ pub fn overlay(ui: &Ui, session: &Session, pd: Option<&PanelDrag>, to_screen: im
 pub fn options(app: &mut App, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let now = ui.input(|i| i.time);
-    ui.set_width(300.0);
+    crate::dock::fit_width(ui, 300.0);
     widgets::section_label(ui, "Page layout");
     ui.horizontal_wrapped(|ui| {
         for l in LAYOUT_PRESETS {
@@ -331,5 +331,42 @@ mod tests {
         assert!(gutters.iter().all(|g| *g > 100.0), "{gutters:?}");
         assert_eq!(s.history_len(), h0 + 1, "one step per slider drag");
         assert!(h.state().canvas.panel_options.gutter > 100.0);
+    }
+
+    #[test]
+    fn picking_the_tool_shows_its_layouts_and_the_frame_line_moves_a_frame() {
+        let mut h = harness();
+        h.run();
+        h.get_by_label("Panel (manga)").click();
+        h.run();
+        assert_eq!(h.state().popover, Some(Popover::PanelOptions), "the layouts show on first pick");
+        h.get_by_label("1×2").click();
+        h.run();
+        h.state_mut().popover = None;
+        h.state_mut().canvas.view.pan(0.0, 60.0);
+        h.run();
+        // Grab the middle of the first frame's top edge and drag it down.
+        let (id, before) = h.state().session.panel_frames().remove(0);
+        let mid = [(before[0].x + before[1].x) / 2.0, (before[0].y + before[1].y) / 2.0];
+        let at = screen(&h, mid);
+        drag(&mut h, at, at + vec2(0.0, 40.0));
+        let after = h.state().session.panel(&id).map(|p| p.outline).unwrap_or_default();
+        let dy = after[0].y - before[0].y;
+        assert!(dy > 10.0, "moved down {dy}");
+        assert!(after.iter().zip(&before).all(|(a, b)| (a.y - b.y - dy).abs() < 1e-6 && (a.x - b.x).abs() < 1e-6), "the whole frame moves");
+        // Art painted in a panel stops at its frame.
+        let art = h.state().session.active().to_string();
+        let o = h.state().session.panel(&id).map(|p| p.outline).unwrap_or_default();
+        let (x0, x1) = (o.iter().map(|p| p.x).fold(f64::MAX, f64::min), o.iter().map(|p| p.x).fold(f64::MIN, f64::max));
+        let y = (o[0].y + o[2].y) / 2.0;
+        h.state_mut().set_tool(Tool::Brush);
+        h.run();
+        let (a, b) = (screen(&h, [x0 - 80.0, y]), screen(&h, [x1 + 80.0, y]));
+        drag(&mut h, a, b);
+        let s = &h.state().session;
+        assert_eq!(s.active(), art, "painting goes to the panel's Art layer");
+        let shown = |x: f64| s.pick_color(x as i32, y as i32);
+        assert!(shown((x0 + x1) / 2.0).g < 0.5, "paint shows inside the frame");
+        assert!(shown(x0 - 40.0).g > 0.99, "and stops at it: {:?}", shown(x0 - 40.0));
     }
 }

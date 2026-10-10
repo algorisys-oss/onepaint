@@ -20,6 +20,7 @@ mod debug;
 mod dock;
 mod gallery;
 mod gestures;
+mod help;
 mod keymap;
 mod layout;
 mod palettes;
@@ -925,6 +926,10 @@ impl App {
         let _ = self.session.execute(Command::SetTool { tool });
         if tool == Tool::Move && was != Tool::Move {
             self.begin_transform();
+        }
+        // The Panel tool shows its page layouts as soon as it is picked.
+        if tool == Tool::Panel && was != Tool::Panel {
+            self.popover = Some(Popover::PanelOptions);
         }
     }
 

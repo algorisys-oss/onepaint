@@ -171,7 +171,7 @@ screentone are added as live layers.
 - [ ] Google Drive provider, with desktop OAuth (loopback + PKCE)
 
 ## Comics
-- [x] Panel layouts and panel tool: six page presets; panels clip their art to the frame, inset by half the gutter; one Millipen border layer that follows every edit; round-trips in `.happypaint`
+- [x] Panel layouts and panel tool: the layouts open when the tool is picked; six page presets; panels clip their art to the frame, inset by half the gutter; one Millipen border layer that follows every edit; round-trips in `.happypaint`
 - [x] Balloons (in text layers): speech, rounded, shout and thought shapes, tail, fill and rim (spec 28; the tail is aimed by angle, as in happypaint)
 
 ## Workspace and panels
@@ -198,6 +198,12 @@ Source: `components/toolbar/toolbar.tsx`, `components/dock/`, `state/dock-store.
   mode, value check, version; narrow windows fold details into "…"
 - [x] ColorDrop: drag the colour onto the canvas to fill, with a live preview;
   hold to lock the seed and slide to set the threshold; one undo step
+
+## Help
+- [x] Shortcuts and gestures reference
+- [x] Guide (happypaint's help sections): tool bar, status bar, ColorDrop,
+  panels and docking, Panel (manga), manga and comics, Properties, align and
+  distribute
 
 ## Settings
 - [x] Settings dialog, persisted as `settings.json` in the config dir (spec 34):

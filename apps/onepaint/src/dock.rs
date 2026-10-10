@@ -855,13 +855,18 @@ fn draw_preview(app: &App, ctx: &egui::Context, drop: &Drop, view: Rect, stage_b
     }
 }
 
-/// The drag grip atop a popover that can leave home: pull it to float the
-/// panel, then drop it on a dock or another window.
-pub fn popover_grip(app: &mut App, ui: &mut Ui, id: PanelId) {
+/// A popover body with a drag grip on top: pull it to float the panel,
+/// then drop it on a dock or another window. The grip is laid out after
+/// the body so it spans the popover without widening it.
+pub fn with_grip(app: &mut App, ui: &mut Ui, id: PanelId, body: impl FnOnce(&mut App, &mut Ui)) {
     let t = Tokens::get(ui.ctx());
-    let (rect, r) = ui.allocate_exact_size(vec2(ui.available_width().max(60.0), 12.0), Sense::drag());
-    let r = r.on_hover_text(format!("Drag to float {} · drop on a side to dock", id.label())).on_hover_cursor(egui::CursorIcon::Grab);
+    let top = ui.cursor().top();
+    ui.add_space(12.0);
+    body(app, ui);
+    let rect = Rect::from_min_max(pos2(ui.min_rect().left(), top), pos2(ui.min_rect().right(), top + 12.0));
+    let r = ui.interact(rect, Id::new(("popover-grip", id)), Sense::drag());
     r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, format!("Drag {}", id.label())));
+    let r = r.on_hover_text(format!("Drag to float {} · drop on a side to dock", id.label())).on_hover_cursor(egui::CursorIcon::Grab);
     icons::paint(
         ui,
         Rect::from_center_size(rect.center(), vec2(14.0, 14.0)),
@@ -872,7 +877,7 @@ pub fn popover_grip(app: &mut App, ui: &mut Ui, id: PanelId) {
     if r.drag_started()
         && let Some(p) = r.interact_pointer_pos()
     {
-        let popover_min = ui.min_rect().min - vec2(12.0, 12.0);
+        let popover_min = pos2(rect.left(), top) - vec2(12.0, 12.0);
         begin_drag(app, id, p, p - popover_min);
     }
 }

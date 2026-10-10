@@ -245,3 +245,15 @@ fn panels_join_into_a_floating_tab_group() {
     assert_eq!(g.members, vec![PanelId::Align, PanelId::Palettes]);
     assert!(h.query_by_label("Close these panels").is_some());
 }
+
+#[test]
+fn help_has_a_guide_to_the_panel_tool() {
+    let mut h = harness();
+    h.run();
+    h.state_mut().popover = Some(Popover::Help);
+    h.run();
+    h.get_by_label("Guide").click();
+    h.run();
+    assert!(h.query_by_label("Drag inside a panel").is_some());
+    assert!(h.query_by_label("Drag the status-bar swatch onto the canvas").is_some());
+}

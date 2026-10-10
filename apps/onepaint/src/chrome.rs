@@ -26,78 +26,55 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         let (anchor, side) = crate::toolbar::popover_anchor(app, screen);
         let rect = match p {
             Popover::Menu => popover_at(ctx, "menu", pos2(M, M + BAR_H + 8.0), Align2::LEFT_TOP, |ui| menu(app, ui)),
-            Popover::Brushes => popover_at(ctx, "brushes", anchor, side, |ui| {
-                crate::dock::popover_grip(app, ui, PanelId::Brush);
-                brushes(app, ui)
-            }),
-            Popover::Layers => popover_at(ctx, "layers", anchor, side, |ui| {
-                crate::dock::popover_grip(app, ui, PanelId::Layers);
-                layers(app, ui)
-            }),
-            Popover::Color => popover_at(ctx, "color", anchor, side, |ui| {
-                crate::dock::popover_grip(app, ui, PanelId::Color);
-                color(app, ui)
-            }),
-            Popover::Selection => popover_at(ctx, "selection", anchor, side, |ui| {
-                crate::dock::popover_grip(app, ui, PanelId::ToolOptions);
-                selection(app, ui)
-            }),
+            Popover::Brushes => popover_at(ctx, "brushes", anchor, side, |ui| crate::dock::with_grip(app, ui, PanelId::Brush, brushes)),
+            Popover::Layers => popover_at(ctx, "layers", anchor, side, |ui| crate::dock::with_grip(app, ui, PanelId::Layers, layers)),
+            Popover::Color => popover_at(ctx, "color", anchor, side, |ui| crate::dock::with_grip(app, ui, PanelId::Color, color)),
+            Popover::Selection => {
+                popover_at(ctx, "selection", anchor, side, |ui| crate::dock::with_grip(app, ui, PanelId::ToolOptions, selection))
+            }
             Popover::CanvasSize => popover_at(ctx, "canvas-size", screen.center(), Align2::CENTER_CENTER, |ui| canvas_size(app, ui)),
             Popover::ImageSize => popover_at(ctx, "image-size", screen.center(), Align2::CENTER_CENTER, |ui| image_size(app, ui)),
             Popover::Adjustments => popover_at(ctx, "adjustments", anchor, side, |ui| crate::adjust::list(app, ui)),
             Popover::Filter => popover_at(ctx, "filter", anchor, side, |ui| crate::adjust::filter_panel(app, ui)),
             Popover::AdjustLayer => popover_at(ctx, "adjust-layer", anchor, side, |ui| {
-                crate::dock::popover_grip(app, ui, PanelId::Properties);
-                crate::adjust::layer_panel(app, ui)
+                crate::dock::with_grip(app, ui, PanelId::Properties, crate::adjust::layer_panel)
             }),
-            Popover::GradientOptions => popover_at(ctx, "gradient", anchor, side, |ui| {
-                crate::dock::popover_grip(app, ui, PanelId::ToolOptions);
-                gradient_options(app, ui)
-            }),
-            Popover::ShapeOptions => popover_at(ctx, "shape", anchor, side, |ui| {
-                crate::dock::popover_grip(app, ui, PanelId::ToolOptions);
-                shape_options(app, ui)
-            }),
-            Popover::SmudgeOptions => popover_at(ctx, "smudge", anchor, side, |ui| {
-                crate::dock::popover_grip(app, ui, PanelId::ToolOptions);
-                smudge_options(app, ui)
-            }),
-            Popover::MixerOptions => popover_at(ctx, "mixer", anchor, side, |ui| {
-                crate::dock::popover_grip(app, ui, PanelId::ToolOptions);
-                mixer_options(app, ui)
-            }),
-            Popover::Guides => popover_at(ctx, "guides", anchor, side, |ui| {
-                crate::dock::popover_grip(app, ui, PanelId::Guides);
-                guides(app, ui)
-            }),
-            Popover::LiquifyOptions => popover_at(ctx, "liquify", anchor, side, |ui| {
-                crate::dock::popover_grip(app, ui, PanelId::ToolOptions);
-                liquify_options(app, ui)
-            }),
-            Popover::PenOptions => popover_at(ctx, "pen", anchor, side, |ui| {
-                crate::dock::popover_grip(app, ui, PanelId::ToolOptions);
-                pen_options(app, ui)
-            }),
+            Popover::GradientOptions => {
+                popover_at(ctx, "gradient", anchor, side, |ui| crate::dock::with_grip(app, ui, PanelId::ToolOptions, gradient_options))
+            }
+            Popover::ShapeOptions => {
+                popover_at(ctx, "shape", anchor, side, |ui| crate::dock::with_grip(app, ui, PanelId::ToolOptions, shape_options))
+            }
+            Popover::SmudgeOptions => {
+                popover_at(ctx, "smudge", anchor, side, |ui| crate::dock::with_grip(app, ui, PanelId::ToolOptions, smudge_options))
+            }
+            Popover::MixerOptions => {
+                popover_at(ctx, "mixer", anchor, side, |ui| crate::dock::with_grip(app, ui, PanelId::ToolOptions, mixer_options))
+            }
+            Popover::Guides => popover_at(ctx, "guides", anchor, side, |ui| crate::dock::with_grip(app, ui, PanelId::Guides, guides)),
+            Popover::LiquifyOptions => {
+                popover_at(ctx, "liquify", anchor, side, |ui| crate::dock::with_grip(app, ui, PanelId::ToolOptions, liquify_options))
+            }
+            Popover::PenOptions => {
+                popover_at(ctx, "pen", anchor, side, |ui| crate::dock::with_grip(app, ui, PanelId::ToolOptions, pen_options))
+            }
             Popover::ClipboardMenu => popover_at(ctx, "clipboard", screen.center(), Align2::CENTER_CENTER, |ui| clipboard_menu(app, ui)),
-            Popover::PanelOptions => popover_at(ctx, "panel", anchor, side, |ui| {
-                crate::dock::popover_grip(app, ui, PanelId::ToolOptions);
-                crate::panel_ui::options(app, ui)
-            }),
+            Popover::PanelOptions => {
+                popover_at(ctx, "panel", anchor, side, |ui| crate::dock::with_grip(app, ui, PanelId::ToolOptions, crate::panel_ui::options))
+            }
             Popover::Gallery => popover_at(ctx, "gallery", screen.center(), Align2::CENTER_CENTER, |ui| crate::gallery::show(app, ui)),
-            Popover::Help => popover_at(ctx, "help", screen.center(), Align2::CENTER_CENTER, |ui| help(ui, &app.settings.keybindings)),
+            Popover::Help => popover_at(ctx, "help", screen.center(), Align2::CENTER_CENTER, |ui| crate::help::show(app, ui)),
             Popover::Settings => popover_at(ctx, "settings", screen.center(), Align2::CENTER_CENTER, |ui| crate::settings::dialog(app, ui)),
             Popover::Paper => popover_at(ctx, "paper", screen.center(), Align2::CENTER_CENTER, |ui| paper_dialog(app, ui)),
-            Popover::MoveOptions => popover_at(ctx, "move", anchor, side, |ui| {
-                crate::dock::popover_grip(app, ui, PanelId::ToolOptions);
-                move_options(app, ui)
-            }),
+            Popover::MoveOptions => {
+                popover_at(ctx, "move", anchor, side, |ui| crate::dock::with_grip(app, ui, PanelId::ToolOptions, move_options))
+            }
             Popover::SmartFilters => popover_at(ctx, "smart", anchor, side, |ui| crate::adjust::smart_panel(app, ui)),
             Popover::Export => popover_at(ctx, "export", screen.center(), Align2::CENTER_CENTER, |ui| export_dialog(app, ui)),
             Popover::Recover => popover_at(ctx, "recover", screen.center(), Align2::CENTER_CENTER, |ui| recover(app, ui)),
-            Popover::Fill => popover_at(ctx, "fill", anchor, side, |ui| {
-                crate::dock::popover_grip(app, ui, PanelId::ToolOptions);
-                fill_options(app, ui)
-            }),
+            Popover::Fill => {
+                popover_at(ctx, "fill", anchor, side, |ui| crate::dock::with_grip(app, ui, PanelId::ToolOptions, fill_options))
+            }
             Popover::NewDoc => popover_at(ctx, "newdoc", screen.center(), Align2::CENTER_CENTER, |ui| new_doc(app, ui)),
             Popover::Confirm => popover_at(ctx, "confirm", screen.center(), Align2::CENTER_CENTER, |ui| confirm(app, ui)),
             Popover::BrushStudio => crate::brush_studio::show(app, ctx, screen),
@@ -1698,113 +1675,6 @@ fn clipboard_menu(app: &mut App, ui: &mut Ui) {
 }
 
 /// Shortcuts & gestures (`?`).
-fn help(ui: &mut Ui, keys: &crate::keymap::Overrides) {
-    let t = Tokens::get(ui.ctx());
-    ui.set_width(560.0);
-    widgets::section_label(ui, "Shortcuts & gestures");
-    let groups: [(&str, &[(&str, &str)]); 6] = [
-        (
-            "Tools",
-            &[
-                ("B / E", "Brush / eraser"),
-                ("Shift+B", "Mixer brush"),
-                ("S", "Smudge"),
-                ("G", "Fill"),
-                ("I or Alt-click", "Eyedropper"),
-                ("V or Ctrl+T", "Move / transform"),
-                ("H or hold Space", "Pan"),
-                ("T / P / U", "Text / pen / shape"),
-                ("M / L / W", "Rectangle / lasso / wand select"),
-            ],
-        ),
-        (
-            "Brush & colour",
-            &[
-                ("[ / ]", "Brush size"),
-                ("X", "Swap colours"),
-                ("D", "Black & white"),
-                ("Alt+Backspace", "Fill with colour"),
-                ("Ctrl+Backspace", "Fill with background"),
-            ],
-        ),
-        (
-            "View",
-            &[
-                ("= / −", "Zoom in / out"),
-                ("0 / 1", "Fit / 100%"),
-                ("Ctrl+[ / ]", "Rotate 15°"),
-                ("R-drag, 5", "Rotate / reset rotation"),
-                ("Y, Shift+Y", "Symmetry, move axis"),
-                ("Shift+R / G / P / D", "Rulers, guides, perspective, measure"),
-                ("Alt+L / Alt+B / Alt+R", "Layers / brushes / reference"),
-                ("Ctrl+Y", "Grayscale value check"),
-                ("Tab", "Hide the interface"),
-            ],
-        ),
-        (
-            "Touch",
-            &[
-                ("Pinch / two fingers", "Zoom, rotate, pan"),
-                ("Two-finger tap", "Undo"),
-                ("Three-finger tap", "Redo"),
-                ("Three-finger swipe down", "Copy & paste"),
-                ("Four-finger tap", "Hide the interface"),
-            ],
-        ),
-        (
-            "Animation",
-            &[
-                ("Shift+A", "Animation mode"),
-                ("K", "Play / pause"),
-                (", / .", "Previous / next frame"),
-                ("< / >", "First / last frame"),
-                ("N", "Add frame"),
-                ("O", "Onion skins"),
-            ],
-        ),
-        (
-            "Edit",
-            &[
-                ("Ctrl+Z / Ctrl+Shift+Z", "Undo / redo"),
-                ("Ctrl+C / X / V", "Copy / cut / paste"),
-                ("Ctrl+J", "Layer via copy"),
-                ("Ctrl+A / D / Shift+I", "Select all / deselect / invert"),
-                ("Ctrl+S / O / N", "Save / open / new"),
-                ("Ctrl+Shift+E", "Export"),
-            ],
-        ),
-    ];
-    egui::ScrollArea::vertical().max_height(ui.ctx().content_rect().height() - 120.0).show(ui, |ui| {
-        ui.columns(2, |cols| {
-            for (i, (title, rows)) in groups.iter().enumerate() {
-                let ui = &mut cols[usize::from(i >= 3)];
-                ui.label(RichText::new(*title).font(theme::semibold(12.5)).color(t.fg));
-                egui::Grid::new(*title).num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
-                    for (k, what) in rows.iter() {
-                        ui.label(RichText::new(*k).font(theme::mono(11.0)).color(t.accent));
-                        ui.label(RichText::new(*what).color(t.fg_muted));
-                        ui.end_row();
-                    }
-                });
-                ui.add_space(8.0);
-            }
-            // The list above shows the defaults; changed shortcuts are listed here.
-            if !keys.is_empty() {
-                let ui = &mut cols[1];
-                ui.label(RichText::new("Your shortcuts").font(theme::semibold(12.5)).color(t.fg));
-                egui::Grid::new("your-keys").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
-                    for (id, combo) in keys {
-                        let Some(a) = crate::keymap::Action::from_id(id) else { continue };
-                        ui.label(RichText::new(crate::keymap::format_combo(combo)).font(theme::mono(11.0)).color(t.accent));
-                        ui.label(RichText::new(a.label()).color(t.fg_muted));
-                        ui.end_row();
-                    }
-                });
-            }
-        });
-    });
-}
-
 fn move_options(app: &mut App, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     crate::dock::fit_width(ui, 260.0);

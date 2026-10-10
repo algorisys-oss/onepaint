@@ -17,6 +17,7 @@
 //! - `ONEPAINT_DOCK=1` docks Layers and Properties right and Brushes left, floats Align
 //!   with two layers picked, and docks the tool bar as a left rail;
 //!   `ONEPAINT_DOCK=float` floats a vertical tool bar and groups Colour with Align instead.
+//! - `ONEPAINT_PANELS=1` lays out a 2×2 manga page, cuts a panel, inks across a frame, and shows the Panel tool.
 //! - `ONEPAINT_EXIT=1` closes the app after the screenshot.
 
 use crate::{App, Popover};
@@ -43,6 +44,7 @@ pub struct Debug {
     wet: bool,
     impasto: bool,
     dock: Option<String>,
+    panels: bool,
 }
 
 impl Debug {
@@ -61,6 +63,7 @@ impl Debug {
             || self.impasto
             || self.wet
             || self.dock.is_some()
+            || self.panels
     }
 
     pub fn from_env() -> Self {
@@ -99,6 +102,7 @@ impl Debug {
             impasto: var("ONEPAINT_IMPASTO").is_some(),
             wet: var("ONEPAINT_WET").is_some(),
             dock: var("ONEPAINT_DOCK"),
+            panels: var("ONEPAINT_PANELS").is_some(),
         }
     }
 }
@@ -286,6 +290,35 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
         };
         let _ = app.session.execute(Command::CreatePathLayer { spec: Box::new(spec) });
         app.set_tool(onepaint_engine::Tool::Pen);
+    }
+    if frame == 3 && app.debug.panels {
+        let o = app.canvas.panel_options;
+        let _ = app.session.execute(Command::CreatePanelGrid {
+            rows: 2,
+            cols: 2,
+            gutter: o.gutter as f64,
+            margin: o.margin as f64,
+            border: o.border as f64,
+        });
+        if let Some((id, outline)) = app.session.panel_frames().into_iter().nth(3) {
+            let (cx, cy) = (outline.iter().map(|p| p.x).sum::<f64>() / 4.0, outline.iter().map(|p| p.y).sum::<f64>() / 4.0);
+            let _ = app.session.execute(Command::SplitPanel { id, a: [cx - 300.0, cy - 400.0], b: [cx + 300.0, cy + 400.0] });
+        }
+        // Ink across the first panel's frame: the art stops at it.
+        if let Some((_, o)) = app.session.panel_frames().into_iter().next() {
+            let y = (o[0].y + o[2].y) / 2.0;
+            let _ = app.session.execute(Command::SetBrush { preset_id: "comic-inker".into() });
+            let _ = app.session.execute(Command::SetBrushSize { size: 40.0 });
+            app.set_color(Rgba::new(0.1, 0.1, 0.14, 1.0));
+            let (x0, x1) = (o[0].x - 120.0, o[1].x + 120.0);
+            for i in 0..=40 {
+                let f = i as f64 / 40.0;
+                let p = StrokePoint::at(x0 + (x1 - x0) * f, y + (f * 6.0).sin() * 80.0, 0.8, f * 600.0);
+                if i == 0 { app.session.stroke_begin(p) } else { app.session.stroke_extend(&[p]) }
+            }
+            app.session.stroke_end();
+        }
+        app.set_tool(onepaint_engine::Tool::Panel);
     }
     if frame == 3 && app.debug.anim {
         let bg = app.session.doc().root[0].id().to_string();
