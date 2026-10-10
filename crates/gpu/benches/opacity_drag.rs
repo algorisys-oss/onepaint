@@ -103,9 +103,9 @@ fn bench(c: &mut Criterion) {
         return;
     }
     let tex = target(&device);
-    let view = onepaint_gpu::mip::level_view(&tex, 0, false);
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
     // Level 3 (1/8 scale): about what an 8k page shows at fit-to-window (spec 39).
-    let view3 = onepaint_gpu::mip::level_view(&tex, 3, false);
+    let view3 = onepaint_gpu::mip::level_view(&tex, 3);
     let mut g = c.benchmark_group("opacity drag 8192² × 100 layers");
     g.sample_size(10);
     let full = std::env::var("ONEPAINT_BENCH_FULL").is_ok();
@@ -180,7 +180,7 @@ fn bench(c: &mut Criterion) {
             let l3 = time(&mut || {
                 set_opacity(&mut d, DRAGGED, 0.5);
                 let progs = split(&d);
-                gc.run_level(&device, &queue, &progs, &view3, [SIZE >> 3, SIZE >> 3], 3);
+                gc.run_level(&device, &queue, &progs, &view3, &onepaint_gpu::Sheets::single([SIZE, SIZE]), 3);
                 device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
             });
             eprintln!("{name}: split drag frame at level 3 (plan + GPU) {l3:.2} ms");

@@ -152,8 +152,8 @@ an item changes there, change it here too.
   - [ ] Profile the per-tile GPU cost (≈20 µs per tile-layer; far from the
         memory bandwidth limit)
 - [ ] From the photocraft comparison (2026-10-10; see handoff.md)
-  - [ ] Split the canvas composite into tiles for documents above the GPU
-        texture limit (photocraft `ui-egui/src/gpu_canvas.rs`)
+  - [x] Split the canvas composite into sheets for documents above the GPU
+        texture limit (spec 40); the app now asks for the adapter's limits
   - [ ] Store 8-bit documents as RGBA8 tiles (halves RAM and VRAM)
   - [ ] Check a full refresh's working set fits before starting; route the
         rest to the CPU instead of skipping (photocraft `gpu/src/lib.rs:663-687`)

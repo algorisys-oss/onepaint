@@ -16,20 +16,21 @@ pub const LEVELS: u32 = L_MAX + 1;
 struct Params {
     dst_size: [u32; 2],
     tile: u32,
-    _pad: u32,
+    cols: u32,
+    sheet: [u32; 2],
+    src_size: [u32; 2],
 }
 
 pub struct Mipper {
-    flat: wgpu::ComputePipeline,
+    sheets: wgpu::ComputePipeline,
     array: wgpu::ComputePipeline,
-    flat_layout: wgpu::BindGroupLayout,
-    array_layout: wgpu::BindGroupLayout,
+    layout: wgpu::BindGroupLayout,
 }
 
-/// A single-level view: `D2` for the composite, `D2Array` for atlases.
-pub fn level_view(tex: &wgpu::Texture, level: u32, array: bool) -> wgpu::TextureView {
+/// A single-level `D2Array` view (the composite sheets and the atlases).
+pub fn level_view(tex: &wgpu::Texture, level: u32) -> wgpu::TextureView {
     tex.create_view(&wgpu::TextureViewDescriptor {
-        dimension: Some(if array { wgpu::TextureViewDimension::D2Array } else { wgpu::TextureViewDimension::D2 }),
+        dimension: Some(wgpu::TextureViewDimension::D2Array),
         base_mip_level: level,
         mip_level_count: Some(1),
         ..Default::default()
@@ -79,14 +80,9 @@ impl Mipper {
             },
             count: None,
         };
-        let layout = |entries: &[wgpu::BindGroupLayoutEntry]| {
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("mip"), entries })
-        };
-        let mut flat_entries = common.to_vec();
-        flat_entries.extend([tex(2, wgpu::TextureViewDimension::D2), store(3, wgpu::TextureViewDimension::D2)]);
-        let mut array_entries = common.to_vec();
-        array_entries.extend([tex(4, wgpu::TextureViewDimension::D2Array), store(5, wgpu::TextureViewDimension::D2Array)]);
-        let (flat_layout, array_layout) = (layout(&flat_entries), layout(&array_entries));
+        let mut entries = common.to_vec();
+        entries.extend([tex(4, wgpu::TextureViewDimension::D2Array), store(5, wgpu::TextureViewDimension::D2Array)]);
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("mip"), entries: &entries });
         let pipeline = |l: &wgpu::BindGroupLayout, entry: &str| {
             let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("mip"),
@@ -102,11 +98,20 @@ impl Mipper {
                 cache: None,
             })
         };
-        Self { flat: pipeline(&flat_layout, "mip_2d"), array: pipeline(&array_layout, "mip_array"), flat_layout, array_layout }
+        Self { sheets: pipeline(&layout, "mip_sheets"), array: pipeline(&layout, "mip_array"), layout }
     }
 
-    /// Downsample tiles `keys` of the 2D `tex` from level `from` up to `L_MAX`.
-    pub fn tiles(&self, device: &wgpu::Device, enc: &mut wgpu::CommandEncoder, tex: &wgpu::Texture, keys: &[(i32, i32)], from: u32) {
+    /// Downsample tiles `keys` of the composite sheets `tex`, laid out as
+    /// `sheets`, from level `from` up to `L_MAX`.
+    pub fn tiles(
+        &self,
+        device: &wgpu::Device,
+        enc: &mut wgpu::CommandEncoder,
+        tex: &wgpu::Texture,
+        sheets: &crate::sheets::Sheets,
+        keys: &[(i32, i32)],
+        from: u32,
+    ) {
         let keys: Vec<[u32; 2]> = keys.iter().filter(|(x, y)| *x >= 0 && *y >= 0).map(|&(x, y)| [x as u32, y as u32]).collect();
         let top = (tex.mip_level_count() - 1).min(L_MAX);
         if keys.is_empty() || from >= top {
@@ -119,19 +124,15 @@ impl Mipper {
         });
         for l in from + 1..=top {
             let tile = (TILE as u32 >> l).max(1);
-            let size = [(tex.width() >> l).max(1), (tex.height() >> l).max(1)];
-            let (src, dst) = (level_view(tex, l - 1, false), level_view(tex, l, false));
-            self.pass(
-                device,
-                enc,
-                &self.flat,
-                &self.flat_layout,
-                &jobs,
-                keys.len(),
-                Params { dst_size: size, tile, _pad: 0 },
-                (2, &src),
-                (3, &dst),
-            );
+            let (src, dst) = (level_view(tex, l - 1), level_view(tex, l));
+            let params = Params {
+                dst_size: sheets.doc_at(l),
+                tile,
+                cols: sheets.grid[0],
+                sheet: sheets.sheet_at(l),
+                src_size: sheets.doc_at(l - 1),
+            };
+            self.pass(device, enc, &self.sheets, &jobs, keys.len(), params, &src, &dst);
         }
     }
 
@@ -148,18 +149,9 @@ impl Mipper {
         });
         for l in 1..tex.mip_level_count().min(LEVELS) {
             let tile = (TILE as u32 >> l).max(1);
-            let (src, dst) = (level_view(tex, l - 1, true), level_view(tex, l, true));
-            self.pass(
-                device,
-                enc,
-                &self.array,
-                &self.array_layout,
-                &jobs,
-                keys.len(),
-                Params { dst_size: [tile, tile], tile, _pad: 0 },
-                (4, &src),
-                (5, &dst),
-            );
+            let (src, dst) = (level_view(tex, l - 1), level_view(tex, l));
+            let params = Params { dst_size: [tile, tile], tile, cols: 1, sheet: [tile, tile], src_size: [tile << 1, tile << 1] };
+            self.pass(device, enc, &self.array, &jobs, keys.len(), params, &src, &dst);
         }
     }
 
@@ -169,12 +161,11 @@ impl Mipper {
         device: &wgpu::Device,
         enc: &mut wgpu::CommandEncoder,
         pipeline: &wgpu::ComputePipeline,
-        layout: &wgpu::BindGroupLayout,
         jobs: &wgpu::Buffer,
         n: usize,
         params: Params,
-        src: (u32, &wgpu::TextureView),
-        dst: (u32, &wgpu::TextureView),
+        src: &wgpu::TextureView,
+        dst: &wgpu::TextureView,
     ) {
         let params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("mip params"),
@@ -183,12 +174,12 @@ impl Mipper {
         });
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("mip"),
-            layout,
+            layout: &self.layout,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: params_buf.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: jobs.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: src.0, resource: wgpu::BindingResource::TextureView(src.1) },
-                wgpu::BindGroupEntry { binding: dst.0, resource: wgpu::BindingResource::TextureView(dst.1) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(src) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(dst) },
             ],
         });
         let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("mip"), timestamp_writes: None });

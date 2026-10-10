@@ -53,7 +53,7 @@ fn target(device: &wgpu::Device, size: u32) -> wgpu::TextureView {
             usage: wgpu::TextureUsages::STORAGE_BINDING,
             view_formats: &[],
         })
-        .create_view(&Default::default())
+        .create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() })
 }
 
 fn bench(c: &mut Criterion) {

@@ -14,6 +14,7 @@
 //! segment's content key; a missing one is filled by a pass that runs just
 //! before the composite.
 
+use crate::sheets::Sheets;
 use onepaint_compose::program::{Content, MaskSrc, Op, Segment, StrokeSrc, TileProgram, op_sources, stroke_code};
 use onepaint_doc::BlendMode;
 use onepaint_raster::{TILE, Tile};
@@ -47,7 +48,9 @@ struct Params {
     general_base: u32,
     /// Level of detail (spec 39): sources are read from this mip.
     level: u32,
-    _pad: [u32; 3],
+    /// Sheets across, and the sheet size at this level (spec 40).
+    cols: u32,
+    sheet: [u32; 2],
 }
 
 #[repr(C)]
@@ -238,7 +241,7 @@ impl GpuCompositor {
                 ty: wgpu::BindingType::StorageTexture {
                     access: wgpu::StorageTextureAccess::WriteOnly,
                     format: wgpu::TextureFormat::Rgba16Float,
-                    view_dimension: wgpu::TextureViewDimension::D2,
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
                 },
                 count: None,
             },
@@ -348,7 +351,7 @@ impl GpuCompositor {
                 usage: wgpu::TextureUsages::STORAGE_BINDING,
                 view_formats: &[],
             })
-            .create_view(&Default::default());
+            .create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() });
         Self {
             simple,
             pipelines,
@@ -507,8 +510,9 @@ impl GpuCompositor {
         GpuOp(o)
     }
 
-    /// Composite `programs` into `target` (an `Rgba16Float` storage texture of
-    /// the document size). Edge tiles are clipped to the document.
+    /// Composite `programs` into `target`, a `D2Array` view of one
+    /// `Rgba16Float` storage layer of the document size. Edge tiles are
+    /// clipped to the document.
     pub fn run(
         &mut self,
         device: &wgpu::Device,
@@ -517,19 +521,20 @@ impl GpuCompositor {
         target: &wgpu::TextureView,
         doc_size: [u32; 2],
     ) {
-        self.run_level(device, queue, programs, target, doc_size, 0);
+        self.run_level(device, queue, programs, target, &Sheets::single(doc_size), 0);
     }
 
-    /// [`GpuCompositor::run`] at level of detail `level` (spec 39): `target`
-    /// is that level's view and `size` its size; tiles are `256 >> level`
-    /// pixels and read their sources' mip `level`.
+    /// [`GpuCompositor::run`] into composite sheets laid out as `sheets`
+    /// (spec 40), at level of detail `level` (spec 39): `target` is that
+    /// level's view; tiles are `256 >> level` pixels and read their sources'
+    /// mip `level`.
     pub fn run_level(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         programs: &[TileProgram],
         target: &wgpu::TextureView,
-        doc_size: [u32; 2],
+        sheets: &Sheets,
         level: u32,
     ) {
         self.level = level.min(crate::mip::L_MAX);
@@ -555,14 +560,14 @@ impl GpuCompositor {
             fresh.dedup();
             let full = need.len() + fresh.len() > cap || i - start >= MAX_JOBS || (self.split_cache && i - start >= cache_cap);
             if i > start && full {
-                self.flush(device, queue, &order[start..i], target, doc_size);
+                self.flush(device, queue, &order[start..i], target, sheets);
                 start = i;
                 need.clear();
             }
             need.extend(fresh);
         }
         if start < order.len() {
-            self.flush(device, queue, &order[start..], target, doc_size);
+            self.flush(device, queue, &order[start..], target, sheets);
         }
     }
 
@@ -599,7 +604,7 @@ impl GpuCompositor {
         });
         let read =
             tex.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() });
-        let write = (0..crate::mip::LEVELS).map(|l| crate::mip::level_view(&tex, l, true)).collect();
+        let write = (0..crate::mip::LEVELS).map(|l| crate::mip::level_view(&tex, l)).collect();
         self.cache = Some((tex, read, write));
         self.cache_free = (0..self.cache_layers).rev().collect();
     }
@@ -666,14 +671,7 @@ impl GpuCompositor {
         (fills, main)
     }
 
-    fn flush(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        batch: &[&TileProgram],
-        target: &wgpu::TextureView,
-        doc_size: [u32; 2],
-    ) {
+    fn flush(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, batch: &[&TileProgram], target: &wgpu::TextureView, sheets: &Sheets) {
         self.clock += 1;
         let (fills, main) = self.plan_batch(device, batch);
         self.fills += fills.len() as u64;
@@ -687,8 +685,8 @@ impl GpuCompositor {
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("compose") });
         self.mip_sources(device, &mut enc, fills.iter().chain(&main));
         // Fills and composites can't share a dispatch: one writes the cache, the other reads it.
-        self.dispatch(device, queue, &mut enc, &fills, doc_size, Some(target), true);
-        self.dispatch(device, queue, &mut enc, &main, doc_size, Some(target), false);
+        self.dispatch(device, queue, &mut enc, &fills, sheets, Some(target), true);
+        self.dispatch(device, queue, &mut enc, &main, sheets, Some(target), false);
         // Submit per batch: the next batch's uploads may evict slots this one reads.
         queue.submit([enc.finish()]);
     }
@@ -725,7 +723,7 @@ impl GpuCompositor {
         queue: &wgpu::Queue,
         enc: &mut wgpu::CommandEncoder,
         works: &[Work],
-        doc_size: [u32; 2],
+        sheets: &Sheets,
         target: Option<&wgpu::TextureView>,
         fill: bool,
     ) {
@@ -735,7 +733,14 @@ impl GpuCompositor {
         let (jobs, ops, simple) = self.encode_jobs(works);
         let general = works.len() - simple;
         let pigment = works.iter().filter(|w| !is_simple(&w.ops)).any(|w| uses_pigment(&w.ops));
-        let params = Params { doc_size, per_atlas: self.per_atlas, general_base: simple as u32, level: self.level, _pad: [0; 3] };
+        let params = Params {
+            doc_size: sheets.doc_at(self.level),
+            per_atlas: self.per_atlas,
+            general_base: simple as u32,
+            level: self.level,
+            sheet: sheets.sheet_at(self.level),
+            cols: sheets.grid[0],
+        };
         let bind = self.bind(device, queue, &jobs, &ops, params, target, fill);
         let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some(if fill { "compose fill" } else { "compose" }),
@@ -857,7 +862,7 @@ impl GpuCompositor {
             }
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("compose warm") });
             self.mip_sources(device, &mut enc, fills.iter());
-            self.dispatch(device, queue, &mut enc, &fills, [0, 0], None, true);
+            self.dispatch(device, queue, &mut enc, &fills, &Sheets::single([1, 1]), None, true);
             queue.submit([enc.finish()]);
         }
     }

@@ -18,6 +18,7 @@
 //!   with two layers picked, and docks the tool bar as a left rail;
 //!   `ONEPAINT_DOCK=float` floats a vertical tool bar and groups Colour with Align instead.
 //! - `ONEPAINT_PANELS=1` lays out a 2×2 manga page, cuts a panel, inks across a frame, and shows the Panel tool.
+//! - `ONEPAINT_MAX_SHEET=256` caps the composite's sheet side, to see sheets (spec 40) on small documents.
 //! - `ONEPAINT_EXIT=1` closes the app after the screenshot.
 
 use crate::{App, Popover};

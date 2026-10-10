@@ -100,7 +100,7 @@ fn random_documents_match_the_cpu_oracle() {
     let mut gc = GpuCompositor::new(&device, 64 << 20);
     let (w, h) = (300, 300);
     let tex = target(&device, w, h);
-    let view = tex.create_view(&Default::default());
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
     for seed in 0..40 {
         let doc = random_doc(seed, w, h, true);
         gc.run(&device, &queue, &programs(&doc, None), &view, [w, h]);
@@ -118,7 +118,7 @@ fn strokes_in_progress_match_the_cpu_oracle() {
     let mut gc = GpuCompositor::new(&device, 64 << 20);
     let (w, h) = (300, 300);
     let tex = target(&device, w, h);
-    let view = tex.create_view(&Default::default());
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
     for seed in 100..140 {
         let doc = random_doc(seed, w, h, false);
         let (buf, id, opacity, mode, mask) = random_stroke(seed, &doc).unwrap();
@@ -160,7 +160,7 @@ fn atlas_eviction_keeps_results_exact() {
         doc.root.push(Node::Layer(l));
     }
     let tex = target(&device, w, h);
-    let view = tex.create_view(&Default::default());
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
     let progs = programs(&doc, None);
     gc.run(&device, &queue, &progs, &view, [w, h]);
     assert!(gc.uploads as usize > cap, "{} uploads, capacity {cap}", gc.uploads);
@@ -183,7 +183,7 @@ fn changed_tiles_are_reuploaded() {
     let mut gc = GpuCompositor::new(&device, 64 << 20);
     let mut doc = random_doc(7, 256, 256, false);
     let tex = target(&device, 256, 256);
-    let view = tex.create_view(&Default::default());
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
     gc.run(&device, &queue, &programs(&doc, None), &view, [256, 256]);
     let first = gc.uploads;
     gc.run(&device, &queue, &programs(&doc, None), &view, [256, 256]);
@@ -210,7 +210,7 @@ fn lean_and_general_jobs_share_a_batch() {
     let mut gc = GpuCompositor::new(&device, 64 << 20);
     let (w, h) = (700, 600);
     let tex = target(&device, w, h);
-    let view = tex.create_view(&Default::default());
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
     let mut doc = Document::new(w, h, Some(onepaint_color::Rgba::WHITE));
     let mut r = Rng::new(7);
     for i in 0..4 {
@@ -249,7 +249,7 @@ fn split_programs_match_the_oracle_cold_and_warm() {
     let mut gc = GpuCompositor::new(&device, 64 << 20);
     let (w, h) = (300, 300);
     let tex = target(&device, w, h);
-    let view = tex.create_view(&Default::default());
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
     for seed in 0..24 {
         let doc = random_doc(seed, w, h, true);
         for hot in layer_ids(&doc).iter().step_by(2) {
@@ -273,7 +273,7 @@ fn split_strokes_match_the_oracle() {
     let mut gc = GpuCompositor::new(&device, 64 << 20);
     let (w, h) = (300, 300);
     let tex = target(&device, w, h);
-    let view = tex.create_view(&Default::default());
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
     for seed in 100..124 {
         let doc = random_doc(seed, w, h, false);
         let (buf, id, opacity, mode, mask) = random_stroke(seed, &doc).unwrap();
@@ -327,7 +327,7 @@ fn a_drag_fills_each_segment_once_then_reuses_it() {
     let mut d = deep_doc(8);
     let hot = d.layer_ids()[4].clone();
     let tex = target(&device, 512, 512);
-    let view = tex.create_view(&Default::default());
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
     let tiles = d.bounds().tiles().count() as u64;
     for frame in 0..10 {
         set_opacity(&mut d, &hot, 0.3 + 0.05 * frame as f32);
@@ -361,7 +361,7 @@ fn a_small_cache_still_composites_exactly() {
     let d = deep_doc(6);
     let hot = d.layer_ids()[2].clone();
     let tex = target(&device, 512, 512);
-    let view = tex.create_view(&Default::default());
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
     for _ in 0..2 {
         gc.run(&device, &queue, &split_programs(&d, None, &hot), &view, [512, 512]);
         let (e, at) = max_error(&d, None, &read(&device, &queue, &tex));
@@ -386,7 +386,7 @@ fn warm_up_fills_ahead_so_the_first_frame_fills_nothing() {
     gc.warm(&device, &queue, &progs);
     assert_eq!(gc.fills, warmed, "a second warm-up has nothing to do");
     let tex = target(&device, 512, 512);
-    let view = tex.create_view(&Default::default());
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
     gc.run(&device, &queue, &progs, &view, [512, 512]);
     assert_eq!(gc.fills, warmed, "the first frame only composites");
     let (e, at) = max_error(&d, None, &read(&device, &queue, &tex));
@@ -404,7 +404,7 @@ fn an_over_budget_frame_alternates_and_stays_exact() {
     let mut gc = GpuCompositor::new(&device, 64 * tile_bytes);
     let d = deep_doc(80);
     let tex = target(&device, 512, 512);
-    let view = tex.create_view(&Default::default());
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
     let progs = programs(&d, None);
     for _ in 0..3 {
         gc.run(&device, &queue, &progs, &view, [512, 512]);

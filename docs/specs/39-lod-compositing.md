@@ -132,5 +132,4 @@ therefore a **preview**: close, but not exact.
 - Drawing a stale finer level from a fresh coarser one while it refreshes.
   The finer level shows its previous content until refreshed, as level 0
   does today.
-- Tiling the composite for documents above the GPU texture limit. That is
-  the next item from the photocraft review.
+- Tiling the composite for documents above the GPU texture limit: spec 40.

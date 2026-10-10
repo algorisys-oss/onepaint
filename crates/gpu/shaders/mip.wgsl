@@ -1,25 +1,30 @@
 // Spec 39: one level of the composite pyramid or of the tile atlases, as
 // the 2 × 2 box average of the level below (premultiplied linear light, so
 // the average is the display filter). One invocation per destination pixel;
-// a job is one tile region (2D) or one atlas slot (array).
+// a job is one tile region of the composite sheets or one atlas slot.
 
 struct Params {
-    // Destination level size (2D) and the tile edge at this level.
+    // Sheets: the document size at this level. Array: unused.
     dst_size: vec2<u32>,
+    // The tile edge at this level.
     tile: u32,
-    _pad: u32,
+    // Sheets across (spec 40).
+    cols: u32,
+    // Sheets: the sheet size at this level, and the document size at the level below.
+    sheet: vec2<u32>,
+    src_size: vec2<u32>,
 }
 
 @group(0) @binding(0) var<uniform> prm: Params;
 @group(0) @binding(1) var<storage, read> jobs: array<vec2<u32>>;
-@group(0) @binding(2) var src2d: texture_2d<f32>;
-@group(0) @binding(3) var dst2d: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(4) var src_arr: texture_2d_array<f32>;
 @group(0) @binding(5) var dst_arr: texture_storage_2d_array<rgba16float, write>;
 
-// 2D: a job is a tile key; its region at this level starts at key * tile.
+// Composite sheets: a job is a tile key; its region at this level starts at
+// key * tile in document pixels. Sheets are even at every level, so the 2 × 2
+// source block lies in the same sheet.
 @compute @workgroup_size(8, 8, 1)
-fn mip_2d(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn mip_sheets(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x >= prm.tile || gid.y >= prm.tile) {
         return;
     }
@@ -27,13 +32,16 @@ fn mip_2d(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (p.x >= prm.dst_size.x || p.y >= prm.dst_size.y) {
         return;
     }
-    let src = vec2<i32>(textureDimensions(src2d)) - vec2<i32>(1);
+    let s = p / prm.sheet;
+    let layer = i32(s.y * prm.cols + s.x);
+    let base = vec2<i32>(s * prm.sheet * 2u);
+    let hi = vec2<i32>(prm.src_size) - vec2<i32>(1);
     let q = vec2<i32>(p * 2u);
-    let s = textureLoad(src2d, min(q, src), 0)
-        + textureLoad(src2d, min(q + vec2<i32>(1, 0), src), 0)
-        + textureLoad(src2d, min(q + vec2<i32>(0, 1), src), 0)
-        + textureLoad(src2d, min(q + vec2<i32>(1, 1), src), 0);
-    textureStore(dst2d, vec2<i32>(p), s * 0.25);
+    let sum = textureLoad(src_arr, min(q, hi) - base, layer, 0)
+        + textureLoad(src_arr, min(q + vec2<i32>(1, 0), hi) - base, layer, 0)
+        + textureLoad(src_arr, min(q + vec2<i32>(0, 1), hi) - base, layer, 0)
+        + textureLoad(src_arr, min(q + vec2<i32>(1, 1), hi) - base, layer, 0);
+    textureStore(dst_arr, vec2<i32>(p - s * prm.sheet), layer, sum * 0.25);
 }
 
 // Array: a job is a slot (x); the whole slot at this level.

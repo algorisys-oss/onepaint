@@ -36,6 +36,9 @@ pub fn init_gpu(cc: &eframe::CreationContext) -> (bool, bool) {
         return (false, false);
     };
     let mut gpu = CanvasGpu::new(&rs.device, rs.target_format);
+    if let Some(max) = std::env::var("ONEPAINT_MAX_SHEET").ok().and_then(|v| v.parse().ok()) {
+        gpu.set_max_sheet(max);
+    }
     let compose = std::env::var_os("ONEPAINT_CPU_COMPOSE").is_none();
     if compose {
         gpu.enable_compositor(&rs.device, onepaint_gpu::compose::DEFAULT_BUDGET);

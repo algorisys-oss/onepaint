@@ -21,9 +21,10 @@ struct Params {
     general_base: u32,
     // Level of detail (spec 39): tiles are 256 >> level pixels, read from mip `level`.
     level: u32,
-    _p0: u32,
-    _p1: u32,
-    _p2: u32,
+    // Spec 40: the canvas is split into sheets (array layers), `cols`
+    // across, of size `sheet` at this level.
+    cols: u32,
+    sheet: vec2<u32>,
 }
 
 struct Job {
@@ -50,7 +51,7 @@ struct Km {
 @group(0) @binding(1) var<uniform> km: Km;
 @group(0) @binding(2) var<storage, read> jobs: array<Job>;
 @group(0) @binding(3) var<storage, read> ops: array<Op>;
-@group(0) @binding(4) var out_tex: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(4) var out_tex: texture_storage_2d_array<rgba16float, write>;
 @group(0) @binding(5) var atlas0: texture_2d_array<f32>;
 @group(0) @binding(6) var atlas1: texture_2d_array<f32>;
 @group(0) @binding(7) var atlas2: texture_2d_array<f32>;
@@ -338,7 +339,8 @@ fn finish(job: Job, g: vec2<u32>, p: vec2<i32>, top: vec4<f32>) {
     if (job.dest != NONE) {
         textureStore(cache_out, p, i32(job.dest), top);
     } else {
-        textureStore(out_tex, vec2<i32>(g), top);
+        let s = g / prm.sheet;
+        textureStore(out_tex, vec2<i32>(g - s * prm.sheet), i32(s.y * prm.cols + s.x), top);
     }
 }
 

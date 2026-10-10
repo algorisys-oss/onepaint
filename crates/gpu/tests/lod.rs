@@ -1,11 +1,13 @@
 #![allow(clippy::unwrap_used)]
 //! Level-of-detail compositing (spec 39) against the box-downsampled CPU
-//! oracle; skipped without an adapter.
+//! oracle, on one composite texture and split into sheets (spec 40); skipped
+//! without an adapter.
 use onepaint_compose::StrokeOverlay;
 use onepaint_compose::composite_tile;
 use onepaint_compose::program::{TileProgram, plan_tile, plan_tile_split};
 use onepaint_compose::testdocs::{Rng, random_doc, random_stroke};
 use onepaint_doc::{BlendMode, Document, Layer, Node};
+use onepaint_gpu::Sheets;
 use onepaint_gpu::compose::GpuCompositor;
 use onepaint_gpu::mip::{LEVELS, Mipper, level_view};
 use onepaint_raster::{TILE, Tile};
@@ -17,10 +19,17 @@ fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
     pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()
 }
 
-fn target(device: &wgpu::Device, w: u32, h: u32) -> wgpu::Texture {
+/// The composite as one texture, and split into 256² sheets.
+fn layouts(doc: [u32; 2]) -> [Sheets; 2] {
+    let split = Sheets::plan(doc, 256, 256).unwrap();
+    assert!(split.count() > 1);
+    [Sheets::single(doc), split]
+}
+
+fn target(device: &wgpu::Device, sheets: &Sheets) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: None,
-        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d { width: sheets.sheet[0], height: sheets.sheet[1], depth_or_array_layers: sheets.count() },
         mip_level_count: LEVELS,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -30,37 +39,47 @@ fn target(device: &wgpu::Device, w: u32, h: u32) -> wgpu::Texture {
     })
 }
 
-fn level_size(tex: &wgpu::Texture, l: u32) -> [u32; 2] {
-    [(tex.width() >> l).max(1), (tex.height() >> l).max(1)]
-}
-
-/// Level `l` of the texture as row-major f32 RGBA.
-fn read(device: &wgpu::Device, queue: &wgpu::Queue, tex: &wgpu::Texture, l: u32) -> Vec<f32> {
-    let [w, h] = level_size(tex, l);
-    let stride = (w * 8).div_ceil(256) * 256;
-    let buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: None,
-        size: (stride * h) as u64,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    let mut enc = device.create_command_encoder(&Default::default());
-    enc.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo { texture: tex, mip_level: l, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &buf,
-            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(stride), rows_per_image: Some(h) },
-        },
-        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-    );
-    queue.submit([enc.finish()]);
-    buf.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-    let data = buf.slice(..).get_mapped_range().unwrap();
-    let mut out = Vec::with_capacity((w * h * 4) as usize);
-    for y in 0..h as usize {
-        let row: &[half::f16] = bytemuck::cast_slice(&data[y * stride as usize..y * stride as usize + w as usize * 8]);
-        out.extend(row.iter().map(|v| v.to_f32()));
+/// Level `l` of the document, gathered from its sheets, as row-major f32 RGBA.
+fn read(device: &wgpu::Device, queue: &wgpu::Queue, tex: &wgpu::Texture, sheets: &Sheets, l: u32) -> Vec<f32> {
+    let [w, h] = sheets.doc_at(l);
+    let [sw, sh] = sheets.sheet_at(l);
+    let mut out = vec![0.0f32; (w * h * 4) as usize];
+    for layer in 0..sheets.count() {
+        let [x0, y0, _, _] = sheets.rect(layer);
+        let (x0, y0) = (x0 >> l, y0 >> l);
+        let (cw, ch) = (sw.min(w - x0), sh.min(h - y0));
+        let stride = (cw * 8).div_ceil(256) * 256;
+        let buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: (stride * ch) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut enc = device.create_command_encoder(&Default::default());
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: tex,
+                mip_level: l,
+                origin: wgpu::Origin3d { x: 0, y: 0, z: layer },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buf,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(stride), rows_per_image: Some(ch) },
+            },
+            wgpu::Extent3d { width: cw, height: ch, depth_or_array_layers: 1 },
+        );
+        queue.submit([enc.finish()]);
+        buf.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        let data = buf.slice(..).get_mapped_range().unwrap();
+        for y in 0..ch as usize {
+            let row: &[half::f16] = bytemuck::cast_slice(&data[y * stride as usize..y * stride as usize + cw as usize * 8]);
+            let d = (((y0 as usize + y) * w as usize) + x0 as usize) * 4;
+            for (o, v) in out[d..d + row.len()].iter_mut().zip(row) {
+                *o = v.to_f32();
+            }
+        }
     }
     out
 }
@@ -142,12 +161,13 @@ fn run_at(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     tex: &wgpu::Texture,
+    sheets: &Sheets,
     progs: &[TileProgram],
     l: u32,
 ) -> Vec<f32> {
-    let view = level_view(tex, l, false);
-    gc.run_level(device, queue, progs, &view, level_size(tex, l), l);
-    read(device, queue, tex, l)
+    let view = level_view(tex, l);
+    gc.run_level(device, queue, progs, &view, sheets, l);
+    read(device, queue, tex, sheets, l)
 }
 
 #[test]
@@ -157,17 +177,19 @@ fn downsampling_a_level_0_composite_matches_the_box_oracle() {
         return;
     };
     let doc = random_doc(11, 600, 520, true);
-    let tex = target(&device, 600, 520);
-    let mut gc = GpuCompositor::new(&device, 64 << 20);
-    run_at(&mut gc, &device, &queue, &tex, &programs(&doc, None, None), 0);
-    let keys: Vec<_> = doc.bounds().tiles().collect();
-    let mut enc = device.create_command_encoder(&Default::default());
-    Mipper::new(&device).tiles(&device, &mut enc, &tex, &keys, 0);
-    queue.submit([enc.finish()]);
-    for l in 1..LEVELS {
-        let (want, _) = oracle(&doc, None, l);
-        let e = max_error(&want, &read(&device, &queue, &tex, l));
-        assert!(e <= 3e-3, "level {l}: error {e}");
+    for sheets in layouts([600, 520]) {
+        let tex = target(&device, &sheets);
+        let mut gc = GpuCompositor::new(&device, 64 << 20);
+        run_at(&mut gc, &device, &queue, &tex, &sheets, &programs(&doc, None, None), 0);
+        let keys: Vec<_> = doc.bounds().tiles().collect();
+        let mut enc = device.create_command_encoder(&Default::default());
+        Mipper::new(&device).tiles(&device, &mut enc, &tex, &sheets, &keys, 0);
+        queue.submit([enc.finish()]);
+        for l in 1..LEVELS {
+            let (want, _) = oracle(&doc, None, l);
+            let e = max_error(&want, &read(&device, &queue, &tex, &sheets, l));
+            assert!(e <= 3e-3, "{:?} sheets, level {l}: error {e}", sheets.grid);
+        }
     }
 }
 
@@ -178,15 +200,17 @@ fn uniform_tiles_composite_exactly_at_every_level() {
         return;
     };
     let doc = uniform_doc(10);
-    let tex = target(&device, 600, 520);
-    let mut gc = GpuCompositor::new(&device, 64 << 20);
     let hot = doc.layer_ids()[5].clone();
-    for l in 1..LEVELS {
-        let (want, _) = oracle(&doc, None, l);
-        for (name, progs) in [("unsplit", programs(&doc, None, None)), ("split", programs(&doc, None, Some(&hot)))] {
-            for pass in ["cold", "warm"] {
-                let e = max_error(&want, &run_at(&mut gc, &device, &queue, &tex, &progs, l));
-                assert!(e <= 2e-3, "level {l} {name} {pass}: error {e}");
+    for sheets in layouts([600, 520]) {
+        let tex = target(&device, &sheets);
+        let mut gc = GpuCompositor::new(&device, 64 << 20);
+        for l in 1..LEVELS {
+            let (want, _) = oracle(&doc, None, l);
+            for (name, progs) in [("unsplit", programs(&doc, None, None)), ("split", programs(&doc, None, Some(&hot)))] {
+                for pass in ["cold", "warm"] {
+                    let e = max_error(&want, &run_at(&mut gc, &device, &queue, &tex, &sheets, &progs, l));
+                    assert!(e <= 2e-3, "{:?} sheets, level {l} {name} {pass}: error {e}", sheets.grid);
+                }
             }
         }
     }
@@ -198,7 +222,8 @@ fn random_documents_preview_within_the_bound() {
         eprintln!("skipping: no GPU adapter");
         return;
     };
-    let tex = target(&device, 300, 300);
+    let sheets = Sheets::single([300, 300]);
+    let tex = target(&device, &sheets);
     let mut gc = GpuCompositor::new(&device, 64 << 20);
     for seed in 0..16 {
         let doc = random_doc(seed, 300, 300, seed % 2 == 0);
@@ -212,7 +237,7 @@ fn random_documents_preview_within_the_bound() {
         });
         for l in 1..=3 {
             let (want, _) = oracle(&doc, ov.as_ref(), l);
-            let got = run_at(&mut gc, &device, &queue, &tex, &programs(&doc, ov.as_ref(), None), l);
+            let got = run_at(&mut gc, &device, &queue, &tex, &sheets, &programs(&doc, ov.as_ref(), None), l);
             // A preview: blending at reduced size differs at hard edges, so
             // bound the bulk, not the worst pixel (idle frames refine to exact).
             let mut errs: Vec<f32> = want.iter().zip(&got).map(|(a, b)| (a - b).abs()).collect();
@@ -221,5 +246,23 @@ fn random_documents_preview_within_the_bound() {
             let p99 = errs[(errs.len() - 1) * 99 / 100];
             assert!(mean <= 0.015 && p99 <= 0.15, "seed {seed} level {l}: mean {mean}, p99 {p99}");
         }
+    }
+}
+
+#[test]
+fn sheets_composite_the_same_as_one_texture() {
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let doc = random_doc(5, 600, 520, true);
+    let progs = programs(&doc, None, None);
+    let [one, split] = layouts([600, 520]);
+    let (t1, t2) = (target(&device, &one), target(&device, &split));
+    let mut gc = GpuCompositor::new(&device, 64 << 20);
+    for l in 0..=3 {
+        let a = run_at(&mut gc, &device, &queue, &t1, &one, &progs, l);
+        let b = run_at(&mut gc, &device, &queue, &t2, &split, &progs, l);
+        assert_eq!(a, b, "level {l}");
     }
 }

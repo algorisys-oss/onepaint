@@ -59,9 +59,29 @@ fn main() -> eframe::Result {
             .with_title("onepaint")
             .with_inner_size([1440.0, 920.0])
             .with_min_inner_size([720.0, 480.0]),
+        wgpu_options: wgpu_options(),
         ..Default::default()
     };
     eframe::run_native("onepaint", options, Box::new(move |cc| Ok(Box::new(App::new(cc, open)))))
+}
+
+/// egui's device asks for 8192 px textures; ask for what the adapter allows,
+/// so the composite needs fewer sheets (spec 40).
+fn wgpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
+    use eframe::egui_wgpu::{WgpuConfiguration, WgpuSetup};
+    let mut config = WgpuConfiguration::default();
+    if let WgpuSetup::CreateNew(setup) = &mut config.wgpu_setup {
+        let base = setup.device_descriptor.clone();
+        setup.device_descriptor = std::sync::Arc::new(move |adapter| {
+            let mut desc = base(adapter);
+            let have = adapter.limits();
+            let want = &mut desc.required_limits;
+            want.max_texture_dimension_2d = want.max_texture_dimension_2d.max(have.max_texture_dimension_2d);
+            want.max_texture_array_layers = want.max_texture_array_layers.max(have.max_texture_array_layers);
+            desc
+        });
+    }
+    config
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

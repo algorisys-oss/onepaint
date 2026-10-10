@@ -1,16 +1,20 @@
 //! GPU display of the document composite.
 //!
-//! The composite lives in one Rgba16Float texture (premultiplied, linear);
-//! dirty 256² tiles are either composited into it on the GPU (`compose`) or
-//! uploaded as raw f16 from the CPU compositor, and a present pass draws it
-//! through the view transform over a checkerboard. See
-//! `docs/specs/07-canvas-ui.md` and `docs/specs/13-gpu-compositor.md`.
+//! The composite lives in an Rgba16Float texture array (premultiplied,
+//! linear): one layer of the document size, or past the GPU texture limit
+//! several equal sheets (`sheets`, spec 40). Dirty 256² tiles are either
+//! composited into it on the GPU (`compose`) or uploaded as raw f16 from the
+//! CPU compositor, and a present pass draws it through the view transform
+//! over a checkerboard. See `docs/specs/07-canvas-ui.md` and
+//! `docs/specs/13-gpu-compositor.md`.
 
 pub mod compose;
 pub mod mip;
+pub mod sheets;
 pub mod wet;
 
 pub use mip::L_MAX;
+pub use sheets::Sheets;
 
 use onepaint_raster::{TILE, Tile};
 
@@ -47,15 +51,18 @@ struct Uniforms {
     checker_a: [f32; 4],
     checker_b: [f32; 4],
     sel: [f32; 4],
+    /// Sheet width and height at level 0, sheets across and down (spec 40).
+    sheets: [f32; 4],
 }
 
 struct DocTextures {
     texture: wgpu::Texture,
     /// The composite as a compute-pass storage target, one view per level.
     storage: Vec<wgpu::TextureView>,
+    /// Selection coverage, in the same sheets.
     selection: wgpu::Texture,
     bind: wgpu::BindGroup,
-    size: [u32; 2],
+    sheets: Sheets,
 }
 
 pub struct CanvasGpu {
@@ -66,7 +73,9 @@ pub struct CanvasGpu {
     texture: Option<DocTextures>,
     has_selection: bool,
     srgb_target: bool,
+    /// The largest sheet side, and the most sheets.
     max_dim: u32,
+    max_layers: u32,
     compositor: Option<compose::GpuCompositor>,
     mipper: mip::Mipper,
     /// The level the present pass samples (spec 39).
@@ -99,7 +108,7 @@ impl CanvasGpu {
                     ty: wgpu::BindingType::Texture {
                         multisampled: false,
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
                     },
                     count: None,
                 },
@@ -115,7 +124,7 @@ impl CanvasGpu {
                     ty: wgpu::BindingType::Texture {
                         multisampled: false,
                         sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
                     },
                     count: None,
                 },
@@ -168,6 +177,7 @@ impl CanvasGpu {
             has_selection: false,
             srgb_target: target.is_srgb(),
             max_dim: device.limits().max_texture_dimension_2d,
+            max_layers: device.limits().max_texture_array_layers,
             compositor: None,
             mipper: mip::Mipper::new(device),
             lod: 0,
@@ -181,6 +191,18 @@ impl CanvasGpu {
 
     pub fn has_compositor(&self) -> bool {
         self.compositor.is_some()
+    }
+
+    /// Cap the sheet side below the GPU limit, to exercise sheets on small
+    /// documents (tests and the `ONEPAINT_MAX_SHEET` debug hook).
+    pub fn set_max_sheet(&mut self, max: u32) {
+        self.max_dim = max.min(self.max_dim);
+        self.texture = None;
+    }
+
+    /// The composite's current sheet layout.
+    pub fn sheets(&self) -> Option<Sheets> {
+        self.texture.as_ref().map(|t| t.sheets)
     }
 
     /// Run tile programs straight into the composite texture at `level`
@@ -199,8 +221,7 @@ impl CanvasGpu {
             return;
         }
         let level = level.min(t.storage.len() as u32 - 1);
-        let size = [(t.size[0] >> level).max(1), (t.size[1] >> level).max(1)];
-        c.run_level(device, queue, programs, &t.storage[level as usize], size, level);
+        c.run_level(device, queue, programs, &t.storage[level as usize], &t.sheets, level);
         let keys: Vec<(i32, i32)> = programs.iter().map(|p| (p.tx, p.ty)).collect();
         self.mip_tiles(device, queue, &keys, level);
     }
@@ -213,7 +234,7 @@ impl CanvasGpu {
         }
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("composite mips") });
         for chunk in keys.chunks(65_535) {
-            self.mipper.tiles(device, &mut enc, &t.texture, chunk, from);
+            self.mipper.tiles(device, &mut enc, &t.texture, &t.sheets, chunk, from);
         }
         queue.submit([enc.finish()]);
     }
@@ -233,21 +254,27 @@ impl CanvasGpu {
         }
     }
 
-    /// (Re)create the composite texture when the document size changes. Returns false if too large.
+    /// (Re)create the composite texture when the document size changes.
+    /// Returns false if it can't fit, even in sheets.
     pub fn ensure_size(&mut self, device: &wgpu::Device, w: u32, h: u32) -> bool {
-        if self.texture.as_ref().is_some_and(|t| t.size == [w, h]) {
+        if self.texture.as_ref().is_some_and(|t| t.sheets.doc == [w, h]) {
             return true;
         }
-        if w > self.max_dim || h > self.max_dim || w == 0 || h == 0 {
-            log::error!("document {w}x{h} exceeds the GPU texture limit {}", self.max_dim);
+        let Some(sheets) = Sheets::plan([w, h], self.max_dim, self.max_layers) else {
+            log::error!("document {w}x{h} doesn't fit in {} sheets of {} px", self.max_layers, self.max_dim);
             self.texture = None;
             return false;
+        };
+        if sheets.count() > 1 {
+            log::info!("document {w}x{h} composites in {:?} sheets of {:?}", sheets.grid, sheets.sheet);
         }
+        let [sw, sh] = sheets.sheet;
+        let extent = wgpu::Extent3d { width: sw, height: sh, depth_or_array_layers: sheets.count() };
         // Levels of detail (spec 39), as many as the size allows.
-        let levels = mip::LEVELS.min(32 - w.max(h).leading_zeros());
+        let levels = mip::LEVELS.min(32 - sw.max(sh).leading_zeros());
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("onepaint_composite"),
-            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            size: extent,
             mip_level_count: levels,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -255,11 +282,12 @@ impl CanvasGpu {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::STORAGE_BINDING,
             view_formats: &[],
         });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let storage = (0..levels).map(|l| mip::level_view(&texture, l, false)).collect();
+        let array = wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() };
+        let view = texture.create_view(&array);
+        let storage = (0..levels).map(|l| mip::level_view(&texture, l)).collect();
         let selection = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("onepaint_selection"),
-            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            size: extent,
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -267,7 +295,7 @@ impl CanvasGpu {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
-        let sel_view = selection.create_view(&wgpu::TextureViewDescriptor::default());
+        let sel_view = selection.create_view(&array);
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("onepaint_canvas"),
             layout: &self.layout,
@@ -278,28 +306,31 @@ impl CanvasGpu {
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&sel_view) },
             ],
         });
-        self.texture = Some(DocTextures { texture, storage, selection, bind, size: [w, h] });
+        self.texture = Some(DocTextures { texture, storage, selection, bind, sheets });
         self.has_selection = false;
         true
     }
 
     /// Upload composited tiles; edge tiles are clipped to the document.
     pub fn upload(&self, queue: &wgpu::Queue, tiles: &[((i32, i32), Tile)]) {
-        let Some(DocTextures { texture, size: [w, h], .. }) = &self.texture else {
+        let Some(DocTextures { texture, sheets, .. }) = &self.texture else {
             return;
         };
+        let [w, h] = sheets.doc;
         for ((tx, ty), tile) in tiles {
             let (x, y) = (tx * TILE, ty * TILE);
-            if *tx < 0 || *ty < 0 || x as u32 >= *w || y as u32 >= *h {
+            if *tx < 0 || *ty < 0 || x as u32 >= w || y as u32 >= h {
                 continue;
             }
             let cw = (TILE as u32).min(w - x as u32);
             let ch = (TILE as u32).min(h - y as u32);
+            // Sheets are tile-aligned, so a tile lies in one.
+            let (layer, [lx, ly]) = sheets.locate(x as u32, y as u32);
             queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture,
                     mip_level: 0,
-                    origin: wgpu::Origin3d { x: x as u32, y: y as u32, z: 0 },
+                    origin: wgpu::Origin3d { x: lx, y: ly, z: layer },
                     aspect: wgpu::TextureAspect::All,
                 },
                 bytemuck::cast_slice(&tile.data),
@@ -311,31 +342,41 @@ impl CanvasGpu {
 
     /// Upload the selection coverage (one byte per doc pixel, row-major), or clear it.
     pub fn set_selection(&mut self, queue: &wgpu::Queue, mask: Option<&[u8]>) {
-        let Some(DocTextures { selection, size: [w, h], .. }) = &self.texture else {
+        let Some(DocTextures { selection, sheets, .. }) = &self.texture else {
             return;
         };
-        let Some(data) = mask.filter(|m| m.len() == (*w * *h) as usize) else {
+        let w = sheets.doc[0] as usize;
+        let Some(data) = mask.filter(|m| m.len() == w * sheets.doc[1] as usize) else {
             self.has_selection = false;
             return;
         };
-        // Rows must be 256-byte aligned for texture copies.
-        let stride = (*w).div_ceil(256) * 256;
-        let mut padded = vec![0u8; (stride * *h) as usize];
-        for y in 0..*h as usize {
-            let (s, d) = (y * *w as usize, y * stride as usize);
-            padded[d..d + *w as usize].copy_from_slice(&data[s..s + *w as usize]);
+        for layer in 0..sheets.count() {
+            let [x, y, sw, sh] = sheets.rect(layer);
+            // Rows must be 256-byte aligned for texture copies.
+            let stride = sw.next_multiple_of(256) as usize;
+            let mut padded = vec![0u8; stride * sh as usize];
+            for r in 0..sh as usize {
+                let s = (y as usize + r) * w + x as usize;
+                padded[r * stride..r * stride + sw as usize].copy_from_slice(&data[s..s + sw as usize]);
+            }
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: selection,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: 0, y: 0, z: layer },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &padded,
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(stride as u32), rows_per_image: Some(sh) },
+                wgpu::Extent3d { width: sw, height: sh, depth_or_array_layers: 1 },
+            );
         }
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo { texture: selection, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-            &padded,
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(stride), rows_per_image: Some(*h) },
-            wgpu::Extent3d { width: *w, height: *h, depth_or_array_layers: 1 },
-        );
         self.has_selection = true;
     }
 
     pub fn set_view(&self, queue: &wgpu::Queue, v: &ViewParams) {
-        let doc = self.texture.as_ref().map_or([1, 1], |t| t.size);
+        let sheets = self.texture.as_ref().map_or(Sheets::single([1, 1]), |t| t.sheets);
+        let doc = sheets.doc;
         let u = Uniforms {
             origin: v.origin,
             size: v.size,
@@ -349,6 +390,7 @@ impl CanvasGpu {
             checker_a: v.checker_a,
             checker_b: v.checker_b,
             sel: [if self.has_selection { 1.0 } else { 0.0 }, v.time, self.lod as f32, 0.0],
+            sheets: [sheets.sheet[0] as f32, sheets.sheet[1] as f32, sheets.grid[0] as f32, sheets.grid[1] as f32],
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
     }

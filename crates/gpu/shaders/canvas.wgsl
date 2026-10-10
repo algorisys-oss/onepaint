@@ -20,12 +20,14 @@ struct Uniforms {
     checker_b: vec4<f32>,
     // x: has selection, y: time (s), z: level of detail to sample.
     sel: vec4<f32>,
+    // Spec 40: sheet width and height at level 0, sheets across and down.
+    sheets: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
-@group(0) @binding(1) var tex: texture_2d<f32>;
+@group(0) @binding(1) var tex: texture_2d_array<f32>;
 @group(0) @binding(2) var samp: sampler;
-@group(0) @binding(3) var sel_tex: texture_2d<f32>;
+@group(0) @binding(3) var sel_tex: texture_2d_array<f32>;
 
 @vertex
 fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
@@ -53,15 +55,37 @@ fn to_doc(px: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(q.x * c + q.y * s, -q.x * s + q.y * c) / u.scale + u.doc_size * 0.5;
 }
 
+// Texel `p` (document pixels at `level`, clamped to the document) of the
+// composite sheets (spec 40).
+fn load_doc(p: vec2<i32>, level: u32, size: vec2<i32>) -> vec4<f32> {
+    let c = clamp(p, vec2<i32>(0), size - vec2<i32>(1));
+    let sheet = max(vec2<i32>(u.sheets.xy) >> vec2<u32>(level), vec2<i32>(1));
+    let s = c / sheet;
+    return textureLoad(tex, c - s * sheet, s.y * i32(u.sheets.z) + s.x, i32(level));
+}
+
 // Composite sample at the display level (spec 39): the composite keeps a
-// box-filtered pyramid, so zoomed-out views read one level, bilinearly.
+// box-filtered pyramid, so zoomed-out views read one level, bilinearly. Across
+// several sheets the bilinear filter is done by hand, so seams don't show.
 fn sample_doc(d: vec2<f32>) -> vec4<f32> {
-    return textureSampleLevel(tex, samp, d / u.doc_size, u.sel.z);
+    if (u.sheets.z * u.sheets.w < 1.5) {
+        return textureSampleLevel(tex, samp, d / u.doc_size, 0, u.sel.z);
+    }
+    let level = u32(u.sel.z);
+    let size = max(vec2<i32>(u.doc_size) >> vec2<u32>(level), vec2<i32>(1));
+    let t = d / u.doc_size * vec2<f32>(size) - 0.5;
+    let i = vec2<i32>(floor(t));
+    let f = t - floor(t);
+    let top = mix(load_doc(i, level, size), load_doc(i + vec2<i32>(1, 0), level, size), f.x);
+    let bottom = mix(load_doc(i + vec2<i32>(0, 1), level, size), load_doc(i + vec2<i32>(1, 1), level, size), f.x);
+    return mix(top, bottom, f.y);
 }
 
 fn sel_at(p: vec2<i32>) -> f32 {
     let c = clamp(p, vec2<i32>(0), vec2<i32>(u.doc_size) - vec2<i32>(1));
-    return textureLoad(sel_tex, c, 0).r;
+    let sheet = vec2<i32>(u.sheets.xy);
+    let s = c / sheet;
+    return textureLoad(sel_tex, c - s * sheet, s.y * i32(u.sheets.z) + s.x, 0).r;
 }
 
 // Marching ants on the selection's inner edge (happypaint compositor.ts:290-308):
