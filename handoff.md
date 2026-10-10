@@ -63,6 +63,13 @@ Items 1–5 from the earlier list; every step pushed as it landed.
   - a background load could land on a document opened after it started;
   - the proof LUT and paper grain textures were cached by an address
     that could be reused.
+- **8-bit documents (the user chose A, then B):**
+  - spec 49 stores them as 8-bit tiles, half the CPU memory;
+  - spec 50 makes them composite in gamma space like happypaint, with
+    `color::Space` at every boundary;
+  - the New Canvas dialog offers 8-bit, 16-bit float (the default) and
+    32-bit float;
+  - `ONEPAINT_NEW=WxH@8` starts an 8-bit page.
 - **Debug hooks:** `ONEPAINT_NEW=WxH` (a blank document of that size;
   16384 × 12000 checked, one sheet and 4 × 3) and
   `ONEPAINT_VIEW=gray|proof|warn`.
@@ -78,7 +85,7 @@ Items 1–5 from the earlier list; every step pushed as it landed.
 - **Item 3, 8-bit storage:** waiting for your decision (below).
 
 ## Next up (suggested order)
-1. **Your decision on 8-bit storage** (below), then build it.
+1. **8-bit atlases on the GPU**, so 8-bit documents also halve VRAM.
 2. **Spatial adjustment layers on the GPU** (a padded backdrop pass), then
    ghost pegs.
 3. **The rest of the photocraft list** (`todo.md` §2.1):
@@ -90,19 +97,6 @@ Items 1–5 from the earlier list; every step pushed as it landed.
    a spec.
 
 ## Open decisions for the user
-- **8-bit storage for 8-bit documents (item 3).** In happypaint an 8-bit
-  document also composites in gamma space (divergence 2), so this changes
-  what users see, not just the memory used. The options:
-  - **A, store 8-bit sRGB and keep linear compositing.** RAM and VRAM
-    halve. Every edit re-quantizes the layer to 8 bits, as happypaint does,
-    so soft glazes band a little. Blending is unchanged.
-  - **B, full happypaint 8-bit mode:** A, plus gamma-space blending and its
-    multiply quirk. This closes divergence 2, but 8-bit documents' blend
-    modes will look different from today.
-  - **C, VRAM only:** the GPU atlases hold 8-bit sRGB for 8-bit documents,
-    and the CPU tiles stay f16. VRAM halves, RAM doesn't, and the output
-    is unchanged apart from rounding on the GPU path.
-  - I'd do A, then B as a separate step if you want parity.
 - The GPU memory budget on integrated GPUs: 1 GiB of source tiles plus
   **384 MiB** of segment cache (raised from 256 MiB tonight), both counted
   with mips. 256 MiB thrashed on a 205-tile drag; 384 MiB took the split

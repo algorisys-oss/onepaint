@@ -165,6 +165,8 @@ an item changes there, change it here too.
         texture limit (spec 40); the app now asks for the adapter's limits
   - [x] Store 8-bit documents as 8-bit tiles (spec 49; halves RAM)
   - [ ] 8-bit atlases on the GPU (halves VRAM for 8-bit documents)
+  - [ ] Wet GPU stepper: key its paper buffer on the grain's `Arc`, not its
+        address (as specs 43 and 48 now do)
   - [x] Gamma-space compositing for 8-bit documents (spec 50, B)
   - [ ] Check a full refresh's working set fits before starting; route the
         rest to the CPU instead of skipping (photocraft `gpu/src/lib.rs:663-687`)
