@@ -151,6 +151,16 @@ an item changes there, change it here too.
         direction (spec 38)
   - [ ] Profile the per-tile GPU cost (≈20 µs per tile-layer; far from the
         memory bandwidth limit)
+- [ ] From the photocraft comparison (2026-10-10; see handoff.md)
+  - [ ] Split the canvas composite into tiles for documents above the GPU
+        texture limit (photocraft `ui-egui/src/gpu_canvas.rs`)
+  - [ ] Store 8-bit documents as RGBA8 tiles (halves RAM and VRAM)
+  - [ ] Check a full refresh's working set fits before starting; route the
+        rest to the CPU instead of skipping (photocraft `gpu/src/lib.rs:663-687`)
+  - [ ] Bounded submits and GPU device-loss handling (`gpu/src/health.rs`)
+  - [ ] Open files in the background with progress and cancel
+  - [ ] Perf budgets with a baseline and a regression gate (`perf/budgets.toml`)
+  - [ ] Skip layers under fully opaque tiles when planning
 - [ ] Decide the GPU memory budget on integrated GPUs
 - [ ] Decide whether to drop the CPU tile copy once GPU-resident
 
