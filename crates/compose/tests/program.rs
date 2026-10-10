@@ -116,3 +116,61 @@ fn relief_programs_match_the_tree_compositor() {
         }
     }
 }
+
+/// `doc` with fully opaque normal layers dropped into its top level and
+/// into its first group.
+fn with_opaque_layers(mut doc: onepaint_doc::Document, seed: u64) -> onepaint_doc::Document {
+    let opaque = |name: &str, c: f32| {
+        let mut l = Layer::new(name);
+        for y in 0..doc.height as i32 {
+            for x in 0..doc.width as i32 {
+                l.pixels.set(x, y, [c, 0.5 * c, 0.2, 1.0]);
+            }
+        }
+        l
+    };
+    let (a, b) = (opaque("opaque-top", 0.3), opaque("opaque-in", 0.7));
+    let at = (seed as usize * 7) % (doc.root.len() + 1);
+    doc.root.insert(at, Node::Layer(a));
+    if let Some(Node::Group(g)) = doc.root.iter_mut().find(|n| matches!(n, Node::Group(_))) {
+        let at = (seed as usize) % (g.children.len() + 1);
+        g.children.insert(at, Node::Layer(b));
+    }
+    doc
+}
+
+#[test]
+fn layers_under_an_opaque_tile_are_skipped_exactly() {
+    use onepaint_compose::program::{PlanCache, plan_tiles_cached};
+    let (mut shorter, mut hidden) = (0, 0);
+    for seed in 0..30 {
+        let doc = with_opaque_layers(random_doc(seed, 300, 300, true), seed);
+        let keys: Vec<_> = doc.bounds().tiles().collect();
+        let cache = PlanCache::default();
+        let (cut, cpu) = plan_tiles_cached(&doc, &keys, None, None, Some(&cache));
+        assert!(cpu.is_empty());
+        for p in &cut {
+            assert_eq!(run(p), composite_tile(&doc, p.tx, p.ty, None), "seed {seed} tile {},{}", p.tx, p.ty);
+            if p.ops.len() < plan_tile(&doc, p.tx, p.ty, None).unwrap().ops.len() {
+                shorter += 1;
+            }
+        }
+        // Split at a layer under the top opaque one: hidden, so no split
+        // (unless the opaque layer is a clip base, which doesn't occlude).
+        let at = doc.root.iter().position(|n| n.name() == "opaque-top").unwrap();
+        let base = matches!(doc.root.get(at + 1), Some(Node::Layer(l)) if l.clipped);
+        if !base {
+            for n in &doc.root[..at] {
+                let Node::Layer(l) = n else { continue };
+                if l.adjustment.is_some() {
+                    continue;
+                }
+                let (p, _) = plan_tiles_cached(&doc, &[(0, 0)], None, Some(&l.id), Some(&cache));
+                assert!(p[0].split.is_none(), "seed {seed}: {} is hidden", l.id);
+                hidden += 1;
+            }
+        }
+    }
+    assert!(shorter > 0, "some programs lost the layers under an opaque one");
+    assert!(hidden > 0, "some hot layers were hidden");
+}

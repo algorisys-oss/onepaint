@@ -129,10 +129,20 @@ enum Clip {
 #[derive(Default)]
 pub struct PlanCache {
     coverage: std::sync::Mutex<std::collections::HashMap<(u64, i32, i32), Clip>>,
+    /// Whether a tile is fully opaque, by its address (the `Weak` keeps the
+    /// address from being reused while the entry lives).
+    opaque: std::sync::Mutex<std::collections::HashMap<usize, (std::sync::Weak<Tile>, bool)>>,
 }
 
 /// Cached coverage entries kept at most; past this the cache starts over.
 const MAX_CACHED_CLIPS: usize = 4096;
+/// Cached opacity flags kept at most (dead tiles are dropped first).
+const MAX_CACHED_OPAQUE: usize = 1 << 16;
+
+/// Every pixel's alpha is exactly 1 (f16 0x3c00).
+fn is_opaque(t: &Tile) -> bool {
+    t.data.chunks_exact(4).all(|p| p[3].to_bits() == 0x3c00)
+}
 
 impl PlanCache {
     fn get(&self, key: &(u64, i32, i32)) -> Option<Clip> {
@@ -146,6 +156,25 @@ impl PlanCache {
             }
             m.insert(key, c);
         }
+    }
+
+    /// Whether every pixel of `t` has alpha exactly 1, cached by tile.
+    fn opaque(&self, t: &Arc<Tile>) -> bool {
+        let key = Arc::as_ptr(t) as usize;
+        if let Some(hit) = self.opaque.lock().ok().and_then(|m| m.get(&key).filter(|(w, _)| w.strong_count() > 0).map(|e| e.1)) {
+            return hit;
+        }
+        let v = is_opaque(t);
+        if let Ok(mut m) = self.opaque.lock() {
+            if m.len() >= MAX_CACHED_OPAQUE {
+                m.retain(|_, (w, _)| w.strong_count() > 0);
+                if m.len() >= MAX_CACHED_OPAQUE {
+                    m.clear();
+                }
+            }
+            m.insert(key, (Arc::downgrade(t), v));
+        }
+        v
     }
 
     /// Coverage entries held (tests).
@@ -341,6 +370,10 @@ struct Planner<'a> {
     /// The document as a filter frame: its size bounds relief taps, and
     /// noise and fills are laid out in it.
     frame: onepaint_filters::Frame,
+    /// Where each open register's ops begin (the top level's at 0).
+    regs: Vec<usize>,
+    /// The lowest point top-level ops were cut back to by an opaque layer.
+    cut: Option<usize>,
 }
 
 /// A top-level node (with its clip family) and the ops it produced.
@@ -410,7 +443,7 @@ pub fn plan_tile_split(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverl
 
 fn plan(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, hot: Option<&str>, cache: Option<&PlanCache>) -> Option<TileProgram> {
     let frame = onepaint_filters::Frame::region(0, 0, doc.width, doc.height, doc.dpi as f32);
-    let mut p = Planner { tx, ty, ov, ops: Vec::new(), depth: 1, units: Vec::new(), hot, cache, frame };
+    let mut p = Planner { tx, ty, ov, ops: Vec::new(), depth: 1, units: Vec::new(), hot, cache, frame, regs: vec![0], cut: None };
     p.nodes(&doc.root).ok()?;
     // The paper shades the finished composite (spec 43), after every unit.
     if let Some(paper) = doc.paper() {
@@ -509,12 +542,34 @@ impl Planner<'_> {
             return Err(Unsupported);
         }
         self.ops.push(op);
+        self.regs.push(self.ops.len());
         Ok(())
     }
 
     fn pop(&mut self, mode: BlendMode, opacity: f32, clip: bool, tint: Option<[f32; 3]>) {
         self.depth -= 1;
+        self.regs.pop();
         self.ops.push(Op::Pop { mode, opacity, clip, tint });
+    }
+
+    /// A normal, fully opaque layer replaces its register (`c + top · 0`):
+    /// drop what the register held so far. Needs the session's cache, so a
+    /// tile's opacity is checked once.
+    fn occlude(&mut self, l: &Layer, c: &Content) {
+        let Some(cache) = self.cache else { return };
+        let plain = matches!(c.mask, MaskSrc::None) && c.stroke.is_none() && c.mask_stroke.is_none() && c.relief.is_none();
+        if l.blend_mode != BlendMode::Normal || l.opacity != 1.0 || l.inherit_alpha || !plain {
+            return;
+        }
+        let Some(base) = &c.base else { return };
+        if !cache.opaque(base) {
+            return;
+        }
+        let at = self.regs.last().copied().unwrap_or(0);
+        self.ops.truncate(at);
+        if self.depth == 1 {
+            self.cut = Some(self.cut.map_or(at, |c| c.min(at)));
+        }
     }
 
     fn clipped(&mut self, riders: &[Node]) -> Result<(), Unsupported> {
@@ -549,7 +604,7 @@ impl Planner<'_> {
             }
             let j = riders(nodes, i);
             let top = self.depth == 1;
-            let start = self.ops.len();
+            let mut start = self.ops.len();
             match &nodes[i] {
                 Node::Group(g) => {
                     let clip = self.panel_clip(g);
@@ -574,6 +629,7 @@ impl Planner<'_> {
                         let content = self.content(l)?;
                         if family.is_empty() {
                             if let Some(content) = content {
+                                self.occlude(l, &content);
                                 self.ops.push(Op::Layer {
                                     content,
                                     mode: l.blend_mode,
@@ -593,6 +649,11 @@ impl Planner<'_> {
                 }
             }
             if top {
+                // An opaque layer cut the ops below it: their units are gone.
+                if let Some(c) = self.cut.take() {
+                    self.units.retain(|u| u.end <= c);
+                    start = start.min(c);
+                }
                 let hot = self.hot.is_some_and(|id| nodes[i..j].iter().any(|n| contains(n, id)));
                 let folds = match &nodes[i] {
                     Node::Group(g) => g.blend_mode == BlendMode::Normal,
