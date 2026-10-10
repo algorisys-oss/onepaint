@@ -40,13 +40,47 @@ pub enum MaskSrc {
     Zero,
 }
 
-/// What `layer_content` produces: pixels, then stroke, then mask.
+/// What `layer_content` produces: pixels, then stroke, then relief, then mask.
 #[derive(Clone, Debug)]
 pub struct Content {
     pub base: Option<Arc<Tile>>,
     pub stroke: Option<StrokeSrc>,
     pub mask: MaskSrc,
     pub mask_stroke: Option<StrokeSrc>,
+    /// Impasto relief lighting (spec 45).
+    pub relief: Option<Arc<Relief>>,
+}
+
+/// The height tiles relief reads for tile `(tx, ty)` (spec 45): its own and
+/// the four sharing an edge, since a pixel's taps are one pixel left, right,
+/// up and down. Taps clamp to the document, as `relief::shade` does.
+#[derive(Debug)]
+pub struct Relief {
+    /// Centre, left, right, up, down.
+    pub tiles: [Option<Arc<Tile>>; 5],
+    pub tx: i32,
+    pub ty: i32,
+    /// Document size in pixels.
+    pub doc: [i32; 2],
+}
+
+impl Relief {
+    /// Height at doc pixel (x, y), clamped to the document; (x, y) is on the
+    /// tile or one pixel off an edge.
+    fn height(&self, x: i32, y: i32) -> f32 {
+        let (x, y) = (x.clamp(0, self.doc[0] - 1), y.clamp(0, self.doc[1] - 1));
+        let (dx, dy) = (x.div_euclid(TILE) - self.tx, y.div_euclid(TILE) - self.ty);
+        let k = match (dx, dy) {
+            (0, 0) => 0,
+            (-1, 0) => 1,
+            (1, 0) => 2,
+            (0, -1) => 3,
+            (0, 1) => 4,
+            _ => return 0.0,
+        };
+        let i = (y.rem_euclid(TILE) * TILE + x.rem_euclid(TILE)) as usize;
+        self.tiles[k].as_ref().map_or(0.0, |t| load(t, i)[0])
+    }
 }
 
 /// A colour adjustment layer (spec 42): prepared for the CPU interpreter
@@ -202,7 +236,8 @@ pub fn op_sources(ops: &[Op]) -> impl Iterator<Item = &Arc<Tile>> {
                 MaskSrc::Tile(t) => Some(t),
                 _ => None,
             };
-            c.base.iter().chain(c.stroke.iter().map(|s| &s.tile)).chain(mask).chain(c.mask_stroke.iter().map(|s| &s.tile))
+            let relief = c.relief.iter().flat_map(|r| r.tiles.iter().flatten());
+            c.base.iter().chain(c.stroke.iter().map(|s| &s.tile)).chain(mask).chain(c.mask_stroke.iter().map(|s| &s.tile)).chain(relief)
         });
         content.chain(adjust_mask)
     })
@@ -244,6 +279,11 @@ pub fn segment_key(ops: &[Op]) -> u64 {
             MaskSrc::None => 0usize.hash(h),
             MaskSrc::Zero => 1usize.hash(h),
             MaskSrc::Tile(t) => (2usize, ptr(t)).hash(h),
+        }
+        // Relief depends on where the tile is (taps clamp at the document's edge).
+        if let Some(r) = &c.relief {
+            (r.tx, r.ty, r.doc).hash(h);
+            r.tiles.iter().map(|t| t.as_ref().map(ptr)).for_each(|p| p.hash(h));
         }
     };
     for op in ops {
@@ -294,6 +334,8 @@ struct Planner<'a> {
     units: Vec<Unit>,
     hot: Option<&'a str>,
     cache: Option<&'a PlanCache>,
+    /// Document size, for relief taps at its edge.
+    doc: [u32; 2],
 }
 
 /// A top-level node (with its clip family) and the ops it produced.
@@ -360,7 +402,8 @@ pub fn plan_tile_split(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverl
 }
 
 fn plan(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, hot: Option<&str>, cache: Option<&PlanCache>) -> Option<TileProgram> {
-    let mut p = Planner { tx, ty, ov, ops: Vec::new(), depth: 1, units: Vec::new(), hot, cache };
+    let doc_size = [doc.width, doc.height];
+    let mut p = Planner { tx, ty, ov, ops: Vec::new(), depth: 1, units: Vec::new(), hot, cache, doc: doc_size };
     p.nodes(&doc.root).ok()?;
     // The paper shades the finished composite (spec 43), after every unit.
     if let Some(paper) = doc.paper() {
@@ -379,9 +422,6 @@ fn plan(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, hot: Optio
 
 impl Planner<'_> {
     fn content(&self, l: &Layer) -> Result<Option<Content>, Unsupported> {
-        if l.height.is_some() {
-            return Err(Unsupported); // relief lighting
-        }
         let (tx, ty) = (self.tx, self.ty);
         let on_layer = self.ov.filter(|o| o.layer_id == l.id);
         let src = |o: &StrokeOverlay| o.stroke.tile(tx, ty).map(|t| StrokeSrc { tile: t.clone(), opacity: o.opacity, mode: o.mode });
@@ -391,7 +431,12 @@ impl Planner<'_> {
         if base.is_none() && stroke.is_none() {
             return Ok(None);
         }
-        let mut c = Content { base, stroke, mask: MaskSrc::None, mask_stroke: None };
+        let relief = l.height.as_ref().and_then(|h| {
+            let tiles = [(0, 0), (-1, 0), (1, 0), (0, -1), (0, 1)].map(|(dx, dy)| h.tile(tx + dx, ty + dy).cloned());
+            let doc = [self.doc[0] as i32, self.doc[1] as i32];
+            tiles.iter().any(Option::is_some).then(|| Arc::new(Relief { tiles, tx, ty, doc }))
+        });
+        let mut c = Content { base, stroke, mask: MaskSrc::None, mask_stroke: None, relief };
         if l.mask_enabled
             && let Some(mask) = &l.mask
         {
@@ -587,6 +632,12 @@ fn eval(c: &Content, i: usize) -> Px {
     let mut p = c.base.as_ref().map_or([0.0; 4], |t| load(t, i));
     if let Some(s) = &c.stroke {
         p = apply_stroke_px(p, load(&s.tile, i), s.opacity, s.mode);
+    }
+    if let Some(r) = &c.relief {
+        let (x, y) = (r.tx * TILE + (i % TILE as usize) as i32, r.ty * TILE + (i / TILE as usize) as i32);
+        if x < r.doc[0] && y < r.doc[1] {
+            crate::relief::light_px(&mut p, [r.height(x - 1, y), r.height(x + 1, y), r.height(x, y - 1), r.height(x, y + 1)]);
+        }
     }
     let mut m = match &c.mask {
         MaskSrc::None => return p,

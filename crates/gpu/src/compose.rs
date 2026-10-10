@@ -79,6 +79,7 @@ const F_STROKE: u32 = 8;
 const F_MASK: u32 = 16;
 const F_MASK_ZERO: u32 = 32;
 const F_MASK_STROKE: u32 = 64;
+const F_RELIEF: u32 = 128;
 
 struct Slot {
     idx: u32,
@@ -148,7 +149,7 @@ fn is_simple(ops: &[&Op]) -> bool {
         matches!(
             op,
             Op::Layer {
-                content: Content { base: Some(_), stroke: None, mask: MaskSrc::None, mask_stroke: None },
+                content: Content { base: Some(_), stroke: None, mask: MaskSrc::None, mask_stroke: None, relief: None },
                 mode: BlendMode::Normal,
                 inherit_alpha: false,
                 ..
@@ -523,6 +524,12 @@ impl GpuCompositor {
             o[3] |= F_STROKE;
             (o[5], o[6], o[7]) = stroke(s);
         }
+        // Spec 45: five height slots, two to a word (0xffff: no tile).
+        if let Some(r) = &c.relief {
+            o[3] |= F_RELIEF;
+            let [cc, l, rt, u, d] = r.tiles.each_ref().map(|t| t.as_ref().map_or(0xffff, |t| self.slot(t) & 0xffff));
+            (o[12], o[13], o[14]) = (cc | l << 16, rt | u << 16, d);
+        }
         match &c.mask {
             MaskSrc::None => return,
             MaskSrc::Tile(t) => {
@@ -728,7 +735,8 @@ impl GpuCompositor {
                 let ops = p.at(&seg.range);
                 let (idx, fresh) = self.cache_slot(seg, ops)?;
                 if fresh {
-                    fills.push(Work { origin: [0, 0], ops: ops.iter().collect(), over: None, init: NONE, dest: idx });
+                    // The origin only places relief taps; the image goes to cache slot `idx`.
+                    fills.push(Work { origin, ops: ops.iter().collect(), over: None, init: NONE, dest: idx });
                 }
                 Some(Some(idx))
             };

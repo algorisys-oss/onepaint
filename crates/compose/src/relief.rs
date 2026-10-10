@@ -32,7 +32,6 @@ pub fn shade(buf: &mut [f32], height: &Surface, tx: i32, ty: i32, doc: Rect) {
     let Some(inner) = Rect::from_tile(tx, ty).intersect(&doc) else { return };
     let Some(r) = Rect::new(inner.x - 1, inner.y - 1, inner.w + 2, inner.h + 2).intersect(&doc) else { return };
     let src = height.read_rect(r);
-    let l = light();
     let h = |x: i32, y: i32| -> f32 {
         let (x, y) = (x.clamp(r.x, r.right() - 1), y.clamp(r.y, r.bottom() - 1));
         src[(((y - r.y) * r.w + (x - r.x)) * 4) as usize]
@@ -40,28 +39,35 @@ pub fn shade(buf: &mut [f32], height: &Surface, tx: i32, ty: i32, doc: Rect) {
     for y in inner.y..inner.bottom() {
         for x in inner.x..inner.right() {
             let i = (((y - ty * TILE) * TILE + (x - tx * TILE)) * 4) as usize;
-            let a = buf[i + 3];
-            if a <= 0.0 {
-                continue;
-            }
-            let (hl, hr, hu, hd) = (h(x - 1, y), h(x + 1, y), h(x, y - 1), h(x, y + 1));
-            let amt = smoothstep(0.02, 0.25, hl.max(hr).max(hu).max(hd));
-            if amt <= 0.0 {
-                continue;
-            }
-            let (nx, ny) = ((hl - hr) * 9.0, (hu - hd) * 9.0);
-            let len = (nx * nx + ny * ny + 1.0).sqrt();
-            let n = [nx / len, ny / len, 1.0 / len];
-            let ndl = n[0] * l[0] + n[1] * l[1] + n[2] * l[2];
-            let diff = ndl.clamp(0.0, 1.0);
-            // reflect(-L, n).z = -L.z + 2·(n·L)·n.z
-            let spec = (-l[2] + 2.0 * ndl * n[2]).clamp(0.0, 1.0).powi(22);
-            let k = 1.0 + (0.62 + 0.62 * diff - 1.0) * amt;
-            let add = spec * 0.3 * amt * a;
-            for c in 0..3 {
-                buf[i + c] = buf[i + c] * k + add;
-            }
+            light_px(&mut buf[i..i + 4], [h(x - 1, y), h(x + 1, y), h(x, y - 1), h(x, y + 1)]);
         }
+    }
+}
+
+/// Light one premultiplied pixel from the heights left, right, above and
+/// below it. Transparent pixels and flat neighbourhoods are left alone.
+#[inline]
+pub fn light_px(p: &mut [f32], [hl, hr, hu, hd]: [f32; 4]) {
+    let a = p[3];
+    if a <= 0.0 {
+        return;
+    }
+    let amt = smoothstep(0.02, 0.25, hl.max(hr).max(hu).max(hd));
+    if amt <= 0.0 {
+        return;
+    }
+    let l = light();
+    let (nx, ny) = ((hl - hr) * 9.0, (hu - hd) * 9.0);
+    let len = (nx * nx + ny * ny + 1.0).sqrt();
+    let n = [nx / len, ny / len, 1.0 / len];
+    let ndl = n[0] * l[0] + n[1] * l[1] + n[2] * l[2];
+    let diff = ndl.clamp(0.0, 1.0);
+    // reflect(-L, n).z = -L.z + 2·(n·L)·n.z
+    let spec = (-l[2] + 2.0 * ndl * n[2]).clamp(0.0, 1.0).powi(22);
+    let k = 1.0 + (0.62 + 0.62 * diff - 1.0) * amt;
+    let add = spec * 0.3 * amt * a;
+    for v in &mut p[..3] {
+        *v = *v * k + add;
     }
 }
 

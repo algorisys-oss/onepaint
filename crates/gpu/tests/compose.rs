@@ -503,3 +503,30 @@ fn partial_panel_clips_match_the_cpu_oracle() {
         }
     }
 }
+
+#[test]
+fn relief_matches_the_cpu_oracle() {
+    use onepaint_compose::testdocs::with_relief;
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let mut gc = GpuCompositor::new(&device, 64 << 20);
+    let (w, h) = (600, 300);
+    let tex = target(&device, w, h);
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
+    for seed in 0..16 {
+        let doc = with_relief(random_doc(seed, w, h, false), seed);
+        gc.run(&device, &queue, &programs(&doc, None), &view, [w, h]);
+        let (e, at) = max_error(&doc, None, &read(&device, &queue, &tex));
+        assert!(e <= TOL, "seed {seed}: error {e} at {at:?}");
+        // Split, so relief also runs in cached segment fills, cold and warm.
+        let ids = layer_ids(&doc);
+        let hot = ids[seed as usize % ids.len()].clone();
+        for pass in ["cold", "warm"] {
+            gc.run(&device, &queue, &split_programs(&doc, None, &hot), &view, [w, h]);
+            let (e, at) = max_error(&doc, None, &read(&device, &queue, &tex));
+            assert!(e <= TOL, "seed {seed} split at {hot} ({pass}): error {e} at {at:?}");
+        }
+    }
+}

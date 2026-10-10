@@ -7,7 +7,8 @@
 //   a: kind, blend mode, opacity (f32 bits), flags
 //   b: base slot, stroke slot, stroke code, stroke opacity
 //   c: mask slot, mask stroke slot, mask stroke code, mask stroke opacity
-//   d: ghost tint rgb (f32 bits)
+//   d: ghost tint rgb (f32 bits); for content with F_RELIEF, the height
+//      slots (centre | left << 16, right | up << 16, down), 0xffff for none
 // A stroke code is `kind | mode << 8` (kind 0 paint, 1 erase, 2 alpha lock).
 //
 // Spec 42: an adjust op (a colour adjustment layer) has its params at
@@ -92,6 +93,7 @@ const F_STROKE: u32 = 8u;
 const F_MASK: u32 = 16u;
 const F_MASK_ZERO: u32 = 32u;
 const F_MASK_STROKE: u32 = 64u;
+const F_RELIEF: u32 = 128u;
 
 const M_NORMAL: u32 = 0u;
 const M_MULTIPLY: u32 = 1u;
@@ -522,7 +524,63 @@ fn paper_k(d: vec2<f32>, tile_px: f32, amt: f32) -> f32 {
     return pow(shade, 2.2);
 }
 
-// `layer_content`: pixels, then the live stroke, then the mask.
+// ── Impasto relief (spec 45; crates/compose relief.rs `light_px`) ──
+
+// The job's tile origin and this pixel, in document pixels at the level.
+var<private> tile_origin: vec2<i32>;
+
+// Height at document pixel `q` (clamped to the document), from the tile's
+// own height slot or the one across the edge it lies past.
+fn relief_h(o: Op, q: vec2<i32>) -> f32 {
+    let e = i32(256u >> prm.level);
+    let c = clamp(q, vec2<i32>(0), vec2<i32>(prm.doc_size) - vec2<i32>(1)) - tile_origin;
+    var slot = o.d.x & 0xffffu;
+    var local = c;
+    if (c.x < 0) {
+        slot = o.d.x >> 16u;
+        local.x += e;
+    } else if (c.x >= e) {
+        slot = o.d.y & 0xffffu;
+        local.x -= e;
+    } else if (c.y < 0) {
+        slot = o.d.y >> 16u;
+        local.y += e;
+    } else if (c.y >= e) {
+        slot = o.d.z & 0xffffu;
+        local.y -= e;
+    }
+    if (slot == 0xffffu) {
+        return 0.0;
+    }
+    return load(slot, local).x;
+}
+
+fn relief(o: Op, px: vec4<f32>, p: vec2<i32>) -> vec4<f32> {
+    let g = tile_origin + p;
+    if (px.w <= 0.0 || any(g >= vec2<i32>(prm.doc_size))) {
+        return px;
+    }
+    let hl = relief_h(o, g - vec2<i32>(1, 0));
+    let hr = relief_h(o, g + vec2<i32>(1, 0));
+    let hu = relief_h(o, g - vec2<i32>(0, 1));
+    let hd = relief_h(o, g + vec2<i32>(0, 1));
+    let amt = sstep(0.02, 0.25, max(max(hl, hr), max(hu, hd)));
+    if (amt <= 0.0) {
+        return px;
+    }
+    var l = vec3<f32>(-0.45, -0.6, 0.66);
+    l /= sqrt(dot(l, l));
+    let nx = (hl - hr) * 9.0;
+    let ny = (hu - hd) * 9.0;
+    let len = sqrt(nx * nx + ny * ny + 1.0);
+    let n = vec3<f32>(nx, ny, 1.0) / len;
+    let ndl = dot(n, l);
+    let spec = pow(clamp(-l.z + 2.0 * ndl * n.z, 0.0, 1.0), 22.0);
+    let k = 1.0 + (0.62 + 0.62 * clamp(ndl, 0.0, 1.0) - 1.0) * amt;
+    return vec4<f32>(px.xyz * k + spec * 0.3 * amt * px.w, px.w);
+}
+
+// `layer_content`: pixels, then the live stroke, then relief, then the mask.
 fn content(o: Op, p: vec2<i32>) -> vec4<f32> {
     let flags = o.a.w;
     var c = vec4<f32>(0.0);
@@ -531,6 +589,9 @@ fn content(o: Op, p: vec2<i32>) -> vec4<f32> {
     }
     if ((flags & F_STROKE) != 0u) {
         c = apply_stroke(c, load(o.b.y, p), bitcast<f32>(o.b.w), o.b.z);
+    }
+    if ((flags & F_RELIEF) != 0u) {
+        c = relief(o, c, p);
     }
     if ((flags & F_MASK) != 0u) {
         var m = vec4<f32>(0.0);
@@ -561,6 +622,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let g = job.origin + gid.xy;
+    tile_origin = vec2<i32>(job.origin);
     // A cache image covers its whole tile: it may be reused by any tile.
     if (job.dest == NONE && (g.x >= prm.doc_size.x || g.y >= prm.doc_size.y)) {
         return;

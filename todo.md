@@ -126,7 +126,7 @@ an item changes there, change it here too.
   - [x] Colour adjustment layers, pixel-only kinds (spec 42)
   - [ ] Noise, screentone and fill layers
   - [ ] Spatial adjustment layers (a padded backdrop pass)
-  - [ ] Relief lighting (impasto height)
+  - [x] Relief lighting (impasto height) (spec 45)
   - [x] Paper shading (spec 43)
   - [x] Partial panel clips (spec 44)
   - [ ] Ghost pegs (out-of-pegs onion offsets)

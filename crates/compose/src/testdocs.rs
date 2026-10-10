@@ -242,3 +242,28 @@ pub fn with_adjustments(mut doc: Document, seed: u64) -> Document {
     walk(&mut doc.root, &mut r, &mut id, w, h);
     doc
 }
+
+/// `doc` with impasto height on about half its paint layers (spec 45),
+/// reaching across tile edges and the document's edge.
+pub fn with_relief(mut doc: Document, seed: u64) -> Document {
+    fn walk(nodes: &mut [Node], r: &mut Rng, w: u32, h: u32) {
+        for n in nodes {
+            match n {
+                Node::Group(g) => walk(&mut g.children, r, w, h),
+                Node::Layer(l) if l.adjustment.is_none() && r.chance(0.5) => {
+                    let mut s = Surface::default();
+                    for _ in 0..2 {
+                        let a = rect(r, w, h);
+                        noise(&mut s, r, a);
+                    }
+                    l.height = Some(s);
+                }
+                Node::Layer(_) => {}
+            }
+        }
+    }
+    let mut r = Rng::new(seed ^ 0x4e1);
+    let (w, h) = (doc.width, doc.height);
+    walk(&mut doc.root, &mut r, w, h);
+    doc
+}

@@ -102,3 +102,16 @@ fn paper_shades_programs_like_the_tree_compositor() {
         }
     }
 }
+
+#[test]
+fn relief_programs_match_the_tree_compositor() {
+    use onepaint_compose::testdocs::with_relief;
+    // 300 × 300: tiles end inside and at the document's edge.
+    for seed in 0..30 {
+        let doc = with_relief(random_doc(seed, 300, 300, false), seed);
+        for (tx, ty) in TILES {
+            let prog = plan_tile(&doc, tx, ty, None).unwrap();
+            assert_eq!(run(&prog), composite_tile(&doc, tx, ty, None), "seed {seed} tile {tx},{ty}");
+        }
+    }
+}
