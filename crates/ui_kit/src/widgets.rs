@@ -204,6 +204,34 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     resp
 }
 
+/// A small rotation dial: the needle shows `angle` (radians, clockwise
+/// from up). Dragging sets the angle to the pointer's; `changed()` reports a
+/// drag, `clicked()` a press without one (callers reset on it).
+pub fn rotation_dial(ui: &mut Ui, angle: &mut f32, size: f32, tooltip: &str) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let (rect, mut resp) = ui.allocate_exact_size(vec2(size, size), Sense::click_and_drag());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, ui.is_enabled(), tooltip));
+    let c = rect.center();
+    if resp.dragged()
+        && let Some(p) = resp.interact_pointer_pos()
+        && p.distance(c) > 1.0
+    {
+        let a = (p.x - c.x).atan2(-(p.y - c.y));
+        if (a - *angle).abs() > f32::EPSILON {
+            *angle = a;
+            resp.mark_changed();
+        }
+    }
+    let r = size / 2.0 - 1.0;
+    let hot = resp.hovered() || resp.dragged();
+    let p = ui.painter();
+    p.circle_stroke(c, r, egui::Stroke::new(1.25, if hot { t.fg_muted } else { t.border }));
+    let tip = c + vec2(angle.sin(), -angle.cos()) * (r - 2.0);
+    p.line_segment([c, tip], egui::Stroke::new(1.5, if hot { t.accent } else { t.fg_muted }));
+    p.circle_filled(c, 1.5, t.fg_muted);
+    if tooltip.is_empty() { resp } else { resp.on_hover_text(tooltip) }
+}
+
 /// Accent-filled primary button.
 pub fn primary_button(ui: &mut Ui, label: &str, min_width: f32) -> Response {
     let t = Tokens::get(ui.ctx());

@@ -302,6 +302,8 @@ pub struct Canvas {
     pub pen_down: bool,
     /// The canvas rect's top-left on screen (pen samples are screen points).
     screen_origin: Pos2,
+    /// The canvas rect on screen, as of the last frame.
+    pub stage: Rect,
     pub hover_doc: Option<[f64; 2]>,
     last_pos: Option<Pos2>,
     /// The size slider/keys changed the brush recently: show a preview ring.
@@ -356,6 +358,7 @@ impl Canvas {
             pen_queue: Default::default(),
             pen_down: false,
             screen_origin: Pos2::ZERO,
+            stage: Rect::NOTHING,
             hover_doc: None,
             last_pos: None,
             size_flash: 0.0,
@@ -550,6 +553,11 @@ impl Canvas {
 
     fn snap_config(&self, session: &Session) -> onepaint_stroke::snap::SnapConfig {
         session.guides().snap_config(self.doc_size[0], self.doc_size[1], self.view.scale, self.persp_editing)
+    }
+
+    /// Document coordinates of a screen point.
+    pub fn screen_doc(&self, p: Pos2) -> Pt {
+        self.view.screen_to_doc([(p.x - self.screen_origin.x) as f64, (p.y - self.screen_origin.y) as f64])
     }
 
     fn doc_pt(&self, p: Pos2) -> Pt {
@@ -931,6 +939,7 @@ impl Canvas {
         }
         let local = |p: Pos2| pos2(p.x - rect.left(), p.y - rect.top());
         self.screen_origin = rect.min;
+        self.stage = rect;
         // Raw events, so a stroke starts on press (no drag threshold) and uses every sample.
         for ev in &events {
             match ev {

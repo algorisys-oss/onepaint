@@ -8,6 +8,7 @@ pub mod align;
 pub mod anim;
 mod canvas_ops;
 mod clipboard;
+mod color_drop;
 mod command;
 mod filter_ops;
 pub mod guides;
@@ -350,6 +351,7 @@ pub struct Session {
     clip: Option<Arc<onepaint_selection::Mask>>,
     selection_version: u64,
     transform: Option<transform::Floating>,
+    color_drop: Option<color_drop::ColorDrop>,
     filter: Option<filter_ops::FilterSession>,
     /// The layer whose mask strokes paint into (only while it is active).
     mask_target_layer: Option<NodeId>,
@@ -411,6 +413,7 @@ impl Session {
             clip: None,
             selection_version: 0,
             transform: None,
+            color_drop: None,
             filter: None,
             mask_target_layer: None,
             paint: PaintSettings::default(),
@@ -966,6 +969,10 @@ impl Session {
     // ── Commands ──
 
     pub fn execute(&mut self, cmd: Command) -> Result<(), EngineError> {
+        // A command mid-ColorDrop abandons the drop.
+        if self.color_drop.is_some() {
+            self.cancel_color_drop();
+        }
         if self.recorder.is_some() {
             let c = cmd.clone();
             self.rec(|t| recording::RecEvent::Cmd { t, cmd: Box::new(c) });

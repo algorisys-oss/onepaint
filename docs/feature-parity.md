@@ -187,6 +187,13 @@ Source: `components/toolbar/toolbar.tsx`, `components/dock/`, `state/dock-store.
 - [ ] Align and distribute layers: align edges and centres, distribute centres
   (3+ layers), equal gaps across and down
 - [ ] Toolbars never overlap on narrow windows
+- [x] Status bar (`components/status-bar`): save state, tool, brush and size,
+  colour with ColorDrop, fill threshold and grow, layer, cursor, measure,
+  document properties, layer count, rotation dial, zoom −/%/+, undo/redo,
+  vertical/horizontal symmetry and move axis, edit vanishing points, fill
+  mode, value check, version; narrow windows fold details into "…"
+- [x] ColorDrop: drag the colour onto the canvas to fill, with a live preview;
+  hold to lock the seed and slide to set the threshold; one undo step
 
 ## Settings
 - [x] Settings dialog, persisted as `settings.json` in the config dir (spec 34):

@@ -26,6 +26,7 @@ mod press;
 mod progressive;
 mod reference;
 mod settings;
+mod status_bar;
 mod tablet;
 mod text_ui;
 mod thumbs;
@@ -89,6 +90,8 @@ pub enum Popover {
     /// Three-finger swipe down: copy, cut, paste.
     ClipboardMenu,
     BrushStudio,
+    /// The status bar's "…" details on narrow windows.
+    StatusMore,
 }
 
 /// What a file opens as.
@@ -218,6 +221,8 @@ pub struct App {
     pub clipboard: clip::Clipboard,
     /// Layer being dragged in the layers panel.
     pub layer_drag: Option<String>,
+    /// A colour being dragged onto the canvas (ColorDrop).
+    pub color_drop: Option<status_bar::ColorDropDrag>,
     /// Canvas/image size dialog state: size, anchor (col, row), keep aspect.
     pub size_dialog: ([u32; 2], (u8, u8), bool),
     pub autosave: autosave::Autosave,
@@ -296,6 +301,7 @@ impl App {
             xform_layer: None,
             clipboard: clip::Clipboard::default(),
             layer_drag: None,
+            color_drop: None,
             size_dialog: ([0, 0], (1, 1), true),
             autosave: autosave::Autosave::new(if cfg!(test) { None } else { autosave::dir() }),
             recover: None,
@@ -337,7 +343,10 @@ impl App {
 
     /// Remember the colour that was used for a stroke.
     pub fn push_recent(&mut self) {
-        let c = self.session.color();
+        self.push_recent_color(self.session.color());
+    }
+
+    pub fn push_recent_color(&mut self, c: Rgba) {
         if self.recent.first() != Some(&c) {
             self.recent.retain(|r| r.to_hex() != c.to_hex());
             self.recent.insert(0, c);
@@ -1808,6 +1817,68 @@ mod tests {
         key(&mut h, egui::Key::Z, egui::Modifiers::COMMAND);
         assert!(active_alpha(&h, [600.0, 400.0]) > 0.5, "undo puts the stroke back");
         assert!(active_alpha(&h, [600.0, 500.0]) < 1e-3);
+    }
+
+    #[test]
+    fn status_bar_symmetry_zoom_and_fill_mode() {
+        let mut h = harness();
+        h.run();
+        use onepaint_engine::SymmetryMode;
+        assert!(h.query_by_label("Move symmetry axis — drag the canvas to reposition (Shift+Y)").is_none(), "only with symmetry on");
+        h.get_by_label("Vertical symmetry — mirror left/right (Y toggles symmetry)").click();
+        h.run();
+        assert_eq!(h.state().session.guides().symmetry.mode, SymmetryMode::Vertical);
+        h.get_by_label("Horizontal symmetry — mirror up/down (Y toggles symmetry)").click();
+        h.run();
+        assert_eq!(h.state().session.guides().symmetry.mode, SymmetryMode::Both);
+        h.get_by_label("Move symmetry axis — drag the canvas to reposition (Shift+Y)").click();
+        h.run();
+        assert!(h.state().canvas.sym_editing);
+        // Dragging the canvas now moves the centre, not paint.
+        let n = h.state().session.history_len();
+        drag_stroke(&mut h, pos2(500.0, 300.0), pos2(400.0, 250.0));
+        assert_eq!(h.state().session.history_len(), n, "no paint while moving the axis");
+        assert!(h.state().session.guides().symmetry.cx < 0.5);
+        h.get_by_label("Vertical symmetry — mirror left/right (Y toggles symmetry)").click();
+        h.run();
+        assert_eq!(h.state().session.guides().symmetry.mode, SymmetryMode::Horizontal);
+        let z = h.state().canvas.view.scale;
+        h.get_by_label("Zoom in").click();
+        h.run();
+        assert!((h.state().canvas.view.scale / z - 1.2).abs() < 1e-6);
+        h.get_by_label("Reset zoom to 100%").click();
+        h.run();
+        assert!((h.state().canvas.view.scale - 1.0).abs() < 1e-9);
+        h.get_by_label("Fill mode — brush strokes fill their silhouette (F)").click();
+        h.run();
+        assert!(h.state().canvas.options.fill_shape);
+    }
+
+    #[test]
+    fn color_drop_from_the_status_bar_fills_on_release() {
+        let mut h = harness();
+        h.run();
+        let n = h.state().session.history_len();
+        h.state_mut().set_color(Rgba::new(0.0, 0.0, 1.0, 1.0));
+        h.run();
+        let swatch = h.get_by_label("Drag onto the canvas to fill (ColorDrop) · hold + slide to set threshold").rect().center();
+        let to = pos2(600.0, 400.0);
+        h.event(Event::PointerMoved(swatch));
+        h.step();
+        press(&mut h, swatch, true);
+        for i in 1..=10 {
+            h.event(Event::PointerMoved(swatch + (to - swatch) * (i as f32 / 10.0)));
+            h.step();
+        }
+        assert!(h.state().session.color_drop_active(), "previewing over the canvas");
+        press(&mut h, to, false);
+        h.run();
+        assert!(!h.state().session.color_drop_active());
+        assert_eq!(h.state().session.history_len(), n + 1, "one undo step");
+        let app = h.state();
+        let d = app.canvas.screen_doc(to);
+        let c = app.session.sample_color(d[0] as i32, d[1] as i32).unwrap();
+        assert!(c.b > 0.99 && c.r < 0.01, "filled blue {c:?}");
     }
 
     #[test]

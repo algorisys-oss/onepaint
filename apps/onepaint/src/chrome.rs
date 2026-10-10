@@ -15,7 +15,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     let screen = ctx.content_rect();
     top_bar(app, ctx);
     side_rail(app, ctx, screen);
-    status(app, ctx, screen);
+    crate::status_bar::show(app, ctx, screen);
     crate::timeline::show(app, ctx, screen);
     crate::reference::show(app, ctx);
     if let Some(p) = app.popover {
@@ -52,6 +52,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             Popover::NewDoc => popover_at(ctx, "newdoc", screen.center(), Align2::CENTER_CENTER, |ui| new_doc(app, ui)),
             Popover::Confirm => popover_at(ctx, "confirm", screen.center(), Align2::CENTER_CENTER, |ui| confirm(app, ui)),
             Popover::BrushStudio => crate::brush_studio::show(app, ctx, screen),
+            Popover::StatusMore => egui::Rect::NOTHING,
         };
         // Click outside closes the popover (the top bar handles its own toggles).
         let pressed = ctx.input(|i| i.pointer.any_pressed().then(|| i.pointer.interact_pos()).flatten());
@@ -338,51 +339,6 @@ fn side_rail(app: &mut App, ctx: &egui::Context, screen: egui::Rect) {
     });
 }
 
-fn status(app: &mut App, ctx: &egui::Context, screen: egui::Rect) {
-    let t = Tokens::get(ctx);
-    Area::new(Id::new("status")).order(Order::Middle).pivot(Align2::LEFT_BOTTOM).fixed_pos(pos2(M, screen.bottom() - M)).show(ctx, |ui| {
-        glass_frame(ui).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let v = &app.canvas.view;
-                let zoom = format!("{:.0}%", v.scale * 100.0);
-                if ui
-                    .add(egui::Label::new(RichText::new(zoom).font(theme::mono(11.5)).color(t.fg)).sense(Sense::click()))
-                    .on_hover_text("Fit (Ctrl+0)")
-                    .clicked()
-                {
-                    app.canvas.view.fit();
-                }
-                let deg = app.canvas.view.rotation.to_degrees().rem_euclid(360.0);
-                if deg.abs() > 0.05
-                    && ui
-                        .add(
-                            egui::Label::new(RichText::new(format!("{deg:.0}°")).font(theme::mono(11.5)).color(t.fg_muted))
-                                .sense(Sense::click()),
-                        )
-                        .on_hover_text("Reset rotation")
-                        .clicked()
-                {
-                    let c = [app.canvas.view.view_size[0] / 2.0, app.canvas.view.view_size[1] / 2.0];
-                    let r = app.canvas.view.rotation;
-                    app.canvas.view.rotate_at(c, -r);
-                }
-                if app.session.is_recording() {
-                    ui.label(RichText::new("● REC").font(theme::mono(11.5)).color(t.danger));
-                }
-                let d = app.session.doc();
-                ui.label(RichText::new(format!("{}×{}", d.width, d.height)).font(theme::mono(11.5)).color(t.fg_faint));
-                if let Some([x, y]) = app.canvas.hover_doc {
-                    ui.label(RichText::new(format!("{:.0}, {:.0}", x, y)).font(theme::mono(11.5)).color(t.fg_faint));
-                }
-                if let Some((a, b)) = app.canvas.measure {
-                    let (len, _, deg) = onepaint_stroke::guide_lines::measure_between(a, b, &app.session.guides().units, d.dpi);
-                    ui.label(RichText::new(format!("↔ {len}  {deg:.1}°")).font(theme::mono(11.5)).color(t.accent));
-                }
-            });
-        });
-    });
-}
-
 fn toast(app: &mut App, ctx: &egui::Context, screen: egui::Rect) {
     let now = ctx.input(|i| i.time);
     let Some((msg, until)) = app.toast.clone() else {
@@ -400,7 +356,7 @@ fn toast(app: &mut App, ctx: &egui::Context, screen: egui::Rect) {
     Area::new(Id::new("toast"))
         .order(Order::Tooltip)
         .pivot(Align2::CENTER_BOTTOM)
-        .fixed_pos(pos2(screen.center().x, screen.bottom() - 24.0))
+        .fixed_pos(pos2(screen.center().x, screen.bottom() - crate::status_bar::HEIGHT - 16.0))
         .show(ctx, |ui| {
             popover_frame(ui).show(ui, |ui| ui.label(msg));
         });

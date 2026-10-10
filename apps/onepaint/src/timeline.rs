@@ -101,7 +101,7 @@ pub fn show(app: &mut App, ctx: &egui::Context, screen: egui::Rect) {
     Area::new(Id::new("timeline"))
         .order(Order::Middle)
         .pivot(Align2::CENTER_BOTTOM)
-        .fixed_pos(pos2(screen.center().x, screen.bottom() - 12.0))
+        .fixed_pos(pos2(screen.center().x, screen.bottom() - crate::status_bar::HEIGHT - 8.0))
         .show(ctx, |ui| {
             widgets::glass_frame(ui).show(ui, |ui| {
                 ui.set_max_width((screen.width() - 420.0).max(360.0));

@@ -108,6 +108,8 @@ an item changes there, change it here too.
 - [ ] Properties panel for adjustment and fill layers
 - [ ] Align and distribute layers (engine command plus panel)
 - [ ] No toolbar overlap on narrow windows
+- [x] Status bar parity (symmetry axes and move axis, zoom, rotation dial, fill mode, value check, …)
+- [x] ColorDrop from the status-bar swatch
 
 ### 1.16 Settings
 - [x] Settings dialog and `settings.json`, cursor shapes, shortcut rebinding, timeline metric

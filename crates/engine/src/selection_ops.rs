@@ -143,30 +143,24 @@ impl Session {
     /// Paint bucket (happypaint `computeFill`, PE:1559-1691).
     fn fill(&mut self, x: i32, y: i32, tol: f32, grow: u32) {
         self.ensure_raster();
+        let id = self.active.clone();
+        if let Some(b) = self.bucket(&id, x, y, tol, grow) {
+            self.modify_layer(&id, b.rect, |x, y, p| b.paint(x, y, p));
+        }
+    }
+
+    /// The bucket fill of a layer from a seed. `None` when the layer can't
+    /// take it or the seed misses (outside the canvas or the selection).
+    pub(crate) fn bucket(&self, id: &str, x: i32, y: i32, tol: f32, grow: u32) -> Option<Bucket> {
         let (w, h) = (self.doc.width, self.doc.height);
-        let Some(l) = self.editable_active() else {
-            return;
-        };
+        let l = self.doc.layer(id).filter(|l| l.visible && !l.locked)?;
         let base = self.selection.clone();
         let get = |px: u32, py: u32| l.pixels.get(px as i32, py as i32);
-        let Some(region) = color_match(w, h, &get, x, y, tol, true, base.as_deref()) else {
-            return;
-        };
+        let region = color_match(w, h, &get, x, y, tol, true, base.as_deref())?;
         let region = region.grown4(grow, base.as_deref());
-        let Some((bx, by, bw, bh)) = region.bounds() else {
-            return;
-        };
-        let c = self.color.to_linear_premul();
-        let alpha_lock = l.alpha_lock;
-        let id = self.active.clone();
-        self.modify_layer(&id, Rect::new(bx as i32, by as i32, bw as i32, bh as i32), |x, y, p| {
-            if region.get(x as u32, y as u32) == 0 {
-                return p;
-            }
-            let after = if alpha_lock { [c[0] * p[3], c[1] * p[3], c[2] * p[3], p[3]] } else { [c[0], c[1], c[2], 1.0] };
-            let s = base.as_ref().map_or(1.0, |m| m.coverage(x, y));
-            [0, 1, 2, 3].map(|i| p[i] + (after[i] - p[i]) * s)
-        });
+        let (bx, by, bw, bh) = region.bounds()?;
+        let rect = Rect::new(bx as i32, by as i32, bw as i32, bh as i32);
+        Some(Bucket { rect, region, base, color: self.color.to_linear_premul(), alpha_lock: l.alpha_lock })
     }
 
     /// Source-over the current colour at the selection's coverage.
@@ -206,36 +200,63 @@ impl Session {
         let Some(layer) = self.doc.layer_mut(id) else {
             return;
         };
-        let mut changes: Vec<TileChange> = Vec::new();
-        let mut bytes = 0;
-        for (tx, ty) in rect.tiles() {
-            let Some(ix) = rect.intersect(&Rect::from_tile(tx, ty)) else {
-                continue;
-            };
-            let before = layer.pixels.tile(tx, ty).cloned();
-            let mut buf = before.as_ref().map(|t| t.to_f32()).unwrap_or_else(|| vec![0.0; TILE_PX * 4]);
-            for y in ix.y..ix.bottom() {
-                for x in ix.x..ix.right() {
-                    let i = (((y - ty * TILE) * TILE + (x - tx * TILE)) * 4) as usize;
-                    let o = f(x, y, [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]);
-                    buf[i..i + 4].copy_from_slice(&o);
-                }
-            }
-            let t = Tile::from_f32(&buf);
-            let after = (!t.is_empty()).then(|| Arc::new(t));
-            if before.as_deref() == after.as_deref() {
-                continue;
-            }
-            layer.pixels.set_tile(tx, ty, after.clone());
-            bytes += tile_bytes(&before) + tile_bytes(&after);
-            changes.push(((tx, ty), before, after));
-        }
+        let changes = paint_rect(&mut layer.pixels, rect, f);
         if changes.is_empty() {
             return;
         }
+        let bytes = changes.iter().map(|(_, b, a)| tile_bytes(b) + tile_bytes(a)).sum();
         self.history.push(Change::Tiles { layer: id.to_string(), plane: Plane::Pixels, tiles: changes }, bytes);
         self.mark_dirty(rect);
         self.doc.touch();
         self.history_changed();
     }
+}
+
+/// A computed bucket fill: the region it covers and how it paints.
+pub(crate) struct Bucket {
+    pub rect: Rect,
+    region: Mask,
+    base: Option<Arc<Mask>>,
+    color: [f32; 4],
+    alpha_lock: bool,
+}
+
+impl Bucket {
+    pub fn paint(&self, x: i32, y: i32, p: [f32; 4]) -> [f32; 4] {
+        if self.region.get(x as u32, y as u32) == 0 {
+            return p;
+        }
+        let c = self.color;
+        let after = if self.alpha_lock { [c[0] * p[3], c[1] * p[3], c[2] * p[3], p[3]] } else { [c[0], c[1], c[2], 1.0] };
+        let s = self.base.as_ref().map_or(1.0, |m| m.coverage(x, y));
+        [0, 1, 2, 3].map(|i| p[i] + (after[i] - p[i]) * s)
+    }
+}
+
+/// Apply `f` to every pixel of `pixels` inside `rect`; returns the tiles
+/// that changed (before, after).
+pub(crate) fn paint_rect(pixels: &mut Surface, rect: Rect, f: impl Fn(i32, i32, [f32; 4]) -> [f32; 4]) -> Vec<TileChange> {
+    let mut changes: Vec<TileChange> = Vec::new();
+    for (tx, ty) in rect.tiles() {
+        let Some(ix) = rect.intersect(&Rect::from_tile(tx, ty)) else {
+            continue;
+        };
+        let before = pixels.tile(tx, ty).cloned();
+        let mut buf = before.as_ref().map(|t| t.to_f32()).unwrap_or_else(|| vec![0.0; TILE_PX * 4]);
+        for y in ix.y..ix.bottom() {
+            for x in ix.x..ix.right() {
+                let i = (((y - ty * TILE) * TILE + (x - tx * TILE)) * 4) as usize;
+                let o = f(x, y, [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]);
+                buf[i..i + 4].copy_from_slice(&o);
+            }
+        }
+        let t = Tile::from_f32(&buf);
+        let after = (!t.is_empty()).then(|| Arc::new(t));
+        if before.as_deref() == after.as_deref() {
+            continue;
+        }
+        pixels.set_tile(tx, ty, after.clone());
+        changes.push(((tx, ty), before, after));
+    }
+    changes
 }
