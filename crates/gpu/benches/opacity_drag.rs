@@ -163,6 +163,15 @@ fn bench(c: &mut Criterion) {
                 run(&mut gc, &split(&d));
             }
             eprintln!("{name}: {} segment fills per split frame once warm", (gc.fills - before) / 5);
+            // Back to back with one wait: the GPU stays busy, so its clock
+            // governor raises the clock (single frames run at a low clock).
+            let progs = split(&d);
+            let t0 = std::time::Instant::now();
+            for _ in 0..10 {
+                gc.run(&device, &queue, &progs, &view, [SIZE, SIZE]);
+            }
+            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            eprintln!("{name}: split frames back to back {:.1} ms each", t0.elapsed().as_secs_f64() * 100.0);
             let ((amin, amed), (bmin, bmed)) = (stats(&mut a), stats(&mut b));
             eprintln!("{name}: unsplit min {amin:.1} / median {amed:.1} ms; split min {bmin:.1} / median {bmed:.1} ms");
             // Where a split frame's time goes.

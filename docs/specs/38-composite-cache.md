@@ -44,6 +44,12 @@ quiet machine and clock:
 | Past the atlas budget, split (median) | 152 ms | 22.7 ms |
 | Level 3, fits / past | 5.8 / 5.4 ms | 4.5 / 3.9 ms |
 
+Split frames submitted back to back with one wait (the trace's
+throughput line) cost 14.5 ms each when the tiles fit the atlas and 15.1 ms
+past it. That is under the 16.7 ms frame. The clock still stayed at
+550–700 MHz, so the "balanced" profile seems to cap it rather than idle
+gaps.
+
 Planning takes 1.8 ms of the split frame; the GPU part (three reads and a
 write per pixel over 205 full-resolution tiles) is the rest, near this
 iGPU's bandwidth. The next lever is compositing zoomed-out views at

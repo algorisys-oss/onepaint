@@ -13,7 +13,8 @@ an item changes there, change it here too.
 - [x] Move/transform (scale, rotate, warp, quad homography), pan, liquify
 - [x] Text, pen (path layers), shape, panel
 - [x] Selection tools: rect, ellipse, lasso, polygon, wand
-- [ ] Mixer: Alt-click to load the reservoir from a patch
+- [ ] Mixer: Alt-click to load the reservoir from a patch (needs a per-pixel
+      reservoir in `brush::smudge`; it holds one colour today)
 - [x] Pan tool button on the toolbar
 - [x] Tool reachability test: every `Tool` has a button or a written exemption
 
@@ -151,8 +152,9 @@ an item changes there, change it here too.
         to exact when idle
   - [x] Re-measure spec 38/39 on a quiet machine (browsers closed); the iGPU
         clock stays at 500–650 MHz under the bench, so the numbers are relative
-  - [ ] Bench with the GPU clock pinned (needs root), or keep the GPU busy
-        between samples, for absolute numbers
+  - [x] Back-to-back throughput line in the bench trace (14.5 ms a split frame)
+  - [ ] Bench with the GPU clock pinned (needs root; "balanced" keeps it at
+        550–700 MHz even under load)
   - [x] Stop the cyclic LRU thrash past the budget: batches already keep
         each dispatch within the atlas; over-budget frames now alternate
         direction (spec 38)
