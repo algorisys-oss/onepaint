@@ -124,7 +124,8 @@ an item changes there, change it here too.
 - [x] Oracle tests and a criterion bench
 - [ ] Remaining CPU fallbacks on the GPU
   - [x] Colour adjustment layers, pixel-only kinds (spec 42)
-  - [ ] Noise, screentone and fill layers
+  - [x] Noise, solid and gradient fill layers (spec 46)
+  - [ ] Screentone and pattern fill layers
   - [ ] Spatial adjustment layers (a padded backdrop pass)
   - [x] Relief lighting (impasto height) (spec 45)
   - [x] Paper shading (spec 43)

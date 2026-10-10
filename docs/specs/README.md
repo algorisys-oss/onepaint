@@ -56,3 +56,4 @@ The happypaint references are relative to `../happypaint/frontend/src/`.
 | 43 | [Paper shading on the GPU](43-gpu-paper.md) | brush, compose, gpu |
 | 44 | [Partial panel clips on the GPU](44-gpu-panel-clips.md) | compose, gpu, engine |
 | 45 | [Impasto relief on the GPU](45-gpu-relief.md) | compose, gpu |
+| 46 | [Noise and fill layers on the GPU; adjustments and split caching](46-gpu-noise-fills.md) | filters, compose, gpu |

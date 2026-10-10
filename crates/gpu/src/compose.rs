@@ -179,14 +179,18 @@ impl AdjTable {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         (a.code, a.params.map(f32::to_bits), &a.lut).hash(&mut h);
+        a.ramp.iter().flatten().for_each(|e| e.map(f32::to_bits).hash(&mut h));
         *self.seen.entry(h.finish()).or_insert_with(|| {
             let at = self.data.len() as u32;
             self.data.extend(a.params.chunks_exact(4).map(|c| [c[0], c[1], c[2], c[3]]));
-            let lut = a.lut.as_ref().map_or(NONE, |l| {
-                let lut = self.data.len() as u32;
+            let lut = self.data.len() as u32;
+            if let Some(l) = &a.lut {
                 self.data.extend(l.iter().map(|e| e.map(|v| v as f32 / 255.0)));
-                lut
-            });
+            } else if let Some(r) = &a.ramp {
+                self.data.extend_from_slice(r);
+            } else {
+                return (at, NONE);
+            }
             (at, lut)
         })
     }

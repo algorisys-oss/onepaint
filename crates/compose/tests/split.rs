@@ -272,3 +272,23 @@ fn no_hot_layer_means_no_split() {
     assert!(plan_tile(&d, 0, 0, None).unwrap().split.is_none());
     assert!(plan_tile_split(&d, 0, 0, None, Some("not-a-layer")).unwrap().split.is_none());
 }
+
+#[test]
+fn an_adjustment_at_or_above_the_hot_layer_keeps_the_tile_unsplit() {
+    use onepaint_compose::testdocs::{Rng, random_adjustment};
+    use onepaint_doc::Layer;
+    let mut doc = random_doc(7, 300, 300, false);
+    let below = doc.root.iter().find_map(|n| matches!(n, Node::Layer(_)).then(|| n.id().to_string())).unwrap();
+    let mut adj = Layer::new("adj");
+    adj.adjustment = Some(Box::new(random_adjustment(&mut Rng::new(3))));
+    let adj_id = adj.id.clone();
+    doc.root.push(Node::Layer(adj));
+    for hot in [&below, &adj_id] {
+        let p = plan_tile_split(&doc, 0, 0, None, Some(hot)).unwrap();
+        assert!(p.split.is_none(), "hot {hot}");
+    }
+    // Below the hot layer it is part of the cached image, as any layer is.
+    doc.root.rotate_right(1);
+    let p = plan_tile_split(&doc, 0, 0, None, Some(&below)).unwrap();
+    assert!(p.split.is_some());
+}

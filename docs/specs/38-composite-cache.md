@@ -22,6 +22,10 @@ reduced resolution, which is outside this spec. The "past the budget" row
 also pays to re-upload the hot layer's tiles, because the bench's
 alternating unsplit frames evict them.
 
+Spec 46 adds one rule: a tile whose hot unit, or any unit above it, is an
+adjustment layer is not split, because those layers would amplify the f16
+rounding of the cached image.
+
 Follows spec 13 (GPU compositor). No happypaint source: happypaint
 recomposites every layer on every change, and this is onepaint's own
 performance work.

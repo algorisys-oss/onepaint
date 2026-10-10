@@ -72,8 +72,8 @@ fn random_adjustments_carry_their_params() {
 }
 
 #[test]
-fn noise_tone_and_fill_layers_stay_on_the_cpu() {
-    for kind in ["noise", "tone", "solid-fill"] {
+fn tone_and_pattern_fill_layers_stay_on_the_cpu() {
+    for kind in ["tone", "pattern-fill"] {
         let mut doc = random_doc(4, 300, 300, false);
         let mut l = Layer::new("adj");
         l.adjustment =

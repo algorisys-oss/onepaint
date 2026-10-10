@@ -146,6 +146,17 @@ pub(crate) struct Extra {
     pub pattern: Option<std::sync::Arc<PatternTile>>,
 }
 
+/// A gradient fill's shape as the GPU numbers it (spec 46).
+pub(crate) fn grad_shape_code(s: Option<&str>) -> u32 {
+    match grad_shape(s) {
+        Shape::Linear => 0,
+        Shape::Radial => 1,
+        Shape::Angle => 2,
+        Shape::Reflected => 3,
+        Shape::Diamond => 4,
+    }
+}
+
 fn grad_shape(s: Option<&str>) -> Shape {
     match s {
         Some("radial") => Shape::Radial,

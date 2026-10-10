@@ -41,7 +41,8 @@ the samples `sc_samples` derives, with hue in turns.
   the tree compositor skips them.
 - A colour kind without a GPU form makes the tile `Unsupported`.
 - At the top level an adjustment is its own unit, and it never folds into
-  a suffix image (it reads the backdrop). It can be the hot unit.
+  a suffix image (it reads the backdrop). Spec 46: a tile with an
+  adjustment unit at or above the hot unit is not split at all.
 - The CPU interpreter runs `Prepared::color_px`, so `run` equals
   `composite_tile` exactly.
 - Segment keys hash the code, params, LUT and mask.

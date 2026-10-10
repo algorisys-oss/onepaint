@@ -417,7 +417,38 @@ fn selective(rgb: vec3<f32>, base: u32) -> vec3<f32> {
     return o;
 }
 
-fn adjust(op: Op, s: vec4<f32>) -> vec4<f32> {
+fn pcg(v: u32) -> u32 {
+    let s = v * 747796405u + 2891336453u;
+    let w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
+    return (w >> 22u) ^ w;
+}
+
+fn rnd(x: u32, y: u32, k: u32) -> f32 {
+    return f32(pcg(x ^ pcg(y ^ pcg(k)))) * (1.0 / 4294967296.0);
+}
+
+// Gradient fill position along the shape (filters gradient.rs `shape_t`).
+fn shape_t(shape: u32, d: vec2<f32>, ab: vec2<f32>) -> f32 {
+    let len2 = max(dot(ab, ab), 1e-4);
+    let along = dot(d, ab) / len2;
+    let across = (d.x * ab.y - d.y * ab.x) / len2;
+    switch shape {
+        case 1u: { return clamp(length(d) / sqrt(len2), 0.0, 1.0); }
+        case 2u: {
+            if (dot(d, d) < 1e-8) {
+                return 0.0;
+            }
+            let turn = (atan2(ab.y, ab.x) - atan2(d.y, d.x)) / 6.283185307179586;
+            return turn - floor(turn);
+        }
+        case 3u: { return clamp(abs(along), 0.0, 1.0); }
+        case 4u: { return clamp(abs(along) + abs(across), 0.0, 1.0); }
+        default: { return clamp(along, 0.0, 1.0); }
+    }
+}
+
+// `pos`: the pixel in doc px (noise and fills depend on it, spec 46).
+fn adjust(op: Op, s: vec4<f32>, pos: vec2<i32>) -> vec4<f32> {
     let base = op.b.x;
     let lut = op.b.y;
     let a = s.w;
@@ -488,6 +519,24 @@ fn adjust(op: Op, s: vec4<f32>) -> vec4<f32> {
         }
         case 13u: {
             return repremul(selective(c01(w), base), a);
+        }
+        case 14u: {
+            let q = vec2<u32>(max(pos, vec2<i32>(0)));
+            var n = vec3<f32>(rnd(q.x, q.y, 51u) - 0.5);
+            if (p0.y < 0.5) {
+                n = vec3<f32>(n.x, rnd(q.x, q.y, 52u) - 0.5, rnd(q.x, q.y, 53u) - 0.5);
+            }
+            o = c01(w + n * p0.x);
+        }
+        case 15u: {
+            return vec4<f32>(p0.xyz, 1.0);
+        }
+        case 16u: {
+            let t = shape_t(u32(p0.x), vec2<f32>(pos) + 0.5 - p0.yz, vec2<f32>(p0.w, p1.x) - p0.yz);
+            let x = clamp(t, 0.0, 1.0) * 1023.0;
+            let i0 = u32(floor(x));
+            let c = mix(adj[lut + i0], adj[lut + min(i0 + 1u, 1023u)], x - floor(x));
+            return vec4<f32>(c.xyz * c.w, c.w);
         }
         default: {}
     }
@@ -678,7 +727,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 top = c + top * (1.0 - c.w);
             }
             case OP_ADJUST: {
-                var v = adjust(o, top);
+                var v = adjust(o, top, (tile_origin + p) * i32(1u << prm.level));
                 if ((o.a.w & F_MASK) != 0u) {
                     v *= load(o.c.x, p).x;
                 }

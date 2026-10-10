@@ -89,6 +89,8 @@ impl Relief {
 pub struct Adjust {
     pub prepared: onepaint_filters::Prepared,
     pub gpu: onepaint_filters::gpu::GpuAdjust,
+    /// The tile's origin in doc px (noise and fills depend on position).
+    pub at: [i32; 2],
 }
 
 impl std::fmt::Debug for Adjust {
@@ -309,6 +311,8 @@ pub fn segment_key(ops: &[Op]) -> u64 {
                 (5u8, *mode as u8, opacity.to_bits(), adjust.gpu.code).hash(&mut h);
                 adjust.gpu.params.map(f32::to_bits).hash(&mut h);
                 adjust.gpu.lut.hash(&mut h);
+                adjust.gpu.ramp.iter().flatten().for_each(|e| e.map(f32::to_bits).hash(&mut h));
+                adjust.at.hash(&mut h);
                 mask.as_ref().map(ptr).hash(&mut h);
             }
             Op::Paper { shade, tx, ty } => {
@@ -334,8 +338,9 @@ struct Planner<'a> {
     units: Vec<Unit>,
     hot: Option<&'a str>,
     cache: Option<&'a PlanCache>,
-    /// Document size, for relief taps at its edge.
-    doc: [u32; 2],
+    /// The document as a filter frame: its size bounds relief taps, and
+    /// noise and fills are laid out in it.
+    frame: onepaint_filters::Frame,
 }
 
 /// A top-level node (with its clip family) and the ops it produced.
@@ -345,6 +350,8 @@ struct Unit {
     hot: bool,
     /// Its result does not depend on what lies below (spec 38).
     folds: bool,
+    /// An adjustment layer: it reads the backdrop and may amplify rounding.
+    adjust: bool,
 }
 
 /// Whether `id` is `n` or anything inside it.
@@ -402,8 +409,8 @@ pub fn plan_tile_split(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverl
 }
 
 fn plan(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, hot: Option<&str>, cache: Option<&PlanCache>) -> Option<TileProgram> {
-    let doc_size = [doc.width, doc.height];
-    let mut p = Planner { tx, ty, ov, ops: Vec::new(), depth: 1, units: Vec::new(), hot, cache, doc: doc_size };
+    let frame = onepaint_filters::Frame::region(0, 0, doc.width, doc.height, doc.dpi as f32);
+    let mut p = Planner { tx, ty, ov, ops: Vec::new(), depth: 1, units: Vec::new(), hot, cache, frame };
     p.nodes(&doc.root).ok()?;
     // The paper shades the finished composite (spec 43), after every unit.
     if let Some(paper) = doc.paper() {
@@ -433,7 +440,7 @@ impl Planner<'_> {
         }
         let relief = l.height.as_ref().and_then(|h| {
             let tiles = [(0, 0), (-1, 0), (1, 0), (0, -1), (0, 1)].map(|(dx, dy)| h.tile(tx + dx, ty + dy).cloned());
-            let doc = [self.doc[0] as i32, self.doc[1] as i32];
+            let doc = [self.frame.doc_w as i32, self.frame.doc_h as i32];
             tiles.iter().any(Option::is_some).then(|| Arc::new(Relief { tiles, tx, ty, doc }))
         });
         let mut c = Content { base, stroke, mask: MaskSrc::None, mask_stroke: None, relief };
@@ -473,16 +480,16 @@ impl Planner<'_> {
         Some(c)
     }
 
-    /// An adjustment layer (`draw_adjustment`): pixel-only colour kinds run
-    /// on the GPU (spec 42), other colour kinds keep the tile on the CPU, and
-    /// anything else draws nothing.
+    /// An adjustment layer (`draw_adjustment`): colour kinds with a GPU form
+    /// run there (specs 42, 46), other colour kinds keep the tile on the
+    /// CPU, and anything else draws nothing.
     fn adjust(&mut self, l: &Layer) -> Result<(), Unsupported> {
         let Some(adj) = &l.adjustment else { return Ok(()) };
         if !l.visible || l.opacity <= 0.0 {
             return Ok(());
         }
         let Some(kind) = onepaint_filters::Kind::parse(&adj.kind).filter(|k| k.is_color()) else { return Ok(()) };
-        let gpu = onepaint_filters::gpu::gpu_adjust(kind, &adj.params).ok_or(Unsupported)?;
+        let gpu = onepaint_filters::gpu::gpu_adjust(kind, &adj.params, self.frame).ok_or(Unsupported)?;
         let mask = match (&l.mask, l.mask_enabled) {
             (Some(m), true) => match m.tile(self.tx, self.ty) {
                 Some(t) => Some(t.clone()),
@@ -490,8 +497,8 @@ impl Planner<'_> {
             },
             _ => None,
         };
-        let prepared = onepaint_filters::prepare(kind, &adj.params);
-        let adjust = Arc::new(Adjust { prepared, gpu });
+        let prepared = onepaint_filters::prepare_in(kind, &adj.params, self.frame);
+        let adjust = Arc::new(Adjust { prepared, gpu, at: [self.tx * TILE, self.ty * TILE] });
         self.ops.push(Op::Adjust { adjust, mask, mode: l.blend_mode, opacity: l.opacity });
         Ok(())
     }
@@ -535,7 +542,7 @@ impl Planner<'_> {
                 if self.depth == 1 {
                     let hot = self.hot.is_some_and(|id| id == l.id);
                     // It reads the backdrop, so it never folds into a suffix image.
-                    self.units.push(Unit { start, end: self.ops.len(), hot, folds: false });
+                    self.units.push(Unit { start, end: self.ops.len(), hot, folds: false, adjust: true });
                 }
                 i += 1;
                 continue;
@@ -591,7 +598,7 @@ impl Planner<'_> {
                     Node::Group(g) => g.blend_mode == BlendMode::Normal,
                     Node::Layer(l) => l.blend_mode == BlendMode::Normal && !l.inherit_alpha,
                 };
-                self.units.push(Unit { start, end: self.ops.len(), hot, folds });
+                self.units.push(Unit { start, end: self.ops.len(), hot, folds, adjust: false });
             }
             i = j;
         }
@@ -602,6 +609,12 @@ impl Planner<'_> {
 /// Cut `ops` at the hot unit (spec 38): `None` when no unit holds it.
 fn split(ops: &[Op], units: &[Unit]) -> Option<Split> {
     let h = units.iter().position(|u| u.hot)?;
+    // An adjustment layer at or above the hot one would read the cached f16
+    // image below it, and the stronger ones (hue near grey, threshold,
+    // levels) turn that rounding into visible differences: run unsplit.
+    if units[h..].iter().any(|u| u.adjust && !ops[u.start..u.end].is_empty()) {
+        return None;
+    }
     let hot_unit = &units[h];
     let after = &units[h + 1..];
     // Units are contiguous: every top-level op belongs to one.
@@ -673,8 +686,8 @@ fn exec(ops: &[Op], init: Px, i: usize, stack: &mut Vec<Px>) -> Px {
             }
             Op::Clip { content, opacity } => *top = clip_over(*top, eval(content, i), *opacity),
             Op::Adjust { adjust, mask, mode, opacity } => {
-                // Pixel-only kinds: the position doesn't matter.
-                let mut o = adjust.prepared.color_px(*top, 0, 0);
+                let (x, y) = (adjust.at[0] + (i % TILE as usize) as i32, adjust.at[1] + (i / TILE as usize) as i32);
+                let mut o = adjust.prepared.color_px(*top, x, y);
                 if let Some(m) = mask {
                     let k = load(m, i)[0];
                     o = o.map(|v| v * k);

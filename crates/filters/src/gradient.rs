@@ -128,6 +128,11 @@ impl Ramp {
         Ramp((0..RAMP_SIZE).map(|i| sample_stops(&lin, i as f64 / (RAMP_SIZE - 1) as f64).map(|v| v as f32)).collect())
     }
 
+    /// The ramp's entries (for the GPU, spec 46).
+    pub fn entries(&self) -> &[[f32; 4]] {
+        &self.0
+    }
+
     /// Manual lerp between entries (RGBA32F isn't filterable everywhere).
     pub fn sample(&self, t: f64) -> [f32; 4] {
         let x = t.clamp(0.0, 1.0) * (RAMP_SIZE - 1) as f64;
