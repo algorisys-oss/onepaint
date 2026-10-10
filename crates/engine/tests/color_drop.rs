@@ -80,3 +80,18 @@ fn refuses_locked_hidden_and_vector_layers_and_another_command_cancels() {
     s.execute(Command::Undo).unwrap();
     assert_eq!(px(&s, 25, 25), [1.0, 0.0, 0.0, 1.0], "the abandoned drop left nothing behind");
 }
+
+#[test]
+fn holding_still_does_not_refill() {
+    let mut s = session();
+    assert!(s.begin_color_drop(25.0, 25.0, BLUE, 0.15, 0));
+    for _ in 0..30 {
+        s.update_color_drop(25.4, 25.7, 0.15, 0);
+    }
+    assert_eq!(s.color_drop_fills(), 1, "same pixel, same threshold");
+    s.update_color_drop(26.0, 25.0, 0.15, 0);
+    s.update_color_drop(26.0, 25.0, 0.2, 0);
+    s.update_color_drop(26.0, 25.0, 0.2, 1);
+    assert_eq!(s.color_drop_fills(), 4);
+    assert_eq!(px(&s, 25, 25), [0.0, 0.0, 1.0, 1.0]);
+}

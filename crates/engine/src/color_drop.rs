@@ -15,6 +15,10 @@ pub(crate) struct ColorDrop {
     /// The rect the current preview touched.
     last: Option<Rect>,
     color: Rgba,
+    /// The fill the preview shows: seed pixel, threshold, grow.
+    shown: Option<((i32, i32), f32, u32)>,
+    /// Fills computed this session (a hold costs none).
+    fills: u32,
 }
 
 impl Session {
@@ -32,22 +36,30 @@ impl Session {
         let Some(l) = self.doc.layer(&id).filter(|l| l.visible && !l.locked && l.adjustment.is_none()) else {
             return false;
         };
-        self.color_drop = Some(ColorDrop { layer: id, original: l.pixels.clone(), last: None, color });
+        self.color_drop = Some(ColorDrop { layer: id, original: l.pixels.clone(), last: None, color, shown: None, fills: 0 });
         self.update_color_drop(x, y, tolerance, grow);
         true
     }
 
     /// Move the seed or change the threshold: refill from the snapshot.
+    /// Holding still (same seed pixel, threshold and grow) costs nothing.
     pub fn update_color_drop(&mut self, x: f64, y: f64, tolerance: f32, grow: u32) {
+        let (tolerance, grow) = (tolerance.clamp(0.0, 1.0), grow.min(8));
+        let key = ((x.floor() as i32, y.floor() as i32), tolerance, grow);
         let Some(cd) = self.color_drop.as_mut() else {
             return;
         };
+        if cd.shown == Some(key) {
+            return;
+        }
+        cd.shown = Some(key);
+        cd.fills += 1;
         let (id, color, last) = (cd.layer.clone(), cd.color, cd.last.take());
         if let Some(r) = last {
             self.restore_color_drop_rect(r);
         }
         let saved = std::mem::replace(&mut self.color, color);
-        let fill = self.bucket(&id, x.floor() as i32, y.floor() as i32, tolerance.clamp(0.0, 1.0), grow.min(8));
+        let fill = self.bucket(&id, key.0.0, key.0.1, tolerance, grow);
         self.color = saved;
         let Some(b) = fill else {
             return;
@@ -98,6 +110,11 @@ impl Session {
             self.restore_color_drop_rect(r);
         }
         self.color_drop = None;
+    }
+
+    /// Fills the current drop has computed (for tests and profiling).
+    pub fn color_drop_fills(&self) -> u32 {
+        self.color_drop.as_ref().map_or(0, |cd| cd.fills)
     }
 
     pub fn color_drop_active(&self) -> bool {

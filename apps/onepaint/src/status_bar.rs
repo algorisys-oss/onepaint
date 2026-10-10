@@ -60,6 +60,11 @@ pub(crate) fn tool_label(t: Tool) -> &'static str {
     }
 }
 
+/// Layers (not groups), inside groups too, without building a list.
+fn layer_count(nodes: &[onepaint_doc::Node]) -> usize {
+    nodes.iter().map(|n| if let onepaint_doc::Node::Group(g) = n { layer_count(&g.children) } else { 1 }).sum()
+}
+
 fn brushy(t: Tool) -> bool {
     matches!(t, Tool::Brush | Tool::Eraser | Tool::Smudge | Tool::Mixer)
 }
@@ -252,7 +257,7 @@ fn right(app: &mut App, ui: &mut Ui, compact: bool) {
     zoom(app, ui);
     if !compact {
         rotation(app, ui);
-        let n = app.session.doc().layer_ids().len();
+        let n = layer_count(&app.session.doc().root);
         mono(ui, format!("{n} layer{}", if n == 1 { "" } else { "s" }), t.fg_faint);
         doc_button(app, ui);
     }
@@ -345,7 +350,7 @@ fn more(app: &mut App, ui: &mut Ui) {
     }
     let pos = app.canvas.hover_doc.map_or("–".to_string(), |[x, y]| format!("{x:.0}, {y:.0}"));
     mono(ui, format!("Cursor  {pos}"), t.fg_muted);
-    let n = app.session.doc().layer_ids().len();
+    let n = layer_count(&app.session.doc().root);
     mono(ui, format!("{n} layer{}", if n == 1 { "" } else { "s" }), t.fg_muted);
     if tool == Tool::Fill {
         ui.horizontal(|ui| threshold_controls(app, ui));
@@ -447,6 +452,15 @@ mod tests {
         assert_eq!(toggle_axis(Both, true), Horizontal);
         assert_eq!(toggle_axis(Horizontal, false), Off);
         assert_eq!(toggle_axis(Radial, false), Horizontal, "radial counts as neither axis");
+    }
+
+    #[test]
+    fn layer_count_matches_layer_ids() {
+        let mut d = onepaint_doc::Document::new(64, 64, None);
+        let mut g = onepaint_doc::Group::new("g");
+        g.children.push(onepaint_doc::Node::Layer(onepaint_doc::Layer::new("a")));
+        d.root.push(onepaint_doc::Node::Group(g));
+        assert_eq!(layer_count(&d.root), d.layer_ids().len());
     }
 
     #[test]
