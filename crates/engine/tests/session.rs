@@ -272,3 +272,10 @@ fn strokes_use_the_brush_blend_mode() {
     // Normal would mix in cyan's blue; multiply keeps blue at 0 and darkens red.
     assert!(c.b < 0.01 && c.r < 0.95 && c.g > 0.9, "yellow × cyan multiplies toward green: {c:?}");
 }
+
+#[test]
+fn tool_all_lists_every_tool_once_in_index_order() {
+    for (i, t) in Tool::ALL.iter().enumerate() {
+        assert_eq!(t.index(), i, "{t:?}");
+    }
+}

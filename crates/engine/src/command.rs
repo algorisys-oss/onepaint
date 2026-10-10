@@ -268,6 +268,11 @@ pub enum Command {
     },
     CommitTransform,
     CancelTransform,
+    /// Move layers by whole pixels as one undo step (align and distribute;
+    /// happypaint `alignLayers`). Text and path layers stay vector.
+    AlignLayers {
+        moves: Vec<crate::align::LayerMove>,
+    },
     /// Selection to a new layer (Ctrl+J), or cut to a new layer (Ctrl+Shift+J).
     LayerViaCopy {
         cut: bool,

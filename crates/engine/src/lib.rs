@@ -4,6 +4,7 @@
 //! drained [`Event`]s, mirroring happypaint's store handlers, `PaintSink`
 //! and engine callbacks. No UI or GPU code lives here.
 
+pub mod align;
 pub mod anim;
 mod canvas_ops;
 mod clipboard;
@@ -73,6 +74,57 @@ pub enum Tool {
     Hand,
     /// Comic panels: draw, cut, reshape and move frames (spec 30).
     Panel,
+}
+
+impl Tool {
+    /// Every tool, in declaration order. `index` is an exhaustive match, so
+    /// adding a variant fails to compile until it is listed here too.
+    pub const ALL: [Tool; 19] = [
+        Tool::Brush,
+        Tool::Eraser,
+        Tool::Fill,
+        Tool::Eyedropper,
+        Tool::SelectRect,
+        Tool::SelectEllipse,
+        Tool::SelectLasso,
+        Tool::SelectPoly,
+        Tool::SelectWand,
+        Tool::Move,
+        Tool::Gradient,
+        Tool::Shape,
+        Tool::Text,
+        Tool::Smudge,
+        Tool::Mixer,
+        Tool::Liquify,
+        Tool::Pen,
+        Tool::Hand,
+        Tool::Panel,
+    ];
+
+    /// The tool's position in [`Tool::ALL`].
+    pub const fn index(self) -> usize {
+        match self {
+            Tool::Brush => 0,
+            Tool::Eraser => 1,
+            Tool::Fill => 2,
+            Tool::Eyedropper => 3,
+            Tool::SelectRect => 4,
+            Tool::SelectEllipse => 5,
+            Tool::SelectLasso => 6,
+            Tool::SelectPoly => 7,
+            Tool::SelectWand => 8,
+            Tool::Move => 9,
+            Tool::Gradient => 10,
+            Tool::Shape => 11,
+            Tool::Text => 12,
+            Tool::Smudge => 13,
+            Tool::Mixer => 14,
+            Tool::Liquify => 15,
+            Tool::Pen => 16,
+            Tool::Hand => 17,
+            Tool::Panel => 18,
+        }
+    }
 }
 
 /// Optional layer property edits; `None` leaves a property unchanged.
@@ -991,6 +1043,7 @@ impl Session {
         }
         match cmd {
             Command::BeginTransform => self.begin_transform(),
+            Command::AlignLayers { moves } => self.align_layers(moves),
             Command::LayerViaCopy { cut } => self.layer_via_copy(cut),
             Command::ResizeCanvas { width, height, dx, dy } => self.resize_canvas(width, height, dx, dy),
             Command::ScaleImage { width, height } => self.scale_image(width, height),

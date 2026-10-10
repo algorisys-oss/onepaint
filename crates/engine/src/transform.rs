@@ -500,7 +500,7 @@ impl Session {
 
 /// A text object under a rotation plus uniform scale `m`: the anchor moves
 /// with the pixels; size, tracking and wrap width scale (PE:2447-2464).
-fn transform_text(t: &onepaint_text::TextSpec, m: &Affine) -> onepaint_text::TextSpec {
+pub(crate) fn transform_text(t: &onepaint_text::TextSpec, m: &Affine) -> onepaint_text::TextSpec {
     let k = m.a.hypot(m.b);
     let [x, y] = m.apply([t.x, t.y]);
     let mut out = t.clone();

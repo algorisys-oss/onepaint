@@ -21,7 +21,7 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] fill (flood fill) (tolerance, grow, confined to the selection, alpha lock)
 - [x] eyedropper (the tool, Alt-click and Alt-drag sample the composite; touch-and-hold comes with gestures)
 - [x] move/transform (scale, rotate, warp, quad homography)
-- [x] pan (space-drag, middle-drag, two-finger scroll)
+- [~] pan (H, space-drag, middle-drag, two-finger scroll; no toolbar button yet)
 - [x] smudge
 - [x] mixer (Wet/Load/Mix, the 12 Photoshop combinations, Keep colour, Clean; no Alt-click patch load yet)
 - [x] gradient, with output to pixels or a fill layer (5 shapes, colour→clear or →BG, reverse, selection-aware)
@@ -35,6 +35,9 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] select-lasso
 - [x] select-poly
 - [x] select-wand
+- [ ] Every tool reachable from the toolbar, guarded by a test (happypaint's
+  `components/toolbar/tool-reachability.test.ts`; select-ellipse and
+  select-poly may share the Select button)
 
 ## Brushes
 - [x] All 118 presets, including Manga and the baked Procreate brushes, with identical parameters (all 124 load with verbatim parameters, tips and grains, and every preset field is painted: wet, impasto, settle, fluid, dual brush, colour tips, grain movement)
@@ -170,6 +173,20 @@ screentone are added as live layers.
 ## Comics
 - [x] Panel layouts and panel tool: six page presets; panels clip their art to the frame, inset by half the gutter; one Millipen border layer that follows every edit; round-trips in `.happypaint`
 - [x] Balloons (in text layers): speech, rounded, shout and thought shapes, tail, fill and rim (spec 28; the tail is aimed by angle, as in happypaint)
+
+## Workspace and panels
+Source: `components/toolbar/toolbar.tsx`, `components/dock/`, `state/dock-store.ts`.
+
+- [ ] Movable toolbar: drag it by its grip, double-click the grip to switch
+  between horizontal and vertical, dock it to the left or right edge as a rail
+- [ ] Dockable panels (layers, properties, brush, library, reference, colour,
+  palettes, align): float, dock left or right, tab, collapse and resize; the
+  layout persists
+- [ ] Properties panel: the selected adjustment or fill layer's settings in a
+  panel of their own
+- [ ] Align and distribute layers: align edges and centres, distribute centres
+  (3+ layers), equal gaps across and down
+- [ ] Toolbars never overlap on narrow windows
 
 ## Settings
 - [x] Settings dialog, persisted as `settings.json` in the config dir (spec 34):
