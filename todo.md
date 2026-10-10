@@ -136,9 +136,10 @@ an item changes there, change it here too.
       budget, 2.4 s when they don't (the LRU evicts and re-uploads every
       frame); planning is 2–3 ms of it
   - [ ] Cache the composite below and above the active layer per tile, so a
-        drag blends three inputs instead of ~30 layers
+        drag blends three inputs instead of ~30 layers (spec 38)
   - [ ] Stop the cyclic LRU thrash past the budget: pin a frame's working
         set, alternate traversal order, and check the working set fits first
+        (spec 38, budget overflow)
   - [ ] Profile the per-tile GPU cost (≈20 µs per tile-layer; far from the
         memory bandwidth limit)
 - [ ] Decide the GPU memory budget on integrated GPUs
