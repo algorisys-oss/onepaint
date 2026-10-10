@@ -1,20 +1,26 @@
 # 38: Cached composite below and above the active layer
 
 ## Status
-Built: the split, the segment cache and its fill pass, and `Session::plan`
-splitting at the stroked or active layer. Warm-up and the budget-overflow
-items are still to do.
+Built: the split (as ranges into the program's ops), the segment cache and
+its fill pass, `Session::plan` splitting at the stroked or active layer
+with tiles planned in parallel, warm-up on idle frames after the active
+layer changes, and over-budget frames that alternate direction.
 
 Measured on Iris Xe with the opacity-drag bench (`ONEPAINT_BENCH_TRACE=1`,
-unsplit and split frames alternated, browsers sharing the GPU):
+unsplit and split frames alternated; browsers were sharing the GPU, so
+treat these as upper bounds):
 
-| Drag frame, 8192² × 100 layers | Unsplit (median) | Split (median) |
+| Drag frame, 8192² × 100 layers | Unsplit (median) | Split (median / min) |
 |---|---|---|
-| Distinct tiles fit the atlas | 210 ms | 28 ms |
-| Past the atlas budget | 339 ms | 28 ms |
+| Distinct tiles fit the atlas | 150 ms | 19.7 / 16.8 ms |
+| Past the atlas budget | 336 ms | 28 / 23 ms |
 
-Planning is 5–7 ms of the split frame, so the next step toward 16.7 ms is
-making planning cheaper.
+Planning takes 1.8 ms of the split frame; the GPU part (three reads and a
+write per pixel over 205 full-resolution tiles) is the rest, near this
+iGPU's bandwidth. The next lever is compositing zoomed-out views at
+reduced resolution, which is outside this spec. The "past the budget" row
+also pays to re-upload the hot layer's tiles, because the bench's
+alternating unsplit frames evict them.
 
 Follows spec 13 (GPU compositor). No happypaint source: happypaint
 recomposites every layer on every change, and this is onepaint's own

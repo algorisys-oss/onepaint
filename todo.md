@@ -138,12 +138,15 @@ an item changes there, change it here too.
   - [x] Cache the composite below and above the active layer per tile, so a
         drag blends three inputs instead of ~30 layers (spec 38): drag frame
         median 210 → 28 ms (fits), 339 → 28 ms (past the budget)
-  - [ ] Spec 38 warm-up when the active layer changes
-  - [ ] Cheaper planning: 5–7 ms of the 28 ms frame (plan only the hot unit
-        and reuse segment keys between frames)
-  - [ ] Stop the cyclic LRU thrash past the budget: pin a frame's working
-        set, alternate traversal order, and check the working set fits first
-        (spec 38, budget overflow)
+  - [x] Spec 38 warm-up when the active layer changes
+  - [x] Cheaper planning: ranges instead of copies, parallel planning
+        (5 → 1.8 ms). Drag frame now 19.7 ms median (16.8 min) when the
+        tiles fit, 28 ms past the budget
+  - [ ] Composite zoomed-out views at reduced resolution (the GPU part is
+        now near the iGPU's bandwidth at full resolution)
+  - [x] Stop the cyclic LRU thrash past the budget: batches already keep
+        each dispatch within the atlas; over-budget frames now alternate
+        direction (spec 38)
   - [ ] Profile the per-tile GPU cost (≈20 µs per tile-layer; far from the
         memory bandwidth limit)
 - [ ] Decide the GPU memory budget on integrated GPUs
