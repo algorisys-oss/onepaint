@@ -12,7 +12,7 @@ use crate::{GHOST_PEG_KEY, GHOST_TINT_KEY, StrokeMode, StrokeOverlay, apply_stro
 use onepaint_doc::{BlendMode, Document, Layer, Node};
 pub use onepaint_filters::gpu::GpuAdjust;
 use onepaint_panel::coverage::TileCoverage;
-use onepaint_raster::{Px, TILE_PX, Tile};
+use onepaint_raster::{Px, TILE, TILE_PX, Tile};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -63,6 +63,20 @@ impl std::fmt::Debug for Adjust {
     }
 }
 
+/// The document paper's visible tooth (spec 43).
+#[derive(Clone)]
+pub struct PaperShade {
+    pub tex: onepaint_brush::paper::PaperTexture,
+    /// `visible_amount(strength)`, above 0.
+    pub amt: f32,
+}
+
+impl std::fmt::Debug for PaperShade {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PaperShade({}, {})", self.tex.tile_px(), self.amt)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Op {
     /// Blend content onto the top register (`draw_layer`).
@@ -78,6 +92,8 @@ pub enum Op {
     /// Adjust the top register, mask the result and blend it back
     /// (`draw_adjustment`, spec 42).
     Adjust { adjust: Arc<Adjust>, mask: Option<Arc<Tile>>, mode: BlendMode, opacity: f32 },
+    /// Shade the finished tile `(tx, ty)` with the paper's tooth (spec 43).
+    Paper { shade: Arc<PaperShade>, tx: i32, ty: i32 },
 }
 
 #[derive(Clone, Debug)]
@@ -193,6 +209,10 @@ pub fn segment_key(ops: &[Op]) -> u64 {
                 adjust.gpu.lut.hash(&mut h);
                 mask.as_ref().map(ptr).hash(&mut h);
             }
+            Op::Paper { shade, tx, ty } => {
+                (6u8, *tx, *ty, shade.amt.to_bits(), shade.tex.tile_px().to_bits()).hash(&mut h);
+                (shade.tex.mask().data.as_ptr() as usize).hash(&mut h);
+            }
         }
     }
     h.finish()
@@ -261,12 +281,15 @@ const MIN_SEGMENT_SOURCES: usize = 2;
 
 /// [`plan_tile`], plus the ops cut at `hot` (a layer id) for spec 38.
 pub fn plan_tile_split(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, hot: Option<&str>) -> Option<TileProgram> {
-    // The paper shades the finished composite on the CPU.
-    if doc.paper().is_some() {
-        return None;
-    }
     let mut p = Planner { tx, ty, ov, ops: Vec::new(), depth: 1, units: Vec::new(), hot };
     p.nodes(&doc.root).ok()?;
+    // The paper shades the finished composite (spec 43), after every unit.
+    if let Some(paper) = doc.paper() {
+        let amt = onepaint_brush::paper::visible_amount(paper.strength());
+        if let Some(tex) = onepaint_brush::paper::PaperTexture::new(&paper).filter(|_| amt > 0.0) {
+            p.ops.push(Op::Paper { shade: Arc::new(PaperShade { tex, amt }), tx, ty });
+        }
+    }
     let split = hot.and_then(|_| split(&p.ops, &p.units));
     let prog = TileProgram { tx, ty, ops: p.ops, split };
     let mut seen: Vec<*const Tile> = prog.sources().map(Arc::as_ptr).collect();
@@ -500,6 +523,14 @@ fn exec(ops: &[Op], init: Px, i: usize, stack: &mut Vec<Px>) -> Px {
                     o = o.map(|v| v * k);
                 }
                 *top = blend_px(*mode, *top, o, *opacity);
+            }
+            Op::Paper { shade, tx, ty } => {
+                if top[..3].iter().any(|v| *v != 0.0) {
+                    let (lx, ly) = ((i % TILE as usize) as i32, (i / TILE as usize) as i32);
+                    let (x, y) = ((tx * TILE + lx) as f64 + 0.5, (ty * TILE + ly) as f64 + 0.5);
+                    let k = onepaint_brush::paper::shade_at(&shade.tex, shade.amt, x, y);
+                    top[..3].iter_mut().for_each(|v| *v *= k);
+                }
             }
             Op::Pop { mode, opacity, clip, tint } => {
                 let Some(mut v) = stack.pop() else { break };

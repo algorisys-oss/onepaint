@@ -70,6 +70,8 @@ struct Km {
 @group(0) @binding(14) var cache_out: texture_storage_2d_array<rgba16float, write>;
 // Colour adjustment params and LUTs (spec 42).
 @group(0) @binding(15) var<storage, read> adj: array<vec4<f32>>;
+// The document paper's grain (spec 43), R32Float, repeat-sampled by hand.
+@group(0) @binding(16) var paper_tex: texture_2d<f32>;
 
 const NONE: u32 = 0xffffffffu;
 
@@ -80,6 +82,7 @@ const OP_CLIP: u32 = 3u;
 const OP_POP: u32 = 4u;
 const OP_OVER_CACHE: u32 = 5u;
 const OP_ADJUST: u32 = 6u;
+const OP_PAPER: u32 = 7u;
 
 const F_INHERIT: u32 = 1u;     // Layer: inherit alpha; Pop: clip instead of blend
 const F_TINT: u32 = 2u;
@@ -488,6 +491,36 @@ fn adjust(op: Op, s: vec4<f32>) -> vec4<f32> {
     return repremul(o, a);
 }
 
+// ── Paper tooth (spec 43; crates/brush paper.rs `shade_at`) ──
+
+fn paper_at(i: vec2<i32>, n: i32) -> f32 {
+    return textureLoad(paper_tex, vec2<i32>(i.x % n, i.y % n), 0).x;
+}
+
+// `TipMask::sample_repeat` at doc position `d`.
+fn paper_h(d: vec2<f32>, tile_px: f32) -> f32 {
+    let n = i32(textureDimensions(paper_tex).x);
+    let nf = f32(n);
+    let t = d / tile_px * nf - 0.5;
+    let w = t - nf * floor(t / nf);
+    let i = vec2<i32>(w);
+    let f = w - floor(w);
+    let top = mix(paper_at(i, n), paper_at(i + vec2<i32>(1, 0), n), f.x);
+    let bottom = mix(paper_at(i + vec2<i32>(0, 1), n), paper_at(i + vec2<i32>(1, 1), n), f.x);
+    return mix(top, bottom, f.y);
+}
+
+fn paper_k(d: vec2<f32>, tile_px: f32, amt: f32) -> f32 {
+    var l = vec3<f32>(-0.45, -0.6, 0.66);
+    l /= sqrt(dot(l, l));
+    let nx = (paper_h(d - vec2<f32>(1.0, 0.0), tile_px) - paper_h(d + vec2<f32>(1.0, 0.0), tile_px)) * 2.0;
+    let ny = (paper_h(d - vec2<f32>(0.0, 1.0), tile_px) - paper_h(d + vec2<f32>(0.0, 1.0), tile_px)) * 2.0;
+    let lambert = clamp((nx * l.x + ny * l.y + l.z) / sqrt(nx * nx + ny * ny + 1.0), 0.0, 1.0);
+    let h = paper_h(d, tile_px);
+    let shade = 1.0 + (0.55 + 0.45 * (0.35 + 0.65 * lambert) * (0.4 + 0.6 * h) - 1.0) * amt;
+    return pow(shade, 2.2);
+}
+
 // `layer_content`: pixels, then the live stroke, then the mask.
 fn content(o: Op, p: vec2<i32>) -> vec4<f32> {
     let flags = o.a.w;
@@ -587,6 +620,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     v *= load(o.c.x, p).x;
                 }
                 top = blend_px(o.a.y, top, v, opacity);
+            }
+            case OP_PAPER: {
+                if (any(top.xyz != vec3<f32>(0.0))) {
+                    // The level's pixel centre in doc px (an approximation above level 0).
+                    let d = (vec2<f32>(g) + 0.5) * f32(1u << prm.level);
+                    top = vec4<f32>(top.xyz * paper_k(d, bitcast<f32>(o.b.x), bitcast<f32>(o.b.y)), top.w);
+                }
             }
             default: {
                 var v = top;

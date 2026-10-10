@@ -82,3 +82,23 @@ fn noise_tone_and_fill_layers_stay_on_the_cpu() {
         assert!(plan_tile(&doc, 0, 0, None).is_none(), "{kind}");
     }
 }
+
+fn papered(seed: u64) -> onepaint_doc::Document {
+    let mut doc = with_adjustments(random_doc(seed, 300, 300, false), seed);
+    let grain = ["rough-tooth", "canvas", "linen"][seed as usize % 3];
+    let scale = Some(0.5 + (seed % 4) as f64 * 0.4);
+    doc.set_paper(Some(onepaint_doc::Paper { grain_id: grain.into(), scale, strength: 0.3 + (seed % 3) as f64 * 0.3 }));
+    doc
+}
+
+#[test]
+fn paper_shades_programs_like_the_tree_compositor() {
+    for seed in 0..24 {
+        let doc = papered(seed);
+        for (tx, ty) in TILES {
+            let prog = plan_tile(&doc, tx, ty, None).unwrap();
+            assert!(matches!(prog.ops.last(), Some(Op::Paper { .. })));
+            assert_eq!(run(&prog), composite_tile(&doc, tx, ty, None), "seed {seed} tile {tx},{ty}");
+        }
+    }
+}

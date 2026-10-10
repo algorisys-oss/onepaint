@@ -96,33 +96,43 @@ impl<'a> PaperTooth<'a> {
     }
 }
 
-/// The visible tooth over a composited tile (premultiplied linear): rgb ×
-/// shade^2.2, darken-only, alpha untouched (`compositor.ts:214-233`).
-pub fn shade_tile(buf: &mut [f32], paper: &PaperTexture, strength: f64, tx: i32, ty: i32) {
-    let amt = strength.clamp(0.0, 1.0) as f32 * VISIBLE_PAPER_SCALE;
-    if amt <= 0.0 {
-        return;
-    }
+/// The visible tooth's amount for a paper strength (0 = none).
+pub fn visible_amount(strength: f64) -> f32 {
+    strength.clamp(0.0, 1.0) as f32 * VISIBLE_PAPER_SCALE
+}
+
+/// The factor the visible tooth multiplies rgb by at doc position (x, y)
+/// (pixel centres), for amount `amt` (`compositor.ts:214-233`).
+pub fn shade_at(paper: &PaperTexture, amt: f32, x: f64, y: f64) -> f32 {
     let l = {
         let v = [-0.45f32, -0.6, 0.66];
         let n = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
         v.map(|c| c / n)
     };
+    let (pl, pr) = (paper.height(x - 1.0, y), paper.height(x + 1.0, y));
+    let (pu, pd) = (paper.height(x, y - 1.0), paper.height(x, y + 1.0));
+    let (nx, ny) = ((pl - pr) * 2.0, (pu - pd) * 2.0);
+    let len = (nx * nx + ny * ny + 1.0).sqrt();
+    let lambert = ((nx * l[0] + ny * l[1] + l[2]) / len).clamp(0.0, 1.0);
+    let h = paper.height(x, y);
+    let shade = 1.0 + (0.55 + 0.45 * (0.35 + 0.65 * lambert) * (0.4 + 0.6 * h) - 1.0) * amt;
+    shade.powf(2.2)
+}
+
+/// The visible tooth over a composited tile (premultiplied linear): rgb ×
+/// shade^2.2, darken-only, alpha untouched (`compositor.ts:214-233`).
+pub fn shade_tile(buf: &mut [f32], paper: &PaperTexture, strength: f64, tx: i32, ty: i32) {
+    let amt = visible_amount(strength);
+    if amt <= 0.0 {
+        return;
+    }
     for ly in 0..TILE {
         for lx in 0..TILE {
             let i = ((ly * TILE + lx) * 4) as usize;
             if buf[i] == 0.0 && buf[i + 1] == 0.0 && buf[i + 2] == 0.0 {
                 continue;
             }
-            let (x, y) = ((tx * TILE + lx) as f64 + 0.5, (ty * TILE + ly) as f64 + 0.5);
-            let (pl, pr) = (paper.height(x - 1.0, y), paper.height(x + 1.0, y));
-            let (pu, pd) = (paper.height(x, y - 1.0), paper.height(x, y + 1.0));
-            let (nx, ny) = ((pl - pr) * 2.0, (pu - pd) * 2.0);
-            let len = (nx * nx + ny * ny + 1.0).sqrt();
-            let lambert = ((nx * l[0] + ny * l[1] + l[2]) / len).clamp(0.0, 1.0);
-            let h = paper.height(x, y);
-            let shade = 1.0 + (0.55 + 0.45 * (0.35 + 0.65 * lambert) * (0.4 + 0.6 * h) - 1.0) * amt;
-            let k = shade.powf(2.2);
+            let k = shade_at(paper, amt, (tx * TILE + lx) as f64 + 0.5, (ty * TILE + ly) as f64 + 0.5);
             for c in 0..3 {
                 buf[i + c] *= k;
             }

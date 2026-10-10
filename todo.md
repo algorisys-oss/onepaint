@@ -127,7 +127,7 @@ an item changes there, change it here too.
   - [ ] Noise, screentone and fill layers
   - [ ] Spatial adjustment layers (a padded backdrop pass)
   - [ ] Relief lighting (impasto height)
-  - [ ] Paper shading
+  - [x] Paper shading (spec 43)
   - [ ] Partial panel clips
   - [ ] Ghost pegs (out-of-pegs onion offsets)
   - [ ] Present-only view modes

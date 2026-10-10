@@ -441,3 +441,30 @@ fn colour_adjustment_layers_match_the_cpu_oracle() {
         }
     }
 }
+
+#[test]
+fn paper_shading_matches_the_cpu_oracle() {
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let mut gc = GpuCompositor::new(&device, 64 << 20);
+    let (w, h) = (300, 300);
+    let tex = target(&device, w, h);
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
+    for seed in 0..18 {
+        let mut doc = with_adjustments(random_doc(seed, w, h, false), seed);
+        // Grains of different sizes, so the paper texture is replaced between documents.
+        let grain = ["rough-tooth", "canvas", "linen"][seed as usize % 3];
+        let scale = Some(0.5 + (seed % 4) as f64 * 0.4);
+        doc.set_paper(Some(onepaint_doc::Paper { grain_id: grain.into(), scale, strength: 0.3 + (seed % 3) as f64 * 0.3 }));
+        gc.run(&device, &queue, &programs(&doc, None), &view, [w, h]);
+        let (e, at) = max_error(&doc, None, &read(&device, &queue, &tex));
+        assert!(e <= TOL, "seed {seed} ({grain}): error {e} at {at:?}");
+        let ids = layer_ids(&doc);
+        let hot = ids[seed as usize % ids.len()].clone();
+        gc.run(&device, &queue, &split_programs(&doc, None, &hot), &view, [w, h]);
+        let (e, at) = max_error(&doc, None, &read(&device, &queue, &tex));
+        assert!(e <= TOL, "seed {seed} ({grain}) split at {hot}: error {e} at {at:?}");
+    }
+}

@@ -53,3 +53,4 @@ The happypaint references are relative to `../happypaint/frontend/src/`.
 | 40 | [Composite sheets past the GPU texture limit](40-composite-sheets.md) | gpu, app |
 | 41 | [Opening files in the background](41-background-open.md) | formats, engine, app |
 | 42 | [Colour adjustment layers on the GPU](42-gpu-colour-adjustments.md) | filters, compose, gpu |
+| 43 | [Paper shading on the GPU](43-gpu-paper.md) | brush, compose, gpu |

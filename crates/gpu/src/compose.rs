@@ -38,6 +38,7 @@ pub const DEFAULT_CACHE_BUDGET: u64 = 256 << 20;
 const NONE: u32 = u32::MAX;
 const OP_OVER_CACHE: u32 = 5;
 const OP_ADJUST: u32 = 6;
+const OP_PAPER: u32 = 7;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -136,7 +137,7 @@ fn uses_pigment(ops: &[&Op]) -> bool {
         Op::Layer { content, mode, .. } => pig(*mode) || stroke(&content.stroke) || stroke(&content.mask_stroke),
         Op::PushContent(c) | Op::Clip { content: c, .. } => stroke(&c.stroke) || stroke(&c.mask_stroke),
         Op::Pop { mode, .. } | Op::Adjust { mode, .. } => pig(*mode),
-        Op::PushZero => false,
+        Op::PushZero | Op::Paper { .. } => false,
     })
 }
 
@@ -229,6 +230,9 @@ pub struct GpuCompositor {
     mipper: crate::mip::Mipper,
     /// The level the current run composites at (spec 39).
     level: u32,
+    /// The paper grain (spec 43), keyed on its pixels' address, and a stand-in.
+    paper: Option<(usize, wgpu::TextureView)>,
+    paper_dummy: wgpu::TextureView,
     /// Segment images computed since creation (for tests and stats).
     pub fills: u64,
 }
@@ -310,6 +314,16 @@ impl GpuCompositor {
             count: None,
         });
         entries.push(buffer(15, wgpu::BufferBindingType::Storage { read_only: true }));
+        entries.push(wgpu::BindGroupLayoutEntry {
+            binding: 16,
+            visibility: cs,
+            ty: wgpu::BindingType::Texture {
+                multisampled: false,
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D2,
+            },
+            count: None,
+        });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("compose"), entries: &entries });
         let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("compose"),
@@ -408,6 +422,19 @@ impl GpuCompositor {
             reverse: false,
             mipper: crate::mip::Mipper::new(device),
             level: 0,
+            paper: None,
+            paper_dummy: device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("compose paper (unused)"),
+                    size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::R32Float,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default()),
             fills: 0,
         }
     }
@@ -512,6 +539,10 @@ impl GpuCompositor {
     fn encode(&self, op: &Op, adj: &mut AdjTable) -> GpuOp {
         let mut o = [0u32; 16];
         match op {
+            Op::Paper { shade, .. } => {
+                o[0] = OP_PAPER;
+                (o[4], o[5]) = ((shade.tex.tile_px() as f32).to_bits(), shade.amt.to_bits());
+            }
             Op::Adjust { adjust, mask, mode, opacity } => {
                 (o[0], o[1], o[2]) = (OP_ADJUST, *mode as u32, opacity.to_bits());
                 (o[4], o[5]) = adj.add(&adjust.gpu);
@@ -723,6 +754,7 @@ impl GpuCompositor {
                 }
             }
         }
+        self.ensure_paper(device, queue, main.iter().flat_map(|w| w.ops.iter()));
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("compose") });
         self.mip_sources(device, &mut enc, fills.iter().chain(&main));
         // Fills and composites can't share a dispatch: one writes the cache, the other reads it.
@@ -730,6 +762,34 @@ impl GpuCompositor {
         self.dispatch(device, queue, &mut enc, &main, sheets, Some(target), false);
         // Submit per batch: the next batch's uploads may evict slots this one reads.
         queue.submit([enc.finish()]);
+    }
+
+    /// Upload the paper grain the batch's paper op reads, if it changed (spec 43).
+    fn ensure_paper<'a>(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, mut ops: impl Iterator<Item = &'a &'a Op>) {
+        let Some(Op::Paper { shade, .. }) = ops.find(|op| matches!(op, Op::Paper { .. })) else { return };
+        let mask = shade.tex.mask();
+        let id = mask.data.as_ptr() as usize;
+        if self.paper.as_ref().is_some_and(|(k, _)| *k == id) {
+            return;
+        }
+        let n = mask.size as u32;
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("compose paper"),
+            size: wgpu::Extent3d { width: n, height: n, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            tex.as_image_copy(),
+            bytemuck::cast_slice(&mask.data),
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(n * 4), rows_per_image: Some(n) },
+            wgpu::Extent3d { width: n, height: n, depth_or_array_layers: 1 },
+        );
+        self.paper = Some((id, tex.create_view(&Default::default())));
     }
 
     /// Above level 0, fill the mips of the slots `works` read that lack them.
@@ -879,6 +939,8 @@ impl GpuCompositor {
         entries.push(wgpu::BindGroupEntry { binding: 13, resource: wgpu::BindingResource::TextureView(read) });
         entries.push(wgpu::BindGroupEntry { binding: 14, resource: wgpu::BindingResource::TextureView(write) });
         entries.push(wgpu::BindGroupEntry { binding: 15, resource: b.adj.as_entire_binding() });
+        let paper = self.paper.as_ref().map_or(&self.paper_dummy, |(_, v)| v);
+        entries.push(wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(paper) });
         device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("compose"), layout: &self.layout, entries: &entries })
     }
 
