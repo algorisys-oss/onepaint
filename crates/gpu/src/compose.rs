@@ -7,8 +7,14 @@
 //! forcing copy-on-write clones. A tile changed through `Arc::make_mut` moves
 //! to a new address and is uploaded again. Slots are evicted least recently
 //! used, never from the batch being dispatched.
+//!
+//! Spec 38: a program split at the hot layer starts from a cached image of
+//! the layers below and lays a cached image of the layers above over its
+//! result. Those images live in a cache texture array keyed on the
+//! segment's content key; a missing one is filled by a pass that runs just
+//! before the composite.
 
-use onepaint_compose::program::{Content, MaskSrc, Op, StrokeSrc, TileProgram, stroke_code};
+use onepaint_compose::program::{Content, MaskSrc, Op, Segment, StrokeSrc, TileProgram, op_sources, stroke_code};
 use onepaint_doc::BlendMode;
 use onepaint_raster::{TILE, Tile};
 use std::collections::{HashMap, HashSet};
@@ -24,6 +30,11 @@ const MAX_JOBS: usize = 65_535;
 const TILE_BYTES: u64 = (TILE as u64) * (TILE as u64) * 8;
 /// Default GPU memory for resident layer tiles (spec 13).
 pub const DEFAULT_BUDGET: u64 = 1 << 30;
+/// Default GPU memory for cached segment images (spec 38).
+pub const DEFAULT_CACHE_BUDGET: u64 = 256 << 20;
+/// "Not used" in a job's `init` and `dest`.
+const NONE: u32 = u32::MAX;
+const OP_OVER_CACHE: u32 = 5;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -40,6 +51,10 @@ struct Job {
     origin: [u32; 2],
     op_start: u32,
     op_count: u32,
+    /// Cache slot to start from, or `NONE`.
+    init: u32,
+    /// Cache slot to write, or `NONE` for the canvas.
+    dest: u32,
 }
 
 #[repr(C)]
@@ -60,11 +75,50 @@ struct Slot {
     used: u64,
 }
 
-/// Whether any blend in the program is Pigment (the pipeline needs the KM code).
-fn uses_pigment(p: &TileProgram) -> bool {
+/// A cached segment image. The `Weak`s keep its sources' addresses from
+/// being reused, so a stale key can never match new content.
+struct CacheSlot {
+    idx: u32,
+    _sources: Vec<Weak<Tile>>,
+    used: u64,
+}
+
+struct PassBuffers {
+    params: wgpu::Buffer,
+    jobs: wgpu::Buffer,
+    ops: wgpu::Buffer,
+}
+
+impl PassBuffers {
+    fn new(device: &wgpu::Device) -> Self {
+        Self {
+            params: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("compose params"),
+                size: std::mem::size_of::<Params>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            jobs: storage(device, "compose jobs", 64 * std::mem::size_of::<Job>() as u64),
+            ops: storage(device, "compose ops", 1024 * std::mem::size_of::<GpuOp>() as u64),
+        }
+    }
+}
+
+/// One job's ops before encoding: what it runs, where it starts and ends.
+struct Work<'a> {
+    origin: [u32; 2],
+    ops: Vec<&'a Op>,
+    /// Lay this cache slot over the result after `ops[..over_at]`.
+    over: Option<(usize, u32)>,
+    init: u32,
+    dest: u32,
+}
+
+/// Whether any blend in the ops is Pigment (the pipeline needs the KM code).
+fn uses_pigment(ops: &[&Op]) -> bool {
     let pig = |m: BlendMode| m == BlendMode::Pigment;
     let stroke = |s: &Option<StrokeSrc>| s.as_ref().is_some_and(|s| pig(stroke_code(s.mode).1));
-    p.ops.iter().any(|op| match op {
+    ops.iter().any(|op| match op {
         Op::Layer { content, mode, .. } => pig(*mode) || stroke(&content.stroke) || stroke(&content.mask_stroke),
         Op::PushContent(c) | Op::Clip { content: c, .. } => stroke(&c.stroke) || stroke(&c.mask_stroke),
         Op::Pop { mode, .. } => pig(*mode),
@@ -73,8 +127,8 @@ fn uses_pigment(p: &TileProgram) -> bool {
 }
 
 /// Whether every op is a plain normal layer, which the lean pipeline runs.
-fn is_simple(p: &TileProgram) -> bool {
-    p.ops.iter().all(|op| {
+fn is_simple(ops: &[&Op]) -> bool {
+    ops.iter().all(|op| {
         matches!(
             op,
             Op::Layer {
@@ -87,6 +141,13 @@ fn is_simple(p: &TileProgram) -> bool {
     })
 }
 
+/// Lay cache slot `slot` over the register (`S + (1 − S.a) · x`).
+fn over_cache(slot: u32) -> GpuOp {
+    let mut o = [0u32; 16];
+    (o[0], o[1]) = (OP_OVER_CACHE, slot);
+    GpuOp(o)
+}
+
 fn key(t: &Arc<Tile>) -> usize {
     Arc::as_ptr(t) as usize
 }
@@ -97,10 +158,9 @@ pub struct GpuCompositor {
     /// The full interpreter, without and with the Kubelka–Munk (Pigment mode) code.
     pipelines: [wgpu::ComputePipeline; 2],
     layout: wgpu::BindGroupLayout,
-    params: wgpu::Buffer,
     km: wgpu::Buffer,
-    jobs: wgpu::Buffer,
-    ops: wgpu::Buffer,
+    /// Params, jobs and ops buffers for the fill pass and the composite pass.
+    bufs: [PassBuffers; 2],
     dummy: wgpu::TextureView,
     atlases: Vec<(wgpu::Texture, wgpu::TextureView)>,
     per_atlas: u32,
@@ -110,6 +170,18 @@ pub struct GpuCompositor {
     clock: u64,
     /// Tiles uploaded since creation (for tests and stats).
     pub uploads: u64,
+    /// Segment images: one texture array, read in the composite pass and
+    /// written in the fill pass.
+    cache: Option<(wgpu::Texture, wgpu::TextureView, wgpu::TextureView)>,
+    cache_layers: u32,
+    cache_slots: HashMap<u64, CacheSlot>,
+    cache_free: Vec<u32>,
+    /// Stand-in for the cache's storage view in the composite pass.
+    dummy_store: wgpu::TextureView,
+    /// Use split programs' cached segments (spec 38).
+    pub split_cache: bool,
+    /// Segment images computed since creation (for tests and stats).
+    pub fills: u64,
 }
 
 fn storage(device: &wgpu::Device, label: &str, size: u64) -> wgpu::Buffer {
@@ -122,8 +194,14 @@ fn storage(device: &wgpu::Device, label: &str, size: u64) -> wgpu::Buffer {
 }
 
 impl GpuCompositor {
-    /// `budget` is the GPU memory for resident tiles, in bytes.
+    /// `budget` is the GPU memory for resident tiles, in bytes; segment
+    /// images get [`DEFAULT_CACHE_BUDGET`] on top.
     pub fn new(device: &wgpu::Device, budget: u64) -> Self {
+        Self::with_cache(device, budget, DEFAULT_CACHE_BUDGET)
+    }
+
+    /// As [`GpuCompositor::new`], with `cache_budget` bytes for segment images.
+    pub fn with_cache(device: &wgpu::Device, budget: u64, cache_budget: u64) -> Self {
         let source = format!("{COMPOSE_WGSL}\n{}", crate::wet::PIGMENT_WGSL);
         let module = device
             .create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("compose"), source: wgpu::ShaderSource::Wgsl(source.into()) });
@@ -162,6 +240,26 @@ impl GpuCompositor {
                 count: None,
             });
         }
+        entries.push(wgpu::BindGroupLayoutEntry {
+            binding: 13,
+            visibility: cs,
+            ty: wgpu::BindingType::Texture {
+                multisampled: false,
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D2Array,
+            },
+            count: None,
+        });
+        entries.push(wgpu::BindGroupLayoutEntry {
+            binding: 14,
+            visibility: cs,
+            ty: wgpu::BindingType::StorageTexture {
+                access: wgpu::StorageTextureAccess::WriteOnly,
+                format: wgpu::TextureFormat::Rgba16Float,
+                view_dimension: wgpu::TextureViewDimension::D2Array,
+            },
+            count: None,
+        });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("compose"), entries: &entries });
         let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("compose"),
@@ -195,12 +293,7 @@ impl GpuCompositor {
             contents: bytemuck::cast_slice(&km),
             usage: wgpu::BufferUsages::UNIFORM,
         });
-        let params = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("compose params"),
-            size: std::mem::size_of::<Params>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+
         let dummy = device
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some("compose atlas (unused)"),
@@ -216,14 +309,25 @@ impl GpuCompositor {
         // WebGPU guarantees 256 layers; a program never needs more than `MAX_SOURCES` (128).
         let per_atlas = device.limits().max_texture_array_layers.clamp(1, 256);
         let max_atlases = ((budget / TILE_BYTES) as usize).div_ceil(per_atlas as usize).clamp(1, ATLASES);
+        let cache_layers = ((cache_budget / TILE_BYTES) as u32).min(device.limits().max_texture_array_layers);
+        let dummy_store = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("compose cache (unused)"),
+                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba16Float,
+                usage: wgpu::TextureUsages::STORAGE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() });
         Self {
             simple,
             pipelines,
             layout,
-            params,
             km,
-            jobs: storage(device, "compose jobs", 64 * std::mem::size_of::<Job>() as u64),
-            ops: storage(device, "compose ops", 1024 * std::mem::size_of::<GpuOp>() as u64),
+            bufs: [PassBuffers::new(device), PassBuffers::new(device)],
             dummy,
             atlases: Vec::new(),
             per_atlas,
@@ -232,6 +336,13 @@ impl GpuCompositor {
             free: Vec::new(),
             clock: 0,
             uploads: 0,
+            cache: None,
+            cache_layers,
+            cache_slots: HashMap::new(),
+            cache_free: Vec::new(),
+            dummy_store,
+            split_cache: cache_layers >= 2,
+            fills: 0,
         }
     }
 
@@ -376,13 +487,16 @@ impl GpuCompositor {
         doc_size: [u32; 2],
     ) {
         let cap = self.capacity();
+        // Each program may need two cache slots; keep a batch within the cache.
+        let cache_cap = (self.cache_layers as usize / 2).max(1);
         let mut start = 0;
         let mut need: HashSet<usize> = HashSet::new();
         for (i, p) in programs.iter().enumerate() {
-            let mut fresh: Vec<usize> = p.sources().map(key).filter(|k| !need.contains(k)).collect();
+            let mut fresh: Vec<usize> = self.batch_sources(p).map(key).filter(|k| !need.contains(k)).collect();
             fresh.sort_unstable();
             fresh.dedup();
-            if i > start && (need.len() + fresh.len() > cap || i - start >= MAX_JOBS) {
+            let full = need.len() + fresh.len() > cap || i - start >= MAX_JOBS || (self.split_cache && i - start >= cache_cap);
+            if i > start && full {
                 self.flush(device, queue, &programs[start..i], target, doc_size);
                 start = i;
                 need.clear();
@@ -394,69 +508,219 @@ impl GpuCompositor {
         }
     }
 
+    /// The tiles a program may read in a batch: with a split, the hot and
+    /// tail ops plus any segment that isn't cached yet.
+    fn batch_sources<'a>(&self, p: &'a TileProgram) -> Box<dyn Iterator<Item = &'a Arc<Tile>> + 'a> {
+        match (&p.split, self.split_cache) {
+            (Some(s), true) => {
+                let missing = |seg: &'a Option<Segment>| {
+                    seg.as_ref().filter(|g| !self.cache_slots.contains_key(&g.key)).into_iter().flat_map(|g| g.sources())
+                };
+                Box::new(op_sources(&s.hot).chain(op_sources(&s.tail)).chain(missing(&s.prefix)).chain(missing(&s.suffix)))
+            }
+            _ => Box::new(p.sources()),
+        }
+    }
+
+    fn ensure_cache(&mut self, device: &wgpu::Device) {
+        if self.cache.is_some() {
+            return;
+        }
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("compose segment cache"),
+            size: wgpu::Extent3d { width: TILE as u32, height: TILE as u32, depth_or_array_layers: self.cache_layers },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+            view_formats: &[],
+        });
+        let array = || wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() };
+        let (read, write) = (tex.create_view(&array()), tex.create_view(&array()));
+        self.cache = Some((tex, read, write));
+        self.cache_free = (0..self.cache_layers).rev().collect();
+    }
+
+    /// The cache slot for a segment this batch: `(slot, needs a fill)`.
+    fn cache_slot(&mut self, seg: &Segment) -> Option<(u32, bool)> {
+        let clock = self.clock;
+        if let Some(c) = self.cache_slots.get_mut(&seg.key) {
+            c.used = clock;
+            return Some((c.idx, false));
+        }
+        let idx = match self.cache_free.pop() {
+            Some(i) => i,
+            None => {
+                let (&k, c) = self.cache_slots.iter().filter(|(_, c)| c.used != clock).min_by_key(|(_, c)| c.used)?;
+                let idx = c.idx;
+                self.cache_slots.remove(&k);
+                idx
+            }
+        };
+        let sources = seg.sources().map(Arc::downgrade).collect();
+        self.cache_slots.insert(seg.key, CacheSlot { idx, _sources: sources, used: clock });
+        Some((idx, true))
+    }
+
+    /// Plan a batch's jobs: segment fills first, then the composites.
+    fn plan_batch<'a>(&mut self, device: &wgpu::Device, batch: &'a [TileProgram]) -> (Vec<Work<'a>>, Vec<Work<'a>>) {
+        let mut fills: Vec<Work<'a>> = Vec::new();
+        let mut main: Vec<Work<'a>> = Vec::new();
+        for p in batch {
+            let origin = [(p.tx * TILE) as u32, (p.ty * TILE) as u32];
+            let split = p.split.as_ref().filter(|_| self.split_cache);
+            let Some(s) = split else {
+                main.push(Work { origin, ops: p.ops.iter().collect(), over: None, init: NONE, dest: NONE });
+                continue;
+            };
+            self.ensure_cache(device);
+            let mut slot = |seg: &'a Option<Segment>, fills: &mut Vec<Work<'a>>| -> Option<Option<u32>> {
+                let Some(seg) = seg else { return Some(None) };
+                let (idx, fresh) = self.cache_slot(seg)?;
+                if fresh {
+                    fills.push(Work { origin: [0, 0], ops: seg.ops.iter().collect(), over: None, init: NONE, dest: idx });
+                }
+                Some(Some(idx))
+            };
+            let (Some(prefix), Some(suffix)) = (slot(&s.prefix, &mut fills), slot(&s.suffix, &mut fills)) else {
+                // The cache is full of this batch's own segments: run unsplit.
+                main.push(Work { origin, ops: p.ops.iter().collect(), over: None, init: NONE, dest: NONE });
+                continue;
+            };
+            let mut ops: Vec<&Op> = s.hot.iter().collect();
+            let over = suffix.map(|idx| (ops.len(), idx));
+            ops.extend(s.tail.iter());
+            main.push(Work { origin, ops, over, init: prefix.unwrap_or(NONE), dest: NONE });
+        }
+        (fills, main)
+    }
+
     fn flush(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, batch: &[TileProgram], target: &wgpu::TextureView, doc_size: [u32; 2]) {
         self.clock += 1;
-        for p in batch {
-            for t in p.sources() {
+        let (fills, main) = self.plan_batch(device, batch);
+        self.fills += fills.len() as u64;
+        for w in fills.iter().chain(&main) {
+            for t in w.ops.iter().flat_map(|op| op_sources(std::slice::from_ref(*op))) {
                 if self.resident(device, queue, t).is_none() {
-                    log::error!("compose atlas full; tile ({}, {}) skipped", p.tx, p.ty);
+                    log::error!("compose atlas full; a tile at {:?} skipped", w.origin);
                 }
             }
         }
-        let mut jobs = Vec::with_capacity(batch.len());
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("compose") });
+        // Fills and composites can't share a dispatch: one writes the cache, the other reads it.
+        let mut buffers = Vec::new();
+        for (label, works, fill) in [("compose fill", &fills, true), ("compose", &main, false)] {
+            if works.is_empty() {
+                continue;
+            }
+            let (jobs, ops, simple) = self.encode_jobs(works);
+            let general = works.len() - simple;
+            let pigment = works.iter().filter(|w| !is_simple(&w.ops)).any(|w| uses_pigment(&w.ops));
+            let bind = self.bind(
+                device,
+                queue,
+                &jobs,
+                &ops,
+                Params { doc_size, per_atlas: self.per_atlas, general_base: simple as u32 },
+                target,
+                fill,
+            );
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some(label), timestamp_writes: None });
+            pass.set_bind_group(0, &bind, &[]);
+            let n = (TILE as u32) / 8;
+            if simple > 0 {
+                pass.set_pipeline(&self.simple);
+                pass.dispatch_workgroups(n, n, simple as u32);
+            }
+            if general > 0 {
+                pass.set_pipeline(&self.pipelines[usize::from(pigment)]);
+                pass.dispatch_workgroups(n, n, general as u32);
+            }
+            drop(pass);
+            buffers.push(bind);
+        }
+        // Submit per batch: the next batch's uploads may evict slots this one reads.
+        queue.submit([enc.finish()]);
+    }
+
+    /// Jobs and ops for `works`, the lean ones first; returns how many are lean.
+    fn encode_jobs(&self, works: &[Work]) -> (Vec<Job>, Vec<GpuOp>, usize) {
+        let (simple, general): (Vec<&Work>, Vec<&Work>) = works.iter().partition(|w| is_simple(&w.ops));
+        let mut jobs = Vec::with_capacity(works.len());
         let mut ops = Vec::new();
-        let (simple, general): (Vec<&TileProgram>, Vec<&TileProgram>) = batch.iter().partition(|p| is_simple(p));
-        for p in simple.iter().chain(&general) {
+        for w in simple.iter().chain(&general) {
             let op_start = ops.len() as u32;
-            ops.extend(p.ops.iter().map(|op| self.encode(op)));
-            jobs.push(Job { origin: [(p.tx * TILE) as u32, (p.ty * TILE) as u32], op_start, op_count: ops.len() as u32 - op_start });
+            for (i, op) in w.ops.iter().enumerate() {
+                if let Some((at, slot)) = w.over
+                    && at == i
+                {
+                    ops.push(over_cache(slot));
+                }
+                ops.push(self.encode(op));
+            }
+            if let Some((at, slot)) = w.over
+                && at == w.ops.len()
+            {
+                ops.push(over_cache(slot));
+            }
+            jobs.push(Job { origin: w.origin, op_start, op_count: ops.len() as u32 - op_start, init: w.init, dest: w.dest });
         }
         if ops.is_empty() {
             ops.push(GpuOp::default());
         }
-        let jobs_bytes: &[u8] = bytemuck::cast_slice(&jobs);
-        let ops_bytes: &[u8] = bytemuck::cast_slice(&ops);
-        if self.jobs.size() < jobs_bytes.len() as u64 {
-            self.jobs = storage(device, "compose jobs", (jobs_bytes.len() as u64).next_power_of_two());
+        (jobs, ops, simple.len())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn bind(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        jobs: &[Job],
+        ops: &[GpuOp],
+        params: Params,
+        target: &wgpu::TextureView,
+        fill: bool,
+    ) -> wgpu::BindGroup {
+        // Each pass has its own buffers: both are written before the submit.
+        let b = &mut self.bufs[usize::from(!fill)];
+        let jobs_bytes: &[u8] = bytemuck::cast_slice(jobs);
+        let ops_bytes: &[u8] = bytemuck::cast_slice(ops);
+        if b.jobs.size() < jobs_bytes.len() as u64 {
+            b.jobs = storage(device, "compose jobs", (jobs_bytes.len() as u64).next_power_of_two());
         }
-        if self.ops.size() < ops_bytes.len() as u64 {
-            self.ops = storage(device, "compose ops", (ops_bytes.len() as u64).next_power_of_two());
+        if b.ops.size() < ops_bytes.len() as u64 {
+            b.ops = storage(device, "compose ops", (ops_bytes.len() as u64).next_power_of_two());
         }
-        queue.write_buffer(&self.jobs, 0, jobs_bytes);
-        queue.write_buffer(&self.ops, 0, ops_bytes);
-        queue.write_buffer(
-            &self.params,
-            0,
-            bytemuck::bytes_of(&Params { doc_size, per_atlas: self.per_atlas, general_base: simple.len() as u32 }),
-        );
+        queue.write_buffer(&b.jobs, 0, jobs_bytes);
+        queue.write_buffer(&b.ops, 0, ops_bytes);
+        queue.write_buffer(&b.params, 0, bytemuck::bytes_of(&params));
+        let b = &self.bufs[usize::from(!fill)];
         let mut entries = vec![
-            wgpu::BindGroupEntry { binding: 0, resource: self.params.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 0, resource: b.params.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 1, resource: self.km.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 2, resource: self.jobs.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 3, resource: self.ops.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 2, resource: b.jobs.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 3, resource: b.ops.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(target) },
         ];
         for i in 0..ATLASES {
             let view = self.atlases.get(i).map_or(&self.dummy, |(_, v)| v);
             entries.push(wgpu::BindGroupEntry { binding: 5 + i as u32, resource: wgpu::BindingResource::TextureView(view) });
         }
-        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("compose"), layout: &self.layout, entries: &entries });
-        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("compose") });
-        {
-            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("compose"), timestamp_writes: None });
-            pass.set_bind_group(0, &bind, &[]);
-            let n = (TILE as u32) / 8;
-            if !simple.is_empty() {
-                pass.set_pipeline(&self.simple);
-                pass.dispatch_workgroups(n, n, simple.len() as u32);
-            }
-            if !general.is_empty() {
-                pass.set_pipeline(&self.pipelines[general.iter().any(|p| uses_pigment(p)) as usize]);
-                pass.dispatch_workgroups(n, n, general.len() as u32);
-            }
-        }
-        // Submit per batch: the next batch's uploads may evict slots this one reads.
-        queue.submit([enc.finish()]);
+        let (read, write) = match (&self.cache, fill) {
+            (Some((_, _, w)), true) => (&self.dummy, w),
+            (Some((_, r, _)), false) => (r, &self.dummy_store),
+            (None, _) => (&self.dummy, &self.dummy_store),
+        };
+        entries.push(wgpu::BindGroupEntry { binding: 13, resource: wgpu::BindingResource::TextureView(read) });
+        entries.push(wgpu::BindGroupEntry { binding: 14, resource: wgpu::BindingResource::TextureView(write) });
+        device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("compose"), layout: &self.layout, entries: &entries })
+    }
+
+    /// Cached segment images held.
+    pub fn cached_segments(&self) -> usize {
+        self.cache_slots.len()
     }
 
     /// Tiles currently resident.

@@ -135,8 +135,12 @@ an item changes there, change it here too.
       (2026-10-10): 128 ms a frame when the distinct tiles fit the 1 GiB
       budget, 2.4 s when they don't (the LRU evicts and re-uploads every
       frame); planning is 2–3 ms of it
-  - [ ] Cache the composite below and above the active layer per tile, so a
-        drag blends three inputs instead of ~30 layers (spec 38)
+  - [x] Cache the composite below and above the active layer per tile, so a
+        drag blends three inputs instead of ~30 layers (spec 38): drag frame
+        median 210 → 28 ms (fits), 339 → 28 ms (past the budget)
+  - [ ] Spec 38 warm-up when the active layer changes
+  - [ ] Cheaper planning: 5–7 ms of the 28 ms frame (plan only the hot unit
+        and reuse segment keys between frames)
   - [ ] Stop the cyclic LRU thrash past the budget: pin a frame's working
         set, alternate traversal order, and check the working set fits first
         (spec 38, budget overflow)

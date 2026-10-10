@@ -575,11 +575,13 @@ impl Session {
     pub fn plan(&self, keys: &[(i32, i32)]) -> (Vec<TileProgram>, Vec<(i32, i32)>) {
         let ov = self.overlay().or_else(|| self.wet_overlay());
         let doc = self.display_doc();
+        // Spec 38: split at the layer being changed, so the rest is cached.
+        let hot = ov.as_ref().map_or(self.active.as_str(), |o| o.layer_id).to_string();
         let mut cpu = Vec::new();
         let progs = keys
             .iter()
             .filter_map(|&(tx, ty)| {
-                let p = onepaint_compose::program::plan_tile(&doc, tx, ty, ov.as_ref());
+                let p = onepaint_compose::program::plan_tile_split(&doc, tx, ty, ov.as_ref(), Some(&hot));
                 if p.is_none() {
                     cpu.push((tx, ty));
                 }

@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used)]
 //! The GPU compositor against the CPU oracle (spec 13); skipped without an adapter.
-use onepaint_compose::program::{TileProgram, plan_tile};
+use onepaint_compose::program::{TileProgram, plan_tile, plan_tile_split};
 use onepaint_compose::testdocs::{Rng, random_doc, random_stroke};
 use onepaint_compose::{StrokeOverlay, composite_tile};
 use onepaint_doc::{Document, Layer, Node};
@@ -227,4 +227,145 @@ fn lean_and_general_jobs_share_a_batch() {
     gc.run(&device, &queue, &programs(&doc, None), &view, [w, h]);
     let (e, at) = max_error(&doc, None, &read(&device, &queue, &tex));
     assert!(e <= TOL, "error {e} at {at:?}");
+}
+
+// ── Spec 38: split programs and the segment cache ──
+
+fn split_programs(doc: &Document, ov: Option<&StrokeOverlay>, hot: &str) -> Vec<TileProgram> {
+    doc.bounds().tiles().map(|(tx, ty)| plan_tile_split(doc, tx, ty, ov, Some(hot)).unwrap()).collect()
+}
+
+/// Every layer id, depth first.
+fn layer_ids(doc: &Document) -> Vec<String> {
+    doc.layer_ids()
+}
+
+#[test]
+fn split_programs_match_the_oracle_cold_and_warm() {
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let mut gc = GpuCompositor::new(&device, 64 << 20);
+    let (w, h) = (300, 300);
+    let tex = target(&device, w, h);
+    let view = tex.create_view(&Default::default());
+    for seed in 0..24 {
+        let doc = random_doc(seed, w, h, true);
+        for hot in layer_ids(&doc).iter().step_by(2) {
+            let progs = split_programs(&doc, None, hot);
+            for pass in ["cold", "warm"] {
+                gc.run(&device, &queue, &progs, &view, [w, h]);
+                let (e, at) = max_error(&doc, None, &read(&device, &queue, &tex));
+                assert!(e <= TOL, "seed {seed} hot {hot} ({pass}): error {e} at {at:?}");
+            }
+        }
+    }
+    assert!(gc.fills > 0, "segments were cached");
+}
+
+#[test]
+fn split_strokes_match_the_oracle() {
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let mut gc = GpuCompositor::new(&device, 64 << 20);
+    let (w, h) = (300, 300);
+    let tex = target(&device, w, h);
+    let view = tex.create_view(&Default::default());
+    for seed in 100..124 {
+        let doc = random_doc(seed, w, h, false);
+        let (buf, id, opacity, mode, mask) = random_stroke(seed, &doc).unwrap();
+        let ov = StrokeOverlay { layer_id: &id, stroke: &buf, opacity, mode, mask };
+        gc.run(&device, &queue, &split_programs(&doc, Some(&ov), &id), &view, [w, h]);
+        let (e, at) = max_error(&doc, Some(&ov), &read(&device, &queue, &tex));
+        assert!(e <= TOL, "seed {seed}: error {e} at {at:?}");
+    }
+}
+
+/// A stack of plain layers, every one covering every tile, with a distinct
+/// tile per layer and position.
+fn deep_doc(layers: usize) -> Document {
+    let mut d = Document::new(512, 512, None);
+    let mut rng = Rng::new(7);
+    for i in 0..layers {
+        let mut l = Layer::new(&format!("l{i}"));
+        for (tx, ty) in d.bounds().tiles() {
+            let mut t = Tile::default();
+            let a = 0.2 + 0.5 * rng.f();
+            let c = [rng.f() * a, rng.f() * a, rng.f() * a, a];
+            for y in 0..TILE as usize {
+                for x in 0..TILE as usize {
+                    t.set(x, y, c);
+                }
+            }
+            l.pixels.set_tile(tx, ty, Some(Arc::new(t)));
+        }
+        d.root.push(Node::Layer(l));
+    }
+    d
+}
+
+fn set_opacity(d: &mut Document, id: &str, o: f32) {
+    for n in &mut d.root {
+        if let Node::Layer(l) = n
+            && l.id == id
+        {
+            l.opacity = o;
+        }
+    }
+}
+
+#[test]
+fn a_drag_fills_each_segment_once_then_reuses_it() {
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let mut gc = GpuCompositor::new(&device, 64 << 20);
+    let mut d = deep_doc(8);
+    let hot = d.layer_ids()[4].clone();
+    let tex = target(&device, 512, 512);
+    let view = tex.create_view(&Default::default());
+    let tiles = d.bounds().tiles().count() as u64;
+    for frame in 0..10 {
+        set_opacity(&mut d, &hot, 0.3 + 0.05 * frame as f32);
+        gc.run(&device, &queue, &split_programs(&d, None, &hot), &view, [512, 512]);
+        assert_eq!(gc.fills, 2 * tiles, "frame {frame}: a prefix and a suffix per tile, filled once");
+    }
+    let (e, at) = max_error(&d, None, &read(&device, &queue, &tex));
+    assert!(e <= TOL, "error {e} at {at:?}");
+    // Painting below the hot layer refills that tile's prefix only.
+    let below = d.layer_ids()[1].clone();
+    if let Some(Node::Layer(l)) = d.root.iter_mut().find(|n| n.id() == below) {
+        let mut t = Tile::default();
+        t.set(3, 3, [0.5, 0.0, 0.0, 0.5]);
+        l.pixels.set_tile(0, 0, Some(Arc::new(t)));
+    }
+    gc.run(&device, &queue, &split_programs(&d, None, &hot), &view, [512, 512]);
+    assert_eq!(gc.fills, 2 * tiles + 1, "one prefix refilled");
+    let (e, at) = max_error(&d, None, &read(&device, &queue, &tex));
+    assert!(e <= TOL, "error {e} at {at:?}");
+}
+
+#[test]
+fn a_small_cache_still_composites_exactly() {
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    // Room for two segment images: every batch evicts the last one's.
+    let tile_bytes = (TILE as u64) * (TILE as u64) * 8;
+    let mut gc = GpuCompositor::with_cache(&device, 64 << 20, 2 * tile_bytes);
+    let d = deep_doc(6);
+    let hot = d.layer_ids()[2].clone();
+    let tex = target(&device, 512, 512);
+    let view = tex.create_view(&Default::default());
+    for _ in 0..2 {
+        gc.run(&device, &queue, &split_programs(&d, None, &hot), &view, [512, 512]);
+        let (e, at) = max_error(&d, None, &read(&device, &queue, &tex));
+        assert!(e <= TOL, "error {e} at {at:?}");
+    }
+    assert!(gc.cached_segments() <= 2);
 }

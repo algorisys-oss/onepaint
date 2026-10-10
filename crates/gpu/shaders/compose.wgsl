@@ -9,6 +9,10 @@
 //   c: mask slot, mask stroke slot, mask stroke code, mask stroke opacity
 //   d: ghost tint rgb (f32 bits)
 // A stroke code is `kind | mode << 8` (kind 0 paint, 1 erase, 2 alpha lock).
+//
+// Spec 38: a job may start from a cached segment image (`init`), lay a
+// cached image over its result (`OP_OVER_CACHE`, slot in a.y), and write to
+// a cache slot instead of the canvas (`dest`). NONE means "not used".
 
 struct Params {
     doc_size: vec2<u32>,
@@ -20,6 +24,8 @@ struct Job {
     origin: vec2<u32>,
     op_start: u32,
     op_count: u32,
+    init: u32,
+    dest: u32,
 }
 
 struct Op {
@@ -47,12 +53,19 @@ struct Km {
 @group(0) @binding(10) var atlas5: texture_2d_array<f32>;
 @group(0) @binding(11) var atlas6: texture_2d_array<f32>;
 @group(0) @binding(12) var atlas7: texture_2d_array<f32>;
+// Cached segment images: read in the composite pass, written in the fill
+// pass (each pass binds a stand-in for the other).
+@group(0) @binding(13) var cache_tex: texture_2d_array<f32>;
+@group(0) @binding(14) var cache_out: texture_storage_2d_array<rgba16float, write>;
+
+const NONE: u32 = 0xffffffffu;
 
 const OP_LAYER: u32 = 0u;
 const OP_PUSH_ZERO: u32 = 1u;
 const OP_PUSH_CONTENT: u32 = 2u;
 const OP_CLIP: u32 = 3u;
 const OP_POP: u32 = 4u;
+const OP_OVER_CACHE: u32 = 5u;
 
 const F_INHERIT: u32 = 1u;     // Layer: inherit alpha; Pop: clip instead of blend
 const F_TINT: u32 = 2u;
@@ -112,6 +125,10 @@ fn load(slot: u32, p: vec2<i32>) -> vec4<f32> {
         case 6u: { return textureLoad(atlas6, p, l, 0); }
         default: { return textureLoad(atlas7, p, l, 0); }
     }
+}
+
+fn load_cache(slot: u32, p: vec2<i32>) -> vec4<f32> {
+    return textureLoad(cache_tex, p, i32(slot), 0);
 }
 
 // ── sRGB transfer (crates/color/src/lib.rs) ──
@@ -310,25 +327,42 @@ fn content(o: Op, p: vec2<i32>) -> vec4<f32> {
     return c;
 }
 
+fn finish(job: Job, g: vec2<u32>, p: vec2<i32>, top: vec4<f32>) {
+    if (job.dest != NONE) {
+        textureStore(cache_out, p, i32(job.dest), top);
+    } else {
+        textureStore(out_tex, vec2<i32>(g), top);
+    }
+}
+
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let job = jobs[gid.z + select(0u, prm.general_base, GENERAL)];
     let g = job.origin + gid.xy;
-    if (g.x >= prm.doc_size.x || g.y >= prm.doc_size.y) {
+    // A cache image covers its whole tile: it may be reused by any tile.
+    if (job.dest == NONE && (g.x >= prm.doc_size.x || g.y >= prm.doc_size.y)) {
         return;
     }
     let p = vec2<i32>(gid.xy);
     // The top of the stack lives in `top`; `stack` holds the registers under it.
     var stack: array<vec4<f32>, STACK>;
     var top = vec4<f32>(0.0);
+    if (job.init != NONE) {
+        top = load_cache(job.init, p);
+    }
     var sp = 0u;
     if (!GENERAL) {
         for (var i = job.op_start; i < job.op_start + job.op_count; i++) {
             let o = ops[i];
-            let c = load(o.b.x, p) * bitcast<f32>(o.a.z);
+            var c: vec4<f32>;
+            if (o.a.x == OP_OVER_CACHE) {
+                c = load_cache(o.a.y, p);
+            } else {
+                c = load(o.b.x, p) * bitcast<f32>(o.a.z);
+            }
             top = c + top * (1.0 - c.w);
         }
-        textureStore(out_tex, vec2<i32>(g), top);
+        finish(job, g, p, top);
         return;
     }
     for (var i = job.op_start; i < job.op_start + job.op_count; i++) {
@@ -355,6 +389,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case OP_CLIP: {
                 top = clip_over(top, content(o, p), opacity);
             }
+            case OP_OVER_CACHE: {
+                let c = load_cache(o.a.y, p);
+                top = c + top * (1.0 - c.w);
+            }
             default: {
                 var v = top;
                 sp -= 1u;
@@ -371,5 +409,5 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
     }
-    textureStore(out_tex, vec2<i32>(g), top);
+    finish(job, g, p, top);
 }

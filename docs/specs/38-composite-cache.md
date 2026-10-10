@@ -1,7 +1,22 @@
 # 38: Cached composite below and above the active layer
 
 ## Status
-Proposed. Follows spec 13 (GPU compositor). No happypaint source: happypaint
+Built: the split, the segment cache and its fill pass, and `Session::plan`
+splitting at the stroked or active layer. Warm-up and the budget-overflow
+items are still to do.
+
+Measured on Iris Xe with the opacity-drag bench (`ONEPAINT_BENCH_TRACE=1`,
+unsplit and split frames alternated, browsers sharing the GPU):
+
+| Drag frame, 8192² × 100 layers | Unsplit (median) | Split (median) |
+|---|---|---|
+| Distinct tiles fit the atlas | 210 ms | 28 ms |
+| Past the atlas budget | 339 ms | 28 ms |
+
+Planning is 5–7 ms of the split frame, so the next step toward 16.7 ms is
+making planning cheaper.
+
+Follows spec 13 (GPU compositor). No happypaint source: happypaint
 recomposites every layer on every change, and this is onepaint's own
 performance work.
 

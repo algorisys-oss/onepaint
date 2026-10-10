@@ -10,7 +10,7 @@
 #![allow(clippy::unwrap_used)]
 
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use onepaint_compose::program::{TileProgram, plan_tile};
+use onepaint_compose::program::{TileProgram, plan_tile, plan_tile_split};
 use onepaint_doc::{Document, Layer, Node};
 use onepaint_gpu::compose::{DEFAULT_BUDGET, GpuCompositor};
 use onepaint_raster::{TILE, Tile};
@@ -133,7 +133,43 @@ fn bench(c: &mut Criterion) {
         // Warm: the whole page once, as when the document opens.
         let warm: Vec<TileProgram> = all.iter().filter_map(|&(tx, ty)| plan_tile(&d, tx, ty, None)).collect();
         run(&mut gc, &warm);
+        let hot = d.root[DRAGGED].id().to_string();
         let mut o = 0.5f32;
+        // Spec 38: plan with the dragged layer hot; the first frame fills the cache.
+        let split = |d: &Document| -> Vec<TileProgram> {
+            frame_keys.iter().filter_map(|&(tx, ty)| plan_tile_split(d, tx, ty, None, Some(&hot))).collect()
+        };
+        run(&mut gc, &split(&d));
+        if std::env::var("ONEPAINT_BENCH_TRACE").is_ok() {
+            // Alternate unsplit and split frames, so both see the same machine.
+            let (mut a, mut b) = (Vec::new(), Vec::new());
+            for f in 0..30 {
+                set_opacity(&mut d, DRAGGED, 0.2 + 0.02 * f as f32);
+                let t0 = std::time::Instant::now();
+                let progs: Vec<TileProgram> = frame_keys.iter().filter_map(|&(tx, ty)| plan_tile(&d, tx, ty, None)).collect();
+                run(&mut gc, &progs);
+                a.push(t0.elapsed().as_secs_f64() * 1e3);
+                let t0 = std::time::Instant::now();
+                let progs = split(&d);
+                run(&mut gc, &progs);
+                b.push(t0.elapsed().as_secs_f64() * 1e3);
+            }
+            let stats = |v: &mut Vec<f64>| {
+                v.sort_by(f64::total_cmp);
+                (v[0], v[v.len() / 2])
+            };
+            let ((amin, amed), (bmin, bmed)) = (stats(&mut a), stats(&mut b));
+            eprintln!("{name}: unsplit min {amin:.1} / median {amed:.1} ms; split min {bmin:.1} / median {bmed:.1} ms");
+        }
+        g.bench_function(format!("drag frame, split (plan + GPU), {name}"), |b| {
+            b.iter(|| {
+                o = if o > 0.9 { 0.2 } else { o + 0.05 };
+                set_opacity(&mut d, DRAGGED, o);
+                run(&mut gc, black_box(&split(&d)));
+            })
+        });
+        let split_progs = split(&d);
+        g.bench_function(format!("drag frame, split, GPU only, {name}"), |b| b.iter(|| run(&mut gc, black_box(&split_progs))));
         g.bench_function(format!("drag frame (plan + GPU), {name}"), |b| {
             b.iter(|| {
                 o = if o > 0.9 { 0.2 } else { o + 0.05 };
