@@ -58,3 +58,4 @@ The happypaint references are relative to `../happypaint/frontend/src/`.
 | 45 | [Impasto relief on the GPU](45-gpu-relief.md) | compose, gpu |
 | 46 | [Noise, screentone and fill layers on the GPU; adjustments and split caching](46-gpu-noise-fills.md) | filters, compose, gpu |
 | 47 | [Skip layers under an opaque tile](47-opaque-skip.md) | compose, engine |
+| 48 | [View modes in the present pass](48-gpu-view-modes.md) | gpu, app |

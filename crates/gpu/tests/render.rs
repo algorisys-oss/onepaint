@@ -226,3 +226,60 @@ fn sheets_present_like_one_texture() {
         assert!(worst <= 2, "scale {scale}: off by {worst}");
     }
 }
+
+#[test]
+fn view_modes_in_the_present_pass_match_the_cpu() {
+    use onepaint_color::cmyk::{ViewModes, apply_view, builtin_press};
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    // A colour field with translucent and saturated (out-of-gamut) corners.
+    let mut t = Tile::default();
+    for y in 0..256 {
+        for x in 0..256 {
+            let (u, v) = (x as f32 / 255.0, y as f32 / 255.0);
+            let a = if x < 32 { 0.0 } else { 0.35 + 0.65 * v };
+            t.set(x, y, [u * a, (1.0 - u) * v * a, (0.5 + 0.5 * (u * 9.0).sin()) * 0.3 * a, a]);
+        }
+    }
+    let params = ViewParams {
+        origin: [0.0, 0.0],
+        size: [256.0, 256.0],
+        offset: [0.0, 0.0],
+        scale: 1.0,
+        rotation: 0.0,
+        checker: 8.0,
+        stage: [0.0, 0.0, 1.0, 1.0],
+        checker_a: [0.85, 0.85, 0.85, 1.0],
+        checker_b: [0.64, 0.64, 0.64, 1.0],
+        time: 0.0,
+    };
+    let modes = [
+        ViewModes { grayscale: true, ..Default::default() },
+        ViewModes { proof: true, ..Default::default() },
+        ViewModes { proof: true, paper_white: true, black_ink: true, ..Default::default() },
+        ViewModes { gamut_warn: 2.0, ..Default::default() },
+        ViewModes { grayscale: true, proof: true, gamut_warn: 4.0, ..Default::default() },
+    ];
+    for v in modes {
+        // GPU: the raw tile, modes in the present pass.
+        let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+        assert!(gpu.ensure_size(&device, 256, 256));
+        gpu.upload(&queue, &[((0, 0), t.clone())]);
+        gpu.set_view_modes(&device, &queue, &v, builtin_press());
+        gpu.set_view(&queue, &params);
+        let a = render(&gpu, &device, &queue, 256, 256);
+        // CPU: the modes applied to the tile, presented plainly.
+        let mut px = t.to_f32();
+        apply_view(&mut px, &v);
+        let mut cpu = CanvasGpu::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+        assert!(cpu.ensure_size(&device, 256, 256));
+        cpu.upload(&queue, &[((0, 0), Tile::from_f32(&px))]);
+        cpu.set_view(&queue, &params);
+        let b = render(&cpu, &device, &queue, 256, 256);
+        let worst = a.iter().zip(&b).map(|(x, y)| x.abs_diff(*y)).max().unwrap();
+        let off = a.iter().zip(&b).filter(|(x, y)| x.abs_diff(**y) > 2).count();
+        assert!(off * 1000 <= a.len(), "{v:?}: off by up to {worst} on {off} channels");
+    }
+}

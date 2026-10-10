@@ -132,7 +132,7 @@ an item changes there, change it here too.
   - [x] Paper shading (spec 43)
   - [x] Partial panel clips (spec 44)
   - [ ] Ghost pegs (out-of-pegs onion offsets)
-  - [ ] Present-only view modes
+  - [x] Present-only view modes (spec 48)
 - [x] Opacity-drag bench (`cargo bench -p onepaint-gpu --bench opacity_drag`)
 - [ ] Opacity drag at 60 fps on 8k × 100 layers. Baseline on Iris Xe
       (2026-10-10): 128 ms a frame when the distinct tiles fit the 1 GiB

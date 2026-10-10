@@ -22,12 +22,19 @@ struct Uniforms {
     sel: vec4<f32>,
     // Spec 40: sheet width and height at level 0, sheets across and down.
     sheets: vec4<f32>,
+    // Spec 48: grayscale, proof, gamut-warning threshold (LUT units, 0 off),
+    // any; then the proof's linear black and white points.
+    view: vec4<f32>,
+    lo: vec4<f32>,
+    hi: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var tex: texture_2d_array<f32>;
 @group(0) @binding(2) var samp: sampler;
 @group(0) @binding(3) var sel_tex: texture_2d_array<f32>;
+// The press's proof LUT (gamma sRGB on white → print, ΔE in alpha), 33³.
+@group(0) @binding(4) var proof_lut: texture_3d<f32>;
 
 @vertex
 fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
@@ -102,6 +109,51 @@ fn ants(d: vec2<f32>, pos: vec2<f32>) -> vec4<f32> {
     return vec4<f32>(0.0);
 }
 
+// `cmyk::trilinear` on the proof LUT (0..1 per channel, ΔE / 255 in w).
+fn proof_at(c: vec3<f32>) -> vec4<f32> {
+    let n = i32(textureDimensions(proof_lut).x);
+    let t = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)) * f32(n - 1);
+    let i = min(vec3<i32>(floor(t)), vec3<i32>(n - 2));
+    let f = t - vec3<f32>(i);
+    var out = vec4<f32>(0.0);
+    for (var k = 0; k < 8; k++) {
+        let d = vec3<i32>(k & 1, (k >> 1) & 1, (k >> 2) & 1);
+        let w = select(1.0 - f.x, f.x, d.x == 1) * select(1.0 - f.y, f.y, d.y == 1) * select(1.0 - f.z, f.z, d.z == 1);
+        out += w * textureLoad(proof_lut, i + d, 0);
+    }
+    return out;
+}
+
+// Present-only view modes on premultiplied linear `p` (`cmyk::apply_view_with`):
+// grayscale on the encoded colour, then the proof on white and the warning.
+fn view_modes(p: vec4<f32>) -> vec4<f32> {
+    let a = p.a;
+    var c = vec3<f32>(0.0);
+    if (a > 0.0) {
+        c = lin2srgb(p.rgb / a) * a;
+    }
+    if (u.view.x > 0.5) {
+        c = vec3<f32>(dot(c, vec3<f32>(0.2126, 0.7152, 0.0722)));
+    }
+    var out_a = a;
+    if (u.view.y > 0.5 || u.view.z > 0.0) {
+        let on_white = clamp(c + 1.0 - a, vec3<f32>(0.0), vec3<f32>(1.0));
+        let s = proof_at(on_white);
+        if (u.view.y > 0.5) {
+            c = lin2srgb(clamp((srgb2lin(s.rgb) - u.lo.rgb) / max(u.hi.rgb - u.lo.rgb, vec3<f32>(1e-4)), vec3<f32>(0.0), vec3<f32>(1.0)));
+            out_a = 1.0;
+        }
+        if (u.view.z > 0.0 && s.w * 255.0 >= u.view.z) {
+            c = vec3<f32>(0.78, 0.06, 0.10);
+            out_a = 1.0;
+        }
+    }
+    if (out_a <= 0.0) {
+        return vec4<f32>(0.0);
+    }
+    return vec4<f32>(srgb2lin(c / out_a) * out_a, out_a);
+}
+
 @fragment
 fn fs_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let d = to_doc(pos.xy);
@@ -112,7 +164,10 @@ fn fs_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
         let cell = floor(pos.xy / u.checker);
         let odd = (i32(cell.x) + i32(cell.y)) % 2 != 0;
         let chk = select(u.checker_a.rgb, u.checker_b.rgb, odd);
-        let p = sample_doc(d);
+        var p = sample_doc(d);
+        if (u.view.w > 0.5) {
+            p = view_modes(p);
+        }
         var s = vec3<f32>(0.0);
         if (p.a > 0.0) {
             s = lin2srgb(p.rgb / p.a);

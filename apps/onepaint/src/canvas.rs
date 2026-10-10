@@ -93,6 +93,9 @@ struct CanvasCallback {
     warm: Arc<Vec<TileProgram>>,
     selection: SelectionUpload,
     params: ViewParams,
+    /// Present-only view modes and the press they proof on (spec 48).
+    view: onepaint_color::cmyk::ViewModes,
+    press: Option<Arc<onepaint_color::cmyk::Press>>,
 }
 
 impl CallbackTrait for CanvasCallback {
@@ -115,6 +118,7 @@ impl CallbackTrait for CanvasCallback {
             if let Some(sel) = &self.selection {
                 gpu.set_selection(queue, sel.as_deref().map(|v| v.as_slice()));
             }
+            gpu.set_view_modes(device, queue, &self.view, crate::press::active(&self.press));
             gpu.set_view(queue, &self.params);
         }
         Vec::new()
@@ -423,26 +427,12 @@ impl Canvas {
 
     /// Proof through `press` (the built-in press when none).
     pub fn set_press(&mut self, press: Option<std::sync::Arc<onepaint_color::cmyk::Press>>) {
-        let same = match (&self.press, &press) {
-            (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
-            (a, b) => a.is_none() && b.is_none(),
-        };
-        if !same {
-            self.press = press;
-            if self.view_modes.any() {
-                let [w, h] = self.doc_size;
-                self.levels.dirty(onepaint_raster::Rect::new(0, 0, w as i32, h as i32).tiles());
-            }
-        }
+        self.press = press;
     }
 
-    /// Change the view modes and re-present every tile.
+    /// Change the view modes; the present pass applies them (spec 48).
     pub fn set_view_modes(&mut self, v: onepaint_color::cmyk::ViewModes) {
-        if v != self.view_modes {
-            self.view_modes = v;
-            let [w, h] = self.doc_size;
-            self.levels.dirty(onepaint_raster::Rect::new(0, 0, w as i32, h as i32).tiles());
-        }
+        self.view_modes = v;
     }
 
     pub fn reset_for(&mut self, doc: [u32; 2]) {
@@ -1335,6 +1325,8 @@ impl Canvas {
                     warm: Arc::new(warm),
                     selection,
                     params,
+                    view: self.view_modes,
+                    press: self.press.clone(),
                 },
             ));
         }
@@ -1371,7 +1363,7 @@ impl Canvas {
             self.warm_queue.reverse();
         }
         let busy = !self.levels.stale_at(self.lod).is_empty() || (self.lod > 0 && !self.levels.rough().is_empty());
-        if busy || self.warm_queue.is_empty() || session.is_stroking() || self.view_modes.any() {
+        if busy || self.warm_queue.is_empty() || session.is_stroking() {
             return Vec::new();
         }
         let n = self.warm_queue.len().min(WARM_TILES_PER_FRAME);
@@ -1405,9 +1397,7 @@ impl Canvas {
     /// CPU within the frame budget. With nothing stale, refine previews at
     /// level 0 (spec 39). Returns the programs and the level they run at.
     fn composite_budgeted(&mut self, session: &Session, ctx: &egui::Context, gpu_compose: bool) -> (Vec<TileProgram>, usize, TileUploads) {
-        let modes = self.view_modes;
-        let gpu = gpu_compose && !modes.any();
-        // The present-only view modes run on CPU tiles, at full size.
+        let gpu = gpu_compose;
         let mut level = if gpu { self.lod } else { 0 };
         let mut todo = self.levels.stale_at(level).clone();
         if todo.is_empty() && gpu && !session.is_stroking() {
@@ -1446,15 +1436,6 @@ impl Canvas {
         }
         if !self.levels.stale_at(self.lod).is_empty() || (gpu && !self.levels.rough().is_empty()) {
             ctx.request_repaint();
-        }
-        if modes.any() {
-            use rayon::prelude::*;
-            let press = crate::press::active(&self.press);
-            out.par_iter_mut().for_each(|(_, t)| {
-                let mut px = t.to_f32();
-                onepaint_color::cmyk::apply_view_with(press, &mut px, &modes);
-                *t = Tile::from_f32(&px);
-            });
         }
         (programs, level, out)
     }

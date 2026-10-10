@@ -16,6 +16,7 @@ pub mod wet;
 pub use mip::L_MAX;
 pub use sheets::Sheets;
 
+use onepaint_color::cmyk::{Press, ViewModes};
 use onepaint_raster::{TILE, Tile};
 
 pub const CANVAS_WGSL: &str = include_str!("../shaders/canvas.wgsl");
@@ -53,6 +54,13 @@ struct Uniforms {
     sel: [f32; 4],
     /// Sheet width and height at level 0, sheets across and down (spec 40).
     sheets: [f32; 4],
+    /// Present-only view modes (spec 48): grayscale, proof, gamut-warning
+    /// threshold in LUT units (0 = off), any on.
+    view: [f32; 4],
+    /// The proof's black and white points, linear (media-relative unless
+    /// simulated).
+    lo: [f32; 4],
+    hi: [f32; 4],
 }
 
 struct DocTextures {
@@ -80,6 +88,11 @@ pub struct CanvasGpu {
     mipper: mip::Mipper,
     /// The level the present pass samples (spec 39).
     lod: u32,
+    /// View modes for the present pass (spec 48), and the proof LUT, keyed
+    /// on the press's LUT address.
+    view: [[f32; 4]; 3],
+    proof: Option<(usize, wgpu::TextureView)>,
+    proof_dummy: wgpu::TextureView,
 }
 
 impl CanvasGpu {
@@ -125,6 +138,16 @@ impl CanvasGpu {
                         multisampled: false,
                         sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D2Array,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D3,
                     },
                     count: None,
                 },
@@ -181,7 +204,92 @@ impl CanvasGpu {
             compositor: None,
             mipper: mip::Mipper::new(device),
             lod: 0,
+            view: [[0.0; 4]; 3],
+            proof: None,
+            proof_dummy: device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("onepaint_proof (unused)"),
+                    size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D3,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default()),
         }
+    }
+
+    /// Present-only view modes (spec 48): grayscale, soft proof on `press`
+    /// and its gamut warning, applied per screen pixel like happypaint's
+    /// present shader (`cmyk::apply_view_with`). Takes effect at the next
+    /// `set_view`; a new press rebuilds the bind group.
+    pub fn set_view_modes(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, v: &ViewModes, press: &Press) {
+        use onepaint_color::srgb_to_linear as s2l;
+        let warn = if v.gamut_warn > 0.0 { (v.gamut_warn as f64 * onepaint_color::cmyk::DELTA_E_SCALE) as f32 } else { 0.0 };
+        let flag = |b: bool| if b { 1.0 } else { 0.0 };
+        let lo = if v.black_ink { [0.0; 3] } else { press.black.map(|c| s2l(c as f32)) };
+        let hi = if v.paper_white { [1.0; 3] } else { press.white.map(|c| s2l(c as f32)) };
+        self.view = [[flag(v.grayscale), flag(v.proof), warn, flag(v.any())], [lo[0], lo[1], lo[2], 0.0], [hi[0], hi[1], hi[2], 0.0]];
+        let key = press.proof_lut.as_ptr() as usize;
+        if !(v.proof || v.gamut_warn > 0.0) || self.proof.as_ref().is_some_and(|(k, _)| *k == key) {
+            return;
+        }
+        let n = onepaint_color::cmyk::GRID as u32;
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("onepaint_proof"),
+            size: wgpu::Extent3d { width: n, height: n, depth_or_array_layers: n },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D3,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            tex.as_image_copy(),
+            &press.proof_lut,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(n * 4), rows_per_image: Some(n) },
+            wgpu::Extent3d { width: n, height: n, depth_or_array_layers: n },
+        );
+        self.proof = Some((key, tex.create_view(&Default::default())));
+        // The bind group holds the old LUT: rebuild it with the composite.
+        if let Some(t) = &mut self.texture {
+            t.bind = Self::bind_group(
+                device,
+                &self.layout,
+                &self.uniforms,
+                &self.sampler,
+                &t.texture,
+                &t.selection,
+                self.proof.as_ref().map_or(&self.proof_dummy, |(_, v)| v),
+            );
+        }
+    }
+
+    fn bind_group(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        uniforms: &wgpu::Buffer,
+        sampler: &wgpu::Sampler,
+        composite: &wgpu::Texture,
+        selection: &wgpu::Texture,
+        proof: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
+        let array = wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() };
+        let (view, sel_view) = (composite.create_view(&array), selection.create_view(&array));
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("onepaint_canvas"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: uniforms.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(sampler) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&sel_view) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(proof) },
+            ],
+        })
     }
 
     /// Composite on the GPU from now on, keeping up to `budget` bytes of layer tiles resident.
@@ -282,8 +390,6 @@ impl CanvasGpu {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::STORAGE_BINDING,
             view_formats: &[],
         });
-        let array = wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() };
-        let view = texture.create_view(&array);
         let storage = (0..levels).map(|l| mip::level_view(&texture, l)).collect();
         let selection = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("onepaint_selection"),
@@ -295,17 +401,8 @@ impl CanvasGpu {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
-        let sel_view = selection.create_view(&array);
-        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("onepaint_canvas"),
-            layout: &self.layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.uniforms.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&sel_view) },
-            ],
-        });
+        let proof = self.proof.as_ref().map_or(&self.proof_dummy, |(_, v)| v);
+        let bind = Self::bind_group(device, &self.layout, &self.uniforms, &self.sampler, &texture, &selection, proof);
         self.texture = Some(DocTextures { texture, storage, selection, bind, sheets });
         self.has_selection = false;
         true
@@ -391,6 +488,9 @@ impl CanvasGpu {
             checker_b: v.checker_b,
             sel: [if self.has_selection { 1.0 } else { 0.0 }, v.time, self.lod as f32, 0.0],
             sheets: [sheets.sheet[0] as f32, sheets.sheet[1] as f32, sheets.grid[0] as f32, sheets.grid[1] as f32],
+            view: self.view[0],
+            lo: self.view[1],
+            hi: self.view[2],
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
     }
