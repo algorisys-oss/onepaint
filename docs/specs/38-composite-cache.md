@@ -31,6 +31,19 @@ submits and the frequency governor never raises the clock. The earlier
 Pinning the clock needs root, so these numbers compare variants within a
 run, not absolute speed; the split is 2.7× faster than unsplit here.
 
+**Cache budget raised to 384 MiB.** The trace now counts segment fills
+per warm split frame. At 256 MiB (384 slots with mips) a 205-tile drag
+refilled 76 segments every frame: each tile needs two slots, prefix and
+suffix, and the frame's batches evicted each other's segments. At 384 MiB
+(576 slots, two per tile for a full 256-tile frame) it fills none. Same
+quiet machine and clock:
+
+| Drag frame | 256 MiB cache | 384 MiB cache |
+|---|---|---|
+| Fits the atlas, split (median) | 53.7 ms | 16.5 ms |
+| Past the atlas budget, split (median) | 152 ms | 22.7 ms |
+| Level 3, fits / past | 5.8 / 5.4 ms | 4.5 / 3.9 ms |
+
 Planning takes 1.8 ms of the split frame; the GPU part (three reads and a
 write per pixel over 205 full-resolution tiles) is the rest, near this
 iGPU's bandwidth. The next lever is compositing zoomed-out views at

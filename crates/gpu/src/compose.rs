@@ -32,8 +32,11 @@ const MAX_JOBS: usize = 65_535;
 const TILE_BYTES: u64 = (TILE as u64) * (TILE as u64) * 8 * 4 / 3;
 /// Default GPU memory for resident layer tiles (spec 13).
 pub const DEFAULT_BUDGET: u64 = 1 << 30;
-/// Default GPU memory for cached segment images (spec 38).
-pub const DEFAULT_CACHE_BUDGET: u64 = 256 << 20;
+/// Default GPU memory for cached segment images (spec 38): two images (the
+/// layers below and above the hot one) for each of a frame's 256 tiles, with
+/// room to spare (576 slots). At 256 MiB (384 slots) a 205-tile drag
+/// thrashed: 76 segments were recomposited every frame, tripling its time.
+pub const DEFAULT_CACHE_BUDGET: u64 = 384 << 20;
 /// "Not used" in a job's `init` and `dest`.
 const NONE: u32 = u32::MAX;
 const OP_OVER_CACHE: u32 = 5;

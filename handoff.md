@@ -47,7 +47,9 @@ Items 1–5 from the earlier list; every step pushed as it landed.
 - **Still on the CPU:** pattern fills, sand screentone, spatial adjustment
   layers, ghost pegs and present-only view modes (`todo.md` §2.1).
 - **Item 1, quiet measurements** (specs 38 and 39 have them):
-  - the split drag frame was 54 ms against 144 ms unsplit;
+  - the split drag frame was 54 ms against 144 ms unsplit. That exposed a
+    segment-cache thrash; with the cache at 384 MiB it is **16.5 ms**,
+    under the 60 fps budget even at the low clock;
   - level 3 was 6.2 ms;
   - the iGPU sat at 500–650 MHz, because the governor doesn't raise the
     clock while the bench waits after every frame. So they are relative,
@@ -82,7 +84,9 @@ Items 1–5 from the earlier list; every step pushed as it landed.
     is unchanged apart from rounding on the GPU path.
   - I'd do A, then B as a separate step if you want parity.
 - The GPU memory budget on integrated GPUs: 1 GiB of source tiles plus
-  256 MiB of segment cache, both counted with mips.
+  **384 MiB** of segment cache (raised from 256 MiB tonight), both counted
+  with mips. 256 MiB thrashed on a 205-tile drag; 384 MiB took the split
+  drag frame from 54 ms to 16.5 ms (spec 38).
 - Whether to drop the CPU tile copy once tiles are resident on the GPU.
 - Vector support: its scope, and when it comes relative to the rest.
 

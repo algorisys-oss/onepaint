@@ -157,6 +157,12 @@ fn bench(c: &mut Criterion) {
                 v.sort_by(f64::total_cmp);
                 (v[0], v[v.len() / 2])
             };
+            // Segment images filled per split frame: 0 once warm, unless the cache thrashes.
+            let before = gc.fills;
+            for _ in 0..5 {
+                run(&mut gc, &split(&d));
+            }
+            eprintln!("{name}: {} segment fills per split frame once warm", (gc.fills - before) / 5);
             let ((amin, amed), (bmin, bmed)) = (stats(&mut a), stats(&mut b));
             eprintln!("{name}: unsplit min {amin:.1} / median {amed:.1} ms; split min {bmin:.1} / median {bmed:.1} ms");
             // Where a split frame's time goes.
