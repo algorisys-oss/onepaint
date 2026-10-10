@@ -80,7 +80,7 @@ The modes are:
 - hue, saturation, color, luminosity
 - pigment (brush only)
 
-- [~] All of them on the GPU, matching the CPU oracle (all 19 modes, groups, clip families, masks, inherit alpha, ghost tints and strokes in progress composite on the GPU; tiles with adjustment layers, relief, paper, partial panel clips or ghost pegs still use the CPU compositor)
+- [~] All of them on the GPU, matching the CPU oracle (all 19 modes, groups, clip families, masks, inherit alpha, ghost tints and strokes in progress composite on the GPU, as do colour adjustment, noise, screentone and fill layers, relief, paper and panel clips (specs 42–46); view modes run in the present pass (spec 48). Tiles with sand screentone, imported pattern images or ghost pegs still use the CPU compositor; spatial adjustment layers are rendered on the CPU, reused mid-stroke, and composite on the GPU as pixels)
 
 ## Adjustments and filters (48 kinds)
 Each kind works destructively, as an adjustment layer, and as a smart filter.
