@@ -18,6 +18,7 @@ pub use sheets::Sheets;
 
 use onepaint_color::cmyk::{Press, ViewModes};
 use onepaint_raster::{TILE, Tile};
+use std::sync::Arc;
 
 pub const CANVAS_WGSL: &str = include_str!("../shaders/canvas.wgsl");
 
@@ -88,10 +89,10 @@ pub struct CanvasGpu {
     mipper: mip::Mipper,
     /// The level the present pass samples (spec 39).
     lod: u32,
-    /// View modes for the present pass (spec 48), and the proof LUT, keyed
-    /// on the press's LUT address.
+    /// View modes for the present pass (spec 48), and the proof LUT with the
+    /// press it came from (`None`: the built-in press), held so it stays unique.
     view: [[f32; 4]; 3],
-    proof: Option<(usize, wgpu::TextureView)>,
+    proof: Option<(Option<Arc<Press>>, wgpu::TextureView)>,
     proof_dummy: wgpu::TextureView,
 }
 
@@ -223,17 +224,24 @@ impl CanvasGpu {
 
     /// Present-only view modes (spec 48): grayscale, soft proof on `press`
     /// and its gamut warning, applied per screen pixel like happypaint's
-    /// present shader (`cmyk::apply_view_with`). Takes effect at the next
-    /// `set_view`; a new press rebuilds the bind group.
-    pub fn set_view_modes(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, v: &ViewModes, press: &Press) {
+    /// present shader (`cmyk::apply_view_with`); `None` is the built-in press.
+    /// Takes effect at the next `set_view`; a new press rebuilds the bind group.
+    pub fn set_view_modes(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, v: &ViewModes, owner: Option<&Arc<Press>>) {
+        let press: &Press = match owner {
+            Some(p) => p,
+            None => onepaint_color::cmyk::builtin_press(),
+        };
         use onepaint_color::srgb_to_linear as s2l;
         let warn = if v.gamut_warn > 0.0 { (v.gamut_warn as f64 * onepaint_color::cmyk::DELTA_E_SCALE) as f32 } else { 0.0 };
         let flag = |b: bool| if b { 1.0 } else { 0.0 };
         let lo = if v.black_ink { [0.0; 3] } else { press.black.map(|c| s2l(c as f32)) };
         let hi = if v.paper_white { [1.0; 3] } else { press.white.map(|c| s2l(c as f32)) };
         self.view = [[flag(v.grayscale), flag(v.proof), warn, flag(v.any())], [lo[0], lo[1], lo[2], 0.0], [hi[0], hi[1], hi[2], 0.0]];
-        let key = press.proof_lut.as_ptr() as usize;
-        if !(v.proof || v.gamut_warn > 0.0) || self.proof.as_ref().is_some_and(|(k, _)| *k == key) {
+        let same = |k: &Option<Arc<Press>>| match (k, owner) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (a, b) => a.is_none() && b.is_none(),
+        };
+        if !(v.proof || v.gamut_warn > 0.0) || self.proof.as_ref().is_some_and(|(k, _)| same(k)) {
             return;
         }
         let n = onepaint_color::cmyk::GRID as u32;
@@ -253,7 +261,7 @@ impl CanvasGpu {
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(n * 4), rows_per_image: Some(n) },
             wgpu::Extent3d { width: n, height: n, depth_or_array_layers: n },
         );
-        self.proof = Some((key, tex.create_view(&Default::default())));
+        self.proof = Some((owner.cloned(), tex.create_view(&Default::default())));
         // The bind group holds the old LUT: rebuild it with the composite.
         if let Some(t) = &mut self.texture {
             t.bind = Self::bind_group(
@@ -355,10 +363,10 @@ impl CanvasGpu {
 
     /// Fill the cache images `programs` will need (spec 38 warm-up).
     pub fn warm(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, programs: &[onepaint_compose::program::TileProgram], level: u32) {
-        if let Some(c) = &mut self.compositor
+        if let (Some(c), Some(t)) = (&mut self.compositor, &self.texture)
             && !programs.is_empty()
         {
-            c.warm_level(device, queue, programs, level);
+            c.warm_level(device, queue, programs, &t.sheets, level);
         }
     }
 

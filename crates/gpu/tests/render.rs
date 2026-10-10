@@ -229,7 +229,7 @@ fn sheets_present_like_one_texture() {
 
 #[test]
 fn view_modes_in_the_present_pass_match_the_cpu() {
-    use onepaint_color::cmyk::{ViewModes, apply_view, builtin_press};
+    use onepaint_color::cmyk::{ViewModes, apply_view};
     let Some((device, queue)) = device() else {
         eprintln!("skipping: no GPU adapter");
         return;
@@ -267,7 +267,7 @@ fn view_modes_in_the_present_pass_match_the_cpu() {
         let mut gpu = CanvasGpu::new(&device, wgpu::TextureFormat::Rgba8Unorm);
         assert!(gpu.ensure_size(&device, 256, 256));
         gpu.upload(&queue, &[((0, 0), t.clone())]);
-        gpu.set_view_modes(&device, &queue, &v, builtin_press());
+        gpu.set_view_modes(&device, &queue, &v, None);
         gpu.set_view(&queue, &params);
         let a = render(&gpu, &device, &queue, 256, 256);
         // CPU: the modes applied to the tile, presented plainly.

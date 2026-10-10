@@ -414,10 +414,10 @@ fn warm_up_fills_ahead_so_the_first_frame_fills_nothing() {
     let d = deep_doc(8);
     let hot = d.layer_ids()[3].clone();
     let progs = split_programs(&d, None, &hot);
-    gc.warm(&device, &queue, &progs);
+    gc.warm(&device, &queue, &progs, [512, 512]);
     let warmed = gc.fills;
     assert_eq!(warmed, 2 * progs.len() as u64);
-    gc.warm(&device, &queue, &progs);
+    gc.warm(&device, &queue, &progs, [512, 512]);
     assert_eq!(gc.fills, warmed, "a second warm-up has nothing to do");
     let tex = target(&device, 512, 512);
     let view = onepaint_gpu::mip::level_view(&tex, 0);
@@ -558,5 +558,31 @@ fn relief_matches_the_cpu_oracle() {
             let (e, at) = max_error(&doc, None, &read(&device, &queue, &tex));
             assert!(e <= TOL, "seed {seed} split at {hot} ({pass}): error {e} at {at:?}");
         }
+    }
+}
+
+#[test]
+fn warmed_segments_keep_their_relief() {
+    use onepaint_compose::testdocs::with_relief;
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let (w, h) = (600, 300);
+    let tex = target(&device, w, h);
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
+    for seed in 0..8 {
+        let doc = with_relief(random_doc(seed, w, h, false), seed);
+        let ids = layer_ids(&doc);
+        let hot = ids[ids.len() - 1].clone();
+        let progs = split_programs(&doc, None, &hot);
+        let mut gc = GpuCompositor::new(&device, 64 << 20);
+        // Idle warm-up fills the segments; the frame then only reads them.
+        gc.warm(&device, &queue, &progs, [w, h]);
+        let filled = gc.fills;
+        gc.run(&device, &queue, &progs, &view, [w, h]);
+        assert_eq!(gc.fills, filled, "seed {seed}: the frame reused the warmed segments");
+        let (e, at) = max_error(&doc, None, &read(&device, &queue, &tex));
+        assert!(e <= TOL, "seed {seed}: error {e} at {at:?}");
     }
 }

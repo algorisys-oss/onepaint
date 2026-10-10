@@ -48,6 +48,12 @@ impl PaperTexture {
     pub fn mask(&self) -> &TipMask {
         &self.tex
     }
+
+    /// The grain tile's handle: a GPU cache holds it, so its address can't
+    /// be reused while the cached texture lives.
+    pub fn mask_arc(&self) -> &Arc<TipMask> {
+        &self.tex
+    }
 }
 
 /// How hard a dry stroke bites into the paper, and what it bites through:

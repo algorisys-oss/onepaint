@@ -118,7 +118,7 @@ impl CallbackTrait for CanvasCallback {
             if let Some(sel) = &self.selection {
                 gpu.set_selection(queue, sel.as_deref().map(|v| v.as_slice()));
             }
-            gpu.set_view_modes(device, queue, &self.view, crate::press::active(&self.press));
+            gpu.set_view_modes(device, queue, &self.view, self.press.as_ref());
             gpu.set_view(queue, &self.params);
         }
         Vec::new()

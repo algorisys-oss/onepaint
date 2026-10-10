@@ -251,8 +251,8 @@ pub struct GpuCompositor {
     mipper: crate::mip::Mipper,
     /// The level the current run composites at (spec 39).
     level: u32,
-    /// The paper grain (spec 43), keyed on its pixels' address, and a stand-in.
-    paper: Option<(usize, wgpu::TextureView)>,
+    /// The paper grain (spec 43), held so its identity stays unique, and a stand-in.
+    paper: Option<(Arc<onepaint_brush::TipMask>, wgpu::TextureView)>,
     paper_dummy: wgpu::TextureView,
     /// Segment images computed since creation (for tests and stats).
     pub fills: u64,
@@ -796,11 +796,11 @@ impl GpuCompositor {
     /// Upload the paper grain the batch's paper op reads, if it changed (spec 43).
     fn ensure_paper<'a>(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, mut ops: impl Iterator<Item = &'a &'a Op>) {
         let Some(Op::Paper { shade, .. }) = ops.find(|op| matches!(op, Op::Paper { .. })) else { return };
-        let mask = shade.tex.mask();
-        let id = mask.data.as_ptr() as usize;
-        if self.paper.as_ref().is_some_and(|(k, _)| *k == id) {
+        let arc = shade.tex.mask_arc();
+        if self.paper.as_ref().is_some_and(|(k, _)| Arc::ptr_eq(k, arc)) {
             return;
         }
+        let mask = arc.as_ref();
         let n = mask.size as u32;
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("compose paper"),
@@ -818,7 +818,7 @@ impl GpuCompositor {
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(n * 4), rows_per_image: Some(n) },
             wgpu::Extent3d { width: n, height: n, depth_or_array_layers: 1 },
         );
-        self.paper = Some((id, tex.create_view(&Default::default())));
+        self.paper = Some((arc.clone(), tex.create_view(&Default::default())));
     }
 
     /// Above level 0, fill the mips of the slots `works` read that lack them.
@@ -975,12 +975,13 @@ impl GpuCompositor {
 
     /// Fill the cache images `programs` will need, without compositing
     /// (spec 38 warm-up, run on idle frames after the active layer changes).
-    pub fn warm(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, programs: &[TileProgram]) {
-        self.warm_level(device, queue, programs, 0);
+    /// `doc_size` places relief taps at the document's edge.
+    pub fn warm(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, programs: &[TileProgram], doc_size: [u32; 2]) {
+        self.warm_level(device, queue, programs, &Sheets::single(doc_size), 0);
     }
 
     /// [`GpuCompositor::warm`] for the cache images at `level` (spec 39).
-    pub fn warm_level(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, programs: &[TileProgram], level: u32) {
+    pub fn warm_level(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, programs: &[TileProgram], sheets: &Sheets, level: u32) {
         self.level = level.min(crate::mip::L_MAX);
         if !self.split_cache {
             return;
@@ -1003,7 +1004,8 @@ impl GpuCompositor {
             }
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("compose warm") });
             self.mip_sources(device, &mut enc, fills.iter());
-            self.dispatch(device, queue, &mut enc, &fills, &Sheets::single([1, 1]), None, true);
+            // Fills write cache slots only, but relief clamps its taps to the document.
+            self.dispatch(device, queue, &mut enc, &fills, sheets, None, true);
             queue.submit([enc.finish()]);
         }
     }

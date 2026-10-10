@@ -191,7 +191,7 @@ fn bench(c: &mut Criterion) {
             let (g1, g50, gall) = (gpu(1), gpu(50), gpu(progs.len()));
             eprintln!("{name}: split plan {plan:.2} ms; GPU 1 tile {g1:.2} ms, 50 tiles {g50:.2} ms, {} tiles {gall:.2} ms", progs.len());
             // The same drag frame at level 3.
-            gc.warm_level(&device, &queue, &progs, 3);
+            gc.warm_level(&device, &queue, &progs, &onepaint_gpu::Sheets::single([SIZE, SIZE]), 3);
             let l3 = time(&mut || {
                 set_opacity(&mut d, DRAGGED, 0.5);
                 let progs = split(&d);

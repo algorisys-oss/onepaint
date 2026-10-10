@@ -478,13 +478,14 @@ impl App {
     /// already running is cancelled.
     pub fn open_path(&mut self, p: PathBuf) {
         let kind = kind_of(&p);
-        if kind == FileKind::Book {
-            return self.open_book(p);
-        }
         if let Some(old) = self.loading.take() {
             old.progress.cancel();
         }
-        self.loading = Some(loading::Loading::start(p, kind));
+        if kind == FileKind::Book {
+            return self.open_book(p);
+        }
+        let target = (self.active_tab, self.session.doc().id.clone());
+        self.loading = Some(loading::Loading::start(p, kind, target));
     }
 
     /// Open an autosave as unsaved work, in the background.
@@ -498,6 +499,10 @@ impl App {
     /// Install a finished background load, or report why it didn't finish.
     fn finish_loading(&mut self, outcome: loading::Outcome, now: f64) {
         let Some(l) = self.loading.take() else { return };
+        // The drawing it was meant to replace is gone (another tab or document).
+        if !l.target.1.is_empty() && l.target != (self.active_tab, self.session.doc().id.clone()) {
+            return;
+        }
         match outcome {
             loading::Outcome::Loaded(doc) => {
                 self.session.open_document(doc);
@@ -2925,6 +2930,14 @@ mod tests {
         h.state().loading.as_ref().unwrap().progress.cancel();
         wait_loaded(&mut h);
         assert_eq!(h.state().session.doc().id, before);
+        // Replaced meanwhile (here by a new drawing): the load is dropped.
+        h.state_mut().open_path(path.clone());
+        h.state_mut().new_document(100, 80);
+        let fresh = h.state().session.doc().id.clone();
+        wait_loaded(&mut h);
+        assert_eq!(h.state().session.doc().id, fresh);
+        assert_eq!(h.state().session.doc().width, 100);
+        let before = fresh;
         // A file that can't be read says so.
         h.state_mut().open_path(dir.join("missing.happypaint"));
         wait_loaded(&mut h);

@@ -19,6 +19,9 @@ pub struct Loading {
     pub progress: Progress,
     /// An autosave being recovered: it opens as unsaved work.
     pub recovered: bool,
+    /// The tab and document the load replaces; if either changed meanwhile
+    /// (a book opened, a new drawing, a tab switch), the result is dropped.
+    pub target: (usize, String),
     started: Instant,
     rx: mpsc::Receiver<Result<Document, String>>,
 }
@@ -32,7 +35,7 @@ pub enum Outcome {
 
 impl Loading {
     /// Start reading `path` on a worker thread. Books open on the UI thread.
-    pub fn start(path: PathBuf, kind: FileKind) -> Self {
+    pub fn start(path: PathBuf, kind: FileKind, target: (usize, String)) -> Self {
         let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Image").to_string();
         let progress = Progress::default();
         let (tx, rx) = mpsc::channel();
@@ -50,7 +53,7 @@ impl Loading {
             // The receiver is gone if the app moved on; nothing to do then.
             let _ = tx.send(doc);
         });
-        Self { path, kind, name, progress, recovered: false, started: Instant::now(), rx }
+        Self { path, kind, name, progress, recovered: false, target, started: Instant::now(), rx }
     }
 
     /// The result, once the worker is done.
@@ -82,6 +85,7 @@ impl Loading {
             name: name.into(),
             progress: Progress::default(),
             recovered: false,
+            target: (0, String::new()),
             started: Instant::now() - SHOW_AFTER,
             rx,
         };
