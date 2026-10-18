@@ -79,3 +79,27 @@ fn switching_layers_resets_the_target() {
     s.execute(Command::SetMaskTarget { on: true }).unwrap();
     assert!(!s.mask_target(), "no mask on the background");
 }
+
+#[test]
+fn a_feathered_mask_edit_redraws_as_far_as_the_blur_reaches() {
+    let mut s = Session::new(600, 64, Some(Rgba::WHITE));
+    s.execute(Command::SetColor { rgba: Rgba::new(1.0, 0.0, 0.0, 1.0) }).unwrap();
+    s.execute(Command::SelectAll).unwrap();
+    s.execute(Command::FillSelection).unwrap();
+    s.execute(Command::Deselect).unwrap();
+    let id = s.active().to_string();
+    s.execute(Command::AddMask).unwrap();
+    let props = LayerProps { mask_feather: Some(20.0), ..Default::default() };
+    s.execute(Command::SetLayerProps { id, props }).unwrap();
+    s.take_dirty_tiles();
+    // A black dab in tile 0, 30 px from tile 1: the blur reaches 41 px.
+    s.execute(Command::SetColor { rgba: Rgba::BLACK }).unwrap();
+    s.stroke_begin(StrokePoint::at(220.0, 32.0, 1.0, 0.0));
+    s.stroke_extend(&[StrokePoint::at(226.0, 32.0, 1.0, 8.0)]);
+    s.stroke_end();
+    let dirty = s.take_dirty_tiles();
+    assert!(dirty.contains(&(1, 0)), "{dirty:?}");
+    // The hole is soft: half hidden just past the dab, not cut.
+    let c = s.pick_color(226, 32);
+    assert!(c.g > 0.05, "{c:?}");
+}

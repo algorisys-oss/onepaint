@@ -141,7 +141,15 @@ pub struct PlanCache {
     /// Whether a tile is fully opaque, by its address (the `Weak` keeps the
     /// address from being reused while the entry lives).
     opaque: std::sync::Mutex<std::collections::HashMap<usize, (std::sync::Weak<Tile>, bool)>>,
+    /// Feathered mask tiles by the mask tiles they read (held weakly, so a
+    /// freed address can't match), the feather, the tile and the document size.
+    feather: std::sync::Mutex<std::collections::HashMap<u64, Feathered>>,
 }
+
+type Feathered = (Vec<Option<std::sync::Weak<Tile>>>, Option<Arc<Tile>>);
+
+/// Cached feathered mask tiles kept at most; past this the cache starts over.
+const MAX_CACHED_FEATHER: usize = 1024;
 
 type PreparedAdjust = (Arc<onepaint_filters::Prepared>, Arc<onepaint_filters::gpu::GpuAdjust>);
 
@@ -183,6 +191,30 @@ impl PlanCache {
         }
         // Another thread may have prepared it meanwhile: share theirs.
         Some(m.entry(key).or_insert(v).clone())
+    }
+
+    /// The feathered mask tile `make` builds from the `window` tiles, unless
+    /// one was built from the same tiles before.
+    fn feathered(&self, key: u64, window: &[Option<Arc<Tile>>], make: impl FnOnce() -> Option<Arc<Tile>>) -> Option<Arc<Tile>> {
+        let same = |w: &[Option<std::sync::Weak<Tile>>]| {
+            w.len() == window.len()
+                && w.iter().zip(window).all(|(a, b)| match (a, b) {
+                    (None, None) => true,
+                    (Some(a), Some(b)) => a.strong_count() > 0 && std::ptr::eq(a.as_ptr(), Arc::as_ptr(b)),
+                    _ => false,
+                })
+        };
+        if let Some(hit) = self.feather.lock().ok().and_then(|m| m.get(&key).filter(|e| same(&e.0)).map(|e| e.1.clone())) {
+            return hit;
+        }
+        let v = make();
+        if let Ok(mut m) = self.feather.lock() {
+            if m.len() >= MAX_CACHED_FEATHER {
+                m.clear();
+            }
+            m.insert(key, (window.iter().map(|t| t.as_ref().map(Arc::downgrade)).collect(), v.clone()));
+        }
+        v
     }
 
     /// Whether every pixel of `t` has alpha exactly 1, cached by tile.
@@ -575,8 +607,10 @@ impl Planner<'_> {
             && let Some(mask) = &l.mask
         {
             c.density = l.mask_density();
-            c.mask = match (mask.tile(tx, ty), &mask_stroke) {
-                (Some(t), _) => MaskSrc::Tile(t.clone()),
+            // Feathered, except while the mask is being painted.
+            let tile = if mask_stroke.is_none() { self.mask_tile(l, mask) } else { mask.tile(tx, ty).cloned() };
+            c.mask = match (tile, &mask_stroke) {
+                (Some(t), _) => MaskSrc::Tile(t),
                 (None, Some(_)) => MaskSrc::Zero,
                 (None, None) if c.density >= 1.0 => return Ok(None),
                 (None, None) => MaskSrc::Zero,
@@ -584,6 +618,25 @@ impl Planner<'_> {
             c.mask_stroke = mask_stroke;
         }
         Ok(Some(c))
+    }
+
+    /// `l`'s mask tile here, blurred by its feather (`feather.rs`) through
+    /// the cache; `None` where it covers nothing (no tile, or nothing in reach).
+    fn mask_tile(&self, l: &Layer, mask: &onepaint_raster::Surface) -> Option<Arc<Tile>> {
+        let (tx, ty) = (self.tx, self.ty);
+        let f = l.mask_feather();
+        if f <= 0.0 {
+            return mask.tile(tx, ty).cloned();
+        }
+        let doc = [self.frame.doc_w, self.frame.doc_h];
+        let make = || crate::feather::feathered_mask_tile(mask, f, tx, ty, doc).map(Arc::new);
+        let Some(cache) = self.cache else { return make() };
+        let window = crate::feather::window(mask, f, tx, ty).tiles;
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        window.iter().map(|t| t.as_ref().map(|t| Arc::as_ptr(t) as usize)).for_each(|p| p.hash(&mut h));
+        (f.to_bits(), tx, ty, doc).hash(&mut h);
+        cache.feathered(h.finish(), &window, make)
     }
 
     /// A panel group's clip over this tile (`panel_clip`), through the cache.
@@ -636,8 +689,8 @@ impl Planner<'_> {
         .ok_or(Unsupported)?;
         let density = l.mask_density();
         let mask = match (&l.mask, l.mask_enabled) {
-            (Some(m), true) => match m.tile(self.tx, self.ty) {
-                Some(t) => MaskSrc::Tile(t.clone()),
+            (Some(m), true) => match self.mask_tile(l, m) {
+                Some(t) => MaskSrc::Tile(t),
                 None if density >= 1.0 => return Ok(()), // fully masked out on this tile
                 None => MaskSrc::Zero,
             },

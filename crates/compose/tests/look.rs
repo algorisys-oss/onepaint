@@ -139,3 +139,28 @@ fn adjustment_layers_take_density_and_blend_if() {
     let d = doc(vec![Node::Layer(layer("bg", WHITE)), Node::Layer(inv)]);
     assert!(close(composite_px(&d, 1, 1), WHITE));
 }
+
+#[test]
+fn feather_blurs_the_mask_before_density() {
+    // Red over the left half; the mask shows its left half, feathered by 4 px.
+    let mut l = Layer::new("red");
+    fill(&mut l.pixels, Rect::new(0, 0, 64, 64), RED);
+    let mut m = Surface::new();
+    fill(&mut m, Rect::new(0, 0, 32, 64), [1.0; 4]);
+    fill(&mut m, Rect::new(32, 0, 32, 64), BLACK);
+    l.mask = Some(m.clone());
+    l.set_mask_feather(4.0);
+    let f = onepaint_compose::feather::feathered_tile(&m, 4.0, 0, 0, [64, 64]).unwrap();
+    let d = doc(vec![Node::Layer(l.clone())]);
+    for x in [24, 30, 31, 32, 33, 40] {
+        let a = composite_px(&d, x, 10)[3];
+        // The feathered mask is stored as an f16 tile, like any mask.
+        assert!((a - f[10 * 256 + x as usize]).abs() < 1e-3, "x {x}: {a}");
+    }
+    // The edge is soft now: not 1 then 0.
+    assert!(composite_px(&d, 31, 10)[3] < 0.9 && composite_px(&d, 32, 10)[3] > 0.1);
+    // Density applies to the feathered mask.
+    l.set_mask_density(0.5);
+    let a = composite_px(&doc(vec![Node::Layer(l)]), 33, 10)[3];
+    assert!((a - (1.0 - 0.5 * (1.0 - f[10 * 256 + 33]))).abs() < 1e-3);
+}

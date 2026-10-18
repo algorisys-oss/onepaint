@@ -148,6 +148,9 @@ fn looks(r: &mut Rng, nodes: &mut [Node], adjust_only: bool) {
                 if l.mask.is_some() && r.chance(0.4) {
                     l.set_mask_density(r.f());
                 }
+                if l.mask.is_some() && r.chance(0.3) {
+                    l.set_mask_feather(0.25 + 12.0 * r.f());
+                }
                 if r.chance(0.2) {
                     l.set_blend_if(Some(random_blend_if(r)));
                 }

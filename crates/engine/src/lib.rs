@@ -130,6 +130,19 @@ impl Tool {
     }
 }
 
+/// The farthest any feathered mask in `nodes` reads (0 without one).
+fn feather_reach(nodes: &[Node]) -> i32 {
+    nodes
+        .iter()
+        .map(|n| match n {
+            Node::Layer(l) if l.mask.is_some() && l.mask_feather() > 0.0 => onepaint_compose::feather::reach(l.mask_feather()),
+            Node::Layer(_) => 0,
+            Node::Group(g) => feather_reach(&g.children),
+        })
+        .max()
+        .unwrap_or(0)
+}
+
 /// Optional layer property edits; `None` leaves a property unchanged.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct LayerProps {
@@ -591,6 +604,9 @@ impl Session {
     }
 
     fn mark_dirty(&mut self, r: Rect) {
+        // A feathered mask spreads an edit (of the mask, or of what it
+        // covers) as far as its blur reaches.
+        let r = r.inflate(feather_reach(&self.doc.root));
         if let Some(r) = r.intersect(&self.doc.bounds()) {
             self.dirty.extend(r.tiles());
             self.events.push(Event::NeedsRender);

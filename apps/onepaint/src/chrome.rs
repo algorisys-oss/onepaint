@@ -1072,6 +1072,14 @@ fn layers(app: &mut App, ui: &mut Ui) {
                 let props = LayerProps { mask_density: Some(d.round() / 100.0), ..Default::default() };
                 let _ = app.session.execute(Command::SetLayerProps { id: active.clone(), props });
             }
+            let mut f = l.mask_feather();
+            if widgets::slider_row(ui, "Feather", &mut f, 0.0..=250.0, |v| format!("{v:.1} px"))
+                .on_hover_text("Soften the mask's edges, without changing the mask (Photoshop's Feather)")
+                .changed()
+            {
+                let props = LayerProps { mask_feather: Some((f * 2.0).round() / 2.0), ..Default::default() };
+                let _ = app.session.execute(Command::SetLayerProps { id: active.clone(), props });
+            }
         }
         ui.horizontal(|ui| {
             let mut clip = l.clipped;

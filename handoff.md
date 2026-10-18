@@ -12,8 +12,8 @@ Rules for the run: commit locally per milestone, **do not push**; build with
 Order (✓ done, ▶ in progress):
 1. ✓ Photoshop blend modes + Pass Through groups — `aaed348`.
 2. ✓ Knockout (v0.202.2) — committed.
-3. ▶ Mask density/feather + Blend If (v0.202.0): 3a density + Blend If committed; 3b feather in progress.
-4. Vector masks (v0.202.1).
+3. ✓ Mask density/feather + Blend If (v0.202.0) — c1c2d56 and the feather commit.
+4. ▶ Vector masks (v0.202.1) — spec notes at the end of the delta doc.
 5. PSD `phfl` Photo Filter decode; pointer-router "pressed outside canvas" fix.
 6. UI: Mix colour grid, side sliders + typed values, Align on active layer.
 
@@ -61,9 +61,10 @@ Split into 3a (density + Blend If, per tile) and 3b (feather, spatial).
 - ✓ PSD mask params + blend ranges (writer/reader + test).
 - ✓ Engine LayerProps mask_density/mask_feather/blend_if (+ test).
 - ✓ App test `blend_if_unfolds_and_reset_clears_it`.
-- 3a committed. 3b: `crates/compose/src/feather.rs` written (untracked, not
-  yet a module); next wire into layer_content/draw_adjustment, planner via
-  PlanCache (keyed by window tile Weak ptrs), skip while a mask stroke runs.
+- 3a committed (c1c2d56). 3b feather: `compose::feather` wired into the
+  oracle and planner (PlanCache, Weak-keyed), unfeathered while a mask
+  stroke runs, engine `mark_dirty` pads by the largest reach, Feather slider
+  back. All suites green; committed.
 - ✓ UI: Density slider, Blend If section (`ui_kit::range_bar`). Feather
   slider held back until 3b renders it (code in scratchpad feather_ui.rs:
   slider 0–250 px step .5, tooltip "Soften the mask's edges, without

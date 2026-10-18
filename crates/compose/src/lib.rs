@@ -4,6 +4,7 @@
 //! groups, clip families, masks, inherit alpha). See `docs/specs/02-compositor.md`.
 
 pub mod blend;
+pub mod feather;
 pub mod program;
 pub mod relief;
 #[doc(hidden)]
@@ -102,8 +103,10 @@ fn layer_content(l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, frame:
         && let Some(mask) = &l.mask
     {
         let density = l.mask_density();
-        let mut m = match (mask.tile(tx, ty), &mask_stroke) {
-            (Some(t), _) => t.to_f32(),
+        // Feathered, except while the mask is being painted (as happypaint previews it).
+        let feathered = if mask_stroke.is_none() { feathered_mask(l, mask, tx, ty, frame) } else { None };
+        let mut m = match (feathered.or_else(|| mask.tile(tx, ty).map(|t| t.to_f32())), &mask_stroke) {
+            (Some(t), _) => t,
             (None, Some(_)) => zeros(),
             (None, None) if density >= 1.0 => return None,
             (None, None) => zeros(),
@@ -124,6 +127,17 @@ fn layer_content(l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, frame:
         }
     }
     Some(buf)
+}
+
+/// `l`'s mask on tile `(tx, ty)` blurred by its feather, as RGBA: `None`
+/// without a feather (or when the mask reaches nothing here, coverage 0
+/// like a missing tile).
+fn feathered_mask(l: &Layer, mask: &Surface, tx: i32, ty: i32, frame: Frame) -> Option<Buf> {
+    let f = l.mask_feather();
+    if f <= 0.0 {
+        return None;
+    }
+    Some(feather::feathered_mask_tile(mask, f, tx, ty, [frame.doc_w, frame.doc_h]).map_or_else(zeros, |t| t.to_f32()))
 }
 
 /// Blend a tile's worth of `src` onto `target`; the tile's origin places
@@ -458,7 +472,11 @@ fn draw_adjustment(target: &mut Buf, l: &Layer, adj: &onepaint_doc::Adjustment, 
     let Some(kind) = onepaint_filters::Kind::parse(&adj.kind).filter(|k| k.is_color()) else { return };
     let prepared = onepaint_filters::prepare_in(kind, &adj.params, frame);
     let density = l.mask_density();
-    let mask = if l.mask_enabled { l.mask.as_ref().map(|m| m.tile(tx, ty).map(|t| t.to_f32())) } else { None };
+    let mask = if l.mask_enabled {
+        l.mask.as_ref().map(|m| feathered_mask(l, m, tx, ty, frame).or_else(|| m.tile(tx, ty).map(|t| t.to_f32())))
+    } else {
+        None
+    };
     if let Some(None) = mask
         && density >= 1.0
     {

@@ -67,7 +67,7 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] Nested groups (with drag-and-drop into and out of groups)
 - [x] Opacity, visibility and color labels
 - [x] Layer masks (add, which can come from the selection; paint, enable, apply, delete)
-- [~] Mask density and Blend If on layers, on the GPU, in PSD and in Properties (happypaint v0.202.0); mask feather is stored but not rendered yet
+- [x] Mask density and feather, and Blend If on layers, on the GPU, in PSD and in Properties (happypaint v0.202.0)
 - [x] Clipping masks (clip families)
 - [x] Alpha lock
 - [x] Off-canvas pixel overflow (transforms keep off-canvas content; saved as the `overflow` chunk)

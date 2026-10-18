@@ -23,13 +23,21 @@ onepaint ports it in. Fold each item into `feature-parity.md` as it lands.
       Properties select. Done: the CPU oracle (`crates/compose/tests/knockout.rs`),
       `Op::Knockout`/`Op::Snapshot` on the GPU (the oracle suites draw random
       knockouts), PSD `knko`, `LayerProps::knockout`, the Properties select.
-- [~] Mask density and feather, and Blend If (v0.202.0). Density and Blend If
-      are done: the oracle (`crates/compose/tests/look.rs`), the GPU, PSD
-      (mask parameters, blend ranges), `LayerProps`, Properties (Density,
-      a folding Blend If section with `ui_kit::range_bar`). A tile with a
-      Blend If at or above the hot layer runs unsplit (spec 38), as with
-      adjustment layers: its tone steps flip on the f16 cached backdrop.
-      Feather is stored and round-trips but does not render yet.
+- [x] Mask density and feather, and Blend If (v0.202.0): the oracle
+      (`crates/compose/tests/look.rs`), the GPU, PSD (mask parameters, blend
+      ranges), `LayerProps`, Properties (Density, Feather, a folding Blend If
+      section on `ui_kit::range_bar`).
+      - A tile with a Blend If at or above the hot layer runs unsplit (spec
+        38), as with adjustment layers: its tone steps flip on the f16
+        cached backdrop.
+      - Feather (`compose::feather`) is happypaint's 65-tap blur, σ = the
+        feather. Each tile's feathered mask is built on the CPU from the
+        mask tiles in reach and cached in the session's `PlanCache`; the GPU
+        reads it as an ordinary mask tile. While the mask is being painted
+        it shows unfeathered, as happypaint's live preview does. Mask edits
+        redraw as far as the blur reaches. A GPU blur pass would make big
+        feathers cheaper to rebuild (todo).
+      - Not yet: arrow keys on the Blend If bar.
 - [ ] Vector masks (v0.202.1): PSD `vmsk`/`vsms` both ways, live in the
       compositor, the Pen's Create Vector Mask, transforms map the knots.
 
@@ -54,3 +62,41 @@ onepaint ports it in. Fold each item into `feature-parity.md` as it lands.
       (v0.204.1).
 - [ ] Tooltips on tool icons (v0.202.3), Save / Save As (v0.204.2), the
       header as a title bar (v0.204.3): check against onepaint's chrome.
+
+## Notes: vector masks (happypaint v0.202.1, read 2026-10-18)
+
+- Model (`engine/vector-mask.ts`): `VectorMaskSpec { paths, invert?, disabled?,
+  unlinked? }`, `VectorPath { open?, op: combine|subtract|intersect|exclude,
+  rule: even-odd|non-zero, knots }`, knot = `[inX, inY, x, y, outX, outY]`,
+  absolute doc px. Layers only; `.happypaint` key `"vectorMask"`, false flags
+  omitted. Not the Pen's `PathSpec` (handles relative there).
+- Raster: Canvas2D fill per path (always closed, even `open`), then combine
+  with A = acc, B = path: combine `B + A(1−B)`, subtract `A(1−B)`, intersect
+  `AB`, exclude `A(1−B) + B(1−A)`; acc starts full when path 0 is subtract
+  or intersect; invert last. Multiplies after the raster mask's density and
+  feather: `content · m · v` (density/feather never touch `v`). Used by every
+  `applyMask` path: knockout, adjustments, clip bases, clipped adjustments,
+  merge down; inactive when disabled or empty.
+- PSD `vmsk` (= `vsms`): u32 version 3, u32 flags (1 invert, 2 notLink,
+  4 disable), 26-byte records: 0/3 closed/open length (u16 count, i16 op
+  index into [exclude, combine, subtract, intersect], u16 rule 2 = non-zero
+  else even-odd), 1/2 closed knots, 4/5 open knots (six i32 8.24 fixed,
+  y before x, × height/width), 6 fill rule, 7 clipboard, 8 initial fill.
+  Write order: version, flags, 6 (zeros), 8, then length + knots per path.
+  Shape layers (vector fill + mask) stay pixels; layers only.
+- Engine: Pen "Create Vector Mask" masks the plain paint layer directly
+  below the path layer (notices "Create Vector Mask masks the paint layer
+  directly below the path — there isn’t one", "That path encloses no area");
+  each subpath of ≥ 2 anchors → combine/even-odd path, absolute handles.
+  No knot editing. Free Transform (affine only, not distort/warp, not when
+  unlinked) maps every knot point, same undo step; crop/resize translate,
+  Scale Image scales. Duplicate copies it.
+- UI: Properties "Vector mask" (shown when present): Delete ("Remove the
+  vector mask (the layer's pixels are untouched)"), Apply = !disabled ("Keep
+  the paths but stop hiding with them (Photoshop's Shift-click)"), Invert
+  ("Show outside the paths instead of inside"), "N paths". Layer row badge
+  "Vector mask (Properties panel)" unless disabled.
+- Tests to port: `vector-mask.test.ts` (rect ops at y=20, x = 10/25/35:
+  subtract [255,0,0], intersect [0,255,0], exclude [255,0,255]; first
+  subtract; scale 2; translate; conversion `[25,8,30,10,35,12]`; triangle),
+  `psd-roundtrip.test.ts:288-350`, `look-carriers.test.ts:72-85`.
