@@ -16,7 +16,7 @@ struct Prm {
     // The backdrop grid: first tile column and row, columns.
     grid: vec3<i32>,
     // 0 blur, 1 sharpen (combine with `orig`), 2 copy, 3 a per-pixel kind,
-    // 4 bloom (screen the blurred glow over `orig`).
+    // 4 bloom (screen the blurred glow over `orig`), 5 XDoG line art.
     mode: u32,
     dir: vec2<f32>,
     radius: f32,
@@ -65,7 +65,7 @@ fn assemble(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 // filters `sample`: bilinear, clamped to the region.
-fn sample(x0: f32, y0: f32) -> vec4<f32> {
+fn sample_in(t: texture_2d<f32>, x0: f32, y0: f32) -> vec4<f32> {
     let w = prm.region.z;
     let h = prm.region.w;
     let x = clamp(x0, 0.0, f32(w - 1));
@@ -76,18 +76,22 @@ fn sample(x0: f32, y0: f32) -> vec4<f32> {
     let y1 = min(yi + 1, h - 1);
     let fx = x - f32(xi);
     let fy = y - f32(yi);
-    let a = textureLoad(src, vec2<i32>(xi, yi), 0);
-    let b = textureLoad(src, vec2<i32>(x1, yi), 0);
-    let c = textureLoad(src, vec2<i32>(xi, y1), 0);
-    let d = textureLoad(src, vec2<i32>(x1, y1), 0);
+    let a = textureLoad(t, vec2<i32>(xi, yi), 0);
+    let b = textureLoad(t, vec2<i32>(x1, yi), 0);
+    let c = textureLoad(t, vec2<i32>(xi, y1), 0);
+    let d = textureLoad(t, vec2<i32>(x1, y1), 0);
     let top = a + (b - a) * fx;
     let bot = c + (d - c) * fx;
     return top + (bot - top) * fy;
 }
 
-// filters `blur_pass` at one pixel.
-fn blur(x: f32, y: f32) -> vec4<f32> {
-    let spread = max(prm.radius, 1.0) / f32(HALF);
+fn sample(x0: f32, y0: f32) -> vec4<f32> {
+    return sample_in(src, x0, y0);
+}
+
+// filters `blur_pass` at one pixel of `t`.
+fn blur_in(t: texture_2d<f32>, x: f32, y: f32, radius: f32, dir: vec2<f32>) -> vec4<f32> {
+    let spread = max(radius, 1.0) / f32(HALF);
     let sigma = f32(HALF) * 0.5;
     var acc = vec4<f32>(0.0);
     var wsum = 0.0;
@@ -95,10 +99,26 @@ fn blur(x: f32, y: f32) -> vec4<f32> {
         let i = f32(k - HALF);
         let wt = exp(-0.5 * i * i / (sigma * sigma));
         let o = i * spread;
-        acc += sample(x + prm.dir.x * o, y + prm.dir.y * o) * wt;
+        acc += sample_in(t, x + dir.x * o, y + dir.y * o) * wt;
         wsum += wt;
     }
     return acc / max(wsum, 1e-4);
+}
+
+fn blur(x: f32, y: f32) -> vec4<f32> {
+    return blur_in(src, x, y, prm.radius, prm.dir);
+}
+
+
+// Line art's luminance map over the region (XDoG's source).
+@compute @workgroup_size(8, 8, 1)
+fn lum(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let l = vec2<i32>(gid.xy);
+    if (any(l >= prm.region.zw)) {
+        return;
+    }
+    let v = line_lum(textureLoad(src, l, 0));
+    textureStore(dst, l, vec4<f32>(v, v, v, 1.0));
 }
 
 // BLOOM_BRIGHT_SRC over the region: the straight light map of what clears
@@ -307,6 +327,19 @@ fn blur_out(@builtin(global_invocation_id) gid: vec3<u32>) {
             if (prm.mode == 1u) {
                 let a = textureLoad(orig, l, 0);
                 v = clamp(a + (a - v) * prm.amount, vec4<f32>(0.0), vec4<f32>(1.0));
+            } else if (prm.mode == 5u) {
+                // Line art, XDoG: the difference of the two Gaussians (`src`
+                // σ, `orig` 1.6σ, both blurred across already). k0 = 1.6σ,
+                // eps, phi, line.
+                let g1 = v.x;
+                let g2 = blur_in(orig, f32(l.x), f32(l.y), prm.k0.x, prm.dir).x;
+                let d = g1 - 0.985 * g2;
+                var e = 1.0;
+                if (d < prm.k0.y) {
+                    e = 1.0 + tanh(prm.k0.z * (d - prm.k0.y));
+                }
+                let ink = 1.0 - clamp(e, 0.0, 1.0);
+                v = vec4<f32>(vec3<f32>(prm.k0.w * ink), ink);
             } else if (prm.mode == 4u) {
                 // BLOOM_COMBINE_SRC: screen the glow over the source; alpha kept.
                 let s = textureLoad(orig, l, 0);

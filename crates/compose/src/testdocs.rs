@@ -438,7 +438,8 @@ pub fn with_spatial(mut doc: Document, seed: u64) -> Document {
             "halftone" => json!({"cellSize": 2.0 + r.f() * 20.0, "angle": r.f() * 90.0, "mono": r.chance(0.5)}),
             "crystallize" => json!({"cellSize": 2.0 + r.f() * 60.0}),
             "line-art" => {
-                json!({"lineMode": "sobel", "radius": 1.0 + r.f() * 4.0, "threshold": r.f() * 0.3, "amount": r.f(), "mono": r.chance(0.5)})
+                let mode = if r.chance(0.5) { "sobel" } else { "xdog" };
+                json!({"lineMode": mode, "radius": 1.0 + r.f() * 4.0, "threshold": r.f() * 0.3, "amount": r.f(), "mono": r.chance(0.5)})
             }
             "bloom" => json!({"threshold": r.f(), "amount": r.f(), "radius": 1.0 + r.f() * 40.0}),
             _ => json!({"amount": r.f()}),

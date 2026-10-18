@@ -59,7 +59,7 @@ fn kind_params(kind: Kind, p: &onepaint_filters::Params) -> Option<(u32, [f32; 4
             (4, [a.cos(), a.sin(), p.cell_size.unwrap_or(6.0).max(2.0), keep])
         }
         Kind::Crystallize => (5, [p.cell_size.unwrap_or(16.0).max(2.0), 0.0, 0.0, 0.0]),
-        Kind::LineArt => {
+        Kind::LineArt if p.line_mode.as_deref() != Some("xdog") => {
             let line = if p.mono.unwrap_or(false) { 1.0 } else { 0.0 };
             let strength = 1.0 + p.amount.unwrap_or(0.5) * 4.0;
             (7, [p.radius.unwrap_or(1.0).max(1.0), p.threshold.unwrap_or(0.12), strength, line])
@@ -79,6 +79,7 @@ pub struct Job<'a> {
 pub struct SpatialPass {
     assemble: wgpu::ComputePipeline,
     bright: wgpu::ComputePipeline,
+    lum: wgpu::ComputePipeline,
     blur_region: wgpu::ComputePipeline,
     blur_out: wgpu::ComputePipeline,
     layout: wgpu::BindGroupLayout,
@@ -86,6 +87,7 @@ pub struct SpatialPass {
     a: (wgpu::TextureView, wgpu::TextureView),
     b: (wgpu::TextureView, wgpu::TextureView),
     c: (wgpu::TextureView, wgpu::TextureView),
+    d: (wgpu::TextureView, wgpu::TextureView),
     dummy_store: wgpu::TextureView,
     dummy_out: wgpu::TextureView,
     dummy_array: wgpu::TextureView,
@@ -187,12 +189,14 @@ impl SpatialPass {
         Self {
             assemble: pipeline("assemble"),
             bright: pipeline("bright"),
+            lum: pipeline("lum"),
             blur_region: pipeline("blur_region"),
             blur_out: pipeline("blur_out"),
             layout,
             a: scratch(device, "spatial scratch a"),
             b: scratch(device, "spatial scratch b"),
             c: scratch(device, "spatial scratch c"),
+            d: scratch(device, "spatial scratch d"),
             dummy_store: tiny(device, wgpu::TextureFormat::Rgba32Float, storage, false),
             dummy_out: tiny(device, wgpu::TextureFormat::Rgba16Float, storage, true),
             dummy_array: tiny(device, wgpu::TextureFormat::Rgba16Float, sampled, true),
@@ -297,6 +301,30 @@ impl SpatialPass {
         let size = [region[2], region[3]];
         // The region from the backdrop slots into A.
         pass(&self.assemble, prm([0.0; 2], 0.0, 0), [cache, &self.b.1, &self.a.0, &self.dummy_out, &self.b.1], size);
+        if !identity && s.kind == Kind::LineArt && kind == 0 {
+            // XDoG: the luminance map (B), blurred across at σ (C) and 1.6σ
+            // (D), then down both and thresholded.
+            let sigma = p.radius.unwrap_or(2.0).max(0.8) * scale;
+            let line = if p.mono.unwrap_or(false) { 1.0 } else { 0.0 };
+            let eps = (p.threshold.unwrap_or(0.5) - 0.5) * 0.2;
+            let phi = 5.0 + p.amount.unwrap_or(0.5) * 60.0;
+            let xdog = |dir: [f32; 2], r: f32, mode: u32| Prm { k0: [sigma * 1.6, eps, phi, line], ..prm(dir, r, mode) };
+            pass(&self.lum, prm([0.0; 2], 0.0, 0), [&self.dummy_array, &self.a.1, &self.b.0, &self.dummy_out, &self.a.1], size);
+            pass(&self.blur_region, prm([1.0, 0.0], sigma, 0), [&self.dummy_array, &self.b.1, &self.c.0, &self.dummy_out, &self.b.1], size);
+            pass(
+                &self.blur_region,
+                prm([1.0, 0.0], sigma * 1.6, 0),
+                [&self.dummy_array, &self.b.1, &self.d.0, &self.dummy_out, &self.b.1],
+                size,
+            );
+            pass(
+                &self.blur_out,
+                xdog([0.0, 1.0], sigma, 5),
+                [&self.dummy_array, &self.c.1, &self.dummy_store, cache_out, &self.d.1],
+                [edge; 2],
+            );
+            return;
+        }
         if identity || kind != 0 {
             // A copy, or a per-pixel kind reading the region.
             let mode = if identity { 2 } else { 3 };

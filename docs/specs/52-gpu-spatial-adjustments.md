@@ -58,8 +58,8 @@ backdrop.
    tests; Gaussian blur, motion blur, sharpen on the GPU; engine wiring.
 2. The other kinds, each with its GPU pass checked against the oracle.
    - 2a ✓ emboss, mosaic, ripple, halftone, crystallize (one pass).
-   - 2b ✓ bloom (bright pass, blur, screen) and Sobel line art. XDoG line
-     art (two blurs) is next.
+   - 2b ✓ bloom (bright pass, blur, screen) and line art, Sobel and XDoG
+     (a luminance pass, blurs at σ and 1.6σ, then the threshold).
    - Oil paint stays on the CPU: its quadrant choice turns on variances
      that cancel to rounding noise, so a GPU picks another quadrant at
      edges and pixels jump by whole values.

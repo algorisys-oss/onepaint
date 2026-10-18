@@ -745,9 +745,10 @@ fn bloom_and_line_art_layers_match_the_rendered_document() {
     for (kind, params) in [
         ("bloom", serde_json::json!({"threshold": 0.3, "amount": 1.0, "radius": 12.0})),
         ("line-art", serde_json::json!({"lineMode": "sobel", "radius": 1.5, "threshold": 0.05, "amount": 0.8, "mono": true})),
+        ("line-art", serde_json::json!({"lineMode": "xdog", "radius": 2.5, "threshold": 0.5, "amount": 0.4, "mono": false})),
     ] {
         let mut doc = base.clone();
-        if kind == "line-art" {
+        if kind == "line-art" && params["lineMode"] == "sobel" {
             // A gentle ramp: the edge strength sits mid-way up the smoothstep.
             let mut ramp = Layer::new("ramp");
             for y in 0..h as i32 {
@@ -759,7 +760,7 @@ fn bloom_and_line_art_layers_match_the_rendered_document() {
             doc.root = vec![Node::Layer(ramp)];
         }
         let mut s = Layer::new(kind);
-        s.adjustment = Some(Box::new(Adjustment { kind: kind.into(), params: serde_json::from_value(params).unwrap() }));
+        s.adjustment = Some(Box::new(Adjustment { kind: kind.into(), params: serde_json::from_value(params.clone()).unwrap() }));
         doc.root.push(Node::Layer(s));
         gc.run(&device, &queue, &programs(&doc, None), &view, [w, h]);
         let (e, at) = max_error(&rendered(&doc), None, &read(&device, &queue, &tex));
