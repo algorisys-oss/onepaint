@@ -78,3 +78,31 @@ fn stacked_spatial_layers_plan_and_match() {
     }
     assert!(planned >= 16, "{planned}");
 }
+
+/// Spec 53: a whole-canvas layer plans on every tile, sharing one filter of
+/// the whole backdrop, and its programs equal the oracle.
+#[test]
+fn whole_canvas_layers_plan_and_match() {
+    use onepaint_compose::program::{op_contents, plan_tiles_cached};
+    use onepaint_compose::testdocs::with_whole_spatial;
+    let mut planned = 0;
+    for seed in 0..8 {
+        let doc = with_whole_spatial(random_doc(seed, 300, 300, seed % 2 == 0), seed);
+        let want_doc = rendered(&doc);
+        let keys: Vec<_> = doc.bounds().tiles().collect();
+        let (progs, _) = plan_tiles_cached(&doc, &keys, None, None, None);
+        let mut shared = Vec::new();
+        for prog in &progs {
+            if let Some(s) = op_contents(&prog.ops).find_map(|c| c.spatial.as_ref()) {
+                planned += 1;
+                shared.push(std::sync::Arc::as_ptr(s.whole.as_ref().unwrap()));
+            }
+            let (got, want) = (run(prog), composite_tile(&want_doc, prog.tx, prog.ty, None));
+            let worst = got.iter().zip(&want).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+            assert!(worst <= 2e-3, "seed {seed} tile {},{}: {worst}", prog.tx, prog.ty);
+        }
+        shared.dedup();
+        assert!(shared.len() <= 1, "one filter per layer, shared by its tiles");
+    }
+    assert!(planned >= 16, "{planned}");
+}

@@ -160,6 +160,11 @@ impl Session {
 /// plans in 0.8 ms with one, 7.7 ms with two, 63 ms with three (spec 52).
 const MAX_LIVE_SPATIAL: usize = 3;
 
+/// The largest document a whole-canvas layer runs live in (spec 53): its
+/// backdrop tiles must fit half the segment cache, and its filtered image is
+/// 8 bytes a pixel (128 MiB at 4096²).
+const MAX_WHOLE_PX: u64 = 4096 * 4096;
+
 /// Live spatial adjustment layers (blur, sharpen…): rendered as the filtered
 /// backdrop of their container, cached by a fingerprint of everything below.
 #[derive(Default)]
@@ -207,9 +212,12 @@ impl Session {
     /// The spatial layers the GPU filters live (spec 52): every spatial
     /// adjustment layer, when each is at the top level or in isolated groups,
     /// of a kind with a GPU pass and a reach within a tile, and at most
-    /// [`MAX_LIVE_SPATIAL`] of them. Otherwise none, so a stroke never shows a
-    /// live layer over a stale one.
-    pub(crate) fn live_spatial(nodes: &[Node]) -> Vec<NodeId> {
+    /// [`MAX_LIVE_SPATIAL`] of them; or a whole-canvas layer (spec 53) that
+    /// is the document's only spatial layer, in a document of at most
+    /// [`MAX_WHOLE_PX`]. Otherwise none, so a stroke never shows a live layer
+    /// over a stale one.
+    pub(crate) fn live_spatial(doc: &onepaint_doc::Document) -> Vec<NodeId> {
+        let nodes = &doc.root[..];
         // Each spatial layer, and whether every group around it is isolated.
         fn all<'a>(nodes: &'a [Node], isolated: bool, out: &mut Vec<(&'a onepaint_doc::Layer, bool)>) {
             for n in nodes {
@@ -222,12 +230,15 @@ impl Session {
         }
         let mut found = Vec::new();
         all(nodes, true, &mut found);
+        let whole_ok = found.len() == 1 && u64::from(doc.width) * u64::from(doc.height) <= MAX_WHOLE_PX;
         let live = |(l, isolated): &(&onepaint_doc::Layer, bool)| {
             let Some(kind) = onepaint_compose::spatial::spatial_kind(l) else { return false };
             let params = l.adjustment.as_ref().map(|a| a.params.clone()).unwrap_or_default();
-            *isolated
-                && onepaint_compose::spatial::gpu_supported(kind, &params)
-                && onepaint_filters::reach(kind, &params) <= onepaint_raster::TILE
+            let r = onepaint_filters::reach(kind, &params);
+            if r >= onepaint_filters::GLOBAL_REACH {
+                return *isolated && whole_ok && onepaint_compose::spatial::whole_supported(kind, &params);
+            }
+            *isolated && onepaint_compose::spatial::gpu_supported(kind, &params) && r <= onepaint_raster::TILE
         };
         if found.len() > MAX_LIVE_SPATIAL || !found.iter().all(live) {
             return Vec::new();

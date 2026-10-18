@@ -87,6 +87,8 @@ struct Km {
 @group(0) @binding(16) var paper_tex: texture_2d<f32>;
 // Spatial layers' filtered tiles (spec 52).
 @group(0) @binding(17) var filtered_tex: texture_2d_array<f32>;
+// A whole-canvas layer's filtered image at this level (spec 53).
+@group(0) @binding(18) var whole_tex: texture_2d<f32>;
 
 const NONE: u32 = 0xffffffffu;
 
@@ -114,6 +116,7 @@ const F_MASK_STROKE: u32 = 64u;
 const F_RELIEF: u32 = 128u;
 const F_VMASK: u32 = 256u;
 const F_SPATIAL: u32 = 512u;
+const F_WHOLE: u32 = 1024u;
 
 const M_NORMAL: u32 = 0u;
 const M_MULTIPLY: u32 = 1u;
@@ -926,8 +929,14 @@ fn content(o: Op, p: vec2<i32>) -> vec4<f32> {
     if ((flags & F_BASE) != 0u) {
         c = load(o.b.x, p);
     } else if ((flags & F_SPATIAL) != 0u) {
-        // A spatial layer's filtered tile (spec 52).
-        c = textureLoad(filtered_tex, p, i32(o.b.x), i32(prm.level));
+        if ((flags & F_WHOLE) != 0u) {
+            // A whole-canvas layer's image, at the tile's offset (spec 53).
+            let g = min(tile_origin + p, vec2<i32>(textureDimensions(whole_tex)) - 1);
+            c = textureLoad(whole_tex, g, 0);
+        } else {
+            // A spatial layer's filtered tile (spec 52).
+            c = textureLoad(filtered_tex, p, i32(o.b.x), i32(prm.level));
+        }
     }
     if ((flags & F_STROKE) != 0u) {
         c = apply_stroke(c, load(o.b.y, p), bitcast<f32>(o.b.w), o.b.z);

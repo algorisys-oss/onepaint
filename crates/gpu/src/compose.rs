@@ -96,6 +96,8 @@ const F_RELIEF: u32 = 128;
 const F_VMASK: u32 = 256;
 /// The content's pixels are a filtered tile in the segment cache (spec 52).
 const F_SPATIAL: u32 = 512;
+/// The spatial content is a whole-canvas layer's filtered image (spec 53).
+const F_WHOLE: u32 = 1024;
 /// Five vec4<u32>s (compose.wgsl `Op`).
 const OP_WORDS: usize = 20;
 
@@ -307,6 +309,8 @@ pub struct GpuCompositor {
     /// Spatial adjustment layers' filter (spec 52), and where this batch's
     /// filtered tiles are, by their source's key.
     spatial: crate::spatial::SpatialPass,
+    /// The live whole-canvas layer's filtered image (spec 53).
+    whole: crate::whole::WholePass,
     spatial_slots: HashMap<u64, u32>,
     /// Filtered tiles: written by the spatial pass, read by fills and composites.
     filtered: Option<(wgpu::Texture, wgpu::TextureView, Vec<wgpu::TextureView>)>,
@@ -411,6 +415,16 @@ impl GpuCompositor {
                 multisampled: false,
                 sample_type: wgpu::TextureSampleType::Float { filterable: false },
                 view_dimension: wgpu::TextureViewDimension::D2Array,
+            },
+            count: None,
+        });
+        entries.push(wgpu::BindGroupLayoutEntry {
+            binding: 18,
+            visibility: cs,
+            ty: wgpu::BindingType::Texture {
+                multisampled: false,
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D2,
             },
             count: None,
         });
@@ -528,6 +542,7 @@ impl GpuCompositor {
                 .create_view(&Default::default()),
             fills: 0,
             spatial: crate::spatial::SpatialPass::new(device),
+            whole: crate::whole::WholePass::new(device),
             spatial_slots: HashMap::new(),
             filtered: None,
             filtered_layers: (cache_layers / 2).clamp(16, device.limits().max_texture_array_layers),
@@ -662,6 +677,9 @@ impl GpuCompositor {
         }
         if let Some(s) = &c.spatial {
             o[3] |= F_SPATIAL;
+            if s.whole.is_some() {
+                o[3] |= F_WHOLE;
+            }
             o[4] = self.spatial_slots.get(&s.key).copied().unwrap_or(0);
         }
         if let Some(s) = &c.stroke {
@@ -792,6 +810,14 @@ impl GpuCompositor {
     ) {
         self.level = level.min(crate::mip::L_MAX);
         self.gamma = programs.first().is_some_and(|p| p.space == onepaint_color::Space::Gamma);
+        // A whole-canvas layer's image comes first: every tile reads it (spec 53).
+        let whole = programs
+            .iter()
+            .flat_map(|p| onepaint_compose::program::op_contents(&p.ops))
+            .find_map(|c| c.spatial.as_ref().and_then(|s| s.whole.clone()));
+        if let Some(w) = whole {
+            self.prepare_whole(device, queue, &w, sheets);
+        }
         let cap = self.capacity();
         // Each program may need two cache slots; keep a batch within the cache.
         let cache_cap = (self.cache_layers as usize / 2).max(1);
@@ -811,10 +837,14 @@ impl GpuCompositor {
         // Slots this batch's spatial layers take (spec 52): their backdrops in
         // the cache, stacked ones' too, and their results in the filtered tiles.
         fn spatial_need(ops: &[Op]) -> (usize, usize) {
-            onepaint_compose::program::op_contents(ops).filter_map(|c| c.spatial.as_ref()).fold((0, 0), |(c, f), s| {
-                let (bc, bf) = s.backdrop.iter().map(|(_, p)| spatial_need(&p.ops)).fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
-                (c + s.backdrop.len() + bc, f + 1 + bf)
-            })
+            // A whole-canvas layer reads its own image (spec 53).
+            onepaint_compose::program::op_contents(ops).filter_map(|c| c.spatial.as_ref()).filter(|s| s.whole.is_none()).fold(
+                (0, 0),
+                |(c, f), s| {
+                    let (bc, bf) = s.backdrop.iter().map(|(_, p)| spatial_need(&p.ops)).fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
+                    (c + s.backdrop.len() + bc, f + 1 + bf)
+                },
+            )
         }
         let (mut cache_used, mut filtered_used) = (0, 0);
         for (i, p) in order.iter().enumerate() {
@@ -960,7 +990,7 @@ impl GpuCompositor {
         fn walk<'a>(ops: &'a [Op], depth: &mut HashMap<u64, usize>, out: &mut Vec<&'a SpatialSrc>) -> usize {
             let mut deepest = 0;
             for c in op_contents(ops) {
-                let Some(s) = c.spatial.as_deref() else { continue };
+                let Some(s) = c.spatial.as_deref().filter(|s| s.whole.is_none()) else { continue };
                 let d = match depth.get(&s.key) {
                     Some(&d) => d,
                     None => {
@@ -1017,6 +1047,64 @@ impl GpuCompositor {
             jobs.push(crate::spatial::Job { src: s, out: idx, grid });
         }
         out
+    }
+
+    /// Filter a whole-canvas layer's backdrop into its image (spec 53), if
+    /// the image doesn't already hold it: fill the backdrop tiles that changed
+    /// (the rest are cache hits), then one pass over the document.
+    fn prepare_whole(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, w: &onepaint_compose::spatial::Whole, sheets: &Sheets) {
+        let key = self.level_key(w.key);
+        if self.whole.key == Some(key) && self.whole.view().is_some() {
+            return;
+        }
+        if w.backdrop.len() > self.cache_layers as usize / 2 {
+            log::error!("compose cache can't hold a whole-canvas backdrop of {} tiles", w.backdrop.len());
+            return;
+        }
+        self.clock += 1;
+        self.ensure_cache(device);
+        let edge = (TILE as u32) >> self.level;
+        let cols = w.frame.doc_w.div_ceil(TILE as u32) as usize;
+        let rows = w.frame.doc_h.div_ceil(TILE as u32) as usize;
+        let mut grid = vec![crate::whole::NONE; cols * rows];
+        let mut fills = Vec::new();
+        for ((x, y), bp) in &w.backdrop {
+            if bp.ops.is_empty() {
+                continue;
+            }
+            let k = onepaint_compose::program::segment_key(&bp.ops, bp.origin());
+            let Some((slot, fresh)) = self.cache_slot_key(k, &bp.ops) else { continue };
+            if fresh {
+                fills.push(Work {
+                    origin: [*x as u32 * edge, *y as u32 * edge],
+                    ops: bp.ops.iter().collect(),
+                    over: None,
+                    init: NONE,
+                    dest: slot,
+                });
+            }
+            grid[*y as usize * cols + *x as usize] = slot;
+        }
+        self.fills += fills.len() as u64;
+        for wk in &fills {
+            for t in wk.ops.iter().flat_map(|op| op_sources(std::slice::from_ref(*op))) {
+                if self.resident(device, queue, t).is_none() {
+                    log::error!("compose atlas full; a whole-canvas backdrop tile at {:?} skipped", wk.origin);
+                }
+            }
+        }
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("compose whole") });
+        self.mip_sources(device, &mut enc, fills.iter());
+        for chunk in fills.chunks(MAX_JOBS) {
+            self.dispatch(device, queue, &mut enc, chunk, sheets, None, true);
+        }
+        if let Some((_, read, _)) = &self.cache {
+            self.whole.record(device, &mut enc, w, self.level, &grid, read);
+            self.filters += 1;
+        }
+        queue.submit([enc.finish()]);
+        self.pass = 0;
+        self.whole.key = Some(key);
     }
 
     fn ensure_filtered(&mut self, device: &wgpu::Device) {
@@ -1282,6 +1370,8 @@ impl GpuCompositor {
         entries.push(wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(paper) });
         let filtered = self.filtered.as_ref().map_or(&self.dummy, |(_, r, _)| r);
         entries.push(wgpu::BindGroupEntry { binding: 17, resource: wgpu::BindingResource::TextureView(filtered) });
+        let whole = self.whole.view().unwrap_or(&self.paper_dummy);
+        entries.push(wgpu::BindGroupEntry { binding: 18, resource: wgpu::BindingResource::TextureView(whole) });
         device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("compose"), layout: &self.layout, entries: &entries })
     }
 

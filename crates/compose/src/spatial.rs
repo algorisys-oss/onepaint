@@ -124,6 +124,59 @@ pub fn gpu_supported(kind: Kind, _p: &Params) -> bool {
     )
 }
 
+/// Whether a whole-canvas kind (`GLOBAL_REACH`) has a GPU pass (spec 53).
+pub fn whole_supported(kind: Kind, _p: &Params) -> bool {
+    matches!(kind, Kind::Twirl | Kind::Pinch | Kind::PolarCoordinates | Kind::ChromaticAberration)
+}
+
+/// A whole-canvas spatial layer (spec 53): its filter over the backdrop of
+/// every tile, planned once per frame and shared by every tile's program.
+#[derive(Debug)]
+pub struct Whole {
+    pub kind: Kind,
+    pub params: Params,
+    /// The document as a filter frame.
+    pub frame: Frame,
+    /// The backdrop (the layers below) on every tile of the document.
+    pub backdrop: Vec<((i32, i32), Arc<crate::program::TileProgram>)>,
+    /// Changes with anything the result depends on.
+    pub key: u64,
+    filtered: std::sync::OnceLock<Surface>,
+}
+
+impl Whole {
+    pub(crate) fn new(kind: Kind, params: Params, frame: Frame, backdrop: Vec<((i32, i32), Arc<crate::program::TileProgram>)>) -> Self {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (kind.as_str(), serde_json::to_string(&params).unwrap_or_default(), frame.doc_w, frame.doc_h).hash(&mut h);
+        for ((x, y), p) in &backdrop {
+            (x, y, crate::program::segment_key(&p.ops, p.origin())).hash(&mut h);
+        }
+        Self { kind, params, frame, backdrop, key: h.finish(), filtered: Default::default() }
+    }
+
+    /// The filtered document, as the oracle stores it: the backdrop tiles as
+    /// f16, filtered over the whole document.
+    pub fn filtered(&self) -> &Surface {
+        self.filtered.get_or_init(|| {
+            let tiles: Vec<_> = self
+                .backdrop
+                .par_iter()
+                .filter_map(|((x, y), p)| {
+                    let t = Tile::from_f32(&crate::program::run(p));
+                    (!t.is_empty()).then(|| ((*x, *y), Arc::new(t)))
+                })
+                .collect();
+            let mut src = Surface::new();
+            for ((x, y), t) in tiles {
+                src.set_tile(x, y, Some(t));
+            }
+            let doc = Rect::new(0, 0, self.frame.doc_w as i32, self.frame.doc_h as i32);
+            apply(&src, doc, self.frame, self.kind, &self.params)
+        })
+    }
+}
+
 /// A spatial layer's pixels on one tile, as a program computes them: its
 /// filter over the backdrop programs of the tiles within reach.
 #[derive(Debug)]
@@ -140,6 +193,9 @@ pub struct SpatialSrc {
     pub backdrop: Vec<((i32, i32), Arc<crate::program::TileProgram>)>,
     /// Changes with anything the result depends on.
     pub key: u64,
+    /// A whole-canvas layer's shared filter (spec 53); `backdrop` is then
+    /// empty, as the whole backdrop is `whole`'s.
+    pub whole: Option<Arc<Whole>>,
     filtered: std::sync::OnceLock<Vec<f32>>,
 }
 
@@ -159,13 +215,37 @@ impl SpatialSrc {
             (x, y, crate::program::segment_key(&p.ops, p.origin())).hash(&mut h);
         }
         let reach = reach(kind, &params);
-        Self { kind, params, reach, tx, ty, region, frame, backdrop, key: h.finish(), filtered: Default::default() }
+        Self { kind, params, reach, tx, ty, region, frame, backdrop, key: h.finish(), whole: None, filtered: Default::default() }
+    }
+
+    /// Tile `(tx, ty)` of a whole-canvas layer.
+    pub(crate) fn of_whole(whole: Arc<Whole>, (tx, ty): (i32, i32)) -> Self {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (whole.key, tx, ty).hash(&mut h);
+        let region = Rect::new(0, 0, whole.frame.doc_w as i32, whole.frame.doc_h as i32);
+        Self {
+            kind: whole.kind,
+            params: whole.params.clone(),
+            reach: GLOBAL_REACH,
+            tx,
+            ty,
+            region,
+            frame: whole.frame,
+            backdrop: Vec::new(),
+            key: h.finish(),
+            whole: Some(whole),
+            filtered: Default::default(),
+        }
     }
 
     /// The filtered tile (premultiplied, `TILE × TILE` RGBA), as the oracle
     /// stores it (f16): the backdrop tiles as f16, filtered over the region.
     pub fn filtered(&self) -> &[f32] {
         self.filtered.get_or_init(|| {
+            if let Some(w) = &self.whole {
+                return w.filtered().tile(self.tx, self.ty).map_or_else(|| vec![0.0; onepaint_raster::TILE_PX * 4], |t| t.to_f32());
+            }
             let r = self.region;
             let mut src = Surface::new();
             for ((x, y), p) in &self.backdrop {

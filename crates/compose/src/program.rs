@@ -570,6 +570,8 @@ struct Planner<'a> {
     /// A spatial layer was planned: no split (the GPU fills segments in a
     /// pass that can't read the filtered images; spec 52).
     spatial: std::cell::Cell<bool>,
+    /// This call's whole-canvas layers (spec 53).
+    wholes: &'a Wholes,
 }
 
 /// A top-level node (with its clip family) and the ops it produced.
@@ -617,8 +619,9 @@ pub fn plan_tiles_cached(
     cache: Option<&PlanCache>,
 ) -> (Vec<TileProgram>, Vec<(i32, i32)>) {
     use rayon::prelude::*;
+    let wholes = plan_wholes(doc, ov, cache);
     let planned: Vec<Result<TileProgram, (i32, i32)>> =
-        keys.par_iter().map(|&(tx, ty)| plan(doc, tx, ty, ov, hot, cache).ok_or((tx, ty))).collect();
+        keys.par_iter().map(|&(tx, ty)| plan(doc, tx, ty, ov, hot, cache, &wholes).ok_or((tx, ty))).collect();
     let mut progs = Vec::with_capacity(planned.len());
     let mut cpu = Vec::new();
     for p in planned {
@@ -635,10 +638,69 @@ const MIN_SEGMENT_SOURCES: usize = 2;
 
 /// [`plan_tile`], plus the ops cut at `hot` (a layer id) for spec 38.
 pub fn plan_tile_split(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, hot: Option<&str>) -> Option<TileProgram> {
-    plan(doc, tx, ty, ov, hot, None)
+    // A whole-canvas layer is planned once for many tiles (`plan_tiles_cached`);
+    // alone, a tile leaves it to the CPU.
+    plan(doc, tx, ty, ov, hot, None, &Wholes::default())
 }
 
-fn plan(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, hot: Option<&str>, cache: Option<&PlanCache>) -> Option<TileProgram> {
+/// Whole-canvas spatial layers (spec 53) planned for one call, by layer id:
+/// `None` where one can't run on the GPU.
+#[derive(Default)]
+pub(crate) struct Wholes(std::collections::HashMap<String, Option<Arc<crate::spatial::Whole>>>);
+
+/// Plan every whole-canvas layer's backdrop once, before the tiles, so
+/// every tile shares it (planning it per tile would be quadratic). Their
+/// backdrops can't hold spatial layers of their own (no stacking yet).
+fn plan_wholes(doc: &Document, ov: Option<&StrokeOverlay>, cache: Option<&PlanCache>) -> Wholes {
+    use rayon::prelude::*;
+    fn walk<'a>(nodes: &'a [Node], out: &mut Vec<(&'a Layer, &'a [Node])>) {
+        for (i, n) in nodes.iter().enumerate() {
+            match n {
+                Node::Group(g) => walk(&g.children, out),
+                Node::Layer(l) => {
+                    if let Some(kind) = crate::spatial::spatial_kind(l)
+                        && onepaint_filters::reach(kind, &Default::default()) >= onepaint_filters::GLOBAL_REACH
+                    {
+                        out.push((l, &nodes[..i]));
+                    }
+                }
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(&doc.root, &mut found);
+    let mut out = Wholes::default();
+    for (l, below) in found {
+        let kind = crate::spatial::spatial_kind(l).expect("walk keeps spatial layers");
+        let params = l.adjustment.as_ref().map(|a| a.params.clone()).unwrap_or_default();
+        let whole = crate::spatial::whole_supported(kind, &params).then(|| {
+            let mut sub = doc.clone_shallow();
+            sub.root = below.to_vec();
+            sub.source = None;
+            sub.set_paper(None);
+            let keys: Vec<_> = doc.bounds().tiles().collect();
+            let none = Wholes::default();
+            let backdrop = keys
+                .par_iter()
+                .map(|&(x, y)| plan(&sub, x, y, ov, None, cache, &none).map(|p| ((x, y), Arc::new(p))))
+                .collect::<Option<Vec<_>>>()?;
+            let nested = backdrop.iter().any(|(_, p)| op_contents(&p.ops).any(|c| c.spatial.is_some()));
+            (!nested).then(|| Arc::new(crate::spatial::Whole::new(kind, params, crate::doc_frame(doc), backdrop)))
+        });
+        out.0.insert(l.id.clone(), whole.flatten());
+    }
+    out
+}
+
+fn plan(
+    doc: &Document,
+    tx: i32,
+    ty: i32,
+    ov: Option<&StrokeOverlay>,
+    hot: Option<&str>,
+    cache: Option<&PlanCache>,
+    wholes: &Wholes,
+) -> Option<TileProgram> {
     let frame = crate::doc_frame(doc);
     let mut p = Planner {
         doc,
@@ -657,6 +719,7 @@ fn plan(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, hot: Optio
         background: crate::background_reveals(&doc.root),
         snapshot: false,
         spatial: Default::default(),
+        wholes,
     };
     p.nodes(&doc.root).ok()?;
     // The paper shades the finished composite (spec 43), after every unit.
@@ -687,6 +750,12 @@ impl Planner<'_> {
     fn spatial_content(&self, l: &Layer, kind: onepaint_filters::Kind, below: &[Node]) -> Result<Option<Content>, Unsupported> {
         let params = l.adjustment.as_ref().map(|a| a.params.clone()).unwrap_or_default();
         let r = onepaint_filters::reach(kind, &params);
+        if r >= onepaint_filters::GLOBAL_REACH && self.reveal != Reveal::Below {
+            // A whole-canvas layer (spec 53): its backdrop was planned before the tiles.
+            let whole = self.wholes.0.get(&l.id).cloned().flatten().ok_or(Unsupported)?;
+            self.spatial.set(true);
+            return self.content_with(l, Some(Arc::new(crate::spatial::SpatialSrc::of_whole(whole, (self.tx, self.ty)))));
+        }
         if self.reveal == Reveal::Below || !crate::spatial::gpu_supported(kind, &params) || r > TILE {
             return Err(Unsupported);
         }
@@ -700,7 +769,7 @@ impl Planner<'_> {
         sub.set_paper(None);
         let backdrop = region
             .tiles()
-            .map(|(x, y)| plan(&sub, x, y, self.ov, None, self.cache).map(|p| ((x, y), Arc::new(p))).ok_or(Unsupported))
+            .map(|(x, y)| plan(&sub, x, y, self.ov, None, self.cache, &Wholes::default()).map(|p| ((x, y), Arc::new(p))).ok_or(Unsupported))
             .collect::<Result<Vec<_>, _>>()?;
         self.spatial.set(true);
         let src = crate::spatial::SpatialSrc::new(kind, params, (tx, ty), region, self.frame, backdrop);

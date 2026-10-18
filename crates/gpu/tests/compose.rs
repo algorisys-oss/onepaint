@@ -867,3 +867,81 @@ fn stacked_blurs_over_half_transparent_paint() {
         assert!(e <= TOL, "bg {bg} alpha {alpha} radii {r0}/{r1}: error {e} at {at:?}");
     }
 }
+
+/// Spec 53: a whole-canvas layer (twirl, pinch, polar, chromatic aberration)
+/// filtered over the whole backdrop matches the rendered document. GPU trig
+/// moves a twirl's taps by a hundredth of a pixel, which shows at hard
+/// edges, and pinch is singular at its centre: the stepped count, as for
+/// spec 52's cell kinds.
+#[test]
+fn whole_canvas_layers_match_the_rendered_document() {
+    use onepaint_compose::program::plan_tiles_cached;
+    use onepaint_compose::spatial::rendered;
+    use onepaint_compose::testdocs::with_whole_spatial;
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let mut gc = GpuCompositor::new(&device, 64 << 20);
+    let (w, h) = (300, 300);
+    let tex = target(&device, w, h);
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
+    let mut ran = 0;
+    for seed in 0..12 {
+        let doc = with_whole_spatial(random_doc(seed, w, h, false), seed);
+        let keys: Vec<_> = doc.bounds().tiles().collect();
+        let (progs, cpu) = plan_tiles_cached(&doc, &keys, None, None, None);
+        if !cpu.is_empty() {
+            continue;
+        }
+        ran += 1;
+        gc.run(&device, &queue, &progs, &view, [w, h]);
+        let over = over_tolerance(&rendered(&doc), None, &read(&device, &queue, &tex), TOL);
+        assert!(over as f64 <= (1.5e-3 * (w * h) as f64).ceil(), "seed {seed}: {over} px over");
+    }
+    assert!(ran >= 10, "{ran}");
+}
+
+/// Spec 53, each kind and mode over stripes and a ramp, so every map shows.
+#[test]
+fn whole_canvas_kinds_over_stripes_match_the_oracle() {
+    use onepaint_compose::spatial::rendered;
+    use onepaint_doc::Adjustment;
+    use serde_json::json;
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let (w, h) = (300, 300);
+    let tex = target(&device, w, h);
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
+    let cases = [
+        ("twirl", json!({"centerX": 0.4, "centerY": 0.55, "angle": 140.0, "extent": 0.9})),
+        ("pinch", json!({"centerX": 0.5, "centerY": 0.5, "amount": 0.6, "extent": 0.8})),
+        ("pinch", json!({"centerX": 0.6, "centerY": 0.4, "amount": -0.7, "extent": 1.1})),
+        ("polar-coordinates", json!({"centerX": 0.5, "centerY": 0.5, "polarMode": "to-polar"})),
+        ("polar-coordinates", json!({"centerX": 0.45, "centerY": 0.6, "polarMode": "to-rect"})),
+        ("chromatic-aberration", json!({"amount": 1.5})),
+    ];
+    for (kind, params) in cases {
+        let mut doc = Document::new(w, h, None);
+        let mut paint = Layer::new("paint");
+        for y in 0..h as i32 {
+            for x in 0..w as i32 {
+                let stripe = if (x / 12 + y / 20) % 2 == 0 { 0.9 } else { 0.15 };
+                let a = 0.4 + 0.6 * x as f32 / w as f32;
+                paint.pixels.set(x, y, [stripe * a, (y as f32 / h as f32) * a, 0.5 * a, a]);
+            }
+        }
+        let mut l = Layer::new(kind);
+        l.adjustment = Some(Box::new(Adjustment { kind: kind.into(), params: serde_json::from_value(params.clone()).unwrap() }));
+        doc.root = vec![Node::Layer(paint), Node::Layer(l)];
+        let mut gc = GpuCompositor::new(&device, 64 << 20);
+        let keys: Vec<_> = doc.bounds().tiles().collect();
+        let (progs, cpu) = onepaint_compose::program::plan_tiles_cached(&doc, &keys, None, None, None);
+        assert!(cpu.is_empty(), "{kind} plans on the GPU");
+        gc.run(&device, &queue, &progs, &view, [w, h]);
+        let over = over_tolerance(&rendered(&doc), None, &read(&device, &queue, &tex), TOL);
+        assert!(over as f64 <= (1.5e-3 * (w * h) as f64).ceil(), "{kind} {params}: {over} px over");
+    }
+}

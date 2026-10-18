@@ -260,3 +260,31 @@ fn stacked_blur_layers_both_run_live() {
     let (progs, _) = s.plan(&keys);
     assert!(!progs.iter().any(|p| op_contents(&p.ops).any(|c| c.spatial.is_some())));
 }
+
+/// Spec 53: a lone twirl layer plans on the GPU path and shows a stroke under
+/// it during the stroke; with a second spatial layer it renders on the CPU.
+#[test]
+fn a_lone_twirl_layer_runs_live_on_the_gpu_path() {
+    use onepaint_compose::program::{op_contents, run};
+    let mut s = Session::new(600, 400, Some(onepaint_color::Rgba::WHITE));
+    let paint = s.active().to_string();
+    let p = Params { center_x: Some(0.4), center_y: Some(0.3), angle: Some(120.0), extent: Some(0.8), ..Default::default() };
+    s.execute(Command::AddAdjustmentLayer { kind: "twirl".into(), params: p }).unwrap();
+    s.execute(Command::SetActiveLayer { id: paint.clone() }).unwrap();
+    s.take_dirty_tiles();
+    s.stroke_begin(onepaint_stroke::StrokePoint::at(250.0, 120.0, 1.0, 0.0));
+    s.stroke_extend(&[onepaint_stroke::StrokePoint::at(254.0, 120.0, 1.0, 8.0)]);
+    let keys: Vec<_> = s.doc().bounds().tiles().collect();
+    let (progs, cpu) = s.plan(&keys);
+    assert!(cpu.is_empty(), "no tile falls back: {cpu:?}");
+    assert!(progs.iter().any(|p| op_contents(&p.ops).any(|c| c.spatial.as_ref().is_some_and(|s| s.whole.is_some()))));
+    // The stroke in progress shows through the twirl somewhere: not all white.
+    let dark = progs.iter().any(|p| run(p).chunks_exact(4).any(|px| px[0] < 0.9));
+    assert!(dark, "the stroke shows, twirled");
+    // A whole-canvas layer is live only on its own.
+    s.stroke_end();
+    let p = Params { radius: Some(3.0), ..Default::default() };
+    s.execute(Command::AddAdjustmentLayer { kind: "gaussian-blur".into(), params: p }).unwrap();
+    let (progs, _) = s.plan(&keys);
+    assert!(!progs.iter().any(|p| op_contents(&p.ops).any(|c| c.spatial.is_some())));
+}

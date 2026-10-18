@@ -465,3 +465,37 @@ pub fn with_spatial_n(mut doc: Document, seed: u64, n: usize) -> Document {
     }
     doc
 }
+
+/// [`with_spatial`] for whole-canvas kinds (spec 53): one twirl, pinch,
+/// polar or chromatic aberration layer.
+pub fn with_whole_spatial(mut doc: Document, seed: u64) -> Document {
+    use serde_json::json;
+    let mut r = Rng::new(seed ^ 0x3b01);
+    let kinds = ["twirl", "pinch", "polar-coordinates", "chromatic-aberration"];
+    let kind = kinds[r.below(kinds.len() as u32) as usize];
+    let (cx, cy) = (0.2 + r.f() * 0.6, 0.2 + r.f() * 0.6);
+    let params = match kind {
+        "twirl" => json!({"centerX": cx, "centerY": cy, "angle": r.f() * 720.0 - 360.0, "extent": 0.2 + r.f() * 1.2}),
+        "pinch" => json!({"centerX": cx, "centerY": cy, "amount": r.f() * 2.0 - 1.0, "extent": 0.2 + r.f() * 1.2}),
+        "polar-coordinates" => {
+            let mode = if r.chance(0.5) { "to-polar" } else { "to-rect" };
+            json!({"centerX": cx, "centerY": cy, "polarMode": mode})
+        }
+        _ => json!({"amount": r.f() * 2.0}),
+    };
+    let mut l = Layer::new("whole");
+    l.id = "whole".into();
+    l.adjustment =
+        Some(Box::new(onepaint_doc::Adjustment { kind: kind.into(), params: serde_json::from_value(params).unwrap_or_default() }));
+    l.opacity = if r.chance(0.6) { 1.0 } else { 0.3 + r.f() * 0.7 };
+    l.blend_mode = if r.chance(0.7) { BlendMode::Normal } else { mode(&mut r, false) };
+    if r.chance(0.3) {
+        let mut m = Surface::default();
+        let a = rect(&mut r, doc.width, doc.height);
+        noise(&mut m, &mut r, a);
+        l.mask = Some(m);
+    }
+    let at = r.below(doc.root.len() as u32 + 1) as usize;
+    doc.root.insert(at, Node::Layer(l));
+    doc
+}

@@ -29,9 +29,14 @@ Done today, all pushed (newest last):
   (`compose::spatial`, `gpu::spatial` + `spatial.wgsl`,
   `Session::display_doc_gpu`).
 
+- 2026-10-19 (overnight): spec 53, whole-canvas filter layers. A lone
+  twirl, pinch, polar or chromatic aberration layer runs live on the GPU
+  (one pass over the document reading backdrop tiles from the segment
+  cache; `gpu::whole`, `whole.wgsl`), in documents up to 4096².
+
 Next (the user's order: recommended list, then robustness):
-1. Spec 52 whole-canvas kinds (radial/spin/tilt-shift/iris/field blur,
-   twirl, pinch, polar, chromatic) — needs its own design.
+1. Spec 53 phases 2–3: radial and spin blur, then the Blur Gallery
+   (tilt-shift, iris, field).
 2. Robustness (photocraft list, `todo.md` §2.1): working-set checks,
    device-loss handling, a perf-budget gate.
 

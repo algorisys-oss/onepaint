@@ -13,6 +13,7 @@ pub mod mip;
 pub mod sheets;
 pub mod spatial;
 pub mod wet;
+pub mod whole;
 
 pub use mip::L_MAX;
 pub use sheets::Sheets;

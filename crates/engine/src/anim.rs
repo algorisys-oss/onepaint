@@ -472,7 +472,7 @@ impl Session {
     /// [`Self::display_doc`] for the GPU planner: the live spatial layers
     /// (spec 52) stay adjustment layers, filtered per frame on the GPU.
     pub(crate) fn display_doc_gpu(&self) -> std::borrow::Cow<'_, Document> {
-        let live = Self::live_spatial(&self.doc.root);
+        let live = Self::live_spatial(&self.doc);
         self.display_doc_with(&live)
     }
 
