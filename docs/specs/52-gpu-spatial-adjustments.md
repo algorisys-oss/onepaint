@@ -1,8 +1,9 @@
 # 52: Spatial adjustment layers on the GPU
 
 ## Status
-In progress (2026-10-18). Phase 1: Gaussian blur, motion blur and sharpen
-at the top level.
+Phase 1 built (2026-10-18): Gaussian blur, motion blur and sharpen, live on
+the GPU when the layer is the document's only spatial layer and sits at the
+top level. Everything else renders on the CPU as before.
 
 ## Why
 A spatial adjustment layer (blur, sharpen, distort…) is rendered on the
@@ -38,9 +39,17 @@ backdrop.
   kernel, `filters` `blur_pass`) and writes the filtered tile to a cache
   slot; the composite reads that slot like a layer's pixels (mask, vector
   mask, density, Blend If, mode, opacity).
-- **Engine:** the GPU path plans the document with such layers live, so a
-  stroke below them redraws them every frame; tiles that fall back to the
-  CPU use the rendered document as before.
+- **Engine:** `Session::plan` uses `display_doc_gpu`, which leaves the live
+  layer (`live_spatial`: the document's only spatial layer, top level, a
+  GPU kind, reach within a tile) unrendered, so a stroke below it redraws
+  it every frame. Tiles that fall back to the CPU, and every other spatial
+  layer, use the rendered document as before. Dirty rects grow by a
+  spatial layer's reach, as for feathered masks.
+- **Limits of phase 1:** stacked spatial layers and ones in groups render
+  on the CPU; a program with a spatial layer runs unsplit (the fill pass
+  can't read filtered tiles); reduced levels scale the radius and round the
+  region to level pixels.
+- `ONEPAINT_BLUR=12` adds a blur layer for screenshots.
 
 ## Phases
 1. Oracle in `compose`; `Op::Spatial` with the CPU interpreter and program

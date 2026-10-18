@@ -202,3 +202,31 @@ fn selection_masks_generators() {
     assert!((40..64).all(|x| layer_px(&s, x, 30)[3] == 0.0));
     assert!((0..30).any(|x| layer_px(&s, x, 30)[3] > 0.0));
 }
+
+/// Spec 52: a lone top-level blur layer plans as GPU programs, live during a
+/// stroke under it, and an edit redraws as far as the blur reaches.
+#[test]
+fn a_lone_blur_layer_runs_live_on_the_gpu_path() {
+    use onepaint_compose::program::{op_contents, run};
+    let mut s = Session::new(600, 400, Some(onepaint_color::Rgba::WHITE));
+    let paint = s.active().to_string();
+    let p = Params { radius: Some(12.0), ..Default::default() };
+    s.execute(Command::AddAdjustmentLayer { kind: "gaussian-blur".into(), params: p }).unwrap();
+    s.execute(Command::SetActiveLayer { id: paint }).unwrap();
+    s.take_dirty_tiles();
+    s.stroke_begin(onepaint_stroke::StrokePoint::at(250.0, 120.0, 1.0, 0.0));
+    s.stroke_extend(&[onepaint_stroke::StrokePoint::at(254.0, 120.0, 1.0, 8.0)]);
+    let keys: Vec<_> = s.doc().bounds().tiles().collect();
+    let (progs, cpu) = s.plan(&keys);
+    assert!(cpu.is_empty(), "no tile falls back: {cpu:?}");
+    assert!(progs.iter().any(|p| op_contents(&p.ops).any(|c| c.spatial.is_some())));
+    // The program shows the stroke in progress, blurred: grey near it, not white.
+    let at = progs.iter().find(|p| (p.tx, p.ty) == (0, 0)).unwrap();
+    let px = run(at);
+    let i = (120 * 256 + 252) * 4;
+    assert!(px[i] < 0.95, "blurred paint under the stroke: {:?}", &px[i..i + 4]);
+    // The stroke's tiles plus the blur's reach (12 + 2 px) are dirty: tile 1 starts at 256.
+    let dirty = s.take_dirty_tiles();
+    assert!(dirty.contains(&(1, 0)), "{dirty:?}");
+    s.stroke_end();
+}

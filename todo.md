@@ -129,7 +129,9 @@ an item changes there, change it here too.
   - [x] Screentone (not the sand shape) (spec 46)
   - [x] Built-in pattern fill layers (spec 46)
   - [ ] Imported pattern fills and sand screentone
-  - [ ] Spatial adjustment layers (a padded backdrop pass)
+  - [~] Spatial adjustment layers (spec 52): a lone top-level Gaussian
+        blur, motion blur or sharpen runs live on the GPU; other kinds,
+        stacked ones and ones in groups still render on the CPU
   - [x] Relief lighting (impasto height) (spec 45)
   - [x] Paper shading (spec 43)
   - [x] Partial panel clips (spec 44)

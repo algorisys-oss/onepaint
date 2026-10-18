@@ -130,12 +130,20 @@ impl Tool {
     }
 }
 
-/// The farthest any feathered mask in `nodes` reads (0 without one).
+/// The farthest any feathered mask or spatial layer in `nodes` reads (0
+/// without one).
 fn feather_reach(nodes: &[Node]) -> i32 {
     nodes
         .iter()
         .map(|n| match n {
             Node::Layer(l) if l.mask.is_some() && l.mask_feather() > 0.0 => onepaint_compose::feather::reach(l.mask_feather()),
+            // A spatial layer redraws as far as its filter reads (spec 52).
+            Node::Layer(l) if onepaint_compose::spatial::spatial_kind(l).is_some() => l
+                .adjustment
+                .as_ref()
+                .and_then(|a| onepaint_filters::Kind::parse(&a.kind).map(|k| onepaint_filters::reach(k, &a.params)))
+                .unwrap_or(0)
+                .min(1 << 16),
             Node::Layer(_) => 0,
             Node::Group(g) => feather_reach(&g.children),
         })
@@ -646,7 +654,8 @@ impl Session {
     /// progress. Returns the programs and the tiles that need [`Self::composite`].
     pub fn plan(&self, keys: &[(i32, i32)]) -> (Vec<TileProgram>, Vec<(i32, i32)>) {
         let ov = self.overlay().or_else(|| self.wet_overlay());
-        let doc = self.display_doc();
+        // A lone top-level blur stays live and runs on the GPU (spec 52).
+        let doc = self.display_doc_gpu();
         // Spec 38: split at the layer being changed, so the rest is cached.
         let hot = ov.as_ref().map_or(self.active.as_str(), |o| o.layer_id).to_string();
         onepaint_compose::program::plan_tiles_cached(&doc, keys, ov.as_ref(), Some(&hot), Some(&self.plan_cache))

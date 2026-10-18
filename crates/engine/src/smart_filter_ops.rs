@@ -199,16 +199,47 @@ impl Session {
         })
     }
 
+    /// The spatial layer the GPU filters live (spec 52, phase 1): the
+    /// document's only spatial adjustment layer, at the top level, of a kind
+    /// with a GPU pass and a reach within a tile.
+    pub(crate) fn live_spatial(nodes: &[Node]) -> Option<NodeId> {
+        fn all<'a>(nodes: &'a [Node], out: &mut Vec<&'a onepaint_doc::Layer>) {
+            for n in nodes {
+                match n {
+                    Node::Layer(l) if onepaint_compose::spatial::spatial_kind(l).is_some() => out.push(l),
+                    Node::Layer(_) => {}
+                    Node::Group(g) => all(&g.children, out),
+                }
+            }
+        }
+        let mut found = Vec::new();
+        all(nodes, &mut found);
+        let [l] = found[..] else { return None };
+        let kind = onepaint_compose::spatial::spatial_kind(l)?;
+        let params = l.adjustment.as_ref().map(|a| a.params.clone()).unwrap_or_default();
+        let top = nodes.iter().any(|n| n.id() == l.id);
+        (top && onepaint_compose::spatial::gpu_kind(kind) && onepaint_filters::reach(kind, &params) <= onepaint_raster::TILE)
+            .then(|| l.id.clone())
+    }
+
     /// Replace spatial adjustment layers in `nodes` (and nested groups) with
     /// their rendered result. `fresh` = false reuses stale cache entries.
     pub(crate) fn render_spatial_adjustments(&self, nodes: &mut [Node], fresh: bool) {
+        self.render_spatial_except(nodes, fresh, None)
+    }
+
+    /// [`Self::render_spatial_adjustments`], leaving `live` for the GPU.
+    pub(crate) fn render_spatial_except(&self, nodes: &mut [Node], fresh: bool, live: Option<&str>) {
         let (w, h) = (self.doc.width, self.doc.height);
         for i in 0..nodes.len() {
             if let Node::Group(g) = &mut nodes[i] {
-                self.render_spatial_adjustments(&mut g.children, fresh);
+                self.render_spatial_except(&mut g.children, fresh, live);
                 continue;
             }
             let Node::Layer(l) = &nodes[i] else { continue };
+            if live == Some(l.id.as_str()) {
+                continue;
+            }
             let Some(kind) = l.adjustment.as_ref().and_then(|a| Kind::parse(&a.kind)) else { continue };
             if kind.is_color() || !l.visible || l.clipped {
                 continue;

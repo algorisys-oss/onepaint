@@ -24,6 +24,8 @@
 //! - `ONEPAINT_MAX_SHEET=256` caps the composite's sheet side, to see sheets (spec 40) on small documents.
 //! - `ONEPAINT_SLIDERS=left|right|top|bottom|float|tools` places the size and opacity sliders
 //!   (`float` lays them horizontally; in memory, not saved).
+//! - `ONEPAINT_BLUR=12` adds a Gaussian blur adjustment layer of that radius on top
+//!   (after the demo; spec 52 runs a lone one live on the GPU).
 //! - `ONEPAINT_EXIT=1` closes the app after the screenshot.
 
 use crate::{App, Popover};
@@ -266,6 +268,12 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
         let _ = app.session.execute(Command::AddLayer);
         wave(app, h * 0.45, 40.0, hex("#2f6690"), "watercolor-live", 90.0);
         wave(app, h * 0.55, 60.0, hex("#e8c547"), "watercolor-live", 70.0);
+    }
+    if frame == 3
+        && let Some(r) = std::env::var("ONEPAINT_BLUR").ok().and_then(|v| v.parse::<f32>().ok())
+    {
+        let params = onepaint_filters::Params { radius: Some(r), ..Default::default() };
+        let _ = app.session.execute(Command::AddAdjustmentLayer { kind: "gaussian-blur".into(), params });
     }
     if frame == 3 && app.debug.impasto {
         let (w, h) = (app.session.doc().width as f64, app.session.doc().height as f64);
