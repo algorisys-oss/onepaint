@@ -227,8 +227,10 @@ fn unthreshold(nodes: &mut [Node]) {
         if matches!(n.blend_mode(), BlendMode::HardMix | BlendMode::DarkerColor | BlendMode::LighterColor | BlendMode::Dissolve) {
             n.set_blend_mode(BlendMode::Normal);
         }
-        if let Node::Group(g) = n {
-            unthreshold(&mut g.children);
+        match n {
+            Node::Group(g) => unthreshold(&mut g.children),
+            // Blend If is a tone step too.
+            Node::Layer(l) => l.set_blend_if(None),
         }
     }
 }

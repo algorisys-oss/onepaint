@@ -9,9 +9,9 @@ pub mod relief;
 #[doc(hidden)]
 pub mod testdocs;
 
-use blend::{blend_px_alpha_lock_at, blend_px_alpha_lock_in, blend_px_at, blend_px_in, clip_over};
+use blend::{blend_px_alpha_lock_at, blend_px_alpha_lock_in, blend_px_at, blend_px_if, blend_px_in, clip_over};
 use onepaint_color::Space;
-use onepaint_doc::{BlendMode, Document, Layer, Node};
+use onepaint_doc::{BlendIf, BlendMode, Document, Layer, Node, mask_k};
 use onepaint_filters::Frame;
 use onepaint_panel::coverage::{TileCoverage, tile_coverage};
 use onepaint_raster::{Px, Rect, Surface, TILE, TILE_PX, Tile};
@@ -101,10 +101,12 @@ fn layer_content(l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, frame:
     if l.mask_enabled
         && let Some(mask) = &l.mask
     {
+        let density = l.mask_density();
         let mut m = match (mask.tile(tx, ty), &mask_stroke) {
             (Some(t), _) => t.to_f32(),
             (None, Some(_)) => zeros(),
-            (None, None) => return None,
+            (None, None) if density >= 1.0 => return None,
+            (None, None) => zeros(),
         };
         if let Some((o, st)) = mask_stroke {
             let s = st.to_f32();
@@ -115,7 +117,7 @@ fn layer_content(l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, frame:
             }
         }
         for i in (0..buf.len()).step_by(4) {
-            let k = m[i];
+            let k = mask_k(density, m[i]);
             for c in 0..4 {
                 buf[i + c] *= k;
             }
@@ -127,10 +129,31 @@ fn layer_content(l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, frame:
 /// Blend a tile's worth of `src` onto `target`; the tile's origin places
 /// Dissolve's dither.
 fn blend_into(target: &mut [f32], src: &[f32], mode: BlendMode, opacity: f32, space: Space, (tx, ty): (i32, i32)) {
+    blend_into_if(target, src, mode, opacity, space, (tx, ty), None);
+}
+
+/// [`blend_into`] through the layer's Blend If, when it has one.
+fn blend_into_if(
+    target: &mut [f32],
+    src: &[f32],
+    mode: BlendMode,
+    opacity: f32,
+    space: Space,
+    (tx, ty): (i32, i32),
+    bif: Option<&BlendIf>,
+) {
     if opacity <= 0.0 {
         return;
     }
     let mode = mode.effective();
+    if let Some(b) = bif {
+        for i in (0..target.len()).step_by(4) {
+            let p = (i / 4) as i32;
+            let r = blend_px_if(space, mode, px(target, i), px(src, i), opacity, tx * TILE + p % TILE, ty * TILE + p / TILE, b);
+            target[i..i + 4].copy_from_slice(&r);
+        }
+        return;
+    }
     if mode == BlendMode::Dissolve {
         for i in (0..target.len()).step_by(4) {
             let p = (i / 4) as i32;
@@ -288,7 +311,8 @@ fn composite_nodes(nodes: &[Node], tx: i32, ty: i32, target: &mut Buf, ov: Optio
                         if l.inherit_alpha {
                             clip_into(target, &fam, l.opacity);
                         } else {
-                            blend_into(target, &fam, l.blend_mode, l.opacity, frame.space, (tx, ty));
+                            // The base's Blend If applies to the whole family.
+                            blend_into_if(target, &fam, l.blend_mode, l.opacity, frame.space, (tx, ty), l.blend_if().as_ref());
                         }
                     }
                 }
@@ -433,8 +457,11 @@ fn draw_adjustment(target: &mut Buf, l: &Layer, adj: &onepaint_doc::Adjustment, 
     }
     let Some(kind) = onepaint_filters::Kind::parse(&adj.kind).filter(|k| k.is_color()) else { return };
     let prepared = onepaint_filters::prepare_in(kind, &adj.params, frame);
+    let density = l.mask_density();
     let mask = if l.mask_enabled { l.mask.as_ref().map(|m| m.tile(tx, ty).map(|t| t.to_f32())) } else { None };
-    if let Some(None) = mask {
+    if let Some(None) = mask
+        && density >= 1.0
+    {
         return; // fully masked out on this tile
     }
     let mut out = vec![0.0; target.len()];
@@ -442,13 +469,15 @@ fn draw_adjustment(target: &mut Buf, l: &Layer, adj: &onepaint_doc::Adjustment, 
         let p = (i / 4) as i32;
         let (x, y) = (tx * TILE + p % TILE, ty * TILE + p / TILE);
         let mut o = prepared.color_px(px(target, i), x, y);
-        if let Some(Some(m)) = &mask {
-            let k = m[i];
-            o = o.map(|v| v * k);
+        match &mask {
+            Some(Some(m)) => o = o.map(|v| v * mask_k(density, m[i])),
+            Some(None) => o = o.map(|v| v * (1.0 - density)),
+            None => {}
         }
         out[i..i + 4].copy_from_slice(&o);
     }
-    blend_into(target, &out, l.blend_mode, l.opacity, frame.space, (tx, ty));
+    let bif = if l.clipped { None } else { l.blend_if() };
+    blend_into_if(target, &out, l.blend_mode, l.opacity, frame.space, (tx, ty), bif.as_ref());
 }
 
 fn draw_layer(target: &mut Buf, l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, frame: Frame) {
@@ -463,7 +492,9 @@ fn draw_layer(target: &mut Buf, l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeO
             }
         }
     }
-    blend_into(target, &c, l.blend_mode, l.opacity, frame.space, (tx, ty));
+    // Inherit alpha has no Blend If (happypaint `compositeInheritAlpha`).
+    let bif = if l.inherit_alpha { None } else { l.blend_if() };
+    blend_into_if(target, &c, l.blend_mode, l.opacity, frame.space, (tx, ty), bif.as_ref());
 }
 
 /// The document as a filter frame (size, DPI and space for tone and fill

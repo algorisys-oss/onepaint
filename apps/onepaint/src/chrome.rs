@@ -4,7 +4,7 @@
 use crate::layout::PanelId;
 use crate::{App, Popover};
 use egui::{Align2, Area, Id, Order, RichText, Sense, Ui, pos2, vec2};
-use onepaint_doc::{BlendMode, Knockout, Node};
+use onepaint_doc::{BlendIf, BlendMode, Knockout, Node};
 use onepaint_engine::{Command, LayerProps, Tool};
 use onepaint_ui_kit::widgets::{self, glass_frame, popover_frame};
 use onepaint_ui_kit::{Tokens, icons, theme};
@@ -1063,6 +1063,16 @@ fn layers(app: &mut App, ui: &mut Ui) {
                 }
             }
         });
+        if l.mask.is_some() {
+            let mut d = l.mask_density() * 100.0;
+            if widgets::slider_row(ui, "Density", &mut d, 0.0..=100.0, |v| format!("{v:.0}%"))
+                .on_hover_text("How strongly the mask hides (Photoshop's Density)")
+                .changed()
+            {
+                let props = LayerProps { mask_density: Some(d.round() / 100.0), ..Default::default() };
+                let _ = app.session.execute(Command::SetLayerProps { id: active.clone(), props });
+            }
+        }
         ui.horizontal(|ui| {
             let mut clip = l.clipped;
             if widgets::toggle(ui, &mut clip, "Clip").changed() {
@@ -1079,6 +1089,7 @@ fn layers(app: &mut App, ui: &mut Ui) {
                 });
             }
         });
+        blend_if_controls(app, ui, l.blend_if(), &active);
         if l.adjustment.is_none() {
             bevel_controls(app, ui, &active);
         }
@@ -2061,5 +2072,63 @@ fn paper_dialog(app: &mut App, ui: &mut Ui) {
     ui.add_space(10.0);
     if widgets::primary_button(ui, "Done", 90.0).clicked() {
         app.popover = None;
+    }
+}
+
+/// Properties ▸ Blend If (happypaint `layer-look-editor.tsx`): a channel,
+/// Split, and the This Layer / Underlying Layer bars.
+fn blend_if_controls(app: &mut App, ui: &mut Ui, current: Option<BlendIf>, active: &str) {
+    use onepaint_ui_kit::range_bar::{range_bar, range_readout};
+    let t = Tokens::get(ui.ctx());
+    const CHANNELS: [(&str, egui::Color32); 4] = [
+        ("Gray", egui::Color32::WHITE),
+        ("Red", egui::Color32::from_rgb(255, 0, 0)),
+        ("Green", egui::Color32::from_rgb(0, 255, 0)),
+        ("Blue", egui::Color32::from_rgb(0, 0, 255)),
+    ];
+    let (ch_id, split_id, open_id) = (Id::new("blend-if-channel"), Id::new("blend-if-split"), Id::new("blend-if-open"));
+    let mut ch: usize = ui.data(|d| d.get_temp(ch_id)).unwrap_or(0);
+    let mut split: bool = ui.data(|d| d.get_temp(split_id)).unwrap_or(false);
+    // Folded away until asked for (or in use), so the panel stays short.
+    let mut open: bool = ui.data(|d| d.get_temp(open_id)).unwrap_or(current.is_some());
+    ui.horizontal(|ui| {
+        if widgets::toggle(ui, &mut open, "Blend If").on_hover_text("Show this layer's tones only where they fall in a range").changed() {
+            ui.data_mut(|d| d.insert_temp(open_id, open));
+        }
+        if current.is_some() && widgets::secondary_button(ui, "Reset", 56.0).on_hover_text("Let every tone through again").clicked() {
+            let props = LayerProps { blend_if: Some(None), ..Default::default() };
+            let _ = app.session.execute(Command::SetLayerProps { id: active.to_string(), props });
+        }
+    });
+    if !open {
+        return;
+    }
+    ui.horizontal(|ui| {
+        egui::ComboBox::from_id_salt("blend-if-channel").selected_text(CHANNELS[ch].0).width(90.0).show_ui(ui, |ui| {
+            for (i, (name, _)) in CHANNELS.iter().enumerate() {
+                ui.selectable_value(&mut ch, i, *name);
+            }
+        });
+        widgets::toggle(ui, &mut split, "Split").on_hover_text("Pull a slider's two halves apart for a soft transition (or Alt-drag)");
+    });
+    ui.data_mut(|d| {
+        d.insert_temp(ch_id, ch);
+        d.insert_temp(split_id, split);
+    });
+    let mut b = current.unwrap_or_default();
+    let mut changed = false;
+    for (label, this) in [("This Layer", true), ("Underlying Layer", false)] {
+        let r = if this { &mut b.0[ch].src } else { &mut b.0[ch].dst };
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(label).color(t.fg_muted));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(RichText::new(range_readout(*r)).font(theme::mono(12.0)).color(t.fg));
+            });
+        });
+        changed |= range_bar(ui, r, CHANNELS[ch].1, split, &format!("{label} — {}", CHANNELS[ch].0)).changed();
+    }
+    if changed {
+        let props = LayerProps { blend_if: Some(Some(b)), ..Default::default() };
+        let _ = app.session.execute(Command::SetLayerProps { id: active.to_string(), props });
     }
 }

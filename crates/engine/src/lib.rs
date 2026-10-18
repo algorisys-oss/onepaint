@@ -44,7 +44,7 @@ pub use onepaint_selection::{Mask, Mode as SelectMode};
 use onepaint_brush::{BrushPreset, StrokeEngine};
 use onepaint_color::Rgba;
 use onepaint_compose::{StrokeMode, StrokeOverlay, apply_stroke_px_at, composite_tile};
-use onepaint_doc::{BlendMode, Document, Group, Knockout, Layer, Node, NodeId};
+use onepaint_doc::{BlendIf, BlendMode, Document, Group, Knockout, Layer, Node, NodeId};
 pub use onepaint_formats::Progress;
 use onepaint_history::History;
 use onepaint_raster::{Rect, Surface, TILE, TILE_PX, Tile};
@@ -152,6 +152,15 @@ pub struct LayerProps {
     /// `Some(None)` clears the knockout; layers only.
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "some_option")]
     pub knockout: Option<Option<Knockout>>,
+    /// How strongly the mask hides, 0..=1; layers only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mask_density: Option<f32>,
+    /// The mask's feather in doc px; layers only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mask_feather: Option<f32>,
+    /// `Some(None)` resets Blend If; layers only.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "some_option")]
+    pub blend_if: Option<Option<BlendIf>>,
 }
 
 /// Keep an explicit `null` as `Some(None)`, so "clear" survives a replay.
@@ -172,6 +181,9 @@ impl LayerProps {
             (self.locked.is_some(), "locked"),
             (self.collapsed.is_some(), "collapsed"),
             (self.knockout.is_some(), "knockout"),
+            (self.mask_density.is_some(), "density"),
+            (self.mask_feather.is_some(), "feather"),
+            (self.blend_if.is_some(), "blendIf"),
         ] {
             if set {
                 k.push_str(name);
@@ -1558,6 +1570,15 @@ impl Session {
                     }
                     if let Some(v) = p.knockout {
                         l.set_knockout(v);
+                    }
+                    if let Some(v) = p.mask_density {
+                        l.set_mask_density(v);
+                    }
+                    if let Some(v) = p.mask_feather {
+                        l.set_mask_feather(v);
+                    }
+                    if let Some(v) = p.blend_if {
+                        l.set_blend_if(v);
                     }
                 }
                 Node::Group(g) => {

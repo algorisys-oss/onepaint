@@ -4,6 +4,7 @@
 //! See `docs/design-system.md`.
 
 pub mod icons;
+pub mod range_bar;
 pub mod theme;
 pub mod widgets;
 

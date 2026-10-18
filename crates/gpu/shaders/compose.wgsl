@@ -8,7 +8,11 @@
 //   b: base slot, stroke slot, stroke code, stroke opacity
 //   c: mask slot, mask stroke slot, mask stroke code, mask stroke opacity
 //   d: ghost tint rgb (f32 bits); for content with F_RELIEF, the height
-//      slots (centre | left << 16, right | up << 16, down), 0xffff for none
+//      slots (centre | left << 16, right | up << 16, down), 0xffff for none;
+//      d.w the mask's density (f32 bits) when F_MASK is set
+// The mode word of a layer, adjust or pop op is `mode | bif << 8`: `bif` is
+// 0, or 1 + where its Blend If ranges start in `adj` (eight vec4s: gray,
+// red, green, blue; This Layer then Underlying Layer, in 0..255).
 // A stroke code is `kind | mode << 8` (kind 0 paint, 1 erase, 2 alpha lock).
 //
 // Spec 42: an adjust op (a colour adjustment layer) has its params at
@@ -409,6 +413,61 @@ fn blend_px_alpha_lock(mode: u32, bp: vec4<f32>, src: vec4<f32>, opacity: f32) -
     let cb = straight(b);
     let bl = blend_color(m, cb, cs);
     return prem_srgb_to_lin(vec4<f32>((a_s * bl + (1.0 - a_s) * cb) * ab, ab));
+}
+
+// One Blend If slider's weight (blend.rs `blend_range_weight`).
+fn bif_weight(r: vec4<f32>, t: f32) -> f32 {
+    let v = floor(t * 255.0 + 0.5);
+    if (v < r.x || v > r.w) {
+        return 0.0;
+    }
+    if (v < r.y) {
+        return (v - r.x) / (r.y - r.x);
+    }
+    if (v > r.z) {
+        return (r.w - v) / (r.w - r.z);
+    }
+    return 1.0;
+}
+
+// blend.rs `blend_if_weight`: on sRGB straight tones.
+fn blend_if_weight(at: u32, bp: vec4<f32>, src: vec4<f32>) -> f32 {
+    var s = src;
+    var b = bp;
+    if (prm.gamma == 0u) {
+        s = prem_lin_to_srgb(s);
+        b = prem_lin_to_srgb(b);
+    }
+    let cs = straight(s);
+    let cb = straight(b);
+    let k = vec3<f32>(0.3, 0.59, 0.11);
+    var w = bif_weight(adj[at], dot(cs, k)) * bif_weight(adj[at + 1u], dot(cb, k));
+    for (var i = 0u; i < 3u; i++) {
+        w *= bif_weight(adj[at + 2u + 2u * i], cs[i]) * bif_weight(adj[at + 3u + 2u * i], cb[i]);
+    }
+    return w;
+}
+
+// `blend_px` for a mode word (blend.rs `blend_px_if`): Blend If scales the
+// source's alpha after Dissolve's dither.
+fn blend_word(word: u32, bp: vec4<f32>, src: vec4<f32>, opacity: f32) -> vec4<f32> {
+    let mode = word & 0xffu;
+    let bif = word >> 8u;
+    if (bif == 0u) {
+        return blend_px(mode, bp, src, opacity);
+    }
+    let w = blend_if_weight(bif - 1u, bp, src);
+    if (previewed(mode) == M_DISSOLVE) {
+        if (dissolve_hit(src.w * opacity)) {
+            var c = straight(src);
+            if (prm.gamma != 0u) {
+                c = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
+            }
+            return blend_px(M_NORMAL, bp, vec4<f32>(c * w, w), 1.0);
+        }
+        return bp;
+    }
+    return blend_px(mode, bp, src * w, opacity);
 }
 
 fn clip_over(d: vec4<f32>, src: vec4<f32>, opacity: f32) -> vec4<f32> {
@@ -819,7 +878,7 @@ fn content(o: Op, p: vec2<i32>) -> vec4<f32> {
         if ((flags & F_MASK_STROKE) != 0u) {
             m = apply_stroke(m, load(o.c.y, p), bitcast<f32>(o.c.w), o.c.z);
         }
-        c *= m.x;
+        c *= 1.0 - bitcast<f32>(o.d.w) * (1.0 - m.x);
     }
     return c;
 }
@@ -879,7 +938,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if ((o.a.w & F_INHERIT) != 0u) {
                     c *= top.w;
                 }
-                top = blend_px(o.a.y, top, c, opacity);
+                top = blend_word(o.a.y, top, c, opacity);
             }
             case OP_PUSH_ZERO: {
                 stack[sp] = top;
@@ -926,9 +985,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case OP_ADJUST: {
                 var v = adjust(o, top, (tile_origin + p) * i32(1u << prm.level));
                 if ((o.a.w & F_MASK) != 0u) {
-                    v *= load(o.c.x, p).x;
+                    var m = 0.0;
+                    if ((o.a.w & F_MASK_ZERO) == 0u) {
+                        m = load(o.c.x, p).x;
+                    }
+                    v *= 1.0 - bitcast<f32>(o.d.w) * (1.0 - m);
                 }
-                top = blend_px(o.a.y, top, v, opacity);
+                top = blend_word(o.a.y, top, v, opacity);
             }
             case OP_COVERAGE: {
                 // A panel frame's partial clip (spec 44), coverage in the slot's channels.
@@ -952,7 +1015,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if ((o.a.w & F_INHERIT) != 0u) {
                     top = clip_over(top, v, opacity);
                 } else {
-                    top = blend_px(o.a.y, top, v, opacity);
+                    top = blend_word(o.a.y, top, v, opacity);
                 }
             }
         }

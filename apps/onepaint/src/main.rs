@@ -1611,6 +1611,33 @@ mod tests {
     }
 
     #[test]
+    fn blend_if_unfolds_and_reset_clears_it() {
+        let mut h = harness();
+        h.run();
+        h.get_by_label("Layers").click();
+        h.run();
+        assert!(h.query_by_label("This Layer — Gray").is_none());
+        h.get_by_label("Blend If").click();
+        h.run();
+        assert!(h.query_by_label("This Layer — Gray").is_some());
+        // Drag the white slider of This Layer to the left: it now hides the light tones.
+        let r = h.get_by_label("This Layer — Gray").rect();
+        h.event(Event::PointerMoved(pos2(r.right() - 7.0, r.center().y)));
+        h.step();
+        press(&mut h, pos2(r.right() - 7.0, r.center().y), true);
+        h.event(Event::PointerMoved(pos2(r.center().x, r.center().y)));
+        h.step();
+        press(&mut h, pos2(r.center().x, r.center().y), false);
+        h.run();
+        let id = h.state().session.active().to_string();
+        let b = h.state().session.doc().layer(&id).unwrap().blend_if().expect("Blend If set");
+        assert!(b.0[0].src[2] < 200 && b.0[0].src[2] == b.0[0].src[3], "{:?}", b.0[0]);
+        h.get_by_label("Reset").click();
+        h.run();
+        assert_eq!(h.state().session.doc().layer(&id).unwrap().blend_if(), None);
+    }
+
+    #[test]
     fn top_bar_buttons_open_popovers_and_add_layers() {
         let mut h = harness();
         h.run();

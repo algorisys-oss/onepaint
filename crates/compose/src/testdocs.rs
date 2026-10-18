@@ -135,7 +135,39 @@ pub fn random_doc(seed: u64, w: u32, h: u32, pigment: bool) -> Document {
     if let Some(Node::Layer(l)) = d.root.first_mut() {
         l.locked = k.chance(0.5);
     }
+    looks(&mut Rng::new(seed ^ 0x6c6f_6f6b), &mut d.root, false);
     d
+}
+
+/// Mask density and Blend If on some layers (only adjustment layers when
+/// `adjust_only`).
+fn looks(r: &mut Rng, nodes: &mut [Node], adjust_only: bool) {
+    for n in nodes {
+        match n {
+            Node::Layer(l) if !adjust_only || l.adjustment.is_some() => {
+                if l.mask.is_some() && r.chance(0.4) {
+                    l.set_mask_density(r.f());
+                }
+                if r.chance(0.2) {
+                    l.set_blend_if(Some(random_blend_if(r)));
+                }
+            }
+            Node::Layer(_) => {}
+            Node::Group(g) => looks(r, &mut g.children, adjust_only),
+        }
+    }
+}
+
+/// One or two channels with random (often split) sliders.
+pub fn random_blend_if(r: &mut Rng) -> onepaint_doc::BlendIf {
+    let mut b = onepaint_doc::BlendIf::default();
+    for _ in 0..1 + r.below(2) {
+        let mut v = [0u8; 4].map(|_| r.below(256) as u8);
+        v.sort_unstable();
+        let c = &mut b.0[r.below(4) as usize];
+        if r.chance(0.5) { c.src = v } else { c.dst = v }
+    }
+    b
 }
 
 fn knockouts(r: &mut Rng, nodes: &mut [Node]) {
@@ -299,6 +331,7 @@ pub fn with_adjustments(mut doc: Document, seed: u64) -> Document {
     let (w, h) = (doc.width, doc.height);
     let mut id = 0;
     walk(&mut doc.root, &mut r, &mut id, w, h);
+    looks(&mut Rng::new(seed ^ 0xad2), &mut doc.root, true);
     doc
 }
 

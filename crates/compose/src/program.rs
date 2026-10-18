@@ -7,12 +7,12 @@
 //! on the CPU. [`run`] interprets a program on the CPU, which tests the
 //! flattening against [`crate::composite_tile`].
 
-use crate::blend::{blend_px_at, blend_px_in, clip_over};
+use crate::blend::{blend_px_at, blend_px_if, blend_px_in, clip_over};
 use crate::{
     GHOST_PEG_KEY, GHOST_TINT_KEY, StrokeMode, StrokeOverlay, apply_stroke_px, apply_stroke_px_at, panel_clip, passes_through, riders,
 };
 use onepaint_color::Space;
-use onepaint_doc::{BlendMode, Document, Layer, Node};
+use onepaint_doc::{BlendIf, BlendMode, Document, Layer, Node, mask_k};
 pub use onepaint_filters::gpu::GpuAdjust;
 use onepaint_panel::coverage::TileCoverage;
 use onepaint_raster::{Px, TILE, TILE_PX, Tile};
@@ -52,6 +52,8 @@ pub struct Content {
     pub mask_stroke: Option<StrokeSrc>,
     /// Impasto relief lighting (spec 45).
     pub relief: Option<Arc<Relief>>,
+    /// The mask's density: it multiplies by `1 − density · (1 − m)`.
+    pub density: f32,
 }
 
 /// The height tiles relief reads for tile `(tx, ty)` (spec 45): its own and
@@ -229,7 +231,7 @@ impl std::fmt::Debug for PaperShade {
 #[derive(Clone, Debug)]
 pub enum Op {
     /// Blend content onto the top register (`draw_layer`).
-    Layer { content: Content, mode: BlendMode, opacity: f32, inherit_alpha: bool },
+    Layer { content: Content, mode: BlendMode, opacity: f32, inherit_alpha: bool, blend_if: Option<BlendIf> },
     /// Push a transparent register (a group starts).
     PushZero,
     /// Push content as a new register (a clip family's base).
@@ -237,10 +239,11 @@ pub enum Op {
     /// Clip content onto the top register (a clipped layer).
     Clip { content: Content, opacity: f32 },
     /// Pop the top register, tint it, and blend (or clip) it onto the next.
-    Pop { mode: BlendMode, opacity: f32, clip: bool, tint: Option<[f32; 3]> },
+    Pop { mode: BlendMode, opacity: f32, clip: bool, tint: Option<[f32; 3]>, blend_if: Option<BlendIf> },
     /// Adjust the top register, mask the result and blend it back
     /// (`draw_adjustment`, spec 42).
-    Adjust { adjust: Arc<Adjust>, mask: Option<Arc<Tile>>, mode: BlendMode, opacity: f32 },
+    /// `mask` is never [`MaskSrc::Zero`] unless `density` < 1.
+    Adjust { adjust: Arc<Adjust>, mask: MaskSrc, density: f32, mode: BlendMode, opacity: f32, blend_if: Option<BlendIf> },
     /// Shade the finished tile `(tx, ty)` with the paper's tooth (spec 43).
     Paper { shade: Arc<PaperShade>, tx: i32, ty: i32 },
     /// Multiply the top register by a panel frame's coverage (spec 44).
@@ -309,7 +312,7 @@ pub fn op_sources(ops: &[Op]) -> impl Iterator<Item = &Arc<Tile>> {
             Op::Layer { content, .. } | Op::PushContent(content) | Op::Clip { content, .. } | Op::Knockout { content, .. } => {
                 (Some(content), None)
             }
-            Op::Adjust { mask, .. } => (None, mask.as_ref()),
+            Op::Adjust { mask: MaskSrc::Tile(m), .. } => (None, Some(m)),
             Op::Coverage(c) => (None, Some(&c.tile)),
             _ => (None, None),
         };
@@ -353,6 +356,11 @@ pub fn segment_key(ops: &[Op], at: [i32; 2]) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     at.hash(&mut h);
     let ptr = |t: &Arc<Tile>| Arc::as_ptr(t) as usize;
+    let mask_key = |m: &MaskSrc, h: &mut std::collections::hash_map::DefaultHasher| match m {
+        MaskSrc::None => 0usize.hash(h),
+        MaskSrc::Zero => 1usize.hash(h),
+        MaskSrc::Tile(t) => (2usize, ptr(t)).hash(h),
+    };
     let content = |c: &Content, h: &mut std::collections::hash_map::DefaultHasher| {
         c.base.as_ref().map(ptr).hash(h);
         for s in [&c.stroke, &c.mask_stroke] {
@@ -365,11 +373,8 @@ pub fn segment_key(ops: &[Op], at: [i32; 2]) -> u64 {
                 0usize.hash(h);
             }
         }
-        match &c.mask {
-            MaskSrc::None => 0usize.hash(h),
-            MaskSrc::Zero => 1usize.hash(h),
-            MaskSrc::Tile(t) => (2usize, ptr(t)).hash(h),
-        }
+        mask_key(&c.mask, h);
+        c.density.to_bits().hash(h);
         // Relief depends on where the tile is (taps clamp at the document's edge).
         if let Some(r) = &c.relief {
             (r.tx, r.ty, r.doc).hash(h);
@@ -378,8 +383,8 @@ pub fn segment_key(ops: &[Op], at: [i32; 2]) -> u64 {
     };
     for op in ops {
         match op {
-            Op::Layer { content: c, mode, opacity, inherit_alpha } => {
-                (0u8, *mode as u8, opacity.to_bits(), *inherit_alpha).hash(&mut h);
+            Op::Layer { content: c, mode, opacity, inherit_alpha, blend_if } => {
+                (0u8, *mode as u8, opacity.to_bits(), *inherit_alpha, blend_if).hash(&mut h);
                 content(c, &mut h);
             }
             Op::PushZero => 1u8.hash(&mut h),
@@ -391,17 +396,17 @@ pub fn segment_key(ops: &[Op], at: [i32; 2]) -> u64 {
                 (3u8, opacity.to_bits()).hash(&mut h);
                 content(c, &mut h);
             }
-            Op::Pop { mode, opacity, clip, tint } => {
-                (4u8, *mode as u8, opacity.to_bits(), *clip).hash(&mut h);
+            Op::Pop { mode, opacity, clip, tint, blend_if } => {
+                (4u8, *mode as u8, opacity.to_bits(), *clip, blend_if).hash(&mut h);
                 tint.map(|t| t.map(f32::to_bits)).hash(&mut h);
             }
-            Op::Adjust { adjust, mask, mode, opacity } => {
-                (5u8, *mode as u8, opacity.to_bits(), adjust.gpu.code).hash(&mut h);
+            Op::Adjust { adjust, mask, density, mode, opacity, blend_if } => {
+                (5u8, *mode as u8, opacity.to_bits(), adjust.gpu.code, density.to_bits(), blend_if).hash(&mut h);
                 adjust.gpu.params.map(f32::to_bits).hash(&mut h);
                 adjust.gpu.lut.hash(&mut h);
                 adjust.gpu.table.iter().flatten().for_each(|e| e.map(f32::to_bits).hash(&mut h));
                 adjust.at.hash(&mut h);
-                mask.as_ref().map(ptr).hash(&mut h);
+                mask_key(mask, &mut h);
             }
             Op::Paper { shade, tx, ty } => {
                 (6u8, *tx, *ty, shade.amt.to_bits(), shade.tex.tile_px().to_bits()).hash(&mut h);
@@ -456,7 +461,8 @@ struct Unit {
     hot: bool,
     /// Its result does not depend on what lies below (spec 38).
     folds: bool,
-    /// An adjustment layer: it reads the backdrop and may amplify rounding.
+    /// An adjustment layer or a Blend If: it reads the backdrop and may
+    /// amplify rounding (Blend If's tone steps flip on it).
     adjust: bool,
 }
 
@@ -564,14 +570,16 @@ impl Planner<'_> {
             let doc = [self.frame.doc_w as i32, self.frame.doc_h as i32];
             tiles.iter().any(Option::is_some).then(|| Arc::new(Relief { tiles, tx, ty, doc }))
         });
-        let mut c = Content { base, stroke, mask: MaskSrc::None, mask_stroke: None, relief };
+        let mut c = Content { base, stroke, mask: MaskSrc::None, mask_stroke: None, relief, density: 1.0 };
         if l.mask_enabled
             && let Some(mask) = &l.mask
         {
+            c.density = l.mask_density();
             c.mask = match (mask.tile(tx, ty), &mask_stroke) {
                 (Some(t), _) => MaskSrc::Tile(t.clone()),
                 (None, Some(_)) => MaskSrc::Zero,
-                (None, None) => return Ok(None),
+                (None, None) if c.density >= 1.0 => return Ok(None),
+                (None, None) => MaskSrc::Zero,
             };
             c.mask_stroke = mask_stroke;
         }
@@ -626,15 +634,18 @@ impl Planner<'_> {
             None => make(),
         }
         .ok_or(Unsupported)?;
+        let density = l.mask_density();
         let mask = match (&l.mask, l.mask_enabled) {
             (Some(m), true) => match m.tile(self.tx, self.ty) {
-                Some(t) => Some(t.clone()),
-                None => return Ok(()), // fully masked out on this tile
+                Some(t) => MaskSrc::Tile(t.clone()),
+                None if density >= 1.0 => return Ok(()), // fully masked out on this tile
+                None => MaskSrc::Zero,
             },
-            _ => None,
+            _ => MaskSrc::None,
         };
         let adjust = Arc::new(Adjust { prepared, gpu, at: [self.tx * TILE, self.ty * TILE] });
-        self.ops.push(Op::Adjust { adjust, mask, mode: l.blend_mode.effective(), opacity: l.opacity });
+        let blend_if = if l.clipped { None } else { l.blend_if() };
+        self.ops.push(Op::Adjust { adjust, mask, density, mode: l.blend_mode.effective(), opacity: l.opacity, blend_if });
         Ok(())
     }
 
@@ -648,10 +659,10 @@ impl Planner<'_> {
         Ok(())
     }
 
-    fn pop(&mut self, mode: BlendMode, opacity: f32, clip: bool, tint: Option<[f32; 3]>) {
+    fn pop(&mut self, mode: BlendMode, opacity: f32, clip: bool, tint: Option<[f32; 3]>, blend_if: Option<BlendIf>) {
         self.depth -= 1;
         self.regs.pop();
-        self.ops.push(Op::Pop { mode: mode.effective(), opacity, clip, tint });
+        self.ops.push(Op::Pop { mode: mode.effective(), opacity, clip, tint, blend_if });
     }
 
     /// A normal, fully opaque layer replaces its register (`c + top · 0`):
@@ -663,7 +674,7 @@ impl Planner<'_> {
             return;
         }
         let plain = matches!(c.mask, MaskSrc::None) && c.stroke.is_none() && c.mask_stroke.is_none() && c.relief.is_none();
-        if l.blend_mode != BlendMode::Normal || l.opacity != 1.0 || l.inherit_alpha || !plain {
+        if l.blend_mode != BlendMode::Normal || l.opacity != 1.0 || l.inherit_alpha || !plain || l.blend_if().is_some() {
             return;
         }
         let Some(base) = &c.base else { return };
@@ -738,7 +749,7 @@ impl Planner<'_> {
                         }
                         self.clipped(&nodes[i + 1..j])?;
                         let tint = g.extra.get(GHOST_TINT_KEY).and_then(|v| serde_json::from_value::<[f32; 3]>(v.clone()).ok());
-                        self.pop(g.blend_mode, g.opacity, false, tint);
+                        self.pop(g.blend_mode, g.opacity, false, tint, None);
                     }
                 }
                 Node::Layer(l) => {
@@ -756,6 +767,8 @@ impl Planner<'_> {
                                     mode: l.blend_mode.effective(),
                                     opacity: l.opacity,
                                     inherit_alpha: l.inherit_alpha,
+                                    // Inherit alpha has no Blend If.
+                                    blend_if: l.blend_if().filter(|_| !l.inherit_alpha),
                                 });
                             }
                         } else {
@@ -765,7 +778,8 @@ impl Planner<'_> {
                                 None => self.push(Op::PushZero)?,
                             }
                             self.clipped(family)?;
-                            self.pop(l.blend_mode, l.opacity, l.inherit_alpha, None);
+                            // The base's Blend If applies to the whole family.
+                            self.pop(l.blend_mode, l.opacity, l.inherit_alpha, None, l.blend_if().filter(|_| !l.inherit_alpha));
                         }
                     }
                 }
@@ -791,9 +805,12 @@ impl Planner<'_> {
                     && !knocks
                     && match &nodes[i] {
                         Node::Group(g) => g.blend_mode.effective() == BlendMode::Normal,
-                        Node::Layer(l) => l.blend_mode.effective() == BlendMode::Normal && !l.inherit_alpha,
+                        // Blend If reads the backdrop.
+                        Node::Layer(l) => l.blend_mode.effective() == BlendMode::Normal && !l.inherit_alpha && l.blend_if().is_none(),
                     };
-                let adjust = through && self.ops[start..].iter().any(|o| matches!(o, Op::Adjust { .. }));
+                let blend_if = |o: &Op| matches!(o, Op::Layer { blend_if: Some(_), .. } | Op::Pop { blend_if: Some(_), .. });
+                let adjust =
+                    (through && self.ops[start..].iter().any(|o| matches!(o, Op::Adjust { .. }))) || self.ops[start..].iter().any(blend_if);
                 self.units.push(Unit { start, end: self.ops.len(), hot, folds, adjust });
             }
             i = j;
@@ -805,9 +822,10 @@ impl Planner<'_> {
 /// Cut `ops` at the hot unit (spec 38): `None` when no unit holds it.
 fn split(ops: &[Op], units: &[Unit], at: [i32; 2]) -> Option<Split> {
     let h = units.iter().position(|u| u.hot)?;
-    // An adjustment layer at or above the hot one would read the cached f16
-    // image below it, and the stronger ones (hue near grey, threshold,
-    // levels) turn that rounding into visible differences: run unsplit.
+    // An adjustment layer (or a Blend If) at or above the hot one would read
+    // the cached f16 image below it, and the stronger ones (hue near grey,
+    // threshold, levels, Blend If's tone steps) turn that rounding into
+    // visible differences: run unsplit.
     if units[h..].iter().any(|u| u.adjust && !ops[u.start..u.end].is_empty()) {
         return None;
     }
@@ -862,7 +880,8 @@ fn eval(c: &Content, i: usize, space: Space, at: [i32; 2]) -> Px {
     if let Some(s) = &c.mask_stroke {
         m = apply_stroke_px(m, load(&s.tile, i), s.opacity, s.mode);
     }
-    p.map(|v| v * m[0])
+    let k = mask_k(c.density, m[0]);
+    p.map(|v| v * k)
 }
 
 /// Run `ops` on one pixel, starting from the register `init`; `at` is the
@@ -889,13 +908,13 @@ fn exec(ops: &[Op], init: Px, i: usize, stack: &mut Vec<Px>, space: Space, at: [
         // The stack is never empty: the planner pairs every push with a pop.
         let Some(top) = stack.last_mut() else { break };
         match op {
-            Op::Layer { content, mode, opacity, inherit_alpha } => {
+            Op::Layer { content, mode, opacity, inherit_alpha, blend_if } => {
                 let mut c = eval(content, i, space, at);
                 if *inherit_alpha {
                     let a = top[3];
                     c = c.map(|v| v * a);
                 }
-                *top = blend_px_at(space, *mode, *top, c, *opacity, x, y);
+                *top = blend_at(space, *mode, *top, c, *opacity, x, y, blend_if.as_ref());
             }
             Op::PushZero => stack.push([0.0; 4]),
             Op::PushContent(c) => {
@@ -914,14 +933,19 @@ fn exec(ops: &[Op], init: Px, i: usize, stack: &mut Vec<Px>, space: Space, at: [
                 *dst = std::array::from_fn(|c| dst[c] * (1.0 - opacity) + v[c] * opacity);
             }
             Op::Clip { content, opacity } => *top = clip_over(*top, eval(content, i, space, at), *opacity),
-            Op::Adjust { adjust, mask, mode, opacity } => {
+            Op::Adjust { adjust, mask, density, mode, opacity, blend_if } => {
                 let (x, y) = (adjust.at[0] + (i % TILE as usize) as i32, adjust.at[1] + (i / TILE as usize) as i32);
                 let mut o = adjust.prepared.color_px(*top, x, y);
-                if let Some(m) = mask {
-                    let k = load(m, i)[0];
+                let m = match mask {
+                    MaskSrc::None => None,
+                    MaskSrc::Tile(m) => Some(load(m, i)[0]),
+                    MaskSrc::Zero => Some(0.0),
+                };
+                if let Some(m) = m {
+                    let k = mask_k(*density, m);
                     o = o.map(|v| v * k);
                 }
-                *top = blend_px_at(space, *mode, *top, o, *opacity, x, y);
+                *top = blend_at(space, *mode, *top, o, *opacity, x, y, blend_if.as_ref());
             }
             Op::Coverage(c) => {
                 let k = c.values[i];
@@ -935,7 +959,7 @@ fn exec(ops: &[Op], init: Px, i: usize, stack: &mut Vec<Px>, space: Space, at: [
                     top[..3].iter_mut().for_each(|v| *v *= k);
                 }
             }
-            Op::Pop { mode, opacity, clip, tint } => {
+            Op::Pop { mode, opacity, clip, tint, blend_if } => {
                 let Some(mut v) = stack.pop() else { break };
                 if let Some(t) = tint {
                     for c in 0..3 {
@@ -943,11 +967,21 @@ fn exec(ops: &[Op], init: Px, i: usize, stack: &mut Vec<Px>, space: Space, at: [
                     }
                 }
                 let Some(dst) = stack.last_mut() else { break };
-                *dst = if *clip { clip_over(*dst, v, *opacity) } else { blend_px_at(space, *mode, *dst, v, *opacity, x, y) };
+                *dst =
+                    if *clip { clip_over(*dst, v, *opacity) } else { blend_at(space, *mode, *dst, v, *opacity, x, y, blend_if.as_ref()) };
             }
         }
     }
     stack[0]
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+fn blend_at(space: Space, mode: BlendMode, bp: Px, src: Px, opacity: f32, x: i32, y: i32, b: Option<&BlendIf>) -> Px {
+    match b {
+        Some(b) => blend_px_if(space, mode, bp, src, opacity, x, y, b),
+        None => blend_px_at(space, mode, bp, src, opacity, x, y),
+    }
 }
 
 /// Run a program on the CPU: premultiplied linear f32, `TILE × TILE`.

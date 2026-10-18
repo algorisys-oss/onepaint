@@ -23,7 +23,13 @@ onepaint ports it in. Fold each item into `feature-parity.md` as it lands.
       Properties select. Done: the CPU oracle (`crates/compose/tests/knockout.rs`),
       `Op::Knockout`/`Op::Snapshot` on the GPU (the oracle suites draw random
       knockouts), PSD `knko`, `LayerProps::knockout`, the Properties select.
-- [ ] Mask density and feather, and Blend If (v0.202.0).
+- [~] Mask density and feather, and Blend If (v0.202.0). Density and Blend If
+      are done: the oracle (`crates/compose/tests/look.rs`), the GPU, PSD
+      (mask parameters, blend ranges), `LayerProps`, Properties (Density,
+      a folding Blend If section with `ui_kit::range_bar`). A tile with a
+      Blend If at or above the hot layer runs unsplit (spec 38), as with
+      adjustment layers: its tone steps flip on the f16 cached backdrop.
+      Feather is stored and round-trips but does not render yet.
 - [ ] Vector masks (v0.202.1): PSD `vmsk`/`vsms` both ways, live in the
       compositor, the Pen's Create Vector Mask, transforms map the knots.
 

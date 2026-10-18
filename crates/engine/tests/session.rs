@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used)]
 use onepaint_color::Rgba;
-use onepaint_doc::{BlendMode, Knockout};
+use onepaint_doc::{BlendIf, BlendMode, Knockout};
 use onepaint_engine::*;
 use onepaint_stroke::StrokePoint;
 
@@ -69,6 +69,24 @@ fn knockout_is_an_undoable_layer_prop_that_replays() {
     let clear = Command::SetLayerProps { id, props: LayerProps { knockout: Some(None), ..Default::default() } };
     let json = serde_json::to_string(&clear).unwrap();
     assert_eq!(serde_json::from_str::<Command>(&json).unwrap(), clear);
+}
+
+#[test]
+fn mask_look_and_blend_if_are_undoable_layer_props() {
+    let mut s = new_session();
+    let id = s.active().to_string();
+    let mut b = BlendIf::default();
+    b.0[0].dst = [30, 60, 255, 255];
+    let props = LayerProps { mask_density: Some(0.25), mask_feather: Some(3.0), blend_if: Some(Some(b)), ..Default::default() };
+    let cmd = Command::SetLayerProps { id: id.clone(), props };
+    // The replay form round-trips.
+    assert_eq!(serde_json::from_str::<Command>(&serde_json::to_string(&cmd).unwrap()).unwrap(), cmd);
+    s.execute(cmd).unwrap();
+    let l = s.doc().layer(&id).unwrap();
+    assert_eq!((l.mask_density(), l.mask_feather(), l.blend_if()), (0.25, 3.0, Some(b)));
+    s.execute(Command::Undo).unwrap();
+    let l = s.doc().layer(&id).unwrap();
+    assert_eq!((l.mask_density(), l.mask_feather(), l.blend_if()), (1.0, 0.0, None));
 }
 
 #[test]

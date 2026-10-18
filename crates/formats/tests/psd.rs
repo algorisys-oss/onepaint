@@ -86,6 +86,30 @@ fn knockout_round_trips_as_the_knko_byte() {
 }
 
 #[test]
+fn mask_density_feather_and_blend_if_round_trip() {
+    // happypaint `psd-roundtrip.test.ts` "Looked".
+    let mut d = Document::new(16, 16, Some(Rgba::WHITE));
+    let mut l = Layer::new("Looked");
+    fill(&mut l.pixels, 0, 0, 16, 16, Rgba::new(250.0 / 255.0, 120.0 / 255.0, 20.0 / 255.0, 1.0).to_linear_premul());
+    let mut m = Surface::new();
+    fill(&mut m, 0, 0, 16, 16, [0.0, 0.0, 0.0, 1.0]);
+    l.mask = Some(m);
+    l.set_mask_density(0.6);
+    l.set_mask_feather(4.0);
+    let mut b = BlendIf::default();
+    b.0[0] = ChannelRanges { src: [0, 0, 180, 220], dst: [30, 60, 255, 255] };
+    l.set_blend_if(Some(b));
+    d.root.push(Node::Layer(l));
+    let r = read_psd(&write_psd(&d, &vec![1.0f32; 16 * 16 * 4]).unwrap()).unwrap();
+    let got = r.root.iter().filter_map(|n| n.as_layer()).find(|l| l.name == "Looked").unwrap();
+    assert!((got.mask_density() - 0.6).abs() < 0.5 / 255.0);
+    assert_eq!((got.mask_feather(), got.blend_if()), (4.0, Some(b)));
+    // At their defaults nothing is written and nothing comes back.
+    let plain = r.root.iter().filter_map(|n| n.as_layer()).find(|l| l.name != "Looked").unwrap();
+    assert!(plain.extra.is_empty(), "{:?}", plain.extra);
+}
+
+#[test]
 fn reads_a_file_written_by_ag_psd() {
     let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/agpsd.psd")).unwrap();
     let d = read_psd(&bytes).unwrap();

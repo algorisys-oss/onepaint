@@ -165,6 +165,10 @@ struct Record {
     flags: u8,
     name: String,
     mask: Option<(Rect, u8, u8)>,
+    /// The user mask's density and feather (written when not at default).
+    mask_look: (f32, f32),
+    /// Blend If, as Photoshop's blend ranges (empty: none).
+    ranges: Vec<u8>,
     extra: Vec<([u8; 4], Vec<u8>)>,
 }
 
@@ -264,6 +268,7 @@ fn layer_record(l: &Layer, doc: Rect, frame: onepaint_filters::Frame) -> Record 
     if let Some(k) = l.knockout() {
         extra.push((*b"knko", vec![if k == onepaint_doc::Knockout::Deep { 2 } else { 1 }, 0, 0, 0]));
     }
+    let ranges = l.blend_if().map_or_else(Vec::new, |b| b.0.iter().flat_map(|c| c.src.into_iter().chain(c.dst)).collect());
     let hidden = if l.visible { 0 } else { 2 };
     Record {
         rect,
@@ -274,6 +279,8 @@ fn layer_record(l: &Layer, doc: Rect, frame: onepaint_filters::Frame) -> Record 
         flags: 0x08 | hidden | if l.adjustment.is_some() { 0x10 } else { 0 },
         name: l.name.clone(),
         mask,
+        mask_look: (l.mask_density(), l.mask_feather()),
+        ranges,
         extra,
     }
 }
@@ -288,6 +295,8 @@ fn empty_record(name: &str, key: [u8; 4], opacity: u8, flags: u8, lsct: Vec<u8>)
         flags,
         name: name.to_string(),
         mask: None,
+        mask_look: (1.0, 0.0),
+        ranges: Vec::new(),
         extra: vec![(*b"lsct", lsct)],
     }
 }
@@ -386,11 +395,25 @@ pub fn write_psd(doc: &Document, composite: &[f32]) -> Result<Vec<u8>, FormatErr
                             m.i32(r.bottom());
                             m.i32(r.right());
                             m.u8(dc);
-                            m.u8(fl);
+                            // Mask parameters (flag 0x10): user density (bit 0)
+                            // as a byte, user feather (bit 1) as an f64.
+                            let (density, feather) = rec.mask_look;
+                            let which = u8::from(density < 1.0) | u8::from(feather > 0.0) << 1;
+                            m.u8(if which != 0 { fl | 0x10 } else { fl });
+                            if which != 0 {
+                                m.u8(which);
+                                if density < 1.0 {
+                                    m.u8((density.max(0.0) * 255.0).round() as u8);
+                                }
+                                if feather > 0.0 {
+                                    m.bytes(&f64::from(feather).to_be_bytes());
+                                }
+                            }
                             m.u16(0);
                         }
                     });
-                    ex.u32(0);
+                    ex.u32(rec.ranges.len() as u32);
+                    ex.bytes(&rec.ranges);
                     pascal_padded(ex, &rec.name, 4);
                     let mut blocks = rec.extra.clone();
                     let utf16: Vec<u16> = rec.name.encode_utf16().collect();
@@ -476,6 +499,10 @@ impl<'a> Cur<'a> {
     fn i32(&mut self) -> Result<i32, FormatError> {
         Ok(self.u32()? as i32)
     }
+    fn f64(&mut self) -> Result<f64, FormatError> {
+        self.u64().map(f64::from_bits)
+    }
+
     fn u64(&mut self) -> Result<u64, FormatError> {
         let s = self.take(8)?;
         let mut a = [0u8; 8];
@@ -499,6 +526,8 @@ struct RRec {
     lsct: Option<(u32, Option<[u8; 4]>)>,
     adjustment: Option<onepaint_doc::Adjustment>,
     knockout: u8,
+    mask_look: (f32, f32),
+    blend_if: Option<onepaint_doc::BlendIf>,
 }
 
 fn decode_channel(c: &mut Cur, len: usize, w: usize, h: usize, depth: u16, psb: bool) -> Result<Vec<u8>, FormatError> {
@@ -649,14 +678,34 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                 let mlen = c.u32()? as usize;
                 let mstart = c.p;
                 let mut mask = None;
+                let mut mask_look = (1.0f32, 0.0f32);
                 if mlen >= 20 {
                     let (t, l, b, r) = (c.i32()?, c.i32()?, c.i32()?, c.i32()?);
                     let (dc, fl) = (c.u8()?, c.u8()?);
                     mask = Some((Rect::new(l, t, r - l, b - t), dc, fl));
+                    // Mask parameters (`mask-params.ts`): density bytes, feather f64s.
+                    if fl & 0x10 != 0 {
+                        let which = c.u8()?;
+                        if which & 1 != 0 {
+                            mask_look.0 = c.u8()? as f32 / 255.0;
+                        }
+                        if which & 2 != 0 {
+                            mask_look.1 = c.f64()? as f32;
+                        }
+                    }
                 }
                 c.p = mstart + mlen;
                 let br = c.u32()? as usize;
-                c.take(br)?;
+                // Blend ranges: gray then each channel, This Layer then Underlying (RGB only).
+                let ranges = c.take(br)?;
+                let blend_if = (!gray && br >= 8).then(|| {
+                    let mut b = onepaint_doc::BlendIf::default();
+                    for (i, ch) in ranges.chunks_exact(8).take(4).enumerate() {
+                        b.0[i].src.copy_from_slice(&ch[..4]);
+                        b.0[i].dst.copy_from_slice(&ch[4..]);
+                    }
+                    b
+                });
                 let nl = c.u8()? as usize;
                 let raw = c.take(nl)?;
                 let mut name = String::from_utf8_lossy(raw).into_owned();
@@ -756,6 +805,8 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                     lsct,
                     adjustment,
                     knockout,
+                    mask_look,
+                    blend_if,
                 });
             }
             // Channel image data, record by record.
@@ -820,6 +871,12 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                         l.clipped = rec.clipping != 0;
                         l.pixels = pixels.unwrap_or_default();
                         l.mask_enabled = rec.mask.is_none_or(|m| m.2 & 2 == 0);
+                        // Density and feather only come in with a real mask.
+                        if mask.is_some() {
+                            l.set_mask_density(rec.mask_look.0);
+                            l.set_mask_feather(rec.mask_look.1);
+                        }
+                        l.set_blend_if(rec.blend_if);
                         l.mask = mask;
                         l.adjustment = rec.adjustment.map(Box::new);
                         l.set_knockout(match rec.knockout {

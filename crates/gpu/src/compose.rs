@@ -16,7 +16,7 @@
 
 use crate::sheets::Sheets;
 use onepaint_compose::program::{Content, MaskSrc, Op, Reveal, Segment, StrokeSrc, TileProgram, op_sources, stroke_code};
-use onepaint_doc::BlendMode;
+use onepaint_doc::{BlendIf, BlendMode};
 use onepaint_raster::{TILE, Tile};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Weak};
@@ -159,9 +159,10 @@ fn is_simple(ops: &[&Op]) -> bool {
         matches!(
             op,
             Op::Layer {
-                content: Content { base: Some(_), stroke: None, mask: MaskSrc::None, mask_stroke: None, relief: None },
+                content: Content { base: Some(_), stroke: None, mask: MaskSrc::None, mask_stroke: None, relief: None, .. },
                 mode: BlendMode::Normal,
                 inherit_alpha: false,
+                blend_if: None,
                 ..
             }
         )
@@ -216,6 +217,29 @@ impl AdjTable {
             (at, lut)
         })
     }
+
+    /// Blend If's eight ranges (gray, red, green, blue; This Layer then
+    /// Underlying Layer) as vec4s; the op's mode word carries `at + 1`.
+    fn blend_if(&mut self, b: &BlendIf) -> u32 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (0xb1fu32, b).hash(&mut h);
+        let data = &mut self.data;
+        let (at, _) = *self.seen.entry(h.finish()).or_insert_with(|| {
+            let at = data.len() as u32;
+            for c in &b.0 {
+                data.push(c.src.map(f32::from));
+                data.push(c.dst.map(f32::from));
+            }
+            (at, NONE)
+        });
+        at + 1
+    }
+}
+
+/// An op's mode word: the blend mode, and its Blend If's place in the table + 1 (0: none).
+fn mode_word(mode: BlendMode, b: &Option<BlendIf>, adj: &mut AdjTable) -> u32 {
+    mode as u32 | b.as_ref().map_or(0, |b| adj.blend_if(b)) << 8
 }
 
 fn key(t: &Arc<Tile>) -> usize {
@@ -559,18 +583,27 @@ impl GpuCompositor {
             let [cc, l, rt, u, d] = r.tiles.each_ref().map(|t| t.as_ref().map_or(0xffff, |t| self.slot(t) & 0xffff));
             (o[12], o[13], o[14]) = (cc | l << 16, rt | u << 16, d);
         }
-        match &c.mask {
-            MaskSrc::None => return,
+        if !self.encode_mask(o, &c.mask, c.density) {
+            return;
+        }
+        if let Some(s) = &c.mask_stroke {
+            o[3] |= F_MASK_STROKE;
+            (o[9], o[10], o[11]) = stroke(s);
+        }
+    }
+
+    /// The mask's slot and flags, and its density in `d.w`; false without one.
+    fn encode_mask(&self, o: &mut [u32; 16], m: &MaskSrc, density: f32) -> bool {
+        match m {
+            MaskSrc::None => return false,
             MaskSrc::Tile(t) => {
                 o[3] |= F_MASK;
                 o[8] = self.slot(t);
             }
             MaskSrc::Zero => o[3] |= F_MASK | F_MASK_ZERO,
         }
-        if let Some(s) = &c.mask_stroke {
-            o[3] |= F_MASK_STROKE;
-            (o[9], o[10], o[11]) = stroke(s);
-        }
+        o[15] = density.to_bits();
+        true
     }
 
     fn encode(&self, op: &Op, adj: &mut AdjTable) -> GpuOp {
@@ -581,17 +614,14 @@ impl GpuCompositor {
                 o[0] = OP_PAPER;
                 (o[4], o[5]) = ((shade.tex.tile_px() as f32).to_bits(), shade.amt.to_bits());
             }
-            Op::Adjust { adjust, mask, mode, opacity } => {
-                (o[0], o[1], o[2]) = (OP_ADJUST, *mode as u32, opacity.to_bits());
+            Op::Adjust { adjust, mask, density, mode, opacity, blend_if } => {
+                (o[0], o[1], o[2]) = (OP_ADJUST, mode_word(*mode, blend_if, adj), opacity.to_bits());
                 (o[4], o[5]) = adj.add(&adjust.gpu);
                 o[6] = adjust.gpu.code;
-                if let Some(m) = mask {
-                    o[3] |= F_MASK;
-                    o[8] = self.slot(m);
-                }
+                self.encode_mask(&mut o, mask, *density);
             }
-            Op::Layer { content, mode, opacity, inherit_alpha } => {
-                (o[0], o[1], o[2]) = (0, *mode as u32, opacity.to_bits());
+            Op::Layer { content, mode, opacity, inherit_alpha, blend_if } => {
+                (o[0], o[1], o[2]) = (0, mode_word(*mode, blend_if, adj), opacity.to_bits());
                 if *inherit_alpha {
                     o[3] |= F_INHERIT;
                 }
@@ -618,8 +648,8 @@ impl GpuCompositor {
                 (o[0], o[2]) = (3, opacity.to_bits());
                 self.encode_content(&mut o, content);
             }
-            Op::Pop { mode, opacity, clip, tint } => {
-                (o[0], o[1], o[2]) = (4, *mode as u32, opacity.to_bits());
+            Op::Pop { mode, opacity, clip, tint, blend_if } => {
+                (o[0], o[1], o[2]) = (4, mode_word(*mode, blend_if, adj), opacity.to_bits());
                 if *clip {
                     o[3] |= F_INHERIT;
                 }

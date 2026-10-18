@@ -5,7 +5,7 @@
 //! premultiplied sRGB and converted back, exactly as happypaint's shader does.
 
 use onepaint_color::{Px, Space, prem_lin_to_srgb, prem_srgb_to_lin};
-use onepaint_doc::BlendMode;
+use onepaint_doc::{BlendIf, BlendMode, BlendRange};
 
 /// Separable per-channel blend `B(b, s)` on straight colour, with happypaint's
 /// non-W3C edge cases for dodge, burn and divide.
@@ -334,4 +334,60 @@ pub fn clip_over(d: Px, src: Px, opacity: f32) -> Px {
     let k = 1.0 - src[3] * opacity;
     let da = d[3];
     [src[0] * opacity * da + d[0] * k, src[1] * opacity * da + d[1] * k, src[2] * opacity * da + d[2] * k, src[3] * opacity * da + d[3] * k]
+}
+
+/// One Blend If slider's weight at tone `v` (0..=1, rounded to 0..=255 as
+/// happypaint's shader does): 0 outside the slider, ramping between the
+/// halves of a split end (`compositor.ts` `bifWeight`).
+#[inline]
+pub fn blend_range_weight(r: BlendRange, v: f32) -> f32 {
+    let v = (v * 255.0 + 0.5).floor();
+    let [b0, b1, w0, w1] = r.map(f32::from);
+    if v < b0 || v > w1 {
+        0.0
+    } else if v < b1 {
+        (v - b0) / (b1 - b0)
+    } else if v > w0 {
+        (w1 - v) / (w1 - w0)
+    } else {
+        1.0
+    }
+}
+
+/// How much of `src` Blend If lets through over `bp` (`blendIfAt`): the
+/// product of the gray, red, green and blue weights for This Layer (the
+/// source's straight colour) and Underlying Layer (the backdrop's), on sRGB
+/// tones. A transparent backdrop reads as black.
+pub fn blend_if_weight(space: Space, b: &BlendIf, bp: Px, src: Px) -> f32 {
+    let tone = |p: Px| straight(if space == Space::Linear { prem_lin_to_srgb(p) } else { p });
+    let (s, d) = (tone(src), tone(bp));
+    let gray = |c: [f32; 3]| 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2];
+    let mut w = blend_range_weight(b.0[0].src, gray(s)) * blend_range_weight(b.0[0].dst, gray(d));
+    for i in 0..3 {
+        if w <= 0.0 {
+            return 0.0;
+        }
+        w *= blend_range_weight(b.0[i + 1].src, s[i]) * blend_range_weight(b.0[i + 1].dst, d[i]);
+    }
+    w
+}
+
+/// [`blend_px_at`] with Blend If: the weight scales the source's alpha
+/// after Dissolve's dither, before the blend (the BLEND shader's order).
+#[allow(clippy::too_many_arguments)]
+pub fn blend_px_if(space: Space, m: BlendMode, bp: Px, src: Px, opacity: f32, x: i32, y: i32, b: &BlendIf) -> Px {
+    let w = blend_if_weight(space, b, bp, src);
+    if m != BlendMode::Dissolve {
+        return blend_px_at(space, m, bp, src.map(|v| v * w), opacity, x, y);
+    }
+    let a = src[3] * opacity;
+    if a > 0.0 && dissolve_noise(x, y) < a {
+        let mut c = straight(src);
+        if space == Space::Gamma {
+            c = c.map(|v| v.clamp(0.0, 1.0));
+        }
+        blend_px_in(space, BlendMode::Normal, bp, [c[0] * w, c[1] * w, c[2] * w, w], 1.0)
+    } else {
+        bp
+    }
 }

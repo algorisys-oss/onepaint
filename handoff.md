@@ -12,7 +12,7 @@ Rules for the run: commit locally per milestone, **do not push**; build with
 Order (✓ done, ▶ in progress):
 1. ✓ Photoshop blend modes + Pass Through groups — `aaed348`.
 2. ✓ Knockout (v0.202.2) — committed.
-3. ▶ Mask density/feather + Blend If (v0.202.0).
+3. ▶ Mask density/feather + Blend If (v0.202.0): 3a density + Blend If committed; 3b feather in progress.
 4. Vector masks (v0.202.1).
 5. PSD `phfl` Photo Filter decode; pointer-router "pressed outside canvas" fix.
 6. UI: Mix colour grid, side sliders + typed values, Align on active layer.
@@ -26,8 +26,49 @@ Oracle `crates/compose/tests/knockout.rs`; GPU `OP_KNOCKOUT`/`OP_SNAPSHOT`;
 PSD `knko`; `LayerProps::knockout`; Properties select.
 
 ### Step 3, mask density/feather + Blend If — state
-Not started. Read happypaint `look-meta.ts`, `layer-look-editor.tsx` and the
-compositor's mask/Blend If code first.
+Spec (happypaint `look-meta.ts`, `compositor.ts` MASKMUL :72, BLEND :375,
+`lookMask` :1668, `storage/psd/mask-params.ts`; docs/graphics/01 :307-334):
+- Layer-only fields `maskDensity` (0..1, absent=1), `maskFeather` (doc px,
+  absent=0), `blendIf` ([gray,R,G,B] of {src,dst} [bl,bh,wl,wh] 0..255,
+  absent=full [0,0,255,255]); omitted when default in `.happypaint`.
+- Mask: feather first = Gaussian σ = feather px (clamp to edge), then
+  `m' = 1 − d·(1 − m)`. Density doesn't touch the vector mask.
+- Blend If: on sRGB straight colour (doc converted), values rounded to
+  0..255, gray = .3R+.59G+.11B; weight = Π over gray,R,G,B of
+  w(src,Cs)·w(dst,Cb); w = 0 outside [bl,wh], ramps (v−bl)/(bh−bl) and
+  (wh−v)/(wh−wl). Multiplies src alpha (after opacity/mask, after
+  dissolve) before blending. Transparent backdrop → Cb = 0.
+  Ignored for clipped riders, clipped adjustments, inherit-alpha, groups;
+  a clip family's base applies it to the whole family; unclipped
+  adjustments honour it. Knockout punch ignores it. Merge Down honours all.
+- PSD: mask body byte 17 flags 0x10 → byte 18 `which`, then bit0 density u8,
+  bit1 feather f64 BE (bit2/3 vector ones). Blend ranges: 8 bytes/channel
+  (src4,dst4), gray first; RGB only. Tests in `mask-params.test.ts`.
+- UI (Properties, under Mask): Density 0–100 %, Feather 0–250 px step .5;
+  Blend If: channel select, Split, This Layer / Underlying Layer bars, Reset.
+
+Split into 3a (density + Blend If, per tile) and 3b (feather, spatial).
+3a progress (uncommitted):
+- ✓ `doc::look` (`BlendIf`, `ChannelRanges`, `mask_k`, Layer accessors, serde).
+- ✓ compose oracle (`blend_if_weight`, `blend_px_if`; tests `tests/look.rs`).
+- ✓ program: `Content::density`, `blend_if` on Layer/Pop/Adjust ops, Adjust
+  mask is a `MaskSrc`; Blend If units don't fold or occlude. testdocs adds
+  random looks (mutation check: 8 program tests fail without Blend If).
+- ✓ GPU: mode word `mode | (bif+1) << 8`, ranges in the adj table, density
+  in `d.w`. A Blend If unit at/above the hot one disables the split (its
+  steps flipped on the f16 prefix: 27–36 px over). All GPU suites green;
+  `lod.rs` drops Blend If like the other tone steps.
+- ✓ PSD mask params + blend ranges (writer/reader + test).
+- ✓ Engine LayerProps mask_density/mask_feather/blend_if (+ test).
+- ✓ App test `blend_if_unfolds_and_reset_clears_it`.
+- 3a committed. 3b: `crates/compose/src/feather.rs` written (untracked, not
+  yet a module); next wire into layer_content/draw_adjustment, planner via
+  PlanCache (keyed by window tile Weak ptrs), skip while a mask stroke runs.
+- ✓ UI: Density slider, Blend If section (`ui_kit::range_bar`). Feather
+  slider held back until 3b renders it (code in scratchpad feather_ui.rs:
+  slider 0–250 px step .5, tooltip "Soften the mask's edges, without
+  changing the mask (Photoshop's Feather)").
+- TODO: range bar keyboard (arrows ±1, Shift ±10) — not done.
 
 ## Earlier session (2026-10-10, evening, unattended)
 Items 1–5 from the earlier list; every step pushed as it landed.

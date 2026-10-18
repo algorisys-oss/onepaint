@@ -7,7 +7,9 @@ use onepaint_color::Rgba;
 use onepaint_raster::{Rect, Surface};
 use serde::{Deserialize, Serialize};
 
+pub mod look;
 pub mod paper;
+pub use look::{BlendIf, BlendRange, ChannelRanges, FULL_RANGE, mask_k};
 pub use paper::{PAPER_PRESETS, Paper, PaperPreset, paper_preset_id};
 
 pub type NodeId = String;
