@@ -56,6 +56,8 @@ pub struct Content {
     pub density: f32,
     /// The vector mask's coverage here (`None`: no vector mask, or it covers the tile).
     pub vmask: Option<Arc<Tile>>,
+    /// A spatial adjustment layer's pixels, in place of `base` (spec 52).
+    pub spatial: Option<Arc<crate::spatial::SpatialSrc>>,
 }
 
 /// The height tiles relief reads for tile `(tx, ty)` (spec 45): its own and
@@ -399,8 +401,8 @@ pub struct Split {
 }
 
 /// Every source tile `ops` read, in op order (with repeats).
-pub fn op_sources(ops: &[Op]) -> impl Iterator<Item = &Arc<Tile>> {
-    ops.iter().flat_map(|op| {
+pub fn op_sources(ops: &[Op]) -> Box<dyn Iterator<Item = &Arc<Tile>> + '_> {
+    Box::new(ops.iter().flat_map(|op| {
         let (c, extra): (Option<&Content>, [Option<&Arc<Tile>>; 2]) = match op {
             Op::Layer { content, .. } | Op::PushContent(content) | Op::Clip { content, .. } | Op::Knockout { content, .. } => {
                 (Some(content), [None, None])
@@ -422,9 +424,11 @@ pub fn op_sources(ops: &[Op]) -> impl Iterator<Item = &Arc<Tile>> {
                 .chain(c.mask_stroke.iter().map(|s| &s.tile))
                 .chain(relief)
                 .chain(c.vmask.iter())
+                // A spatial layer reads its backdrop programs' tiles (spec 52).
+                .chain(c.spatial.iter().flat_map(|s| s.backdrop.iter().flat_map(|(_, p)| op_sources(&p.ops))))
         });
         content.chain(extra.into_iter().flatten())
-    })
+    }))
 }
 
 impl TileProgram {
@@ -474,6 +478,7 @@ pub fn segment_key(ops: &[Op], at: [i32; 2]) -> u64 {
         }
         mask_key(&c.mask, h);
         c.density.to_bits().hash(h);
+        c.spatial.as_ref().map(|s| s.key).hash(h);
         c.vmask.as_ref().map(ptr).hash(h);
         // Relief depends on where the tile is (taps clamp at the document's edge).
         if let Some(r) = &c.relief {
@@ -530,6 +535,7 @@ pub fn segment_key(ops: &[Op], at: [i32; 2]) -> u64 {
 struct Unsupported;
 
 struct Planner<'a> {
+    doc: &'a Document,
     tx: i32,
     ty: i32,
     ov: Option<&'a StrokeOverlay<'a>>,
@@ -624,6 +630,7 @@ pub fn plan_tile_split(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverl
 fn plan(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, hot: Option<&str>, cache: Option<&PlanCache>) -> Option<TileProgram> {
     let frame = crate::doc_frame(doc);
     let mut p = Planner {
+        doc,
         tx,
         ty,
         ov,
@@ -657,13 +664,41 @@ fn plan(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, hot: Optio
 
 impl Planner<'_> {
     fn content(&self, l: &Layer) -> Result<Option<Content>, Unsupported> {
+        self.content_with(l, None)
+    }
+
+    /// A top-level spatial adjustment layer's content (spec 52): its filter
+    /// over the layers `below`, planned on every tile within its reach.
+    fn spatial_content(&self, l: &Layer, kind: onepaint_filters::Kind, below: &[Node]) -> Result<Option<Content>, Unsupported> {
+        let params = l.adjustment.as_ref().map(|a| a.params.clone()).unwrap_or_default();
+        let r = onepaint_filters::reach(kind, &params);
+        if self.depth != 1 || !crate::spatial::gpu_kind(kind) || r > TILE {
+            return Err(Unsupported);
+        }
+        let (tx, ty) = (self.tx, self.ty);
+        let bounds = self.doc.bounds();
+        let t = onepaint_raster::Rect::from_tile(tx, ty);
+        let region = onepaint_raster::Rect::new(t.x - r, t.y - r, t.w + 2 * r, t.h + 2 * r).intersect(&bounds).ok_or(Unsupported)?;
+        let mut sub = self.doc.clone_shallow();
+        sub.root = below.to_vec();
+        sub.source = None;
+        sub.set_paper(None);
+        let backdrop = region
+            .tiles()
+            .map(|(x, y)| plan(&sub, x, y, self.ov, None, self.cache).map(|p| ((x, y), Arc::new(p))).ok_or(Unsupported))
+            .collect::<Result<Vec<_>, _>>()?;
+        let src = crate::spatial::SpatialSrc::new(kind, params, (tx, ty), region, self.frame, backdrop);
+        self.content_with(l, Some(Arc::new(src)))
+    }
+
+    fn content_with(&self, l: &Layer, spatial: Option<Arc<crate::spatial::SpatialSrc>>) -> Result<Option<Content>, Unsupported> {
         let (tx, ty) = (self.tx, self.ty);
         let on_layer = self.ov.filter(|o| o.layer_id == l.id);
         let src = |o: &StrokeOverlay| o.stroke.tile(tx, ty).map(|t| StrokeSrc { tile: t.clone(), opacity: o.opacity, mode: o.mode });
         let stroke = on_layer.filter(|o| !o.mask).and_then(src);
         let mask_stroke = on_layer.filter(|o| o.mask).and_then(src);
-        let base = l.pixels.tile(tx, ty).cloned();
-        if base.is_none() && stroke.is_none() {
+        let base = if spatial.is_some() { None } else { l.pixels.tile(tx, ty).cloned() };
+        if base.is_none() && stroke.is_none() && spatial.is_none() {
             return Ok(None);
         }
         let relief = l.height.as_ref().and_then(|h| {
@@ -676,7 +711,7 @@ impl Planner<'_> {
             Some(VCover::Partial(t)) => Some(t),
             Some(VCover::Full) | None => None,
         };
-        let mut c = Content { base, stroke, mask: MaskSrc::None, mask_stroke: None, relief, density: 1.0, vmask };
+        let mut c = Content { base, stroke, mask: MaskSrc::None, mask_stroke: None, relief, density: 1.0, vmask, spatial };
         if l.mask_enabled
             && let Some(mask) = &l.mask
         {
@@ -854,6 +889,7 @@ impl Planner<'_> {
             // An adjustment layer is never a clip base (as in `composite_nodes`).
             if let Node::Layer(l) = &nodes[i]
                 && l.adjustment.is_some()
+                && crate::spatial::spatial_kind(l).is_none()
             {
                 let start = self.ops.len();
                 self.adjust(l)?;
@@ -902,7 +938,10 @@ impl Planner<'_> {
                 Node::Layer(l) => {
                     if l.visible && l.opacity > 0.0 {
                         let family = &nodes[i + 1..j];
-                        let content = self.content(l)?;
+                        let content = match crate::spatial::spatial_kind(l) {
+                            Some(kind) => self.spatial_content(l, kind, &nodes[..i])?,
+                            None => self.content(l)?,
+                        };
                         let punch = |c: &Content| Op::Knockout { content: c.clone(), opacity: l.opacity, reveal: self.reveal };
                         let punch = content.as_ref().filter(|_| l.knockout().is_some()).map(punch);
                         if family.is_empty() {
@@ -948,16 +987,20 @@ impl Planner<'_> {
                 let through = matches!(&nodes[i], Node::Group(g) if passes_through(g, &nodes[i + 1..j]));
                 // So does a knockout: it punches to what is under it.
                 let knocks = matches!(&nodes[i], Node::Layer(l) if l.knockout().is_some());
+                // A spatial layer reads the backdrop around it (spec 52).
+                let spatial = matches!(&nodes[i], Node::Layer(l) if crate::spatial::spatial_kind(l).is_some());
                 let folds = !through
                     && !knocks
+                    && !spatial
                     && match &nodes[i] {
                         Node::Group(g) => g.blend_mode.effective() == BlendMode::Normal,
                         // Blend If reads the backdrop.
                         Node::Layer(l) => l.blend_mode.effective() == BlendMode::Normal && !l.inherit_alpha && l.blend_if().is_none(),
                     };
                 let blend_if = |o: &Op| matches!(o, Op::Layer { blend_if: Some(_), .. } | Op::Pop { blend_if: Some(_), .. });
-                let adjust =
-                    (through && self.ops[start..].iter().any(|o| matches!(o, Op::Adjust { .. }))) || self.ops[start..].iter().any(blend_if);
+                let adjust = (through && self.ops[start..].iter().any(|o| matches!(o, Op::Adjust { .. })))
+                    || self.ops[start..].iter().any(blend_if)
+                    || spatial;
                 self.units.push(Unit { start, end: self.ops.len(), hot, folds, adjust });
             }
             i = j;
@@ -1008,7 +1051,13 @@ fn pos(at: [i32; 2], i: usize) -> (i32, i32) {
 }
 
 fn eval(c: &Content, i: usize, space: Space, at: [i32; 2]) -> Px {
-    let mut p = c.base.as_ref().map_or([0.0; 4], |t| load(t, i));
+    let mut p = match &c.spatial {
+        Some(s) => {
+            let f = s.filtered();
+            [f[i * 4], f[i * 4 + 1], f[i * 4 + 2], f[i * 4 + 3]]
+        }
+        None => c.base.as_ref().map_or([0.0; 4], |t| load(t, i)),
+    };
     if let Some(s) = &c.stroke {
         let (x, y) = pos(at, i);
         p = apply_stroke_px_at(space, p, load(&s.tile, i), s.opacity, s.mode, x, y);

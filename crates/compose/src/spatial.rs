@@ -102,3 +102,70 @@ pub fn rendered(doc: &Document) -> Document {
     walk(doc, &mut out.root);
     out
 }
+
+// ── The GPU path (spec 52) ──
+
+/// Kinds whose filter has a GPU pass.
+pub fn gpu_kind(kind: Kind) -> bool {
+    matches!(kind, Kind::GaussianBlur | Kind::MotionBlur | Kind::Sharpen)
+}
+
+/// A spatial layer's pixels on one tile, as a program computes them: its
+/// filter over the backdrop programs of the tiles within reach.
+#[derive(Debug)]
+pub struct SpatialSrc {
+    pub kind: Kind,
+    pub params: Params,
+    pub reach: i32,
+    pub tx: i32,
+    pub ty: i32,
+    /// Where the filter reads: the tile ± reach, inside the document.
+    pub region: Rect,
+    pub frame: Frame,
+    /// The backdrop (the layers below) on each tile the region touches.
+    pub backdrop: Vec<((i32, i32), Arc<crate::program::TileProgram>)>,
+    /// Changes with anything the result depends on.
+    pub key: u64,
+    filtered: std::sync::OnceLock<Vec<f32>>,
+}
+
+impl SpatialSrc {
+    pub(crate) fn new(
+        kind: Kind,
+        params: Params,
+        (tx, ty): (i32, i32),
+        region: Rect,
+        frame: Frame,
+        backdrop: Vec<((i32, i32), Arc<crate::program::TileProgram>)>,
+    ) -> Self {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (kind.as_str(), serde_json::to_string(&params).unwrap_or_default(), tx, ty).hash(&mut h);
+        for ((x, y), p) in &backdrop {
+            (x, y, crate::program::segment_key(&p.ops, p.origin())).hash(&mut h);
+        }
+        let reach = reach(kind, &params);
+        Self { kind, params, reach, tx, ty, region, frame, backdrop, key: h.finish(), filtered: Default::default() }
+    }
+
+    /// The filtered tile (premultiplied, `TILE × TILE` RGBA), as the oracle
+    /// stores it (f16): the backdrop tiles as f16, filtered over the region.
+    pub fn filtered(&self) -> &[f32] {
+        self.filtered.get_or_init(|| {
+            let r = self.region;
+            let mut src = Surface::new();
+            for ((x, y), p) in &self.backdrop {
+                let t = Tile::from_f32(&crate::program::run(p));
+                if !t.is_empty() {
+                    src.set_tile(*x, *y, Some(Arc::new(t)));
+                }
+            }
+            let buf = src.read_rect(r);
+            let rf = Frame::region(r.x, r.y, self.frame.doc_w, self.frame.doc_h, self.frame.dpi).in_space(self.frame.space);
+            let res = apply_spatial_in(self.kind, &self.params, &buf, r.w as usize, r.h as usize, rf);
+            let mut out = Surface::new();
+            out.write_rect(r, &res);
+            out.tile(self.tx, self.ty).map_or_else(|| vec![0.0; onepaint_raster::TILE_PX * 4], |t| t.to_f32())
+        })
+    }
+}

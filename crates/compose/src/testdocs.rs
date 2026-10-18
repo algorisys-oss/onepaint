@@ -418,3 +418,34 @@ pub fn with_relief(mut doc: Document, seed: u64) -> Document {
     walk(&mut doc.root, &mut r, w, h);
     doc
 }
+
+/// `doc` with one or two spatial adjustment layers (Gaussian blur, motion
+/// blur, sharpen) dropped into its top level (spec 52).
+pub fn with_spatial(mut doc: Document, seed: u64) -> Document {
+    use serde_json::json;
+    let mut r = Rng::new(seed ^ 0x5ba7);
+    for i in 0..1 + r.below(2) {
+        let kinds = ["gaussian-blur", "motion-blur", "sharpen"];
+        let kind = kinds[r.below(3) as usize];
+        let params = match kind {
+            "gaussian-blur" => json!({"radius": 1.0 + r.f() * 40.0}),
+            "motion-blur" => json!({"angle": r.f() * 360.0, "distance": 1.0 + r.f() * 40.0}),
+            _ => json!({"amount": r.f()}),
+        };
+        let mut l = Layer::new(&format!("spatial{i}"));
+        l.id = format!("spatial{i}");
+        l.adjustment =
+            Some(Box::new(onepaint_doc::Adjustment { kind: kind.into(), params: serde_json::from_value(params).unwrap_or_default() }));
+        l.opacity = if r.chance(0.6) { 1.0 } else { 0.3 + r.f() * 0.7 };
+        l.blend_mode = if r.chance(0.7) { BlendMode::Normal } else { mode(&mut r, false) };
+        if r.chance(0.3) {
+            let mut m = Surface::default();
+            let a = rect(&mut r, doc.width, doc.height);
+            noise(&mut m, &mut r, a);
+            l.mask = Some(m);
+        }
+        let at = r.below(doc.root.len() as u32 + 1) as usize;
+        doc.root.insert(at, Node::Layer(l));
+    }
+    doc
+}
