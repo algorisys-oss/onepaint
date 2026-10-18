@@ -163,20 +163,33 @@ pub fn show(app: &mut App, ctx: &egui::Context, view: Rect, stage_bottom: f32, t
                     });
                 }
             };
+            // "With the tools": the size and opacity sliders ride in the bar.
+            let sliders = app.settings.side_sliders && app.settings.side_sliders_mode == crate::side_sliders::Mode::Tools;
             if vertical {
                 ui.vertical(|ui| {
                     grip(app, ui, vec2(grid.x, GRIP), "grip-horizontal");
                     body(ui, app);
+                    if sliders {
+                        widgets::hairline(ui);
+                        ui.vertical_centered(|ui| crate::side_sliders::body(app, ui, true));
+                    }
                 });
             } else {
                 ui.horizontal(|ui| {
                     grip(app, ui, vec2(GRIP, grid.y.max(BTN)), "grip-vertical");
                     ui.vertical(|ui| body(ui, app));
+                    if sliders {
+                        widgets::vline(ui, 24.0);
+                        crate::side_sliders::body(app, ui, false);
+                    }
                 });
             }
         });
     });
     let rect = r.response.rect;
+    if app.settings.side_sliders && app.settings.side_sliders_mode == crate::side_sliders::Mode::Tools {
+        crate::side_sliders::entry_popover(app, ctx, vertical);
+    }
     resize_handle(app, ctx, rect, rail.is_some());
     drag_tick(app, ctx, rect, view, stage_bottom);
     let _ = t;

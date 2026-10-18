@@ -17,7 +17,9 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     let stage_bottom = screen.bottom() - crate::status_bar::HEIGHT;
     crate::dock::normalise(app, screen);
     let topbar = top_bar(app, ctx);
-    side_rail(app, ctx, screen);
+    let res = crate::dock::reserved(app, screen);
+    let stage = egui::Rect::from_min_max(pos2(screen.left() + res.left, screen.top()), pos2(screen.right() - res.right, stage_bottom));
+    crate::side_sliders::show(app, ctx, stage);
     crate::status_bar::show(app, ctx, screen);
     crate::dock::show(app, ctx, screen, stage_bottom);
     let toolbar = crate::toolbar::show(app, ctx, screen, stage_bottom, topbar.right());
@@ -201,48 +203,6 @@ fn top_bar(app: &mut App, ctx: &egui::Context) -> egui::Rect {
         });
     });
     r.response.rect
-}
-
-fn side_rail(app: &mut App, ctx: &egui::Context, screen: egui::Rect) {
-    let t = Tokens::get(ctx);
-    let left = screen.left() + crate::dock::reserved(app, screen).left;
-    Area::new(Id::new("rail")).order(Order::Middle).pivot(Align2::LEFT_CENTER).fixed_pos(pos2(left + M, screen.center().y)).show(
-        ctx,
-        |ui| {
-            glass_frame(ui).show(ui, |ui| {
-                ui.vertical_centered(|ui| {
-                    ui.spacing_mut().item_spacing.y = 4.0;
-                    let size = app.session.current_brush().size;
-                    // Size on a perceptual (sqrt) scale.
-                    let mut s = (size as f32).sqrt();
-                    if widgets::vslider(ui, &mut s, 1.0..=31.6, 150.0, "Brush size  [ ]").changed() {
-                        let _ = app.session.execute(Command::SetBrushSize { size: (s * s).round() as f64 });
-                        app.canvas.size_flash = 1.0;
-                    }
-                    ui.label(
-                        RichText::new(format!("{}", app.session.current_brush().size.round())).font(theme::mono(10.5)).color(t.fg_faint),
-                    );
-                    ui.add_space(6.0);
-                    let mut o = app.session.current_brush().opacity as f32;
-                    if widgets::vslider(ui, &mut o, 0.01..=1.0, 120.0, "Brush opacity").changed() {
-                        let _ = app.session.execute(Command::SetBrushOpacity { opacity: o as f64 });
-                    }
-                    ui.label(RichText::new(format!("{}%", (o * 100.0).round())).font(theme::mono(10.5)).color(t.fg_faint));
-                    ui.add_space(6.0);
-                    ui.add_enabled_ui(app.session.can_undo(), |ui| {
-                        if icons::button(ui, "undo-2", 32.0, false, "Undo (Ctrl+Z)").clicked() {
-                            let _ = app.session.execute(Command::Undo);
-                        }
-                    });
-                    ui.add_enabled_ui(app.session.can_redo(), |ui| {
-                        if icons::button(ui, "redo-2", 32.0, false, "Redo (Ctrl+Shift+Z)").clicked() {
-                            let _ = app.session.execute(Command::Redo);
-                        }
-                    });
-                });
-            });
-        },
-    );
 }
 
 fn toast(app: &mut App, ctx: &egui::Context, screen: egui::Rect) {

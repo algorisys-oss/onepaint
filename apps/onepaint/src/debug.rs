@@ -22,6 +22,8 @@
 //! - `ONEPAINT_NEW=16384x12000` starts with a blank document of that size (before the demo, if any);
 //!   `@8` after the size makes it 8-bit (`2048x1536@8`).
 //! - `ONEPAINT_MAX_SHEET=256` caps the composite's sheet side, to see sheets (spec 40) on small documents.
+//! - `ONEPAINT_SLIDERS=left|right|top|bottom|float|tools` places the size and opacity sliders
+//!   (`float` lays them horizontally; in memory, not saved).
 //! - `ONEPAINT_EXIT=1` closes the app after the screenshot.
 
 use crate::{App, Popover};
@@ -402,6 +404,13 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
         let _ = app.session.execute(Command::UpdateFilter {
             params: onepaint_filters::Params { curve: Some(s_curve), curve_mode: Some("smooth".into()), ..Default::default() },
         });
+    }
+    if frame == 1
+        && let Ok(m) = std::env::var("ONEPAINT_SLIDERS")
+        && let Ok(mode) = serde_json::from_value::<crate::side_sliders::Mode>(serde_json::Value::String(m))
+    {
+        app.settings.side_sliders_mode = mode;
+        app.settings.side_sliders_float = crate::side_sliders::Float { x: 300.0, y: 420.0, horizontal: true };
     }
     if frame == 3 && app.debug.popover.is_some() {
         app.popover = app.debug.popover;

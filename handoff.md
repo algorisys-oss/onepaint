@@ -17,7 +17,7 @@ Order (✓ done, ▶ in progress):
 3. ✓ Mask density/feather + Blend If (v0.202.0) — c1c2d56 and the feather commit.
 4. ✓ Vector masks (v0.202.1) — committed.
 5. ✓ PSD `phfl` blocked on the Photo Filter kind (todo); pointer fix not applicable (no heal).
-6. ▶ UI: Mix colour grid, side sliders + typed values, Align on active layer.
+6. ✓ UI: Mix colour grid, side sliders + typed values, Align on active layer.
 
 ### Step 2, Knockout — done
 Semantics (happypaint `compositor.ts` `knockoutPunch`): before a knocked-out

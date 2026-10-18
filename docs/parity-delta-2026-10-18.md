@@ -71,8 +71,13 @@ onepaint ports it in. Fold each item into `feature-parity.md` as it lands.
       Colour panel; settings live in `settings.json` (`colorMixMode`, `mix`).
       The Perceptual / RGB buttons have no tooltips yet (onepaint's segmented
       control takes none).
-- [ ] Side sliders anywhere (v0.204.0): edges, floating, with the tools; a
-      typed value entry from the end icon (v0.204.7).
+- [x] Side sliders anywhere (v0.204.0): edges, floating, with the tools; a
+      typed value entry from the end icon (v0.204.7). `side_sliders.rs`
+      (placement, tear-off, clamps, happypaint's size curve and entry parsing,
+      tests ported); Settings ▸ Brush has the toggle and Placement; the
+      press that closes an entry doesn't paint. `ONEPAINT_SLIDERS=…` for
+      screenshots. Not ported: the strip's eyedropper square (divergence 49)
+      and View-menu items (onepaint has no View menu; Settings has them).
 - [x] Align acts on the active layer when nothing is multi-selected
       (v0.204.1), with happypaint's hint and its "Draw a selection to align
       to" notice for one layer aligned to itself.

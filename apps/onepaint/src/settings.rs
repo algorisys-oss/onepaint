@@ -64,6 +64,12 @@ pub struct Settings {
     pub timeline_metric: TimelineMetric,
     /// Shortcut overrides: action id → combo (`keymap.rs`).
     pub keybindings: crate::keymap::Overrides,
+    /// The size and opacity sliders beside the canvas (happypaint `sideSliders*`).
+    pub side_sliders: bool,
+    pub side_sliders_mode: crate::side_sliders::Mode,
+    /// Px from the centre along the edge.
+    pub side_sliders_offset: f32,
+    pub side_sliders_float: crate::side_sliders::Float,
     /// The colour panel shows the Mix grid instead of the picker.
     pub color_mix_mode: bool,
     /// The Mix grid's wells, size and space (happypaint `mix-grid-store.ts`).
@@ -88,6 +94,10 @@ impl Default for Settings {
             max_history_steps: DEFAULT_HISTORY_STEPS,
             keybindings: Default::default(),
             timeline_metric: TimelineMetric::Frames,
+            side_sliders: true,
+            side_sliders_mode: Default::default(),
+            side_sliders_offset: 0.0,
+            side_sliders_float: Default::default(),
             color_mix_mode: false,
             mix: Default::default(),
             path: None,
@@ -119,6 +129,10 @@ impl Settings {
         self.cursor_thickness = self.cursor_thickness.clamp(1, 4);
         self.max_history_steps = self.max_history_steps.clamp(5, 1000);
         self.mix = std::mem::take(&mut self.mix).sanitized();
+        self.side_sliders_float = self.side_sliders_float.coerced();
+        if !self.side_sliders_offset.is_finite() {
+            self.side_sliders_offset = 0.0;
+        }
         // Unknown actions and unreadable combos are dropped (happypaint keeps them).
         self.keybindings.retain(|id, combo| crate::keymap::Action::from_id(id).is_some() && crate::keymap::is_valid(combo));
     }
@@ -188,6 +202,30 @@ pub fn dialog(app: &mut App, ui: &mut Ui) {
             row(ui, "Pen pressure", "Pressure drives size or opacity for every brush, whatever its own settings.");
             widgets::toggle(ui, &mut s.force_size_pressure, "Always use pressure for size");
             widgets::toggle(ui, &mut s.force_opacity_pressure, "Always use pressure for opacity");
+            row(
+                ui,
+                "Size & opacity sliders",
+                "Procreate's sidebar beside the canvas: brush size, opacity, undo and redo. Drag its grip to move it.",
+            );
+            let on_label = if s.side_sliders { "On" } else { "Off" };
+            widgets::toggle(ui, &mut s.side_sliders, on_label);
+            row(
+                ui,
+                "Placement",
+                "An edge (right suits left-handed painting), floating anywhere, or inside the tool panel. Pulling the grip away from an edge also floats it.",
+            );
+            ui.add_enabled_ui(s.side_sliders, |ui| {
+                let mut mode = s.side_sliders_mode;
+                egui::ComboBox::from_id_salt("side-sliders-mode").selected_text(mode.label()).width(180.0).show_ui(ui, |ui| {
+                    for m in crate::side_sliders::Mode::ALL {
+                        ui.selectable_value(&mut mode, m, m.label());
+                    }
+                });
+                if mode != s.side_sliders_mode {
+                    s.side_sliders_mode = mode;
+                    s.side_sliders_offset = 0.0;
+                }
+            });
 
             let ui = &mut cols[1];
             widgets::section_label(ui, "Cursor");

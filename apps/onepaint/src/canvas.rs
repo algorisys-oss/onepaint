@@ -372,6 +372,8 @@ pub struct Canvas {
     /// The touch-and-hold eyedropper's loupe (screen position).
     loupe: Option<Pos2>,
     pub panel_options: crate::panel_ui::PanelOptions,
+    /// Ignore this frame's press (it closes a typed value elsewhere).
+    pub swallow_press: bool,
 }
 
 impl Canvas {
@@ -416,6 +418,7 @@ impl Canvas {
             gesture_queue: Vec::new(),
             loupe: None,
             panel_options: Default::default(),
+            swallow_press: false,
         }
     }
 
@@ -955,7 +958,8 @@ impl Canvas {
                 self.gesture_out.push(g);
             }
         }
-        let suppress = self.gestures.suppress_pointer();
+        // A press that only closes a typed value (side sliders) paints nothing.
+        let suppress = self.gestures.suppress_pointer() || std::mem::take(&mut self.swallow_press);
         if let Some(mt) = ui.input(|i| i.multi_touch()).filter(|m| m.num_touches >= 2) {
             self.view.pan(mt.translation_delta.x as f64, mt.translation_delta.y as f64);
         }

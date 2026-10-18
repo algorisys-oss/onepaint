@@ -2,6 +2,7 @@
 
 mod adjust;
 mod align_ui;
+mod side_sliders;
 
 /// The animation export formats (happypaint `AnimFormat`, less WebM).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -260,6 +261,8 @@ pub struct App {
     pub toolbar: toolbar::ToolbarUi,
     /// Layers picked for align & distribute (Ctrl/⌘- and Shift-click).
     pub layer_picks: Vec<String>,
+    /// The size and opacity sliders' drag and typed entry.
+    pub side: side_sliders::UiState,
     pub pick_anchor: Option<String>,
     /// Align to the selection's bounds rather than the canvas.
     pub align_to_selection: bool,
@@ -350,6 +353,7 @@ impl App {
             dock: Default::default(),
             toolbar: Default::default(),
             layer_picks: Vec::new(),
+            side: Default::default(),
             pick_anchor: None,
             align_to_selection: false,
             size_dialog: ([0, 0], (1, 1), true),
@@ -1399,6 +1403,7 @@ impl eframe::App for App {
         };
         let pegging = self.timing.peg_mode && self.session.anim_settings().enabled;
         self.canvas.peg_target = self.timing.peg_target.clone().filter(|_| pegging);
+        self.canvas.swallow_press = self.side.entry_open();
         self.canvas.show(ui, rect, &mut self.session, space, r, self.gpu_ok, self.gpu_compose);
         // Keep a short history of pen samples (the canvas may use a move a frame late).
         let excess = self.canvas.pen_queue.len().saturating_sub(512);
@@ -2513,6 +2518,61 @@ mod tests {
         let p = h.state().palettes.active();
         assert_eq!((h.state().palettes.palettes.len(), p.name.as_str()), (n + 1, "Mix 5×7"));
         assert_eq!(p.colors.len(), 35);
+    }
+
+    #[test]
+    fn side_slider_end_icons_type_exact_values() {
+        let mut h = harness();
+        h.run();
+        h.state_mut().settings.path = None;
+        h.get_by_label("Type a brush size").click();
+        h.run();
+        // Replace the text: select all, then type.
+        key(&mut h, egui::Key::A, egui::Modifiers::COMMAND);
+        h.get_by_label("Brush size in pixels").type_text("40 px");
+        h.run();
+        key(&mut h, egui::Key::Enter, egui::Modifiers::NONE);
+        h.run();
+        assert_eq!(h.state().session.current_brush().size, 40.0);
+        assert!(h.query_by_label("Brush size in pixels").is_none(), "closed");
+        // Esc leaves the value alone.
+        h.get_by_label("Type an opacity").click();
+        h.run();
+        key(&mut h, egui::Key::A, egui::Modifiers::COMMAND);
+        h.get_by_label("Opacity in percent").type_text("10");
+        h.run();
+        key(&mut h, egui::Key::Escape, egui::Modifiers::NONE);
+        h.run();
+        assert_eq!(h.state().session.current_brush().opacity, 1.0);
+        // A click on the canvas closes an open entry without painting.
+        h.get_by_label("Type an opacity").click();
+        h.run();
+        let n = h.state().session.history_len();
+        drag_stroke(&mut h, pos2(600.0, 300.0), pos2(700.0, 320.0));
+        h.run();
+        assert!(h.query_by_label("Opacity in percent").is_none());
+        assert_eq!(h.state().session.history_len(), n, "no stroke");
+    }
+
+    #[test]
+    fn side_sliders_tear_off_and_ride_with_the_tools() {
+        use crate::side_sliders::Mode;
+        let mut h = harness();
+        h.run();
+        h.state_mut().settings.path = None;
+        assert_eq!(h.state().settings.side_sliders_mode, Mode::Left);
+        let grip = h.get_by_label("Drag to move up or down · pull away from the edge to float it").rect().center();
+        drag_stroke(&mut h, grip, grip + egui::vec2(120.0, 10.0));
+        h.run();
+        assert_eq!(h.state().settings.side_sliders_mode, Mode::Float);
+        assert!(h.state().settings.side_sliders_float.x > 60.0);
+        h.state_mut().settings.side_sliders_mode = Mode::Tools;
+        h.run();
+        assert!(h.query_by_label("Brush size").is_some(), "in the tool bar");
+        assert!(h.query_by_label("Drag to move · double-click to turn horizontal").is_none(), "no strip of its own");
+        h.state_mut().settings.side_sliders = false;
+        h.run();
+        assert!(h.query_by_label("Brush size").is_none());
     }
 
     #[test]
