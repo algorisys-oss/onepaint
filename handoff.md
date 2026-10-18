@@ -84,9 +84,11 @@ title-bar workspace decision, the licence question (delta doc).
 
 ### Done: Exposure, Vibrance, Photo Filter, Channel Mixer (2026-10-18, committed)
 PSD live adjustments done too (levl curv hue2 blnc blwh grdm in
-`formats::psd_adjust`). 8-bit atlases done (spec 49 GPU note). Next: untouched
-PSD round trips need a plan for the user (keep original records), then perf
-(spatial adjustment layers on the GPU) (8-bit atlases,
+`formats::psd_adjust`). 8-bit atlases done (spec 49 GPU note), pushed 25a4a5c.
+Waiting on the user to choose between two planned items (see the chat):
+(a) untouched PSD round trips (keep the opened file's records, patch what
+changed); (b) spatial adjustment layers on the GPU (padded backdrop pass +
+per-kind compute shaders, Gaussian/motion blur and sharpen first). (8-bit atlases,
 spatial adjustments on the GPU), then photocraft robustness items.
 Pushed 14e05aa first. Spec (happypaint `adjustment-renderer.ts` :1048-1118,
 :2370-2401, `psd-map.ts` :206-234/:357-381, `psd/adjust-blocks.ts`):
