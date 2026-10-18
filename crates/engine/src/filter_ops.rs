@@ -235,6 +235,10 @@ pub(crate) fn apply_filter(
     params: &Params,
     clip: Option<&onepaint_selection::Mask>,
 ) -> Surface {
+    // Unclipped, it is the same filter spatial adjustment layers render with.
+    if clip.is_none() {
+        return onepaint_compose::spatial::apply(src, doc, frame, kind, params);
+    }
     let mut out = src.clone();
     let content = src.content_bounds().and_then(|b| b.intersect(&doc));
     if let Some(content) = content

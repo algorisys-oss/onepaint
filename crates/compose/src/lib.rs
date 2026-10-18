@@ -7,6 +7,7 @@ pub mod blend;
 pub mod feather;
 pub mod program;
 pub mod relief;
+pub mod spatial;
 #[doc(hidden)]
 pub mod testdocs;
 pub mod vmask;

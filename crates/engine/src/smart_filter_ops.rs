@@ -203,7 +203,6 @@ impl Session {
     /// their rendered result. `fresh` = false reuses stale cache entries.
     pub(crate) fn render_spatial_adjustments(&self, nodes: &mut [Node], fresh: bool) {
         let (w, h) = (self.doc.width, self.doc.height);
-        let frame = Frame::region(0, 0, w, h, self.doc.dpi as f32);
         for i in 0..nodes.len() {
             if let Node::Group(g) = &mut nodes[i] {
                 self.render_spatial_adjustments(&mut g.children, fresh);
@@ -224,16 +223,8 @@ impl Session {
             let out = match cache.get(&id) {
                 Some((k, s)) if *k == key || !fresh => s.clone(),
                 _ => {
-                    // The backdrop: everything below inside this (isolated) container.
-                    let mut d = self.doc.clone_shallow();
-                    d.root = nodes[..i].to_vec();
-                    // Filter sources are unshaded paint (no paper tooth).
-                    d.set_paper(None);
-                    let flat = onepaint_compose::flatten(&d, None);
-                    let mut backdrop = Surface::new();
-                    backdrop.write_rect(self.doc.bounds(), &flat);
-                    backdrop.prune_empty();
-                    let s = crate::filter_ops::apply_filter(&backdrop, self.doc.bounds(), frame, kind, &params, None);
+                    // The backdrop is everything below inside this (isolated) container.
+                    let s = onepaint_compose::spatial::render_layer(&self.doc, &nodes[..i], kind, &params);
                     cache.insert(id.clone(), (key, s.clone()));
                     s
                 }

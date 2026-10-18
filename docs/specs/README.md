@@ -62,3 +62,4 @@ The happypaint references are relative to `../happypaint/frontend/src/`.
 | 49 | [8-bit documents store 8-bit tiles](49-8bit-storage.md) | raster, engine, app |
 | 50 | [8-bit documents composite in gamma space](50-8bit-gamma.md) | color, compose, filters, brush, engine, formats, gpu, app |
 | 51 | [PSD files save back as they were](51-psd-round-trip.md) | doc, formats |
+| 52 | [Spatial adjustment layers on the GPU](52-gpu-spatial-adjustments.md) | compose, gpu, engine |
