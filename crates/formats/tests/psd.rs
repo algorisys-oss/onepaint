@@ -179,3 +179,21 @@ fn fill_layers_export_their_picture() {
     // 0.5 · 255 = 127.5 rounds either way through the transfer table.
     assert!(c[0] == 255 && c[1].abs_diff(128) <= 1 && c[2] == 0 && c[3] == 255, "{c:?}");
 }
+
+#[test]
+fn adjustment_layers_survive_a_psd_round_trip() {
+    use onepaint_filters::{Kind, default_params};
+    let mut d = Document::new(16, 16, Some(Rgba::WHITE));
+    let kinds =
+        ["levels", "curves", "hue-saturation", "color-balance", "gradient-map", "exposure", "vibrance", "photo-filter", "channel-mixer"];
+    for k in kinds {
+        let mut l = Layer::new(k);
+        l.adjustment = Some(Box::new(Adjustment { kind: k.into(), params: default_params(Kind::parse(k).unwrap()) }));
+        d.root.push(Node::Layer(l));
+    }
+    let r = read_psd(&write_psd(&d, &vec![1.0f32; 16 * 16 * 4]).unwrap()).unwrap();
+    for k in kinds {
+        let l = r.root.iter().filter_map(|n| n.as_layer()).find(|l| l.name == k).unwrap();
+        assert_eq!(l.adjustment.as_ref().map(|a| a.kind.as_str()), Some(k));
+    }
+}

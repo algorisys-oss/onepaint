@@ -181,6 +181,13 @@ pub fn read(key: &[u8; 4], d: &[u8]) -> Option<Adjustment> {
         }
         b"phfl" => ("photo-filter", photo_filter(d)?),
         b"mixr" => ("channel-mixer", mixr(d)?),
+        b"levl" => ("levels", levels(d)?),
+        b"curv" => ("curves", curves(d)?),
+        b"hue2" => ("hue-saturation", hue_sat(d)?),
+        b"blnc" => ("color-balance", color_balance(d)?),
+        // Photoshop's colour weights and tint aren't kept yet (`todo.md`).
+        b"blwh" => ("black-white", Params { amount: Some(1.0), ..Default::default() }),
+        b"grdm" => ("gradient-map", gradient_map(d)?),
         _ => return None,
     };
     Some(Adjustment { kind: kind.into(), params })
@@ -256,9 +263,283 @@ pub fn write(a: &Adjustment) -> Option<([u8; 4], Vec<u8>)> {
             }
             *b"mixr"
         }
+        "levels" => {
+            o.extend(2u16.to_be_bytes());
+            let b = |v: Option<f32>, d: f32| (v.unwrap_or(d).clamp(0.0, 1.0) * 255.0).round() as i16;
+            let gamma = (p.gamma.unwrap_or(1.0).clamp(0.1, 9.99) * 100.0).round() as i16;
+            let rgb = [b(p.in_black, 0.0), b(p.in_white, 1.0), b(p.out_black, 0.0), b(p.out_white, 1.0), gamma];
+            for v in rgb {
+                o.extend(v.to_be_bytes());
+            }
+            // The red, green and blue records and the rest stay at their defaults.
+            for _ in 0..62 {
+                for v in [0i16, 255, 0, 255, 100] {
+                    o.extend(v.to_be_bytes());
+                }
+            }
+            *b"levl"
+        }
+        "curves" => {
+            let chans: Vec<(u16, Vec<[f64; 2]>)> = [(&p.curve, 1u16), (&p.curve_r, 2), (&p.curve_g, 4), (&p.curve_b, 8)]
+                .into_iter()
+                .filter_map(|(c, bit)| {
+                    let pts = c.as_ref().filter(|c| c.len() >= 2)?;
+                    Some((bit, pts.iter().map(|q| [q.x, q.y]).collect()))
+                })
+                .collect();
+            let chans = if chans.iter().any(|c| c.0 == 1) { chans } else { [vec![(1, vec![[0.0, 0.0], [1.0, 1.0]])], chans].concat() };
+            let v = |x: f64| ((x.clamp(0.0, 1.0) * 255.0).round() as i16).to_be_bytes();
+            o.push(0);
+            o.extend(1u16.to_be_bytes());
+            o.extend(0u16.to_be_bytes());
+            o.extend(chans.iter().map(|c| c.0).fold(0u16, |a, b| a | b).to_be_bytes());
+            for (_, pts) in &chans {
+                o.extend((pts.len() as u16).to_be_bytes());
+                for q in pts {
+                    o.extend(v(q[1]));
+                    o.extend(v(q[0]));
+                }
+            }
+            // Photoshop's second copy (`Crv `), which newer versions read.
+            o.extend(*b"Crv ");
+            o.extend(4u16.to_be_bytes());
+            o.extend(0u16.to_be_bytes());
+            o.extend((chans.len() as u16).to_be_bytes());
+            for (bit, pts) in &chans {
+                o.extend((bit.trailing_zeros() as u16).to_be_bytes());
+                o.extend((pts.len() as u16).to_be_bytes());
+                for q in pts {
+                    o.extend(v(q[1]));
+                    o.extend(v(q[0]));
+                }
+            }
+            *b"curv"
+        }
+        "hue-saturation" => {
+            o.extend(2u16.to_be_bytes());
+            let master = [
+                0,
+                0,
+                0,
+                0,
+                p.hue.unwrap_or(0.0).clamp(-180.0, 180.0).round() as i16,
+                (p.saturation.unwrap_or(0.0).clamp(-1.0, 1.0) * 100.0).round() as i16,
+                (p.brightness.unwrap_or(0.0).clamp(-1.0, 1.0) * 100.0).round() as i16,
+            ];
+            for v in master {
+                o.extend(v.to_be_bytes());
+            }
+            o.extend([0u8; 6 * 14]);
+            *b"hue2"
+        }
+        "color-balance" => {
+            let pc = |v: Option<f32>| ((v.unwrap_or(0.0).clamp(-1.0, 1.0) * 100.0).round() as i16).to_be_bytes();
+            o.extend([0u8; 6]);
+            for v in [p.cyan_red, p.magenta_green, p.yellow_blue] {
+                o.extend(pc(v));
+            }
+            o.extend([0u8; 6]);
+            o.extend([1, 0]);
+            *b"blnc"
+        }
+        "black-white" => {
+            o.extend(write_black_white());
+            *b"blwh"
+        }
+        "gradient-map" => {
+            o.extend(write_gradient_map(p));
+            *b"grdm"
+        }
         _ => return None,
     };
     Some((key, o))
+}
+
+fn levels(d: &[u8]) -> Option<Params> {
+    if be16(d, 0)? != 2 {
+        return None;
+    }
+    let v = |i: usize| be16(d, 2 + i * 2).map(|x| x as i16 as f32);
+    let n = |x: f32| (x / 255.0).clamp(0.0, 1.0);
+    let gamma = v(4)? / 100.0;
+    Some(Params {
+        in_black: Some(n(v(0)?)),
+        in_white: Some(n(v(1)?)),
+        out_black: Some(n(v(2)?)),
+        out_white: Some(n(v(3)?)),
+        gamma: Some(if gamma > 0.0 { gamma } else { 1.0 }),
+        ..Default::default()
+    })
+}
+
+fn curves(d: &[u8]) -> Option<Params> {
+    use onepaint_stroke::CurvePoint;
+    if be16(d, 1)? != 1 {
+        return None;
+    }
+    let mask = be16(d, 5)?;
+    let mut at = 7;
+    let mut p = Params { curve_mode: Some("smooth".into()), ..Default::default() };
+    for bit in [1u16, 2, 4, 8] {
+        if mask & bit == 0 {
+            continue;
+        }
+        let n = be16(d, at)? as usize;
+        at += 2;
+        let mut pts = Vec::with_capacity(n);
+        for _ in 0..n {
+            let (out, inp) = (be16(d, at)? as i16 as f64, be16(d, at + 2)? as i16 as f64);
+            pts.push(CurvePoint::new((inp / 255.0).clamp(0.0, 1.0), (out / 255.0).clamp(0.0, 1.0)));
+            at += 4;
+        }
+        let pts = (pts.len() >= 2).then_some(pts);
+        match bit {
+            1 => p.curve = pts,
+            2 => p.curve_r = pts,
+            4 => p.curve_g = pts,
+            _ => p.curve_b = pts,
+        }
+    }
+    if p.curve.is_none() {
+        p.curve = Some(vec![CurvePoint::new(0.0, 0.0), CurvePoint::new(1.0, 1.0)]);
+    }
+    Some(p)
+}
+
+/// The master hue, saturation and lightness; colorize and the six ranges
+/// aren't kept (as happypaint).
+fn hue_sat(d: &[u8]) -> Option<Params> {
+    if be16(d, 0)? != 2 {
+        return None;
+    }
+    let v = |i: usize| be16(d, 2 + i * 2).map(|x| x as i16 as f32);
+    Some(Params { hue: Some(v(4)?), saturation: Some(v(5)? / 100.0), brightness: Some(v(6)? / 100.0), ..Default::default() })
+}
+
+/// The midtones; onepaint's Color Balance has no shadow or highlight range yet.
+fn color_balance(d: &[u8]) -> Option<Params> {
+    let v = |i: usize| be16(d, i * 2).map(|x| x as i16 as f32 / 100.0);
+    Some(Params { cyan_red: Some(v(3)?), magenta_green: Some(v(4)?), yellow_blue: Some(v(5)?), ..Default::default() })
+}
+
+fn unicode(o: &mut Vec<u8>, s: &str) {
+    let u: Vec<u16> = s.encode_utf16().collect();
+    o.extend((u.len() as u32 + 1).to_be_bytes());
+    for c in u {
+        o.extend(c.to_be_bytes());
+    }
+    o.extend([0, 0]);
+}
+
+fn desc_key(o: &mut Vec<u8>, k: &str) {
+    if k.len() == 4 {
+        o.extend(0u32.to_be_bytes());
+    } else {
+        o.extend((k.len() as u32).to_be_bytes());
+    }
+    o.extend(k.as_bytes());
+}
+
+/// Black & White at Photoshop's default weights, no tint (happypaint writes
+/// the layer at full strength; its opacity fades it).
+fn write_black_white() -> Vec<u8> {
+    let mut o = Vec::new();
+    o.extend(16u32.to_be_bytes());
+    unicode(&mut o, "");
+    desc_key(&mut o, "null");
+    o.extend(8u32.to_be_bytes());
+    for (k, v) in [("Rd  ", 40i32), ("Yllw", 60), ("Grn ", 40), ("Cyn ", 60), ("Bl  ", 20), ("Mgnt", 80)] {
+        desc_key(&mut o, k);
+        o.extend(*b"long");
+        o.extend(v.to_be_bytes());
+    }
+    desc_key(&mut o, "useTint");
+    o.extend(*b"bool");
+    o.push(0);
+    desc_key(&mut o, "tintColor");
+    o.extend(*b"Objc");
+    unicode(&mut o, "");
+    desc_key(&mut o, "RGBC");
+    o.extend(3u32.to_be_bytes());
+    for (k, v) in [("Rd  ", 225.0f64), ("Grn ", 211.0), ("Bl  ", 179.0)] {
+        desc_key(&mut o, k);
+        o.extend(*b"doub");
+        o.extend(v.to_bits().to_be_bytes());
+    }
+    o
+}
+
+/// Stops' locations are in 1/4096ths (`interpolation`).
+fn gradient_map(d: &[u8]) -> Option<Params> {
+    let mut at = 2;
+    let version = be16(d, 0)?;
+    at += 2; // reverse, dither
+    if version == 3 && *d.get(at)? != 0 {
+        at += 4;
+    }
+    at += 4 + be32(d, at)? as usize * 2;
+    let n = be16(d, at)? as usize;
+    at += 2;
+    let mut raw = Vec::with_capacity(n);
+    for _ in 0..n {
+        raw.push((be32(d, at)? as f32, record_color(d, at + 8)));
+        at += 20;
+    }
+    let m = be16(d, at)? as usize;
+    at += 2 + m * 10;
+    let interpolation = be16(d, at + 2)?.max(1) as f32;
+    let mode = be16(d, at + 6)?;
+    if mode != 0 || raw.len() < 2 {
+        return None;
+    }
+    let mut stops = raw
+        .into_iter()
+        .map(|(loc, c)| Some(onepaint_filters::Stop { pos: (loc / interpolation).clamp(0.0, 1.0), color: c? }))
+        .collect::<Option<Vec<_>>>()?;
+    stops.sort_by(|a, b| a.pos.total_cmp(&b.pos));
+    Some(Params { gradient_stops: Some(stops), ..Default::default() })
+}
+
+fn write_gradient_map(p: &Params) -> Vec<u8> {
+    let mut stops = p.gradient_stops.clone().filter(|s| s.len() >= 2).unwrap_or_else(|| {
+        vec![
+            onepaint_filters::Stop { pos: 0.0, color: p.shadow.unwrap_or([0.0; 3]) },
+            onepaint_filters::Stop { pos: 1.0, color: p.highlight.unwrap_or([1.0; 3]) },
+        ]
+    });
+    stops.sort_by(|a, b| a.pos.total_cmp(&b.pos));
+    let mut o = Vec::new();
+    o.extend(1u16.to_be_bytes());
+    o.extend([0, 0]);
+    unicode(&mut o, "Custom");
+    o.extend((stops.len() as u16).to_be_bytes());
+    for s in &stops {
+        o.extend(((s.pos.clamp(0.0, 1.0) * 4096.0).round() as u32).to_be_bytes());
+        o.extend(50u32.to_be_bytes());
+        o.extend(0u16.to_be_bytes());
+        for v in s.color {
+            o.extend(((v.clamp(0.0, 1.0) * 255.0).round() as u16 * 257).to_be_bytes());
+        }
+        o.extend([0, 0, 0, 0]);
+    }
+    o.extend(2u16.to_be_bytes());
+    for loc in [0u32, 4096] {
+        o.extend(loc.to_be_bytes());
+        o.extend(50u32.to_be_bytes());
+        o.extend(255u16.to_be_bytes());
+    }
+    o.extend(2u16.to_be_bytes());
+    o.extend(4096u16.to_be_bytes());
+    o.extend(32u16.to_be_bytes());
+    // Solid, no seed, no transparency, unrestricted, smooth, RGB, the full range.
+    o.extend([0u8; 2 + 4 + 2 + 2 + 4]);
+    o.extend(3u16.to_be_bytes());
+    o.extend([0u8; 8]);
+    for _ in 0..4 {
+        o.extend(0x8000u16.to_be_bytes());
+    }
+    o.extend([0u8; 4]);
+    o
 }
 
 #[cfg(test)]
@@ -326,5 +607,58 @@ mod tests {
         assert_eq!((m.mix_rg, m.mix_bc, m.mix_kb, m.mix_rr, m.mix_mono), (Some(0.25), Some(-0.1), Some(0.5), Some(1.0), Some(false)));
         let mono = rt("channel-mixer", Params { mix_mono: Some(true), mix_kr: Some(0.3), mix_kg: Some(0.6), mix_kb: Some(0.1), ..base });
         assert_eq!((mono.mix_mono, mono.mix_kr, mono.mix_kg, mono.mix_kb), (Some(true), Some(0.3), Some(0.6), Some(0.1)));
+    }
+
+    #[test]
+    fn the_older_kinds_map_like_psd_map_test() {
+        use onepaint_stroke::CurvePoint;
+        let rt = |kind: &str, p: Params| {
+            let (key, data) = write(&Adjustment { kind: kind.into(), params: p }).unwrap();
+            read(&key, &data).unwrap()
+        };
+        let h =
+            rt("hue-saturation", Params { hue: Some(40.0), saturation: Some(0.3), brightness: Some(-0.2), ..Default::default() }).params;
+        assert_eq!((h.hue, h.saturation, h.brightness), (Some(40.0), Some(0.3), Some(-0.2)));
+        let l = Params {
+            in_black: Some(0.1),
+            in_white: Some(0.9),
+            gamma: Some(1.3),
+            out_black: Some(0.05),
+            out_white: Some(0.95),
+            ..Default::default()
+        };
+        let (_, data) = write(&Adjustment { kind: "levels".into(), params: l.clone() }).unwrap();
+        // 26, 230, 13, 242 and gamma 130 (psd-map.test.ts).
+        assert_eq!(&data[2..12], &[0, 26, 0, 230, 0, 13, 0, 242, 0, 130]);
+        assert_eq!(data.len(), 632);
+        let l2 = read(b"levl", &data).unwrap().params;
+        assert_eq!(l2.gamma, Some(1.3));
+        assert!((l2.in_black.unwrap() - 26.0 / 255.0).abs() < 1e-6);
+        let c = Params {
+            curve: Some(vec![CurvePoint::new(0.0, 0.0), CurvePoint::new(0.4, 0.6), CurvePoint::new(1.0, 1.0)]),
+            curve_r: Some(vec![CurvePoint::new(0.0, 0.1), CurvePoint::new(1.0, 0.9)]),
+            ..Default::default()
+        };
+        let c2 = rt("curves", c).params;
+        let pts: Vec<_> = c2.curve.unwrap().iter().map(|q| ((q.x * 255.0).round(), (q.y * 255.0).round())).collect();
+        assert_eq!(pts, vec![(0.0, 0.0), (102.0, 153.0), (255.0, 255.0)]);
+        assert!(c2.curve_r.is_some() && c2.curve_g.is_none());
+        assert_eq!(c2.curve_mode.as_deref(), Some("smooth"));
+        let b = rt("color-balance", Params { yellow_blue: Some(0.45), magenta_green: Some(-0.3), ..Default::default() }).params;
+        assert_eq!((b.cyan_red, b.magenta_green, b.yellow_blue), (Some(0.0), Some(-0.3), Some(0.45)));
+        assert_eq!(rt("black-white", Params { amount: Some(0.5), ..Default::default() }).kind, "black-white");
+        let stops = vec![
+            onepaint_filters::Stop { pos: 0.0, color: [0.0, 0.0, 0.2] },
+            onepaint_filters::Stop { pos: 0.6, color: [1.0, 0.5, 0.0] },
+            onepaint_filters::Stop { pos: 1.0, color: [1.0; 3] },
+        ];
+        let g = rt("gradient-map", Params { gradient_stops: Some(stops.clone()), ..Default::default() }).params.gradient_stops.unwrap();
+        for (a, b) in g.iter().zip(&stops) {
+            assert!((a.pos - b.pos).abs() < 1e-3 && close3(a.color, b.color, 1.0 / 255.0), "{a:?} {b:?}");
+        }
+        // The black & white descriptor reads back as Photoshop's weights.
+        let (_, bw) = write(&Adjustment { kind: "black-white".into(), params: Params::default() }).unwrap();
+        let items = descriptor_numbers(&bw).unwrap();
+        assert_eq!(items.iter().map(|i| i.1).collect::<Vec<_>>(), vec![40.0, 60.0, 40.0, 60.0, 20.0, 80.0]);
     }
 }

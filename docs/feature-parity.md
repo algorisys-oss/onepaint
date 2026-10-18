@@ -173,7 +173,7 @@ screentone are added as live layers.
 - [x] Autosave and the gallery (crash-recovery autosave; a gallery of recent drawings with thumbnails, shown at launch)
 - [x] `.happypaint-book` (open as tabs; save all tabs as a book)
 - [ ] `.happypaint-rec`
-- [~] PSD: read and write layers, groups, masks, blend modes, clipping, DPI, fill layers as pixels, and invert/posterize/threshold/brightness-contrast adjustments (8/16-bit RGB/grey read, PSB read; text exported as pixels). Missing against happypaint's v0.201 codec: other colour modes, 32-bit, PSB export, untouched round trips, live Levels/Curves/Hue-Sat/Gradient Map and the new kinds, fill recipes, layer styles, locks, labels and guides.
+- [~] PSD: read and write layers, groups, masks, blend modes, clipping, DPI, fill layers as pixels, and live adjustment layers: invert, posterize, threshold, brightness-contrast, levels, curves, hue-saturation, color-balance (midtones), black-white (Photoshop's weights and tint not kept yet), gradient map (solid; stop colours in RGB, HSB, Lab or grey), exposure, vibrance, photo filter and channel mixer (8/16-bit RGB/grey read, PSB read; text exported as pixels). Missing against happypaint's codec: other colour modes, 32-bit, PSB export, untouched round trips, fill recipes, layer styles, locks, labels and guides.
 - [x] PNG, JPEG, WebP, TIFF and Netpbm, keeping ICC profiles and DPI (import all, converting embedded RGB profiles; export PNG/JPEG/TIFF/PPM with scale, DPI and ICC tags)
 - [x] GIF, MP4, WebM and PNG-zip export (GIF, MP4 and PNG-zip; WebM is covered by MP4, divergence 20)
 - [x] Clipboard: copy and paste images (in-place paste, the system clipboard, layer via copy/cut)

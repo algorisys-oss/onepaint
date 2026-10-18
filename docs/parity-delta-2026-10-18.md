@@ -49,8 +49,8 @@ onepaint ports it in. Fold each item into `feature-parity.md` as it lands.
 
 - [x] `phfl` Photo Filter colour decode (v0.204.7), with the Photo Filter
       adjustment itself (`crates/formats/src/psd_adjust.rs`; the real CS2
-      block test is ported). Gradient Map stops wait for onepaint to import
-      Gradient Map at all. Was:: v3 holds D50 XYZ
+      block test is ported). Gradient Map imports live now too, with stop
+      colours in Lab or grey rescaled as v0.204.7 does. Was:: v3 holds D50 XYZ
       (1.0 = 32768); v2 Lab binary colours rescaled; also fixes Gradient Map
       stops stored as Lab or grey. **Blocked:** onepaint has no Photo Filter
       adjustment yet, and its PSD reader imports only invert, posterize,

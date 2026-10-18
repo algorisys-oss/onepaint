@@ -83,8 +83,9 @@ c1c2d56 density + Blend If, 9bad5ed feather, f19e6d5 vector masks,
 title-bar workspace decision, the licence question (delta doc).
 
 ### Done: Exposure, Vibrance, Photo Filter, Channel Mixer (2026-10-18, committed)
-Next per the recommended order: the PSD codec (live Levels/Curves/Hue-Sat/
-Gradient Map import, untouched round trips), then perf (8-bit atlases,
+PSD live adjustments done too (levl curv hue2 blnc blwh grdm in
+`formats::psd_adjust`). Next: untouched PSD round trips need a plan for the
+user (keep original records), then perf (8-bit atlases,
 spatial adjustments on the GPU), then photocraft robustness items.
 Pushed 14e05aa first. Spec (happypaint `adjustment-renderer.ts` :1048-1118,
 :2370-2401, `psd-map.ts` :206-234/:357-381, `psd/adjust-blocks.ts`):
