@@ -85,6 +85,8 @@ struct Km {
 @group(0) @binding(15) var<storage, read> adj: array<vec4<f32>>;
 // The document paper's grain (spec 43), R32Float, repeat-sampled by hand.
 @group(0) @binding(16) var paper_tex: texture_2d<f32>;
+// Spatial layers' filtered tiles (spec 52).
+@group(0) @binding(17) var filtered_tex: texture_2d_array<f32>;
 
 const NONE: u32 = 0xffffffffu;
 
@@ -924,8 +926,8 @@ fn content(o: Op, p: vec2<i32>) -> vec4<f32> {
     if ((flags & F_BASE) != 0u) {
         c = load(o.b.x, p);
     } else if ((flags & F_SPATIAL) != 0u) {
-        // A spatial layer's filtered tile, in the segment cache (spec 52).
-        c = load_cache(o.b.x, p);
+        // A spatial layer's filtered tile (spec 52).
+        c = textureLoad(filtered_tex, p, i32(o.b.x), i32(prm.level));
     }
     if ((flags & F_STROKE) != 0u) {
         c = apply_stroke(c, load(o.b.y, p), bitcast<f32>(o.b.w), o.b.z);

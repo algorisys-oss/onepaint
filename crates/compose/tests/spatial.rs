@@ -60,3 +60,21 @@ fn spatial_layers_in_isolated_groups_plan_and_pass_through_ones_stay_on_the_cpu(
         }
     }
 }
+
+#[test]
+fn stacked_spatial_layers_plan_and_match() {
+    use onepaint_compose::testdocs::with_spatial_n;
+    let mut planned = 0;
+    for seed in 0..6 {
+        let doc = with_spatial_n(random_doc(seed, 300, 300, false), seed, 2);
+        let want_doc = rendered(&doc);
+        for (tx, ty) in doc.bounds().tiles() {
+            let Some(prog) = plan_tile(&doc, tx, ty, None) else { continue };
+            planned += 1;
+            let (got, want) = (run(&prog), composite_tile(&want_doc, tx, ty, None));
+            let worst = got.iter().zip(&want).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+            assert!(worst <= 4e-3, "seed {seed} tile {tx},{ty}: {worst}");
+        }
+    }
+    assert!(planned >= 16, "{planned}");
+}

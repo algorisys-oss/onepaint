@@ -230,3 +230,33 @@ fn a_lone_blur_layer_runs_live_on_the_gpu_path() {
     assert!(dirty.contains(&(1, 0)), "{dirty:?}");
     s.stroke_end();
 }
+
+/// Spec 52 3b: two stacked blur layers both stay live (up to three do); the upper one's
+/// backdrop programs carry the lower one.
+#[test]
+fn stacked_blur_layers_both_run_live() {
+    use onepaint_compose::program::op_contents;
+    let mut s = Session::new(600, 400, Some(onepaint_color::Rgba::WHITE));
+    let paint = s.active().to_string();
+    for r in [4.0, 8.0] {
+        let p = Params { radius: Some(r), ..Default::default() };
+        s.execute(Command::AddAdjustmentLayer { kind: "gaussian-blur".into(), params: p }).unwrap();
+    }
+    s.execute(Command::SetActiveLayer { id: paint }).unwrap();
+    let keys: Vec<_> = s.doc().bounds().tiles().collect();
+    let (progs, cpu) = s.plan(&keys);
+    assert!(cpu.is_empty(), "no tile falls back: {cpu:?}");
+    let nested = progs.iter().any(|p| {
+        op_contents(&p.ops)
+            .filter_map(|c| c.spatial.as_ref())
+            .any(|sp| sp.backdrop.iter().any(|(_, b)| op_contents(&b.ops).any(|c| c.spatial.is_some())))
+    });
+    assert!(nested, "the upper blur's backdrop holds the lower blur");
+    // Past three, planning would grow ninefold per layer: all render on the CPU.
+    for _ in 0..2 {
+        let p = Params { radius: Some(2.0), ..Default::default() };
+        s.execute(Command::AddAdjustmentLayer { kind: "gaussian-blur".into(), params: p }).unwrap();
+    }
+    let (progs, _) = s.plan(&keys);
+    assert!(!progs.iter().any(|p| op_contents(&p.ops).any(|c| c.spatial.is_some())));
+}

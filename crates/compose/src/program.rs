@@ -702,11 +702,6 @@ impl Planner<'_> {
             .tiles()
             .map(|(x, y)| plan(&sub, x, y, self.ov, None, self.cache).map(|p| ((x, y), Arc::new(p))).ok_or(Unsupported))
             .collect::<Result<Vec<_>, _>>()?;
-        // Stacked spatial layers would need their filters in order: CPU for now.
-        let nested = |p: &TileProgram| op_contents(&p.ops).any(|c| c.spatial.is_some());
-        if backdrop.iter().any(|(_, p)| nested(p)) {
-            return Err(Unsupported);
-        }
         self.spatial.set(true);
         let src = crate::spatial::SpatialSrc::new(kind, params, (tx, ty), region, self.frame, backdrop);
         self.content_with(l, Some(Arc::new(src)))

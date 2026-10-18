@@ -155,6 +155,11 @@ impl Session {
     }
 }
 
+/// Each stacked spatial layer plans the one below over its 3 × 3 tiles in
+/// reach, so planning grows ninefold per layer: a full refresh of 64 tiles
+/// plans in 0.8 ms with one, 7.7 ms with two, 63 ms with three (spec 52).
+const MAX_LIVE_SPATIAL: usize = 3;
+
 /// Live spatial adjustment layers (blur, sharpen…): rendered as the filtered
 /// backdrop of their container, cached by a fingerprint of everything below.
 #[derive(Default)]
@@ -199,10 +204,12 @@ impl Session {
         })
     }
 
-    /// The spatial layer the GPU filters live (spec 52): the document's only
-    /// spatial adjustment layer, at the top level or in isolated groups, of
-    /// a kind with a GPU pass and a reach within a tile.
-    pub(crate) fn live_spatial(nodes: &[Node]) -> Option<NodeId> {
+    /// The spatial layers the GPU filters live (spec 52): every spatial
+    /// adjustment layer, when each is at the top level or in isolated groups,
+    /// of a kind with a GPU pass and a reach within a tile, and at most
+    /// [`MAX_LIVE_SPATIAL`] of them. Otherwise none, so a stroke never shows a
+    /// live layer over a stale one.
+    pub(crate) fn live_spatial(nodes: &[Node]) -> Vec<NodeId> {
         // Each spatial layer, and whether every group around it is isolated.
         fn all<'a>(nodes: &'a [Node], isolated: bool, out: &mut Vec<(&'a onepaint_doc::Layer, bool)>) {
             for n in nodes {
@@ -215,23 +222,27 @@ impl Session {
         }
         let mut found = Vec::new();
         all(nodes, true, &mut found);
-        let [(l, isolated)] = found[..] else { return None };
-        let kind = onepaint_compose::spatial::spatial_kind(l)?;
-        let params = l.adjustment.as_ref().map(|a| a.params.clone()).unwrap_or_default();
-        (isolated
-            && onepaint_compose::spatial::gpu_supported(kind, &params)
-            && onepaint_filters::reach(kind, &params) <= onepaint_raster::TILE)
-            .then(|| l.id.clone())
+        let live = |(l, isolated): &(&onepaint_doc::Layer, bool)| {
+            let Some(kind) = onepaint_compose::spatial::spatial_kind(l) else { return false };
+            let params = l.adjustment.as_ref().map(|a| a.params.clone()).unwrap_or_default();
+            *isolated
+                && onepaint_compose::spatial::gpu_supported(kind, &params)
+                && onepaint_filters::reach(kind, &params) <= onepaint_raster::TILE
+        };
+        if found.len() > MAX_LIVE_SPATIAL || !found.iter().all(live) {
+            return Vec::new();
+        }
+        found.into_iter().map(|(l, _)| l.id.clone()).collect()
     }
 
     /// Replace spatial adjustment layers in `nodes` (and nested groups) with
     /// their rendered result. `fresh` = false reuses stale cache entries.
     pub(crate) fn render_spatial_adjustments(&self, nodes: &mut [Node], fresh: bool) {
-        self.render_spatial_except(nodes, fresh, None)
+        self.render_spatial_except(nodes, fresh, &[])
     }
 
     /// [`Self::render_spatial_adjustments`], leaving `live` for the GPU.
-    pub(crate) fn render_spatial_except(&self, nodes: &mut [Node], fresh: bool, live: Option<&str>) {
+    pub(crate) fn render_spatial_except(&self, nodes: &mut [Node], fresh: bool, live: &[NodeId]) {
         let (w, h) = (self.doc.width, self.doc.height);
         for i in 0..nodes.len() {
             if let Node::Group(g) = &mut nodes[i] {
@@ -239,7 +250,7 @@ impl Session {
                 continue;
             }
             let Node::Layer(l) = &nodes[i] else { continue };
-            if live == Some(l.id.as_str()) {
+            if live.contains(&l.id) {
                 continue;
             }
             let Some(kind) = l.adjustment.as_ref().and_then(|a| Kind::parse(&a.kind)) else { continue };

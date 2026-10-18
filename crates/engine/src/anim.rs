@@ -466,17 +466,17 @@ impl Session {
 
     /// The document compositing shows: the animation view when enabled.
     pub(crate) fn display_doc(&self) -> std::borrow::Cow<'_, Document> {
-        self.display_doc_with(None)
+        self.display_doc_with(&[])
     }
 
-    /// [`Self::display_doc`] for the GPU planner: the live spatial layer
-    /// (spec 52) stays an adjustment layer, filtered per frame on the GPU.
+    /// [`Self::display_doc`] for the GPU planner: the live spatial layers
+    /// (spec 52) stay adjustment layers, filtered per frame on the GPU.
     pub(crate) fn display_doc_gpu(&self) -> std::borrow::Cow<'_, Document> {
         let live = Self::live_spatial(&self.doc.root);
-        self.display_doc_with(live.as_deref())
+        self.display_doc_with(&live)
     }
 
-    fn display_doc_with(&self, live: Option<&str>) -> std::borrow::Cow<'_, Document> {
+    fn display_doc_with(&self, live: &[onepaint_doc::NodeId]) -> std::borrow::Cow<'_, Document> {
         let anim = self.anim.enabled && total_slots(&self.doc.root) > 0;
         let spatial = Self::has_spatial_adjustments(&self.doc.root);
         if !anim && !spatial && !self.has_smart_filters() {

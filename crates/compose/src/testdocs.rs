@@ -421,11 +421,15 @@ pub fn with_relief(mut doc: Document, seed: u64) -> Document {
 
 /// `doc` with a spatial adjustment layer of a kind with a GPU pass dropped
 /// into its top level (spec 52).
-pub fn with_spatial(mut doc: Document, seed: u64) -> Document {
+pub fn with_spatial(doc: Document, seed: u64) -> Document {
+    with_spatial_n(doc, seed, 1)
+}
+
+/// [`with_spatial`] with `n` spatial layers (stacked ones from 2).
+pub fn with_spatial_n(mut doc: Document, seed: u64, n: usize) -> Document {
     use serde_json::json;
     let mut r = Rng::new(seed ^ 0x5ba7);
-    {
-        let i = 0;
+    for i in 0..n {
         let kinds =
             ["gaussian-blur", "motion-blur", "sharpen", "emboss", "mosaic", "ripple", "halftone", "crystallize", "line-art", "bloom"];
         let kind = kinds[r.below(kinds.len() as u32) as usize];

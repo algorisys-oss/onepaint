@@ -801,3 +801,69 @@ fn a_spatial_layer_in_a_group_matches_the_rendered_document() {
     let (e, at) = max_error(&rendered(&doc), None, &read(&device, &queue, &tex));
     assert!(e <= TOL, "error {e} at {at:?}");
 }
+
+/// Stacked spatial layers: the upper one's backdrop reads the lower one's
+/// filtered tiles, a stage later (spec 52 phase 3b).
+#[test]
+fn stacked_spatial_layers_match_the_rendered_document() {
+    use onepaint_compose::spatial::rendered;
+    use onepaint_compose::testdocs::with_spatial_n;
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let mut gc = GpuCompositor::new(&device, 64 << 20);
+    let (w, h) = (300, 300);
+    let tex = target(&device, w, h);
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
+    let mut ran = 0;
+    for seed in 0..8 {
+        let doc = with_spatial_n(random_doc(seed, w, h, false), seed, 2);
+        let Some(progs) = doc.bounds().tiles().map(|(tx, ty)| plan_tile(&doc, tx, ty, None)).collect::<Option<Vec<_>>>() else { continue };
+        ran += 1;
+        gc.run(&device, &queue, &progs, &view, [w, h]);
+        let gpu = read(&device, &queue, &tex);
+        let over = over_tolerance(&rendered(&doc), None, &gpu, 4e-3);
+        assert!(over as f64 <= (1e-3 * (w * h) as f64).ceil(), "seed {seed}: {over} px over");
+    }
+    assert!(ran >= 6, "{ran}");
+}
+
+/// Two stacked blurs over half-transparent paint: the upper one's backdrop
+/// fill reads the lower one's filtered tile. Fills of different stages had
+/// shared one buffer set, so the last stage's jobs ran for every fill and the
+/// upper layer came out empty (0.75 where 0.9375 is right).
+#[test]
+fn stacked_blurs_over_half_transparent_paint() {
+    use onepaint_compose::spatial::rendered;
+    use onepaint_doc::Adjustment;
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let (w, h) = (300, 300);
+    let tex = target(&device, w, h);
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
+    for (bg, alpha, r0, r1) in [(false, 0.5, 0.0, 0.0), (false, 0.5, 6.0, 6.0), (true, 1.0, 6.0, 6.0)] {
+        let mut doc = Document::new(w, h, bg.then_some(onepaint_color::Rgba::WHITE));
+        let mut paint = Layer::new("paint");
+        for y in 60..200 {
+            for x in 40..280 {
+                paint.pixels.set(x, y, [0.2 * alpha, 0.5 * alpha, 0.9 * alpha, alpha]);
+            }
+        }
+        doc.root.push(Node::Layer(paint));
+        for (i, r) in [r0, r1].into_iter().enumerate() {
+            let mut b = Layer::new(&format!("blur{i}"));
+            b.adjustment = Some(Box::new(Adjustment {
+                kind: "gaussian-blur".into(),
+                params: serde_json::from_value(serde_json::json!({"radius": r})).unwrap(),
+            }));
+            doc.root.push(Node::Layer(b));
+        }
+        let mut gc = GpuCompositor::new(&device, 64 << 20);
+        gc.run(&device, &queue, &programs(&doc, None), &view, [w, h]);
+        let (e, at) = max_error(&rendered(&doc), None, &read(&device, &queue, &tex));
+        assert!(e <= TOL, "bg {bg} alpha {alpha} radii {r0}/{r1}: error {e} at {at:?}");
+    }
+}

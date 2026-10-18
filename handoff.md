@@ -22,16 +22,17 @@ Done today, all pushed (newest last):
 - 8-bit tiles in 8-bit GPU atlases (spec 49).
 - Spec 52, spatial adjustment layers on the GPU: Gaussian/motion blur,
   sharpen, emboss, mosaic, ripple, halftone, crystallize, bloom, line art
-  (Sobel and XDoG), live when the layer is the document's only spatial
-  layer, at the top level or in isolated groups (`compose::spatial`,
-  `gpu::spatial` + `spatial.wgsl`, `Session::display_doc_gpu`).
+  (Sobel and XDoG), live at the top level or in isolated groups, stacked
+  too, up to three (3b: filtered tiles in their own texture, jobs staged by
+  depth; each pass of a submit got its own buffers, as fill passes had
+  shared one set and run the last pass's jobs)
+  (`compose::spatial`, `gpu::spatial` + `spatial.wgsl`,
+  `Session::display_doc_gpu`).
 
 Next (the user's order: recommended list, then robustness):
-1. Spec 52 3b: stacked spatial layers — filtered tiles in a texture of
-   their own, so the fill pass can read a lower layer's filtered tiles.
-2. Spec 52 whole-canvas kinds (radial/spin/tilt-shift/iris/field blur,
+1. Spec 52 whole-canvas kinds (radial/spin/tilt-shift/iris/field blur,
    twirl, pinch, polar, chromatic) — needs its own design.
-3. Robustness (photocraft list, `todo.md` §2.1): working-set checks,
+2. Robustness (photocraft list, `todo.md` §2.1): working-set checks,
    device-loss handling, a perf-budget gate.
 
 Open decisions for the user: workspace layout (happypaint's menu bar /
@@ -133,7 +134,8 @@ Items 1–5 from the earlier list; every step pushed as it landed.
 - Vector support: its scope, and when it comes relative to the rest.
 
 ## Gotchas
-- The disk is about 95% full (26 GB free on 2026-10-18). Run `cargo clean` if
+- The disk is about 96% full (19 GB free after a `cargo clean` on
+  2026-10-18; a full build takes ~17 GB). Run `cargo clean` if
   free space drops below 8 GB. RAM is tight: build with `-j 2`.
 - GPU tests and benches skip silently when no adapter is present. Check
   for the "skipping" line before trusting a green run.

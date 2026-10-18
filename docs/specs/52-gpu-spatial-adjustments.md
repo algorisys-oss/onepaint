@@ -5,7 +5,8 @@ Phase 1 built (2026-10-18): Gaussian blur, motion blur and sharpen, live on
 the GPU when the layer is the document's only spatial layer and sits at the
 top level. Phase 2a: emboss, mosaic, ripple, halftone and crystallize too
 (`kind_px` in `spatial.wgsl`, a port of `stylize.rs` / `distort.rs`).
-Everything else renders on the CPU as before.
+Phases 2b, 3a and 3b: bloom and line art, isolated groups, and stacked
+layers. Everything else renders on the CPU as before.
 
 ## Why
 A spatial adjustment layer (blur, sharpen, distort…) is rendered on the
@@ -42,13 +43,14 @@ backdrop.
   slot; the composite reads that slot like a layer's pixels (mask, vector
   mask, density, Blend If, mode, opacity).
 - **Engine:** `Session::plan` uses `display_doc_gpu`, which leaves the live
-  layer (`live_spatial`: the document's only spatial layer, top level, a
-  GPU kind, reach within a tile) unrendered, so a stroke below it redraws
+  layers (`live_spatial`: every spatial layer, when each is top level or in
+  isolated groups, of a GPU kind, with a reach within a tile, at most
+  three of them (planning grows ninefold per stacked layer); otherwise
+  none, so a stroke never shows a live layer over a stale one) unrendered, so a stroke below it redraws
   it every frame. Tiles that fall back to the CPU, and every other spatial
-  layer, use the rendered document as before. Dirty rects grow by a
+  layers, use the rendered document as before. Dirty rects grow by a
   spatial layer's reach, as for feathered masks.
-- **Limits:** stacked spatial layers and ones in Pass Through groups
-  render on the CPU; a program with a spatial layer runs unsplit (the fill pass
+- **Limits:** spatial layers in Pass Through groups render on the CPU; a program with a spatial layer runs unsplit (the fill pass
   can't read filtered tiles); reduced levels scale the radius and round the
   region to level pixels.
 - `ONEPAINT_BLUR=12` adds a blur layer for screenshots.
@@ -77,9 +79,18 @@ backdrop.
      group's children below it, planned the same way. In a Pass Through
      group the backdrop reaches outside the group; those tiles stay on the
      CPU.
-   - 3b stacked spatial layers: the filtered tiles need a texture of their
-     own, so the fill pass can read a lower layer's filtered tiles while
-     it writes the upper layer's backdrop.
+   - 3b ✓ stacked spatial layers. Filtered tiles live in a texture array
+     of their own (`cache_layers / 2` slots, binding 17), so a fill can
+     read a lower layer's filtered tiles while it writes an upper layer's
+     backdrop to the cache. `plan_spatial` stages the jobs by depth (1 +
+     the deepest spatial layer in a backdrop); each stage's fills run, then
+     its filter passes, then the next stage. A backdrop tile with a spatial
+     layer of its own nests its `SpatialSrc`, so two stacked blurs on a
+     tile plan the lower one's 3 × 3 neighbourhood for each of the upper
+     one's tiles in reach (shared through the segment and filtered keys).
+     Each pass of a submit now has its own params/jobs/ops buffers: the
+     fill passes had shared one set, written by `queue.write_buffer` before
+     the submit, so every fill ran the last stage's jobs.
 
 ## Acceptance criteria
 1. Programs with `Op::Spatial` run on the CPU equal the oracle composite

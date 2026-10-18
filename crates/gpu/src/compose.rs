@@ -261,8 +261,11 @@ pub struct GpuCompositor {
     pipelines: [wgpu::ComputePipeline; 2],
     layout: wgpu::BindGroupLayout,
     km: wgpu::Buffer,
-    /// Params, jobs and ops buffers for the fill pass and the composite pass.
-    bufs: [PassBuffers; 2],
+    /// Params, jobs and ops buffers, one set per pass of a submit: each is
+    /// written before the submit, so passes can't share one (spec 52's
+    /// staged fills made that visible). `pass` counts the submit's passes.
+    bufs: Vec<PassBuffers>,
+    pass: usize,
     dummy: wgpu::TextureView,
     /// Atlases of either format: `Rgba16Float`, or `Rgba8Unorm` for 8-bit
     /// documents' tiles (half the memory; their bytes exactly).
@@ -305,6 +308,11 @@ pub struct GpuCompositor {
     /// filtered tiles are, by their source's key.
     spatial: crate::spatial::SpatialPass,
     spatial_slots: HashMap<u64, u32>,
+    /// Filtered tiles: written by the spatial pass, read by fills and composites.
+    filtered: Option<(wgpu::Texture, wgpu::TextureView, Vec<wgpu::TextureView>)>,
+    filtered_layers: u32,
+    filtered_slots: HashMap<u64, CacheSlot>,
+    filtered_free: Vec<u32>,
     /// Filtered tiles computed since creation (for tests and stats).
     pub filters: u64,
 }
@@ -396,6 +404,16 @@ impl GpuCompositor {
             },
             count: None,
         });
+        entries.push(wgpu::BindGroupLayoutEntry {
+            binding: 17,
+            visibility: cs,
+            ty: wgpu::BindingType::Texture {
+                multisampled: false,
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D2Array,
+            },
+            count: None,
+        });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("compose"), entries: &entries });
         let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("compose"),
@@ -474,7 +492,8 @@ impl GpuCompositor {
             pipelines,
             layout,
             km,
-            bufs: [PassBuffers::new(device), PassBuffers::new(device)],
+            bufs: Vec::new(),
+            pass: 0,
             dummy,
             atlases: Vec::new(),
             per_atlas,
@@ -510,6 +529,10 @@ impl GpuCompositor {
             fills: 0,
             spatial: crate::spatial::SpatialPass::new(device),
             spatial_slots: HashMap::new(),
+            filtered: None,
+            filtered_layers: (cache_layers / 2).clamp(16, device.limits().max_texture_array_layers),
+            filtered_slots: HashMap::new(),
+            filtered_free: Vec::new(),
             filters: 0,
         }
     }
@@ -785,28 +808,34 @@ impl GpuCompositor {
         }
         let mut start = 0;
         let mut need: HashSet<usize> = HashSet::new();
-        // Cache slots this batch's spatial layers take: their backdrops and result (spec 52).
-        let spatial_need = |p: &TileProgram| {
-            onepaint_compose::program::op_contents(&p.ops).filter_map(|c| c.spatial.as_ref()).map(|s| s.backdrop.len() + 1).sum::<usize>()
-        };
-        let mut cache_used = 0;
+        // Slots this batch's spatial layers take (spec 52): their backdrops in
+        // the cache, stacked ones' too, and their results in the filtered tiles.
+        fn spatial_need(ops: &[Op]) -> (usize, usize) {
+            onepaint_compose::program::op_contents(ops).filter_map(|c| c.spatial.as_ref()).fold((0, 0), |(c, f), s| {
+                let (bc, bf) = s.backdrop.iter().map(|(_, p)| spatial_need(&p.ops)).fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
+                (c + s.backdrop.len() + bc, f + 1 + bf)
+            })
+        }
+        let (mut cache_used, mut filtered_used) = (0, 0);
         for (i, p) in order.iter().enumerate() {
             let mut fresh: Vec<usize> = self.batch_sources(p).map(key).filter(|k| !need.contains(k)).collect();
             fresh.sort_unstable();
             fresh.dedup();
-            let more = spatial_need(p);
+            let (more, more_f) = spatial_need(&p.ops);
             let full = need.len() + fresh.len() > cap
                 || i - start >= MAX_JOBS
                 || (self.split_cache && i - start >= cache_cap)
-                || (more > 0 && cache_used + more > self.cache_layers as usize);
+                || (more > 0 && cache_used + more > self.cache_layers as usize)
+                || (more_f > 0 && filtered_used + more_f > self.filtered_layers as usize);
             if i > start && full {
                 self.flush(device, queue, &order[start..i], target, sheets);
                 start = i;
                 need.clear();
-                cache_used = 0;
+                (cache_used, filtered_used) = (0, 0);
             }
             need.extend(fresh);
             cache_used += more;
+            filtered_used += more_f;
         }
         if start < order.len() {
             self.flush(device, queue, &order[start..], target, sheets);
@@ -919,64 +948,126 @@ impl GpuCompositor {
         (fills, main)
     }
 
-    /// The filter jobs for the spatial layers `batch` draws (spec 52); the
-    /// backdrop images they need go into `fills`.
-    fn plan_spatial<'a>(
-        &mut self,
-        device: &wgpu::Device,
-        batch: &[&'a TileProgram],
-        fills: &mut Vec<Work<'a>>,
-    ) -> Vec<crate::spatial::Job<'a>> {
+    /// The filter jobs for the spatial layers `batch` draws (spec 52), in
+    /// stages: a stage's backdrop fills, then its filters. A layer stacked on
+    /// another comes a stage later, as its backdrop reads the lower one's
+    /// filtered tiles.
+    fn plan_spatial<'a>(&mut self, device: &wgpu::Device, batch: &[&'a TileProgram]) -> Vec<(Vec<Work<'a>>, Vec<crate::spatial::Job<'a>>)> {
+        use onepaint_compose::program::op_contents;
+        use onepaint_compose::spatial::SpatialSrc;
         self.spatial_slots.clear();
-        let mut jobs = Vec::new();
-        let edge = (TILE as u32) >> self.level;
-        for &p in batch {
-            for c in onepaint_compose::program::op_contents(&p.ops) {
+        // Every source the batch reads, with its stage (1 + its backdrops' deepest).
+        fn walk<'a>(ops: &'a [Op], depth: &mut HashMap<u64, usize>, out: &mut Vec<&'a SpatialSrc>) -> usize {
+            let mut deepest = 0;
+            for c in op_contents(ops) {
                 let Some(s) = c.spatial.as_deref() else { continue };
-                if self.spatial_slots.contains_key(&s.key) {
-                    continue;
-                }
-                self.ensure_cache(device);
-                let reads: Vec<Op> = Vec::new();
-                let Some((out, fresh)) = self.cache_slot_key(s.key, &reads) else {
-                    log::error!("compose cache full; a spatial layer at {},{} skipped", s.tx, s.ty);
-                    continue;
-                };
-                self.spatial_slots.insert(s.key, out);
-                if !fresh {
-                    continue;
-                }
-                let gx = s.backdrop.iter().map(|b| b.0.0).min().unwrap_or(s.tx);
-                let gy = s.backdrop.iter().map(|b| b.0.1).min().unwrap_or(s.ty);
-                let cols = (s.backdrop.iter().map(|b| b.0.0).max().unwrap_or(s.tx) - gx + 1) as usize;
-                let rows = (s.backdrop.iter().map(|b| b.0.1).max().unwrap_or(s.ty) - gy + 1) as usize;
-                let mut grid = vec![crate::spatial::NONE; cols * rows];
-                for ((x, y), bp) in &s.backdrop {
-                    let key = onepaint_compose::program::segment_key(&bp.ops, bp.origin());
-                    let Some((idx, fresh)) = self.cache_slot_key(key, &bp.ops) else { continue };
-                    if fresh {
-                        fills.push(Work {
-                            origin: [*x as u32 * edge, *y as u32 * edge],
-                            ops: bp.ops.iter().collect(),
-                            over: None,
-                            init: NONE,
-                            dest: idx,
-                        });
+                let d = match depth.get(&s.key) {
+                    Some(&d) => d,
+                    None => {
+                        let d = 1 + s.backdrop.iter().map(|(_, p)| walk(&p.ops, depth, out)).max().unwrap_or(0);
+                        depth.insert(s.key, d);
+                        out.push(s);
+                        d
                     }
-                    grid[(*y - gy) as usize * cols + (*x - gx) as usize] = idx;
-                }
-                jobs.push(crate::spatial::Job { src: s, out, grid });
+                };
+                deepest = deepest.max(d);
             }
+            deepest
         }
-        jobs
+        let mut depth = HashMap::new();
+        let mut sources = Vec::new();
+        for &p in batch {
+            walk(&p.ops, &mut depth, &mut sources);
+        }
+        let stages = sources.iter().map(|s| depth[&s.key]).max().unwrap_or(0);
+        let mut out: Vec<(Vec<Work<'a>>, Vec<crate::spatial::Job<'a>>)> = (0..stages).map(|_| (Vec::new(), Vec::new())).collect();
+        let edge = (TILE as u32) >> self.level;
+        for s in sources {
+            self.ensure_cache(device);
+            self.ensure_filtered(device);
+            let sources: Vec<Weak<Tile>> = s.backdrop.iter().flat_map(|(_, p)| op_sources(&p.ops)).map(Arc::downgrade).collect();
+            let Some((idx, fresh)) = self.filtered_slot(s.key, sources) else {
+                log::error!("compose filtered images full; a spatial layer at {},{} skipped", s.tx, s.ty);
+                continue;
+            };
+            self.spatial_slots.insert(s.key, idx);
+            if !fresh {
+                continue;
+            }
+            let (fills, jobs) = &mut out[depth[&s.key] - 1];
+            let gx = s.backdrop.iter().map(|b| b.0.0).min().unwrap_or(s.tx);
+            let gy = s.backdrop.iter().map(|b| b.0.1).min().unwrap_or(s.ty);
+            let cols = (s.backdrop.iter().map(|b| b.0.0).max().unwrap_or(s.tx) - gx + 1) as usize;
+            let rows = (s.backdrop.iter().map(|b| b.0.1).max().unwrap_or(s.ty) - gy + 1) as usize;
+            let mut grid = vec![crate::spatial::NONE; cols * rows];
+            for ((x, y), bp) in &s.backdrop {
+                let key = onepaint_compose::program::segment_key(&bp.ops, bp.origin());
+                let Some((slot, fresh)) = self.cache_slot_key(key, &bp.ops) else { continue };
+                if fresh {
+                    fills.push(Work {
+                        origin: [*x as u32 * edge, *y as u32 * edge],
+                        ops: bp.ops.iter().collect(),
+                        over: None,
+                        init: NONE,
+                        dest: slot,
+                    });
+                }
+                grid[(*y - gy) as usize * cols + (*x - gx) as usize] = slot;
+            }
+            jobs.push(crate::spatial::Job { src: s, out: idx, grid });
+        }
+        out
+    }
+
+    fn ensure_filtered(&mut self, device: &wgpu::Device) {
+        if self.filtered.is_some() {
+            return;
+        }
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("compose filtered tiles"),
+            size: wgpu::Extent3d { width: TILE as u32, height: TILE as u32, depth_or_array_layers: self.filtered_layers },
+            mip_level_count: crate::mip::LEVELS,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+            view_formats: &[],
+        });
+        let read =
+            tex.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() });
+        let write = (0..crate::mip::LEVELS).map(|l| crate::mip::level_view(&tex, l)).collect();
+        self.filtered = Some((tex, read, write));
+        self.filtered_free = (0..self.filtered_layers).rev().collect();
+    }
+
+    /// The slot for a filtered tile keyed `key` (at this level): `(slot, new)`.
+    fn filtered_slot(&mut self, key: u64, sources: Vec<Weak<Tile>>) -> Option<(u32, bool)> {
+        let clock = self.clock;
+        let key = self.level_key(key);
+        if let Some(c) = self.filtered_slots.get_mut(&key) {
+            c.used = clock;
+            return Some((c.idx, false));
+        }
+        let idx = match self.filtered_free.pop() {
+            Some(i) => i,
+            None => {
+                let (&k, c) = self.filtered_slots.iter().filter(|(_, c)| c.used != clock).min_by_key(|(_, c)| c.used)?;
+                let idx = c.idx;
+                self.filtered_slots.remove(&k);
+                idx
+            }
+        };
+        self.filtered_slots.insert(key, CacheSlot { idx, _sources: sources, used: clock });
+        Some((idx, true))
     }
 
     fn flush(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, batch: &[&TileProgram], target: &wgpu::TextureView, sheets: &Sheets) {
         self.clock += 1;
-        let (mut fills, main) = self.plan_batch(device, batch);
-        let jobs = self.plan_spatial(device, batch, &mut fills);
+        let (fills, main) = self.plan_batch(device, batch);
+        let stages = self.plan_spatial(device, batch);
         self.fills += fills.len() as u64;
-        for w in fills.iter().chain(&main) {
+        let stage_fills = stages.iter().flat_map(|(f, _)| f.iter());
+        for w in fills.iter().chain(&main).chain(stage_fills) {
             for t in w.ops.iter().flat_map(|op| op_sources(std::slice::from_ref(*op))) {
                 if self.resident(device, queue, t).is_none() {
                     log::error!("compose atlas full; a tile at {:?} skipped", w.origin);
@@ -985,19 +1076,24 @@ impl GpuCompositor {
         }
         self.ensure_paper(device, queue, main.iter().flat_map(|w| w.ops.iter()));
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("compose") });
-        self.mip_sources(device, &mut enc, fills.iter().chain(&main));
+        self.mip_sources(device, &mut enc, fills.iter().chain(&main).chain(stages.iter().flat_map(|(f, _)| f.iter())));
         // Fills and composites can't share a dispatch: one writes the cache, the other reads it.
         self.dispatch(device, queue, &mut enc, &fills, sheets, Some(target), true);
-        // The spatial layers' filters read the backdrop fills; the composite reads them.
-        if let Some((_, read, write)) = &self.cache {
-            for job in &jobs {
-                self.spatial.record(device, &mut enc, job, self.level, read, &write[self.level as usize]);
+        // Spatial layers stage by stage (spec 52): their backdrops (which may
+        // read a lower layer's filtered tiles), then their filters.
+        for (fills, jobs) in &stages {
+            self.dispatch(device, queue, &mut enc, fills, sheets, Some(target), true);
+            if let (Some((_, read, _)), Some((_, _, write))) = (&self.cache, &self.filtered) {
+                for job in jobs {
+                    self.spatial.record(device, &mut enc, job, self.level, read, &write[self.level as usize]);
+                }
+                self.filters += jobs.len() as u64;
             }
-            self.filters += jobs.len() as u64;
         }
         self.dispatch(device, queue, &mut enc, &main, sheets, Some(target), false);
         // Submit per batch: the next batch's uploads may evict slots this one reads.
         queue.submit([enc.finish()]);
+        self.pass = 0;
     }
 
     /// Upload the paper grain the batch's paper op reads, if it changed (spec 43).
@@ -1139,8 +1235,13 @@ impl GpuCompositor {
         target: Option<&wgpu::TextureView>,
         fill: bool,
     ) -> wgpu::BindGroup {
-        // Each pass has its own buffers: both are written before the submit.
-        let b = &mut self.bufs[usize::from(!fill)];
+        // Each pass has its own buffers: all are written before the submit.
+        let n = self.pass;
+        self.pass += 1;
+        if self.bufs.len() <= n {
+            self.bufs.push(PassBuffers::new(device));
+        }
+        let b = &mut self.bufs[n];
         let jobs_bytes: &[u8] = bytemuck::cast_slice(jobs);
         let ops_bytes: &[u8] = bytemuck::cast_slice(ops);
         if b.jobs.size() < jobs_bytes.len() as u64 {
@@ -1157,7 +1258,7 @@ impl GpuCompositor {
         queue.write_buffer(&b.ops, 0, ops_bytes);
         queue.write_buffer(&b.adj, 0, adj_bytes);
         queue.write_buffer(&b.params, 0, bytemuck::bytes_of(&params));
-        let b = &self.bufs[usize::from(!fill)];
+        let b = &self.bufs[n];
         let mut entries = vec![
             wgpu::BindGroupEntry { binding: 0, resource: b.params.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 1, resource: self.km.as_entire_binding() },
@@ -1179,6 +1280,8 @@ impl GpuCompositor {
         entries.push(wgpu::BindGroupEntry { binding: 15, resource: b.adj.as_entire_binding() });
         let paper = self.paper.as_ref().map_or(&self.paper_dummy, |(_, v)| v);
         entries.push(wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(paper) });
+        let filtered = self.filtered.as_ref().map_or(&self.dummy, |(_, r, _)| r);
+        entries.push(wgpu::BindGroupEntry { binding: 17, resource: wgpu::BindingResource::TextureView(filtered) });
         device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("compose"), layout: &self.layout, entries: &entries })
     }
 
@@ -1217,6 +1320,7 @@ impl GpuCompositor {
             // Fills write cache slots only, but relief clamps its taps to the document.
             self.dispatch(device, queue, &mut enc, &fills, sheets, None, true);
             queue.submit([enc.finish()]);
+            self.pass = 0;
         }
     }
 

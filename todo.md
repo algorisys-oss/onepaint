@@ -129,11 +129,11 @@ an item changes there, change it here too.
   - [x] Screentone (not the sand shape) (spec 46)
   - [x] Built-in pattern fill layers (spec 46)
   - [ ] Imported pattern fills and sand screentone
-  - [~] Spatial adjustment layers (spec 52): a lone Gaussian blur, motion
-        blur, sharpen, emboss, mosaic, ripple, halftone, crystallize, bloom
-        or line art layer runs live on the GPU, at the top level or in an
-        isolated group; other kinds, stacked ones and ones in Pass Through
-        groups still render on the CPU
+  - [~] Spatial adjustment layers (spec 52): Gaussian blur, motion blur,
+        sharpen, emboss, mosaic, ripple, halftone, crystallize, bloom and
+        line art layers run live on the GPU, stacked too, at the top level or
+        in isolated groups; other kinds (whole-canvas ones, oil paint, wind,
+        glitch) and ones in Pass Through groups still render on the CPU
   - [x] Relief lighting (impasto height) (spec 45)
   - [x] Paper shading (spec 43)
   - [x] Partial panel clips (spec 44)
