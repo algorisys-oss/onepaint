@@ -165,6 +165,10 @@ const MAX_LIVE_SPATIAL: usize = 3;
 /// 8 bytes a pixel (128 MiB at 4096²).
 const MAX_WHOLE_PX: u64 = 4096 * 4096;
 
+/// The Blur Gallery also keeps five half-size f32 images (16 MiB each at
+/// 2048²), so it runs live in smaller documents.
+const MAX_GALLERY_PX: u64 = 2048 * 2048;
+
 /// Live spatial adjustment layers (blur, sharpen…): rendered as the filtered
 /// backdrop of their container, cached by a fingerprint of everything below.
 #[derive(Default)]
@@ -230,13 +234,18 @@ impl Session {
         }
         let mut found = Vec::new();
         all(nodes, true, &mut found);
-        let whole_ok = found.len() == 1 && u64::from(doc.width) * u64::from(doc.height) <= MAX_WHOLE_PX;
+        let px = u64::from(doc.width) * u64::from(doc.height);
+        let whole_ok = found.len() == 1 && px <= MAX_WHOLE_PX;
         let live = |(l, isolated): &(&onepaint_doc::Layer, bool)| {
             let Some(kind) = onepaint_compose::spatial::spatial_kind(l) else { return false };
             let params = l.adjustment.as_ref().map(|a| a.params.clone()).unwrap_or_default();
             let r = onepaint_filters::reach(kind, &params);
             if r >= onepaint_filters::GLOBAL_REACH {
-                return *isolated && whole_ok && onepaint_compose::spatial::whole_supported(kind, &params);
+                let gallery = matches!(kind, Kind::TiltShift | Kind::IrisBlur | Kind::FieldBlur);
+                return *isolated
+                    && whole_ok
+                    && (!gallery || px <= MAX_GALLERY_PX)
+                    && onepaint_compose::spatial::whole_supported(kind, &params);
             }
             *isolated && onepaint_compose::spatial::gpu_supported(kind, &params) && r <= onepaint_raster::TILE
         };

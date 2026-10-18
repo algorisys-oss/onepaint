@@ -132,9 +132,9 @@ an item changes there, change it here too.
   - [~] Spatial adjustment layers (spec 52): Gaussian blur, motion blur,
         sharpen, emboss, mosaic, ripple, halftone, crystallize, bloom and
         line art layers run live on the GPU, stacked too, at the top level or
-        in isolated groups; a lone twirl, pinch, polar or chromatic
-        aberration layer too (spec 53). Radial, spin and the Blur Gallery
-        (spec 53 phases 2–3), oil paint, wind, glitch, light rays and ones in
+        in isolated groups; a lone twirl, pinch, polar, chromatic
+        aberration, radial, spin, tilt-shift, iris or field blur layer too
+        (spec 53; heavy ones wait mid-stroke in large documents). Oil paint, wind, glitch, light rays and ones in
         Pass Through groups still render on the CPU
   - [x] Relief lighting (impasto height) (spec 45)
   - [x] Paper shading (spec 43)

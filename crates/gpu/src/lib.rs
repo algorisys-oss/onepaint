@@ -334,6 +334,14 @@ impl CanvasGpu {
         self.texture.as_ref().map(|t| t.sheets)
     }
 
+    /// Whether a stroke is in progress (spec 53: a heavy whole-canvas
+    /// filter keeps its image until the stroke ends).
+    pub fn set_interactive(&mut self, on: bool) {
+        if let Some(c) = &mut self.compositor {
+            c.set_interactive(on);
+        }
+    }
+
     /// Run tile programs straight into the composite texture at `level`
     /// (spec 39), then downsample those tiles into the coarser levels.
     pub fn composite(

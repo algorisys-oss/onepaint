@@ -467,11 +467,23 @@ pub fn with_spatial_n(mut doc: Document, seed: u64, n: usize) -> Document {
 }
 
 /// [`with_spatial`] for whole-canvas kinds (spec 53): one twirl, pinch,
-/// polar or chromatic aberration layer.
+/// polar, chromatic aberration, radial, spin, tilt-shift, iris or field
+/// blur layer.
 pub fn with_whole_spatial(mut doc: Document, seed: u64) -> Document {
     use serde_json::json;
     let mut r = Rng::new(seed ^ 0x3b01);
-    let kinds = ["twirl", "pinch", "polar-coordinates", "chromatic-aberration"];
+    let kinds = [
+        "twirl",
+        "pinch",
+        "polar-coordinates",
+        "chromatic-aberration",
+        "radial-blur",
+        "spin-blur",
+        "tilt-shift",
+        "iris-blur",
+        "field-blur",
+    ];
+    let bokeh = if r.chance(0.5) { r.f() } else { 0.0 };
     let kind = kinds[r.below(kinds.len() as u32) as usize];
     let (cx, cy) = (0.2 + r.f() * 0.6, 0.2 + r.f() * 0.6);
     let params = match kind {
@@ -480,6 +492,26 @@ pub fn with_whole_spatial(mut doc: Document, seed: u64) -> Document {
         "polar-coordinates" => {
             let mode = if r.chance(0.5) { "to-polar" } else { "to-rect" };
             json!({"centerX": cx, "centerY": cy, "polarMode": mode})
+        }
+        "radial-blur" => {
+            let mode = if r.chance(0.5) { "zoom" } else { "spin" };
+            json!({"centerX": cx, "centerY": cy, "radialMode": mode, "amount": r.f()})
+        }
+        "spin-blur" => json!({
+            "centerX": cx, "centerY": cy, "angle": r.f() * 360.0, "extent": 0.2 + r.f() * 0.8,
+            "aspect": 0.4 + r.f() * 1.2, "focus": r.f() * 0.9, "spin": r.f() * 90.0
+        }),
+        "tilt-shift" => json!({
+            "centerX": cx, "centerY": cy, "angle": r.f() * 180.0, "focusSize": r.f() * 0.3,
+            "falloffSize": r.f() * 0.4, "radius": 1.0 + r.f() * 30.0, "bokeh": bokeh
+        }),
+        "iris-blur" => json!({
+            "centerX": cx, "centerY": cy, "angle": r.f() * 180.0, "extent": 0.2 + r.f() * 0.8,
+            "aspect": 0.3 + r.f(), "focus": r.f() * 0.9, "radius": 1.0 + r.f() * 30.0, "bokeh": bokeh
+        }),
+        "field-blur" => {
+            let pins: Vec<_> = (0..1 + r.below(4)).map(|_| json!({"x": r.f(), "y": r.f(), "blur": r.f() * 30.0})).collect();
+            json!({"pins": pins, "bokeh": bokeh, "bokehRange": 0.5 + r.f() * 0.4})
         }
         _ => json!({"amount": r.f() * 2.0}),
     };

@@ -868,8 +868,8 @@ fn stacked_blurs_over_half_transparent_paint() {
     }
 }
 
-/// Spec 53: a whole-canvas layer (twirl, pinch, polar, chromatic aberration)
-/// filtered over the whole backdrop matches the rendered document. GPU trig
+/// Spec 53: a whole-canvas layer (twirl, pinch, polar, chromatic
+/// aberration, radial and spin blur) filtered over the whole backdrop matches the rendered document. GPU trig
 /// moves a twirl's taps by a hundredth of a pixel, which shows at hard
 /// edges, and pinch is singular at its centre: the stepped count, as for
 /// spec 52's cell kinds.
@@ -922,6 +922,16 @@ fn whole_canvas_kinds_over_stripes_match_the_oracle() {
         ("polar-coordinates", json!({"centerX": 0.5, "centerY": 0.5, "polarMode": "to-polar"})),
         ("polar-coordinates", json!({"centerX": 0.45, "centerY": 0.6, "polarMode": "to-rect"})),
         ("chromatic-aberration", json!({"amount": 1.5})),
+        ("radial-blur", json!({"centerX": 0.4, "centerY": 0.5, "radialMode": "zoom", "amount": 0.6})),
+        ("radial-blur", json!({"centerX": 0.6, "centerY": 0.45, "radialMode": "spin", "amount": 0.8})),
+        ("spin-blur", json!({"centerX": 0.5, "centerY": 0.5, "angle": 30.0, "extent": 0.7, "aspect": 0.6, "focus": 0.3, "spin": 60.0})),
+        ("tilt-shift", json!({"centerX": 0.5, "centerY": 0.45, "angle": 20.0, "focusSize": 0.1, "falloffSize": 0.2, "radius": 18.0})),
+        ("tilt-shift", json!({"centerX": 0.5, "centerY": 0.5, "angle": 0.0, "focusSize": 0.05, "radius": 24.0, "bokeh": 0.8})),
+        ("iris-blur", json!({"centerX": 0.4, "centerY": 0.5, "extent": 0.6, "aspect": 0.7, "angle": 30.0, "focus": 0.4, "radius": 20.0})),
+        (
+            "field-blur",
+            json!({"pins": [{"x": 0.2, "y": 0.8, "blur": 0.0}, {"x": 0.7, "y": 0.2, "blur": 25.0}, {"x": 0.9, "y": 0.9, "blur": 10.0}]}),
+        ),
     ];
     for (kind, params) in cases {
         let mut doc = Document::new(w, h, None);
@@ -943,5 +953,54 @@ fn whole_canvas_kinds_over_stripes_match_the_oracle() {
         gc.run(&device, &queue, &progs, &view, [w, h]);
         let over = over_tolerance(&rendered(&doc), None, &read(&device, &queue, &tex), TOL);
         assert!(over as f64 <= (1.5e-3 * (w * h) as f64).ceil(), "{kind} {params}: {over} px over");
+    }
+}
+
+/// Spec 53: mid-stroke, a whole-canvas filter too heavy for a frame keeps its
+/// image (as the CPU path keeps its stale render); light ones refilter.
+#[test]
+fn heavy_whole_canvas_filters_wait_for_the_stroke_to_end() {
+    use onepaint_compose::program::plan_tiles_cached;
+    use onepaint_compose::spatial::rendered;
+    use onepaint_doc::Adjustment;
+    use serde_json::json;
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let n = 1024u32;
+    let tex = target(&device, n, n);
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
+    for (kind, params, heavy) in [("radial-blur", json!({"amount": 0.4}), true), ("twirl", json!({"angle": 90.0}), false)] {
+        let mut gc = GpuCompositor::new(&device, 256 << 20);
+        let mut doc = Document::new(n, n, Some(onepaint_color::Rgba::WHITE));
+        let mut paint = Layer::new("paint");
+        paint.pixels.set(300, 300, [0.0, 0.0, 0.0, 1.0]);
+        let mut l = Layer::new("f");
+        l.adjustment = Some(Box::new(Adjustment { kind: kind.into(), params: serde_json::from_value(params).unwrap() }));
+        doc.root.extend([Node::Layer(paint), Node::Layer(l)]);
+        let keys: Vec<_> = doc.bounds().tiles().collect();
+        let run = |gc: &mut GpuCompositor, doc: &Document| {
+            let (progs, cpu) = plan_tiles_cached(doc, &keys, None, None, None);
+            assert!(cpu.is_empty());
+            gc.run(&device, &queue, &progs, &view, [n, n]);
+            read(&device, &queue, &tex)
+        };
+        run(&mut gc, &doc);
+        let before = gc.filters;
+        // A stroke paints a block under the filter.
+        let Node::Layer(p) = &mut doc.root[1] else { unreachable!() };
+        for y in 400..600 {
+            for x in 400..600 {
+                p.pixels.set(x, y, [0.1, 0.6, 0.2, 1.0]);
+            }
+        }
+        gc.set_interactive(true);
+        run(&mut gc, &doc);
+        assert_eq!(gc.filters - before, u64::from(!heavy), "{kind} mid-stroke");
+        gc.set_interactive(false);
+        let gpu = run(&mut gc, &doc);
+        let over = over_tolerance(&rendered(&doc), None, &gpu, TOL);
+        assert!(over as f64 <= (1.5e-3 * (n * n) as f64).ceil(), "{kind} after the stroke: {over} px over");
     }
 }

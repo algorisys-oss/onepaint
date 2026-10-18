@@ -685,7 +685,7 @@ fn plan_wholes(doc: &Document, ov: Option<&StrokeOverlay>, cache: Option<&PlanCa
                 .map(|&(x, y)| plan(&sub, x, y, ov, None, cache, &none).map(|p| ((x, y), Arc::new(p))))
                 .collect::<Option<Vec<_>>>()?;
             let nested = backdrop.iter().any(|(_, p)| op_contents(&p.ops).any(|c| c.spatial.is_some()));
-            (!nested).then(|| Arc::new(crate::spatial::Whole::new(kind, params, crate::doc_frame(doc), backdrop)))
+            (!nested).then(|| Arc::new(crate::spatial::Whole::new(l.id.clone(), kind, params, crate::doc_frame(doc), backdrop)))
         });
         out.0.insert(l.id.clone(), whole.flatten());
     }

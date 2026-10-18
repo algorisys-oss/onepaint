@@ -288,3 +288,19 @@ fn a_lone_twirl_layer_runs_live_on_the_gpu_path() {
     let (progs, _) = s.plan(&keys);
     assert!(!progs.iter().any(|p| op_contents(&p.ops).any(|c| c.spatial.is_some())));
 }
+
+/// Spec 53: the Blur Gallery keeps five half-size images, so it runs live in
+/// documents up to 2048²; past that it renders on the CPU.
+#[test]
+fn tilt_shift_runs_live_only_in_documents_up_to_2048_square() {
+    use onepaint_compose::program::op_contents;
+    for (w, h, live) in [(600, 400, true), (2100, 2100, false)] {
+        let mut s = Session::new(w, h, Some(onepaint_color::Rgba::WHITE));
+        let p = Params { radius: Some(12.0), focus_size: Some(0.1), ..Default::default() };
+        s.execute(Command::AddAdjustmentLayer { kind: "tilt-shift".into(), params: p }).unwrap();
+        let keys: Vec<_> = s.doc().bounds().tiles().take(4).collect();
+        let (progs, _) = s.plan(&keys);
+        let spatial = progs.iter().any(|p| op_contents(&p.ops).any(|c| c.spatial.is_some()));
+        assert_eq!(spatial, live, "{w}×{h}");
+    }
+}

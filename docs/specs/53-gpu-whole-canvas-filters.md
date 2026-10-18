@@ -1,8 +1,9 @@
 # 53: Whole-canvas filter layers on the GPU
 
 ## Status
-Phase 1 built (2026-10-19): twirl, pinch, polar coordinates and chromatic
-aberration run live on the GPU. Follows spec 52, whose tile path can't take
+Phases 1–3 built (2026-10-19): twirl, pinch, polar coordinates, chromatic
+aberration, radial and spin blur, and the Blur Gallery (tilt-shift, iris,
+field) run live on the GPU. Follows spec 52, whose tile path can't take
 these kinds.
 
 ## Why
@@ -27,19 +28,33 @@ filtered image** that every tile's composite reads.
   layer first (`plan_wholes`, by layer id) and every tile shares one
   `Arc<Whole>`: the backdrop programs, kind, params, frame and a key over
   the backdrops' segment keys. Planning it lazily from inside the parallel
-  tile loop could deadlock under work-stealing, hence the pass of its own. The CPU interpreter filters
-  the whole backdrop once (`OnceLock`) and each tile reads its part.
+  tile loop could deadlock under work-stealing, hence the pass of its own.
+  The CPU interpreter filters the whole backdrop once (`OnceLock`) and each
+  tile reads its part.
 - **GPU** (`gpu::whole`, `whole.wgsl`), before the frame's batches, when
   the layer's key changed at this level:
-  1. Fill the backdrop tiles into segment cache slots; unchanged tiles are
-     cache hits, so a stroke refills only its own.
-  2. One pass over the document reads them through a slot grid (no
-     backdrop image, no copies) and writes the filtered image.
+  1. The backdrop tiles whose segment changed fill segment cache slots, in
+     chunks the cache holds, and are copied into the **backdrop image**
+     (the image remembers each tile's segment key, so a stroke refills and
+     copies only its own tiles).
+  2. One pass over the backdrop image writes the filtered image; the Blur
+     Gallery runs its half-resolution passes first (five `Rgba32Float`
+     images at half size: two scratch, three levels).
   3. Composites read the filtered image at the tile's offset (binding 18,
      `F_SPATIAL | F_WHOLE`).
-  The filtered image is `Rgba16Float` at the level's size and persists
-  across frames, so a frame with no change below the layer costs nothing
-  extra. The backdrop must fit half the cache (256 tiles at 4096²).
+  Both images are `Rgba16Float` at the level's size and persist across
+  frames, so a frame with no change below the layer costs nothing extra.
+  (A first version read the backdrop tiles straight from their cache slots
+  through a slot grid; it needed every tile resident at once, which a
+  device with 256 array layers can't hold at 4096².)
+- **Mid-stroke:** a refilter costing more than `INTERACTIVE_READS` texel
+  reads (about 8 ms on the integrated GPU it was measured on) keeps the
+  layer's image until the stroke ends, as the CPU path keeps its stale
+  render; the app says when a stroke is in progress
+  (`GpuCompositor::set_interactive`). Measured per refilter: twirl 4096²
+  12.5 ms; radial blur 4096² 173 ms; tilt-shift 2048² 56 ms, with bokeh
+  111 ms. So the maps stay live mid-stroke; the many-tap blurs wait in
+  large documents.
 - **Single tiles:** `plan_tile` leaves a whole-canvas layer to the CPU; it
   is planned once per call in `plan_tiles_cached` (before the tiles, so
   parallel tiles never wait on one another).
@@ -50,21 +65,24 @@ filtered image** that every tile's composite reads.
   `filters::tex` exactly: bilinear by hand with clamp-to-edge, no sampler.
   Glitch (`sin` hashes, divergence 17), light rays and lightning stay on the
   CPU.
-- **Levels:** above level 0 the images are the level's size; positions are
+- **Levels:** above level 0 the image is the level's size, rounded down as
+  the mips and the target are (rounding up let clamped taps read an edge
+  texel half off the document: polar's corners at level 3); positions are
   fractions of the document, so they carry over, and pixel radii scale by
   2^−level, as in spec 52.
 - **Engine:** `live_spatial` admits a whole-canvas layer when it is the
   document's only spatial layer (no stacking yet), top level or in isolated
-  groups, and the document is at most `MAX_WHOLE_PX` (4096² px: two f16
-  images of 128 MiB each at level 0). Dirty rects for a whole-canvas layer
-  are the whole document, as they are now.
+  groups, and the document is at most `MAX_WHOLE_PX` (4096²: two f16
+  images of 128 MiB each at level 0), or for the Blur Gallery
+  `MAX_GALLERY_PX` (2048²: its half-size images add 80 MiB). Dirty rects for
+  a whole-canvas layer are the whole document, as they are now.
 
 ## Phases
-1. Planner memo and `Whole`; the CPU interpreter; program tests against the
-   oracle. GPU images and the twirl, pinch, polar and chromatic passes;
+1. ✓ Planner pass and `Whole`; the CPU interpreter; program tests against
+   the oracle. GPU images and the twirl, pinch, polar and chromatic passes;
    engine wiring.
-2. Radial and spin blur.
-3. The Blur Gallery.
+2. ✓ Radial and spin blur.
+3. ✓ The Blur Gallery.
 4. Stacking with other spatial layers (a whole layer over or under tile
    kinds), if it turns out to be worth it.
 

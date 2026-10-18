@@ -342,3 +342,59 @@ fn eight_bit_atlases_preview_like_f16_ones() {
         assert!(worst <= 4.0 / 255.0, "level {l}: {worst}");
     }
 }
+
+/// Spec 53 above level 0: a whole-canvas layer filters the level's image,
+/// with positions as fractions of the document, so it previews like the
+/// filtered document box-averaged. The backdrop is smooth: over hard edges
+/// a map that minifies (polar's radius) aliases at reduced size, which is
+/// the preview's nature, not its maths.
+#[test]
+fn whole_canvas_layers_preview_within_the_bound() {
+    use onepaint_compose::spatial::rendered;
+    use serde_json::json;
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let sheets = Sheets::single([300, 300]);
+    let tex = target(&device, &sheets);
+    let mut gc = GpuCompositor::new(&device, 64 << 20);
+    let cases = [
+        ("twirl", json!({"centerX": 0.4, "centerY": 0.55, "angle": 140.0, "extent": 0.9})),
+        ("pinch", json!({"centerX": 0.5, "centerY": 0.5, "amount": 0.6, "extent": 0.8})),
+        ("polar-coordinates", json!({"centerX": 0.5, "centerY": 0.5, "polarMode": "to-polar"})),
+        ("chromatic-aberration", json!({"amount": 1.5})),
+        ("radial-blur", json!({"centerX": 0.4, "centerY": 0.5, "radialMode": "zoom", "amount": 0.6})),
+        ("spin-blur", json!({"centerX": 0.5, "centerY": 0.5, "extent": 0.7, "aspect": 0.6, "focus": 0.3, "spin": 60.0})),
+        ("tilt-shift", json!({"centerX": 0.5, "centerY": 0.45, "angle": 20.0, "focusSize": 0.1, "falloffSize": 0.2, "radius": 18.0})),
+        ("iris-blur", json!({"centerX": 0.4, "centerY": 0.5, "extent": 0.6, "aspect": 0.7, "focus": 0.4, "radius": 20.0, "bokeh": 0.6})),
+        ("field-blur", json!({"pins": [{"x": 0.2, "y": 0.8, "blur": 0.0}, {"x": 0.7, "y": 0.2, "blur": 25.0}]})),
+    ];
+    for (kind, params) in cases {
+        let mut doc = Document::new(300, 300, None);
+        let mut paint = Layer::new("paint");
+        for y in 0..300 {
+            for x in 0..300 {
+                let (u, v) = (x as f32 / 300.0, y as f32 / 300.0);
+                let wave = 0.5 + 0.4 * (u * 9.0).sin() * (v * 7.0).cos();
+                paint.pixels.set(x, y, [wave, v, 0.5, 1.0]);
+            }
+        }
+        let mut l = Layer::new(kind);
+        l.adjustment = Some(Box::new(onepaint_doc::Adjustment { kind: kind.into(), params: serde_json::from_value(params).unwrap() }));
+        doc.root = vec![Node::Layer(paint), Node::Layer(l)];
+        let keys: Vec<_> = doc.bounds().tiles().collect();
+        let (progs, cpu) = onepaint_compose::program::plan_tiles_cached(&doc, &keys, None, None, None);
+        assert!(cpu.is_empty());
+        let want_doc = rendered(&doc);
+        for l in 1..=3 {
+            let (want, _) = oracle(&want_doc, None, l);
+            let got = run_at(&mut gc, &device, &queue, &tex, &sheets, &progs, l);
+            let mut errs: Vec<f32> = want.iter().zip(&got).map(|(a, b)| (a - b).abs()).collect();
+            errs.sort_by(f32::total_cmp);
+            let mean = errs.iter().sum::<f32>() / errs.len() as f32;
+            let p99 = errs[(errs.len() - 1) * 99 / 100];
+            assert!(mean <= 0.015 && p99 <= 0.15, "{kind} level {l}: mean {mean}, p99 {p99}");
+        }
+    }
+}

@@ -30,14 +30,15 @@ Done today, all pushed (newest last):
   `Session::display_doc_gpu`).
 
 - 2026-10-19 (overnight): spec 53, whole-canvas filter layers. A lone
-  twirl, pinch, polar or chromatic aberration layer runs live on the GPU
+  twirl, pinch, polar, chromatic aberration, radial, spin, tilt-shift,
+  iris or field blur layer runs live on the GPU
   (one pass over the document reading backdrop tiles from the segment
-  cache; `gpu::whole`, `whole.wgsl`), in documents up to 4096².
+  cache into a backdrop image; `gpu::whole`, `whole.wgsl`), in documents
+  up to 4096² (the gallery 2048²). Mid-stroke, filters over ~8 ms (radial
+  4096², the gallery) keep their image until the stroke ends.
 
 Next (the user's order: recommended list, then robustness):
-1. Spec 53 phases 2–3: radial and spin blur, then the Blur Gallery
-   (tilt-shift, iris, field).
-2. Robustness (photocraft list, `todo.md` §2.1): working-set checks,
+1. Robustness (photocraft list, `todo.md` §2.1): working-set checks,
    device-loss handling, a perf-budget gate.
 
 Open decisions for the user: workspace layout (happypaint's menu bar /

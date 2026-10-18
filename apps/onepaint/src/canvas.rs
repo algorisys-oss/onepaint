@@ -98,6 +98,8 @@ struct CanvasCallback {
     press: Option<Arc<onepaint_color::cmyk::Press>>,
     /// What the composite's values mean (spec 50).
     space: onepaint_color::Space,
+    /// A stroke is in progress: heavy whole-canvas filters wait (spec 53).
+    interactive: bool,
 }
 
 impl CallbackTrait for CanvasCallback {
@@ -114,6 +116,7 @@ impl CallbackTrait for CanvasCallback {
             gpu.upload(queue, &self.uploads);
             let uploaded: Vec<(i32, i32)> = self.uploads.iter().map(|(k, _)| *k).collect();
             gpu.mip_tiles(device, queue, &uploaded, 0);
+            gpu.set_interactive(self.interactive);
             gpu.composite(device, queue, &self.programs, self.level);
             gpu.warm(device, queue, &self.warm, self.lod);
             gpu.set_lod(self.lod);
@@ -1335,6 +1338,7 @@ impl Canvas {
                     view: self.view_modes,
                     press: self.press.clone(),
                     space: session.doc().space(),
+                    interactive: session.is_stroking(),
                 },
             ));
         }

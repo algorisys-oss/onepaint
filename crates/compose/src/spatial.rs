@@ -126,13 +126,26 @@ pub fn gpu_supported(kind: Kind, _p: &Params) -> bool {
 
 /// Whether a whole-canvas kind (`GLOBAL_REACH`) has a GPU pass (spec 53).
 pub fn whole_supported(kind: Kind, _p: &Params) -> bool {
-    matches!(kind, Kind::Twirl | Kind::Pinch | Kind::PolarCoordinates | Kind::ChromaticAberration)
+    matches!(
+        kind,
+        Kind::Twirl
+            | Kind::Pinch
+            | Kind::PolarCoordinates
+            | Kind::ChromaticAberration
+            | Kind::RadialBlur
+            | Kind::SpinBlur
+            | Kind::TiltShift
+            | Kind::IrisBlur
+            | Kind::FieldBlur
+    )
 }
 
 /// A whole-canvas spatial layer (spec 53): its filter over the backdrop of
 /// every tile, planned once per frame and shared by every tile's program.
 #[derive(Debug)]
 pub struct Whole {
+    /// The layer's id.
+    pub id: String,
     pub kind: Kind,
     pub params: Params,
     /// The document as a filter frame.
@@ -145,14 +158,20 @@ pub struct Whole {
 }
 
 impl Whole {
-    pub(crate) fn new(kind: Kind, params: Params, frame: Frame, backdrop: Vec<((i32, i32), Arc<crate::program::TileProgram>)>) -> Self {
+    pub(crate) fn new(
+        id: String,
+        kind: Kind,
+        params: Params,
+        frame: Frame,
+        backdrop: Vec<((i32, i32), Arc<crate::program::TileProgram>)>,
+    ) -> Self {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         (kind.as_str(), serde_json::to_string(&params).unwrap_or_default(), frame.doc_w, frame.doc_h).hash(&mut h);
         for ((x, y), p) in &backdrop {
             (x, y, crate::program::segment_key(&p.ops, p.origin())).hash(&mut h);
         }
-        Self { kind, params, frame, backdrop, key: h.finish(), filtered: Default::default() }
+        Self { id, kind, params, frame, backdrop, key: h.finish(), filtered: Default::default() }
     }
 
     /// The filtered document, as the oracle stores it: the backdrop tiles as

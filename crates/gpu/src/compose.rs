@@ -37,6 +37,11 @@ pub const DEFAULT_BUDGET: u64 = 1 << 30;
 /// room to spare (576 slots). At 256 MiB (384 slots) a 205-tile drag
 /// thrashed: 76 segments were recomposited every frame, tripling its time.
 pub const DEFAULT_CACHE_BUDGET: u64 = 384 << 20;
+
+/// Texel reads a whole-canvas refilter may take mid-stroke (spec 53): about
+/// 8 ms on the integrated GPU it was measured on (radial blur 4096² is
+/// 6.4 G reads in 173 ms, tilt-shift 2048² 1.7 G in 56 ms).
+const INTERACTIVE_READS: u64 = 256 << 20;
 /// Atlas formats: f16, and 8-bit (`free` and `grow` index by these).
 const F16: usize = 0;
 const U8: usize = 1;
@@ -311,6 +316,8 @@ pub struct GpuCompositor {
     spatial: crate::spatial::SpatialPass,
     /// The live whole-canvas layer's filtered image (spec 53).
     whole: crate::whole::WholePass,
+    /// A stroke is in progress (see [`GpuCompositor::set_interactive`]).
+    interactive: bool,
     spatial_slots: HashMap<u64, u32>,
     /// Filtered tiles: written by the spatial pass, read by fills and composites.
     filtered: Option<(wgpu::Texture, wgpu::TextureView, Vec<wgpu::TextureView>)>,
@@ -543,6 +550,7 @@ impl GpuCompositor {
             fills: 0,
             spatial: crate::spatial::SpatialPass::new(device),
             whole: crate::whole::WholePass::new(device),
+            interactive: false,
             spatial_slots: HashMap::new(),
             filtered: None,
             filtered_layers: (cache_layers / 2).clamp(16, device.limits().max_texture_array_layers),
@@ -554,6 +562,12 @@ impl GpuCompositor {
 
     /// Slots the atlases can hold at most, in f16 atlases (8-bit tiles fit
     /// at least as many).
+    /// Whether a stroke is in progress: a whole-canvas filter heavier than
+    /// [`INTERACTIVE_READS`] then keeps its image until it ends (spec 53).
+    pub fn set_interactive(&mut self, on: bool) {
+        self.interactive = on;
+    }
+
     pub fn capacity(&self) -> usize {
         self.per_atlas as usize * ((self.budget / self.atlas_bytes(F16)) as usize).clamp(1, ATLASES)
     }
@@ -900,7 +914,7 @@ impl GpuCompositor {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba16Float,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let read =
@@ -1050,61 +1064,102 @@ impl GpuCompositor {
     }
 
     /// Filter a whole-canvas layer's backdrop into its image (spec 53), if
-    /// the image doesn't already hold it: fill the backdrop tiles that changed
-    /// (the rest are cache hits), then one pass over the document.
+    /// the image doesn't already hold it: fill the backdrop tiles whose
+    /// segment changed (in chunks the cache holds), copy each into the
+    /// backdrop image, then one pass over the document.
     fn prepare_whole(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, w: &onepaint_compose::spatial::Whole, sheets: &Sheets) {
         let key = self.level_key(w.key);
+        let doc = [w.frame.doc_w, w.frame.doc_h];
+        self.whole.back(device, doc, self.level);
         if self.whole.key == Some(key) && self.whole.view().is_some() {
             return;
         }
-        if w.backdrop.len() > self.cache_layers as usize / 2 {
-            log::error!("compose cache can't hold a whole-canvas backdrop of {} tiles", w.backdrop.len());
+        // Mid-stroke, a filter too heavy for the frame keeps this layer's
+        // image until the stroke ends, as the CPU path does.
+        let size = crate::whole::WholePass::level_size(doc, self.level);
+        let reads = u64::from(size[0]) * u64::from(size[1]) * crate::whole::reads_per_px(w.kind, &w.params);
+        if self.interactive
+            && reads > INTERACTIVE_READS
+            && self.whole.layer.as_deref() == Some(w.id.as_str())
+            && self.whole.view().is_some()
+        {
             return;
         }
-        self.clock += 1;
         self.ensure_cache(device);
         let edge = (TILE as u32) >> self.level;
-        let cols = w.frame.doc_w.div_ceil(TILE as u32) as usize;
-        let rows = w.frame.doc_h.div_ceil(TILE as u32) as usize;
-        let mut grid = vec![crate::whole::NONE; cols * rows];
-        let mut fills = Vec::new();
-        for ((x, y), bp) in &w.backdrop {
-            if bp.ops.is_empty() {
-                continue;
-            }
-            let k = onepaint_compose::program::segment_key(&bp.ops, bp.origin());
-            let Some((slot, fresh)) = self.cache_slot_key(k, &bp.ops) else { continue };
-            if fresh {
-                fills.push(Work {
-                    origin: [*x as u32 * edge, *y as u32 * edge],
-                    ops: bp.ops.iter().collect(),
-                    over: None,
-                    init: NONE,
-                    dest: slot,
-                });
-            }
-            grid[*y as usize * cols + *x as usize] = slot;
-        }
-        self.fills += fills.len() as u64;
-        for wk in &fills {
-            for t in wk.ops.iter().flat_map(|op| op_sources(std::slice::from_ref(*op))) {
-                if self.resident(device, queue, t).is_none() {
-                    log::error!("compose atlas full; a whole-canvas backdrop tile at {:?} skipped", wk.origin);
+        let changed: Vec<_> = w
+            .backdrop
+            .iter()
+            .map(|(at, bp)| (*at, bp, self.level_key(onepaint_compose::program::segment_key(&bp.ops, bp.origin()))))
+            .filter(|(at, _, k)| self.whole.back_tiles.get(at) != Some(k))
+            .collect();
+        let chunk = (self.cache_layers as usize / 2).clamp(1, MAX_JOBS);
+        for part in changed.chunks(chunk) {
+            self.clock += 1;
+            let mut copies = Vec::new();
+            let mut fills = Vec::new();
+            for ((x, y), bp, k) in part {
+                let seg = onepaint_compose::program::segment_key(&bp.ops, bp.origin());
+                let Some((slot, fresh)) = self.cache_slot_key(seg, &bp.ops) else { continue };
+                if fresh {
+                    fills.push(Work {
+                        origin: [*x as u32 * edge, *y as u32 * edge],
+                        ops: bp.ops.iter().collect(),
+                        over: None,
+                        init: NONE,
+                        dest: slot,
+                    });
                 }
+                copies.push(((*x, *y), slot, *k));
+            }
+            self.fills += fills.len() as u64;
+            for wk in &fills {
+                for t in wk.ops.iter().flat_map(|op| op_sources(std::slice::from_ref(*op))) {
+                    if self.resident(device, queue, t).is_none() {
+                        log::error!("compose atlas full; a whole-canvas backdrop tile at {:?} skipped", wk.origin);
+                    }
+                }
+            }
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("compose whole backdrop") });
+            self.mip_sources(device, &mut enc, fills.iter());
+            self.dispatch(device, queue, &mut enc, &fills, sheets, None, true);
+            let back = self.whole.back(device, doc, self.level);
+            if let Some((cache, _, _)) = &self.cache {
+                for ((x, y), slot, _) in &copies {
+                    let (ox, oy) = (*x as u32 * edge, *y as u32 * edge);
+                    let (cw, ch) = (edge.min(size[0].saturating_sub(ox)), edge.min(size[1].saturating_sub(oy)));
+                    if cw == 0 || ch == 0 {
+                        continue;
+                    }
+                    enc.copy_texture_to_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: cache,
+                            mip_level: self.level,
+                            origin: wgpu::Origin3d { x: 0, y: 0, z: *slot },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::TexelCopyTextureInfo {
+                            texture: back,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d { x: ox, y: oy, z: 0 },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::Extent3d { width: cw, height: ch, depth_or_array_layers: 1 },
+                    );
+                }
+            }
+            queue.submit([enc.finish()]);
+            self.pass = 0;
+            for (at, _, k) in copies {
+                self.whole.back_tiles.insert(at, k);
             }
         }
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("compose whole") });
-        self.mip_sources(device, &mut enc, fills.iter());
-        for chunk in fills.chunks(MAX_JOBS) {
-            self.dispatch(device, queue, &mut enc, chunk, sheets, None, true);
-        }
-        if let Some((_, read, _)) = &self.cache {
-            self.whole.record(device, &mut enc, w, self.level, &grid, read);
-            self.filters += 1;
-        }
+        self.whole.record(device, &mut enc, w, self.level);
+        self.filters += 1;
         queue.submit([enc.finish()]);
-        self.pass = 0;
         self.whole.key = Some(key);
+        self.whole.layer = Some(w.id.clone());
     }
 
     fn ensure_filtered(&mut self, device: &wgpu::Device) {
