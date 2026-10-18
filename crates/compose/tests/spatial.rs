@@ -29,16 +29,34 @@ fn spatial_programs_match_the_rendered_document() {
 }
 
 #[test]
-fn a_spatial_layer_in_a_group_stays_on_the_cpu() {
-    use onepaint_doc::{Adjustment, Group, Layer, Node};
-    let mut doc = random_doc(3, 300, 300, false);
-    let mut blur = Layer::new("blur");
-    blur.adjustment = Some(Box::new(Adjustment {
-        kind: "gaussian-blur".into(),
-        params: serde_json::from_value(serde_json::json!({"radius": 4.0})).unwrap(),
-    }));
-    let mut g = Group::new("g");
-    g.children.push(Node::Layer(blur));
-    doc.root.push(Node::Group(g));
-    assert!(doc.bounds().tiles().all(|(tx, ty)| plan_tile(&doc, tx, ty, None).is_none()));
+fn spatial_layers_in_isolated_groups_plan_and_pass_through_ones_stay_on_the_cpu() {
+    use onepaint_doc::{Adjustment, BlendMode, Group, Layer, Node};
+    for (mode, gpu) in [(BlendMode::Normal, true), (BlendMode::PassThrough, false)] {
+        let mut doc = random_doc(3, 300, 300, false);
+        let mut paint = Layer::new("paint");
+        for y in 60..200 {
+            for x in 40..220 {
+                paint.pixels.set(x, y, [0.2, 0.5, 0.9, 1.0]);
+            }
+        }
+        let mut blur = Layer::new("blur");
+        blur.adjustment = Some(Box::new(Adjustment {
+            kind: "gaussian-blur".into(),
+            params: serde_json::from_value(serde_json::json!({"radius": 6.0})).unwrap(),
+        }));
+        let mut g = Group::new("g");
+        g.blend_mode = mode;
+        g.children = vec![Node::Layer(paint), Node::Layer(blur)];
+        doc.root.push(Node::Group(g));
+        let want_doc = rendered(&doc);
+        for (tx, ty) in doc.bounds().tiles() {
+            let prog = plan_tile(&doc, tx, ty, None);
+            assert_eq!(prog.is_some(), gpu, "{mode:?} tile {tx},{ty}");
+            if let Some(prog) = prog {
+                let (got, want) = (run(&prog), composite_tile(&want_doc, tx, ty, None));
+                let worst = got.iter().zip(&want).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+                assert!(worst <= 2e-3, "tile {tx},{ty}: {worst}");
+            }
+        }
+    }
 }

@@ -679,12 +679,15 @@ impl Planner<'_> {
         self.content_with(l, None)
     }
 
-    /// A top-level spatial adjustment layer's content (spec 52): its filter
-    /// over the layers `below`, planned on every tile within its reach.
+    /// A spatial adjustment layer's content (spec 52): its filter over the
+    /// layers `below` it in its container, planned on every tile within its
+    /// reach. At the top level or in an isolated group that is its whole
+    /// backdrop; in a Pass Through group the backdrop reaches outside, so
+    /// the tile stays on the CPU.
     fn spatial_content(&self, l: &Layer, kind: onepaint_filters::Kind, below: &[Node]) -> Result<Option<Content>, Unsupported> {
         let params = l.adjustment.as_ref().map(|a| a.params.clone()).unwrap_or_default();
         let r = onepaint_filters::reach(kind, &params);
-        if self.depth != 1 || !crate::spatial::gpu_supported(kind, &params) || r > TILE {
+        if self.reveal == Reveal::Below || !crate::spatial::gpu_supported(kind, &params) || r > TILE {
             return Err(Unsupported);
         }
         let (tx, ty) = (self.tx, self.ty);

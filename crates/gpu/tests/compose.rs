@@ -767,3 +767,37 @@ fn bloom_and_line_art_layers_match_the_rendered_document() {
         assert!(e <= TOL, "{kind}: error {e} at {at:?}");
     }
 }
+
+/// A spatial layer in an isolated group filters the group's own content.
+#[test]
+fn a_spatial_layer_in_a_group_matches_the_rendered_document() {
+    use onepaint_compose::spatial::rendered;
+    use onepaint_doc::{Adjustment, Group};
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let mut gc = GpuCompositor::new(&device, 64 << 20);
+    let (w, h) = (300, 300);
+    let tex = target(&device, w, h);
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
+    let mut doc = random_doc(3, w, h, false);
+    let mut paint = Layer::new("paint");
+    for y in 60..200 {
+        for x in 40..220 {
+            paint.pixels.set(x, y, [0.2, 0.5, 0.9, 1.0]);
+        }
+    }
+    let mut blur = Layer::new("blur");
+    blur.adjustment = Some(Box::new(Adjustment {
+        kind: "gaussian-blur".into(),
+        params: serde_json::from_value(serde_json::json!({"radius": 9.0})).unwrap(),
+    }));
+    let mut g = Group::new("g");
+    g.opacity = 0.8;
+    g.children = vec![Node::Layer(paint), Node::Layer(blur)];
+    doc.root.push(Node::Group(g));
+    gc.run(&device, &queue, &programs(&doc, None), &view, [w, h]);
+    let (e, at) = max_error(&rendered(&doc), None, &read(&device, &queue, &tex));
+    assert!(e <= TOL, "error {e} at {at:?}");
+}

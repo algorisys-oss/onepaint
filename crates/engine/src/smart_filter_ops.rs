@@ -199,26 +199,28 @@ impl Session {
         })
     }
 
-    /// The spatial layer the GPU filters live (spec 52, phase 1): the
-    /// document's only spatial adjustment layer, at the top level, of a kind
-    /// with a GPU pass and a reach within a tile.
+    /// The spatial layer the GPU filters live (spec 52): the document's only
+    /// spatial adjustment layer, at the top level or in isolated groups, of
+    /// a kind with a GPU pass and a reach within a tile.
     pub(crate) fn live_spatial(nodes: &[Node]) -> Option<NodeId> {
-        fn all<'a>(nodes: &'a [Node], out: &mut Vec<&'a onepaint_doc::Layer>) {
+        // Each spatial layer, and whether every group around it is isolated.
+        fn all<'a>(nodes: &'a [Node], isolated: bool, out: &mut Vec<(&'a onepaint_doc::Layer, bool)>) {
             for n in nodes {
                 match n {
-                    Node::Layer(l) if onepaint_compose::spatial::spatial_kind(l).is_some() => out.push(l),
+                    Node::Layer(l) if onepaint_compose::spatial::spatial_kind(l).is_some() => out.push((l, isolated)),
                     Node::Layer(_) => {}
-                    Node::Group(g) => all(&g.children, out),
+                    Node::Group(g) => all(&g.children, isolated && g.blend_mode != onepaint_doc::BlendMode::PassThrough, out),
                 }
             }
         }
         let mut found = Vec::new();
-        all(nodes, &mut found);
-        let [l] = found[..] else { return None };
+        all(nodes, true, &mut found);
+        let [(l, isolated)] = found[..] else { return None };
         let kind = onepaint_compose::spatial::spatial_kind(l)?;
         let params = l.adjustment.as_ref().map(|a| a.params.clone()).unwrap_or_default();
-        let top = nodes.iter().any(|n| n.id() == l.id);
-        (top && onepaint_compose::spatial::gpu_supported(kind, &params) && onepaint_filters::reach(kind, &params) <= onepaint_raster::TILE)
+        (isolated
+            && onepaint_compose::spatial::gpu_supported(kind, &params)
+            && onepaint_filters::reach(kind, &params) <= onepaint_raster::TILE)
             .then(|| l.id.clone())
     }
 

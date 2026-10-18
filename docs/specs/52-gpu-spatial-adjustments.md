@@ -47,8 +47,8 @@ backdrop.
   it every frame. Tiles that fall back to the CPU, and every other spatial
   layer, use the rendered document as before. Dirty rects grow by a
   spatial layer's reach, as for feathered masks.
-- **Limits of phase 1:** stacked spatial layers and ones in groups render
-  on the CPU; a program with a spatial layer runs unsplit (the fill pass
+- **Limits:** stacked spatial layers and ones in Pass Through groups
+  render on the CPU; a program with a spatial layer runs unsplit (the fill pass
   can't read filtered tiles); reduced levels scale the radius and round the
   region to level pixels.
 - `ONEPAINT_BLUR=12` adds a blur layer for screenshots.
@@ -72,7 +72,14 @@ backdrop.
      kinds with a whole-canvas reach (radial, spin, tilt-shift, iris and
      field blur, twirl, pinch, polar, chromatic aberration) need the whole
      backdrop at once, a design of their own.
-3. Spatial layers inside groups (the group's register as the backdrop).
+3. Groups and stacking.
+   - 3a ✓ a spatial layer in an isolated group: its backdrop is the
+     group's children below it, planned the same way. In a Pass Through
+     group the backdrop reaches outside the group; those tiles stay on the
+     CPU.
+   - 3b stacked spatial layers: the filtered tiles need a texture of their
+     own, so the fill pass can read a lower layer's filtered tiles while
+     it writes the upper layer's backdrop.
 
 ## Acceptance criteria
 1. Programs with `Op::Spatial` run on the CPU equal the oracle composite
