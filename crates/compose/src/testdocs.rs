@@ -2,7 +2,7 @@
 //! interpreter and GPU pass against `composite_tile`). Not for app use.
 
 use crate::{GHOST_TINT_KEY, StrokeMode};
-use onepaint_doc::{BlendMode, Document, Group, Layer, Node};
+use onepaint_doc::{BlendMode, Document, Group, Knockout, Layer, Node};
 use onepaint_raster::{Rect, Surface};
 
 /// A small xorshift generator: deterministic, no dependency.
@@ -122,14 +122,33 @@ fn nodes(r: &mut Rng, id: &mut u32, depth: u32, w: u32, h: u32, pigment: bool) -
 }
 
 /// A random document `w × h` mixing every blend mode (Pigment if asked),
-/// groups (Pass Through ones too), clip families, masks, inherit alpha and
-/// ghost tints.
+/// groups (Pass Through ones too), clip families, masks, inherit alpha,
+/// ghost tints and knockouts (some over a locked Background).
 pub fn random_doc(seed: u64, w: u32, h: u32, pigment: bool) -> Document {
     let mut r = Rng::new(seed);
     let mut d = Document::new(w, h, None);
     let mut id = 0;
     d.root = nodes(&mut r, &mut id, 0, w, h, pigment);
+    // Their own stream, so the rest of the document is as it was.
+    let mut k = Rng::new(seed ^ 0x6b6e_6f63);
+    knockouts(&mut k, &mut d.root);
+    if let Some(Node::Layer(l)) = d.root.first_mut() {
+        l.locked = k.chance(0.5);
+    }
     d
+}
+
+fn knockouts(r: &mut Rng, nodes: &mut [Node]) {
+    for n in nodes {
+        match n {
+            Node::Layer(l) => {
+                if r.chance(0.15) {
+                    l.set_knockout(Some(if r.chance(0.5) { Knockout::Shallow } else { Knockout::Deep }));
+                }
+            }
+            Node::Group(g) => knockouts(r, &mut g.children),
+        }
+    }
 }
 
 /// Every layer id in the tree.

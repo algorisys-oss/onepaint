@@ -250,6 +250,23 @@ pub enum Op {
     /// Pop the top register `v` and fade it with the next one `d`:
     /// `d·(1 − o) + v·o` (a Pass Through group ends).
     Mix { opacity: f32 },
+    /// Punch a knocked-out layer's shape through the top register:
+    /// `mix(top, reveal, content.a · opacity)`.
+    Knockout { content: Content, opacity: f32, reveal: Reveal },
+    /// Keep the top register as the Background top-level knockouts reveal.
+    Snapshot,
+}
+
+/// What a knockout's hole shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Reveal {
+    /// Transparency: in an isolated group, or at the top level without a
+    /// Background.
+    Clear,
+    /// The register under the top: a Pass Through group's backdrop.
+    Below,
+    /// The [`Op::Snapshot`] image.
+    Background,
 }
 
 #[derive(Clone, Debug)]
@@ -289,7 +306,9 @@ pub struct Split {
 pub fn op_sources(ops: &[Op]) -> impl Iterator<Item = &Arc<Tile>> {
     ops.iter().flat_map(|op| {
         let (c, adjust_mask) = match op {
-            Op::Layer { content, .. } | Op::PushContent(content) | Op::Clip { content, .. } => (Some(content), None),
+            Op::Layer { content, .. } | Op::PushContent(content) | Op::Clip { content, .. } | Op::Knockout { content, .. } => {
+                (Some(content), None)
+            }
             Op::Adjust { mask, .. } => (None, mask.as_ref()),
             Op::Coverage(c) => (None, Some(&c.tile)),
             _ => (None, None),
@@ -391,6 +410,11 @@ pub fn segment_key(ops: &[Op], at: [i32; 2]) -> u64 {
             Op::Coverage(c) => (7u8, ptr(&c.tile)).hash(&mut h),
             Op::PushCopy => 8u8.hash(&mut h),
             Op::Mix { opacity } => (9u8, opacity.to_bits()).hash(&mut h),
+            Op::Knockout { content: c, opacity, reveal } => {
+                (10u8, opacity.to_bits(), *reveal).hash(&mut h);
+                content(c, &mut h);
+            }
+            Op::Snapshot => 11u8.hash(&mut h),
         }
     }
     h.finish()
@@ -416,6 +440,13 @@ struct Planner<'a> {
     regs: Vec<usize>,
     /// The lowest point top-level ops were cut back to by an opaque layer.
     cut: Option<usize>,
+    /// What a knockout in the nodes being planned reveals.
+    reveal: Reveal,
+    /// The top level's knockouts reveal the Background (`background_reveals`).
+    background: bool,
+    /// The Background snapshot was taken: top-level ops can't be cut, and
+    /// the program can't split (a cached prefix would lose it).
+    snapshot: bool,
 }
 
 /// A top-level node (with its clip family) and the ops it produced.
@@ -485,7 +516,22 @@ pub fn plan_tile_split(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverl
 
 fn plan(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, hot: Option<&str>, cache: Option<&PlanCache>) -> Option<TileProgram> {
     let frame = crate::doc_frame(doc);
-    let mut p = Planner { tx, ty, ov, ops: Vec::new(), depth: 1, units: Vec::new(), hot, cache, frame, regs: vec![0], cut: None };
+    let mut p = Planner {
+        tx,
+        ty,
+        ov,
+        ops: Vec::new(),
+        depth: 1,
+        units: Vec::new(),
+        hot,
+        cache,
+        frame,
+        regs: vec![0],
+        cut: None,
+        reveal: Reveal::Clear,
+        background: crate::background_reveals(&doc.root),
+        snapshot: false,
+    };
     p.nodes(&doc.root).ok()?;
     // The paper shades the finished composite (spec 43), after every unit.
     if let Some(paper) = doc.paper() {
@@ -494,7 +540,7 @@ fn plan(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, hot: Optio
             p.ops.push(Op::Paper { shade: Arc::new(PaperShade { tex, amt }), tx, ty });
         }
     }
-    let split = hot.and_then(|_| split(&p.ops, &p.units, [tx * TILE, ty * TILE]));
+    let split = hot.filter(|_| !p.snapshot).and_then(|_| split(&p.ops, &p.units, [tx * TILE, ty * TILE]));
     let prog = TileProgram { tx, ty, ops: p.ops, split, space: doc.space() };
     let mut seen: Vec<*const Tile> = prog.sources().map(Arc::as_ptr).collect();
     seen.sort_unstable();
@@ -613,6 +659,9 @@ impl Planner<'_> {
     /// tile's opacity is checked once.
     fn occlude(&mut self, l: &Layer, c: &Content) {
         let Some(cache) = self.cache else { return };
+        if self.snapshot && self.depth == 1 {
+            return;
+        }
         let plain = matches!(c.mask, MaskSrc::None) && c.stroke.is_none() && c.mask_stroke.is_none() && c.relief.is_none();
         if l.blend_mode != BlendMode::Normal || l.opacity != 1.0 || l.inherit_alpha || !plain {
             return;
@@ -665,7 +714,9 @@ impl Planner<'_> {
                 Node::Group(g) if passes_through(g, &nodes[i + 1..j]) => {
                     if g.visible && g.opacity > 0.0 && !g.children.is_empty() {
                         self.push(Op::PushCopy)?;
+                        let outer = std::mem::replace(&mut self.reveal, Reveal::Below);
                         self.nodes(&g.children)?;
+                        self.reveal = outer;
                         self.depth -= 1;
                         self.regs.pop();
                         self.ops.push(Op::Mix { opacity: g.opacity });
@@ -678,7 +729,9 @@ impl Planner<'_> {
                             return Err(Unsupported);
                         }
                         self.push(Op::PushZero)?;
+                        let outer = std::mem::replace(&mut self.reveal, Reveal::Clear);
                         self.nodes(&g.children)?;
+                        self.reveal = outer;
                         // A panel's frame clips the group before its riders go on.
                         if let Some(Clip::Partial(c)) = clip {
                             self.ops.push(Op::Coverage(c));
@@ -692,9 +745,12 @@ impl Planner<'_> {
                     if l.visible && l.opacity > 0.0 {
                         let family = &nodes[i + 1..j];
                         let content = self.content(l)?;
+                        let punch = |c: &Content| Op::Knockout { content: c.clone(), opacity: l.opacity, reveal: self.reveal };
+                        let punch = content.as_ref().filter(|_| l.knockout().is_some()).map(punch);
                         if family.is_empty() {
                             if let Some(content) = content {
                                 self.occlude(l, &content);
+                                self.ops.extend(punch);
                                 self.ops.push(Op::Layer {
                                     content,
                                     mode: l.blend_mode.effective(),
@@ -703,6 +759,7 @@ impl Planner<'_> {
                                 });
                             }
                         } else {
+                            self.ops.extend(punch);
                             match content {
                                 Some(c) => self.push(Op::PushContent(c))?,
                                 None => self.push(Op::PushZero)?,
@@ -713,6 +770,12 @@ impl Planner<'_> {
                     }
                 }
             }
+            // The Background is drawn: keep it for the knockouts above.
+            if top && i == 0 && self.background {
+                self.ops.push(Op::Snapshot);
+                self.snapshot = true;
+                self.reveal = Reveal::Background;
+            }
             if top {
                 // An opaque layer cut the ops below it: their units are gone.
                 if let Some(c) = self.cut.take() {
@@ -722,7 +785,10 @@ impl Planner<'_> {
                 let hot = self.hot.is_some_and(|id| nodes[i..j].iter().any(|n| contains(n, id)));
                 // A Pass Through group reads the backdrop, like its children.
                 let through = matches!(&nodes[i], Node::Group(g) if passes_through(g, &nodes[i + 1..j]));
+                // So does a knockout: it punches to what is under it.
+                let knocks = matches!(&nodes[i], Node::Layer(l) if l.knockout().is_some());
                 let folds = !through
+                    && !knocks
                     && match &nodes[i] {
                         Node::Group(g) => g.blend_mode.effective() == BlendMode::Normal,
                         Node::Layer(l) => l.blend_mode.effective() == BlendMode::Normal && !l.inherit_alpha,
@@ -805,7 +871,21 @@ fn exec(ops: &[Op], init: Px, i: usize, stack: &mut Vec<Px>, space: Space, at: [
     stack.clear();
     stack.push(init);
     let (x, y) = pos(at, i);
+    let mut background = [0.0; 4];
     for op in ops {
+        if let Op::Knockout { content, opacity, reveal } = op {
+            let k = eval(content, i, space, at)[3] * opacity;
+            let n = stack.len();
+            let bg = match reveal {
+                Reveal::Clear => [0.0; 4],
+                Reveal::Below if n >= 2 => stack[n - 2],
+                Reveal::Below => [0.0; 4],
+                Reveal::Background => background,
+            };
+            let Some(top) = stack.last_mut() else { break };
+            *top = std::array::from_fn(|c| top[c] + (bg[c] - top[c]) * k);
+            continue;
+        }
         // The stack is never empty: the planner pairs every push with a pop.
         let Some(top) = stack.last_mut() else { break };
         match op {
@@ -826,6 +906,8 @@ fn exec(ops: &[Op], init: Px, i: usize, stack: &mut Vec<Px>, space: Space, at: [
                 let v = *top;
                 stack.push(v);
             }
+            Op::Snapshot => background = *top,
+            Op::Knockout { .. } => {}
             Op::Mix { opacity } => {
                 let Some(v) = stack.pop() else { break };
                 let Some(dst) = stack.last_mut() else { break };

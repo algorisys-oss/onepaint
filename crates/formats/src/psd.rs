@@ -260,6 +260,10 @@ fn layer_record(l: &Layer, doc: Rect, frame: onepaint_filters::Frame) -> Record 
             _ => {}
         }
     }
+    // Knockout: one byte (1 shallow, 2 deep) padded to four, written only when set.
+    if let Some(k) = l.knockout() {
+        extra.push((*b"knko", vec![if k == onepaint_doc::Knockout::Deep { 2 } else { 1 }, 0, 0, 0]));
+    }
     let hidden = if l.visible { 0 } else { 2 };
     Record {
         rect,
@@ -494,6 +498,7 @@ struct RRec {
     mask: Option<(Rect, u8, u8)>,
     lsct: Option<(u32, Option<[u8; 4]>)>,
     adjustment: Option<onepaint_doc::Adjustment>,
+    knockout: u8,
 }
 
 fn decode_channel(c: &mut Cur, len: usize, w: usize, h: usize, depth: u16, psb: bool) -> Result<Vec<u8>, FormatError> {
@@ -662,6 +667,7 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                 }
                 let mut lsct = None;
                 let mut adjustment = None;
+                let mut knockout = 0;
                 while c.p + 12 <= ex_end {
                     let sig = c.take(4)?;
                     if sig != b"8BIM" && sig != b"8B64" {
@@ -708,6 +714,7 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                             };
                             lsct = Some((t, blend));
                         }
+                        b"knko" => knockout = d.u8()?,
                         b"nvrt" => adjustment = adj("invert", Default::default()),
                         b"post" => {
                             adjustment = adj(
@@ -748,6 +755,7 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                     mask,
                     lsct,
                     adjustment,
+                    knockout,
                 });
             }
             // Channel image data, record by record.
@@ -814,6 +822,11 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                         l.mask_enabled = rec.mask.is_none_or(|m| m.2 & 2 == 0);
                         l.mask = mask;
                         l.adjustment = rec.adjustment.map(Box::new);
+                        l.set_knockout(match rec.knockout {
+                            1 => Some(onepaint_doc::Knockout::Shallow),
+                            2 => Some(onepaint_doc::Knockout::Deep),
+                            _ => None,
+                        });
                         if let Some(top) = stack.last_mut() {
                             top.push(Node::Layer(l));
                         }

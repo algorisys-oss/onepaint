@@ -187,7 +187,54 @@ fn draw_clipped(fam: &mut [f32], riders: &[Node], tx: i32, ty: i32, ov: Option<&
     }
 }
 
-fn composite_nodes(nodes: &[Node], tx: i32, ty: i32, target: &mut Buf, ov: Option<&StrokeOverlay>, frame: Frame) {
+/// Punch `l`'s masked shape through `target` (knockout): where it covers,
+/// the target becomes `reveal` (transparency when `None`), `mix(cur, bg,
+/// a · opacity)` (happypaint `compositor.ts` KNOCKOUT_FS).
+fn knockout(target: &mut Buf, l: &Layer, reveal: Option<&[f32]>, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, frame: Frame) {
+    let Some(cov) = layer_content(l, tx, ty, ov, frame) else { return };
+    for (i, p) in target.chunks_exact_mut(4).enumerate() {
+        let k = cov[i * 4 + 3] * l.opacity;
+        if k <= 0.0 {
+            continue;
+        }
+        for c in 0..4 {
+            let bg = reveal.map_or(0.0, |r| r[i * 4 + c]);
+            p[c] += (bg - p[c]) * k;
+        }
+    }
+}
+
+/// Whether the top level's knockouts reveal the Background: the bottom
+/// layer when it is a visible, unclipped, locked paint layer and a top-level
+/// layer knocks out. happypaint snapshots it as the loop reaches node 1, so
+/// a Background with clipped layers on it reveals transparency instead.
+pub(crate) fn background_reveals(nodes: &[Node]) -> bool {
+    let Some(Node::Layer(first)) = nodes.first() else { return false };
+    first.locked
+        && !first.clipped
+        && first.visible
+        && first.opacity > 0.0
+        && first.adjustment.is_none()
+        && riders(nodes, 0) == 1
+        && nodes.iter().any(|n| matches!(n, Node::Layer(l) if l.knockout().is_some()))
+}
+
+/// The document's top level: knockouts there reveal the Background
+/// snapshot, else transparency.
+fn composite_root(nodes: &[Node], tx: i32, ty: i32, target: &mut Buf, ov: Option<&StrokeOverlay>, frame: Frame) {
+    if background_reveals(nodes) {
+        composite_nodes(&nodes[..1], tx, ty, target, ov, frame, None);
+        let bg = target.clone();
+        composite_nodes(&nodes[1..], tx, ty, target, ov, frame, Some(&bg));
+    } else {
+        composite_nodes(nodes, tx, ty, target, ov, frame, None);
+    }
+}
+
+/// Composite `nodes` onto `target`. A knocked-out layer's hole shows
+/// `reveal`: the Background at the top level, a Pass Through group's
+/// backdrop, transparency (`None`) in an isolated group.
+fn composite_nodes(nodes: &[Node], tx: i32, ty: i32, target: &mut Buf, ov: Option<&StrokeOverlay>, frame: Frame, reveal: Option<&[f32]>) {
     let mut i = 0;
     while i < nodes.len() {
         // An adjustment layer is never a clip base: following clipped layers render plainly.
@@ -211,7 +258,7 @@ fn composite_nodes(nodes: &[Node], tx: i32, ty: i32, target: &mut Buf, ov: Optio
                         Some(peg) => pegged(&g.children, peg, tx, ty, ov, frame),
                         None => {
                             let mut buf = zeros();
-                            composite_nodes(&g.children, tx, ty, &mut buf, ov, frame);
+                            composite_nodes(&g.children, tx, ty, &mut buf, ov, frame, None);
                             buf
                         }
                     };
@@ -228,6 +275,10 @@ fn composite_nodes(nodes: &[Node], tx: i32, ty: i32, target: &mut Buf, ov: Optio
             }
             Node::Layer(l) => {
                 if l.visible && l.opacity > 0.0 {
+                    // Punch first; the layer (or its family) then draws into the hole.
+                    if l.knockout().is_some() {
+                        knockout(target, l, reveal, tx, ty, ov, frame);
+                    }
                     let family = &nodes[i + 1..j];
                     if family.is_empty() {
                         draw_layer(target, l, tx, ty, ov, frame);
@@ -263,12 +314,17 @@ pub(crate) fn passes_through(g: &onepaint_doc::Group, riders: &[Node]) -> bool {
 /// composite onto the target; below 100% the result fades with the
 /// backdrop, `out = backdrop·(1 − o) + result·o`.
 fn pass_through(children: &[Node], opacity: f32, tx: i32, ty: i32, target: &mut Buf, ov: Option<&StrokeOverlay>, frame: Frame) {
-    if opacity >= 1.0 {
-        composite_nodes(children, tx, ty, target, ov, frame);
+    // A knocked-out child reveals the backdrop the group started from.
+    let knocks = children.iter().any(|n| matches!(n, Node::Layer(l) if l.knockout().is_some()));
+    if opacity >= 1.0 && !knocks {
+        composite_nodes(children, tx, ty, target, ov, frame, None);
         return;
     }
     let backdrop = target.clone();
-    composite_nodes(children, tx, ty, target, ov, frame);
+    composite_nodes(children, tx, ty, target, ov, frame, Some(&backdrop));
+    if opacity >= 1.0 {
+        return;
+    }
     for (o, b) in target.iter_mut().zip(&backdrop) {
         *o = b * (1.0 - opacity) + *o * opacity;
     }
@@ -327,7 +383,7 @@ fn pegged(children: &[Node], [dx, dy, rot, scale]: [f32; 4], tx: i32, ty: i32, o
         .flat_map(|y| xs.clone().map(move |x| (x, y)))
         .map(|(x, y)| {
             let mut b = zeros();
-            composite_nodes(children, x, y, &mut b, ov, frame);
+            composite_nodes(children, x, y, &mut b, ov, frame, None);
             b
         })
         .collect();
@@ -420,7 +476,7 @@ pub fn doc_frame(doc: &Document) -> Frame {
 /// light, or sRGB values in 8-bit documents; spec 50).
 pub fn composite_tile(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverlay>) -> Buf {
     let mut buf = zeros();
-    composite_nodes(&doc.root, tx, ty, &mut buf, ov, doc_frame(doc));
+    composite_root(&doc.root, tx, ty, &mut buf, ov, doc_frame(doc));
     // The paper's visible tooth shades the finished composite (C:214-233).
     if let Some(p) = doc.paper()
         && let Some(tex) = onepaint_brush::paper::PaperTexture::new(&p)

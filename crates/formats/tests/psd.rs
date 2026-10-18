@@ -70,6 +70,22 @@ fn round_trip_through_our_writer_and_reader() {
 }
 
 #[test]
+fn knockout_round_trips_as_the_knko_byte() {
+    let mut d = Document::new(16, 16, Some(Rgba::WHITE));
+    for k in [None, Some(Knockout::Shallow), Some(Knockout::Deep)] {
+        let mut l = Layer::new("k");
+        l.set_knockout(k);
+        d.root.push(Node::Layer(l));
+    }
+    let bytes = write_psd(&d, &vec![1.0f32; 16 * 16 * 4]).unwrap();
+    // Written only when set: two layers carry the block.
+    assert_eq!(bytes.windows(8).filter(|w| w == b"8BIMknko").count(), 2);
+    let r = read_psd(&bytes).unwrap();
+    let got: Vec<_> = r.root.iter().filter_map(|n| n.as_layer()).filter(|l| l.name == "k").map(|l| l.knockout()).collect();
+    assert_eq!(got, vec![None, Some(Knockout::Shallow), Some(Knockout::Deep)]);
+}
+
+#[test]
 fn reads_a_file_written_by_ag_psd() {
     let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/agpsd.psd")).unwrap();
     let d = read_psd(&bytes).unwrap();

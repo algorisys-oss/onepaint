@@ -44,7 +44,7 @@ pub use onepaint_selection::{Mask, Mode as SelectMode};
 use onepaint_brush::{BrushPreset, StrokeEngine};
 use onepaint_color::Rgba;
 use onepaint_compose::{StrokeMode, StrokeOverlay, apply_stroke_px_at, composite_tile};
-use onepaint_doc::{BlendMode, Document, Group, Layer, Node, NodeId};
+use onepaint_doc::{BlendMode, Document, Group, Knockout, Layer, Node, NodeId};
 pub use onepaint_formats::Progress;
 use onepaint_history::History;
 use onepaint_raster::{Rect, Surface, TILE, TILE_PX, Tile};
@@ -149,6 +149,14 @@ pub struct LayerProps {
     pub locked: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collapsed: Option<bool>,
+    /// `Some(None)` clears the knockout; layers only.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "some_option")]
+    pub knockout: Option<Option<Knockout>>,
+}
+
+/// Keep an explicit `null` as `Some(None)`, so "clear" survives a replay.
+fn some_option<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<Option<T>>, D::Error> {
+    Option::<T>::deserialize(d).map(Some)
 }
 
 impl LayerProps {
@@ -163,6 +171,7 @@ impl LayerProps {
             (self.alpha_lock.is_some(), "alpha"),
             (self.locked.is_some(), "locked"),
             (self.collapsed.is_some(), "collapsed"),
+            (self.knockout.is_some(), "knockout"),
         ] {
             if set {
                 k.push_str(name);
@@ -1546,6 +1555,9 @@ impl Session {
                     }
                     if let Some(v) = p.locked {
                         l.locked = v;
+                    }
+                    if let Some(v) = p.knockout {
+                        l.set_knockout(v);
                     }
                 }
                 Node::Group(g) => {

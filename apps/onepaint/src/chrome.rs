@@ -4,7 +4,7 @@
 use crate::layout::PanelId;
 use crate::{App, Popover};
 use egui::{Align2, Area, Id, Order, RichText, Sense, Ui, pos2, vec2};
-use onepaint_doc::{BlendMode, Node};
+use onepaint_doc::{BlendMode, Knockout, Node};
 use onepaint_engine::{Command, LayerProps, Tool};
 use onepaint_ui_kit::widgets::{self, glass_frame, popover_frame};
 use onepaint_ui_kit::{Tokens, icons, theme};
@@ -1028,6 +1028,23 @@ fn layers(app: &mut App, ui: &mut Ui) {
         }
     });
     if let Some(l) = node.as_layer() {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Knockout").color(t.fg_muted)).on_hover_text(
+                "Punch the layer's shape through what is under it: Shallow to below its group, Deep to the Background (Photoshop's Knockout)",
+            );
+            let label = |k: Option<Knockout>| k.map_or("None", Knockout::label);
+            let mut k = l.knockout();
+            egui::ComboBox::from_id_salt("knockout").selected_text(label(k)).width(160.0).show_ui(ui, |ui| {
+                for v in [None, Some(Knockout::Shallow), Some(Knockout::Deep)] {
+                    ui.selectable_value(&mut k, v, label(v));
+                }
+            });
+            if k != l.knockout() {
+                let _ = app
+                    .session
+                    .execute(Command::SetLayerProps { id: active.clone(), props: LayerProps { knockout: Some(k), ..Default::default() } });
+            }
+        });
         ui.horizontal(|ui| {
             if l.mask.is_none() {
                 if widgets::secondary_button(ui, "Add mask", 90.0).on_hover_text("From the selection, if there is one").clicked() {

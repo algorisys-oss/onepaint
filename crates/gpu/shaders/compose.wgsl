@@ -92,6 +92,8 @@ const OP_PAPER: u32 = 7u;
 const OP_COVERAGE: u32 = 8u;
 const OP_PUSH_COPY: u32 = 9u;
 const OP_MIX: u32 = 10u;
+const OP_KNOCKOUT: u32 = 11u;
+const OP_SNAPSHOT: u32 = 12u;
 
 const F_INHERIT: u32 = 1u;     // Layer: inherit alpha; Pop: clip instead of blend
 const F_TINT: u32 = 2u;
@@ -848,6 +850,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // The top of the stack lives in `top`; `stack` holds the registers under it.
     var stack: array<vec4<f32>, STACK>;
     var top = vec4<f32>(0.0);
+    // The Background top-level knockouts reveal (OP_SNAPSHOT).
+    var background = vec4<f32>(0.0);
     if (job.init != NONE) {
         top = load_cache(job.init, p);
     }
@@ -899,6 +903,21 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let v = top;
                 sp -= 1u;
                 top = stack[sp] * (1.0 - opacity) + v * opacity;
+            }
+            case OP_KNOCKOUT: {
+                // The hole shows transparency, the register below (a Pass
+                // Through backdrop) or the Background (program.rs `Reveal`).
+                let k = content(o, p).w * opacity;
+                var bg = vec4<f32>(0.0);
+                if (o.a.y == 1u && sp > 0u) {
+                    bg = stack[sp - 1u];
+                } else if (o.a.y == 2u) {
+                    bg = background;
+                }
+                top = mix(top, bg, k);
+            }
+            case OP_SNAPSHOT: {
+                background = top;
             }
             case OP_OVER_CACHE: {
                 let c = load_cache(o.a.y, p);

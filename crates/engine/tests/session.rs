@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used)]
 use onepaint_color::Rgba;
-use onepaint_doc::BlendMode;
+use onepaint_doc::{BlendMode, Knockout};
 use onepaint_engine::*;
 use onepaint_stroke::StrokePoint;
 
@@ -54,6 +54,21 @@ fn eraser_removes_paint_and_alpha_lock_blocks_erase() {
     draw_line(&mut s, 50.0);
     assert!(s.doc().layer(s.active()).unwrap().pixels.get(100, 50)[3] > 0.9);
     assert_eq!(s.history_len(), n, "alpha-locked erase adds no history");
+}
+
+#[test]
+fn knockout_is_an_undoable_layer_prop_that_replays() {
+    let mut s = new_session();
+    let id = s.active().to_string();
+    let props = LayerProps { knockout: Some(Some(Knockout::Deep)), ..Default::default() };
+    s.execute(Command::SetLayerProps { id: id.clone(), props }).unwrap();
+    assert_eq!(s.doc().layer(&id).unwrap().knockout(), Some(Knockout::Deep));
+    s.execute(Command::Undo).unwrap();
+    assert_eq!(s.doc().layer(&id).unwrap().knockout(), None);
+    // An explicit clear survives serialization.
+    let clear = Command::SetLayerProps { id, props: LayerProps { knockout: Some(None), ..Default::default() } };
+    let json = serde_json::to_string(&clear).unwrap();
+    assert_eq!(serde_json::from_str::<Command>(&json).unwrap(), clear);
 }
 
 #[test]

@@ -326,7 +326,59 @@ impl Layer {
             adjustment: None,
         }
     }
+
+    /// The layer's knockout (happypaint `look-meta.ts`; groups have none).
+    pub fn knockout(&self) -> Option<Knockout> {
+        match self.extra.get(KNOCKOUT_KEY).and_then(|v| v.as_str()) {
+            Some("shallow") => Some(Knockout::Shallow),
+            Some("deep") => Some(Knockout::Deep),
+            _ => None,
+        }
+    }
+
+    /// Set or clear the knockout; `None` drops the key, as happypaint omits it.
+    pub fn set_knockout(&mut self, k: Option<Knockout>) {
+        match k {
+            Some(k) => {
+                self.extra.insert(KNOCKOUT_KEY.into(), serde_json::Value::String(k.as_str().into()));
+            }
+            None => {
+                self.extra.remove(KNOCKOUT_KEY);
+            }
+        }
+    }
 }
+
+/// Where a knocked-out layer's shape punches to: the bottom of its group, or
+/// (at the top level) the Background. happypaint draws the two alike inside a
+/// group: Deep stops at the innermost group rather than reaching the
+/// Background (`compositor.ts` `knockoutPunch`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Knockout {
+    Shallow,
+    Deep,
+}
+
+impl Knockout {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Knockout::Shallow => "shallow",
+            Knockout::Deep => "deep",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Knockout::Shallow => "Shallow",
+            Knockout::Deep => "Deep",
+        }
+    }
+}
+
+/// The `.happypaint` key a layer's knockout lives under, kept in `extra` so
+/// the file's key order survives a round trip.
+pub const KNOCKOUT_KEY: &str = "knockout";
 
 #[derive(Clone, Debug)]
 pub struct Group {

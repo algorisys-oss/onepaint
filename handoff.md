@@ -1,16 +1,35 @@
 # Handoff
 
-Last updated 2026-10-10 (evening). Read this first when picking the work back up,
-then `todo.md` (the working list) and `AGENTS.md` (the rules).
+Last updated 2026-10-18. Read this first when picking the work back up,
+then `docs/parity-delta-2026-10-18.md` (this run's list and decisions),
+`todo.md` and `AGENTS.md`. **Keep this file current after every step**, so a
+dropped session can resume from it.
 
-## Where things stand
-- `main` is clean and pushed.
-- Build, `clippy -D warnings`, fmt and `cargo test --workspace` are all green.
-- Feature parity is nearly complete. `todo.md` lists what is left, and
-  `docs/feature-parity.md` has the per-item notes; deliberate differences
-  from happypaint are in `docs/divergences.md` (now up to 46).
+## Current run: happypaint v0.201.7 → v0.204.7 parity (2026-10-18)
+Rules for the run: commit locally per milestone, **do not push**; build with
+`cargo -j 2` and test one crate at a time (RAM ~3 GB free, disk 95%).
 
-## Last session (2026-10-10, evening, unattended)
+Order (✓ done, ▶ in progress):
+1. ✓ Photoshop blend modes + Pass Through groups — `aaed348`.
+2. ✓ Knockout (v0.202.2) — committed.
+3. ▶ Mask density/feather + Blend If (v0.202.0).
+4. Vector masks (v0.202.1).
+5. PSD `phfl` Photo Filter decode; pointer-router "pressed outside canvas" fix.
+6. UI: Mix colour grid, side sliders + typed values, Align on active layer.
+
+### Step 2, Knockout — done
+Semantics (happypaint `compositor.ts` `knockoutPunch`): before a knocked-out
+layer draws, `target = mix(target, reveal, content.a · opacity)`. Reveal =
+the Background snapshot at the top level, a Pass Through group's backdrop,
+or transparency in an isolated group. Stored in `extra["knockout"]`.
+Oracle `crates/compose/tests/knockout.rs`; GPU `OP_KNOCKOUT`/`OP_SNAPSHOT`;
+PSD `knko`; `LayerProps::knockout`; Properties select.
+
+### Step 3, mask density/feather + Blend If — state
+Not started. Read happypaint `look-meta.ts`, `layer-look-editor.tsx` and the
+compositor's mask/Blend If code first.
+
+## Earlier session (2026-10-10, evening, unattended)
 Items 1–5 from the earlier list; every step pushed as it landed.
 
 - **Spec 40, composite sheets** (`gpu::sheets`): the canvas composite and
@@ -105,8 +124,8 @@ Items 1–5 from the earlier list; every step pushed as it landed.
 - Vector support: its scope, and when it comes relative to the rest.
 
 ## Gotchas
-- The disk is about 91% full. Run `cargo clean` if free space drops below
-  8 GB. RAM is tight, so build with `-j4`.
+- The disk is about 95% full (26 GB free on 2026-10-18). Run `cargo clean` if
+  free space drops below 8 GB. RAM is tight: build with `-j 2`.
 - GPU tests and benches skip silently when no adapter is present. Check
   for the "skipping" line before trusting a green run.
 - **GPU timings are noisy here.** Browsers share the iGPU and its clock

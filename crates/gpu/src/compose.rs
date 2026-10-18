@@ -15,7 +15,7 @@
 //! before the composite.
 
 use crate::sheets::Sheets;
-use onepaint_compose::program::{Content, MaskSrc, Op, Segment, StrokeSrc, TileProgram, op_sources, stroke_code};
+use onepaint_compose::program::{Content, MaskSrc, Op, Reveal, Segment, StrokeSrc, TileProgram, op_sources, stroke_code};
 use onepaint_doc::BlendMode;
 use onepaint_raster::{TILE, Tile};
 use std::collections::{HashMap, HashSet};
@@ -45,6 +45,8 @@ const OP_PAPER: u32 = 7;
 const OP_COVERAGE: u32 = 8;
 const OP_PUSH_COPY: u32 = 9;
 const OP_MIX: u32 = 10;
+const OP_KNOCKOUT: u32 = 11;
+const OP_SNAPSHOT: u32 = 12;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -145,9 +147,9 @@ fn uses_pigment(ops: &[&Op]) -> bool {
     let stroke = |s: &Option<StrokeSrc>| s.as_ref().is_some_and(|s| pig(stroke_code(s.mode).1));
     ops.iter().any(|op| match op {
         Op::Layer { content, mode, .. } => pig(*mode) || stroke(&content.stroke) || stroke(&content.mask_stroke),
-        Op::PushContent(c) | Op::Clip { content: c, .. } => stroke(&c.stroke) || stroke(&c.mask_stroke),
+        Op::PushContent(c) | Op::Clip { content: c, .. } | Op::Knockout { content: c, .. } => stroke(&c.stroke) || stroke(&c.mask_stroke),
         Op::Pop { mode, .. } | Op::Adjust { mode, .. } => pig(*mode),
-        Op::PushZero | Op::Paper { .. } | Op::Coverage(_) | Op::PushCopy | Op::Mix { .. } => false,
+        Op::PushZero | Op::Paper { .. } | Op::Coverage(_) | Op::PushCopy | Op::Mix { .. } | Op::Snapshot => false,
     })
 }
 
@@ -598,6 +600,16 @@ impl GpuCompositor {
             Op::PushZero => o[0] = 1,
             Op::PushCopy => o[0] = OP_PUSH_COPY,
             Op::Mix { opacity } => (o[0], o[2]) = (OP_MIX, opacity.to_bits()),
+            Op::Snapshot => o[0] = OP_SNAPSHOT,
+            Op::Knockout { content, opacity, reveal } => {
+                let r = match reveal {
+                    Reveal::Clear => 0,
+                    Reveal::Below => 1,
+                    Reveal::Background => 2,
+                };
+                (o[0], o[1], o[2]) = (OP_KNOCKOUT, r, opacity.to_bits());
+                self.encode_content(&mut o, content);
+            }
             Op::PushContent(c) => {
                 o[0] = 2;
                 self.encode_content(&mut o, c);
