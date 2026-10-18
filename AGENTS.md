@@ -197,7 +197,10 @@ author would. **Never** add AI/LLM attribution or hints: no
 
 Hot paths (stroke, composite, canvas present, filter preview) get
 `criterion` benches in `benches/`. A change that slows a bench by more than 5%
-needs a justification.
+needs a justification. `scripts/bench-gate/gate.sh save` records a baseline
+on the commit to compare against; `scripts/bench-gate/gate.sh check` fails
+when a bench is slower past the budget (`BENCHES` picks others; the GPU
+benches are noisy on a shared iGPU).
 
 ## Porting workflow (per subsystem)
 

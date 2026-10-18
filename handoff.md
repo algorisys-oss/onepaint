@@ -1,48 +1,47 @@
 # Handoff
 
-Last updated 2026-10-18. Read this first when picking the work back up,
-then `docs/parity-delta-2026-10-18.md` (this run's list and decisions),
-`todo.md` and `AGENTS.md`. **Keep this file current after every step**, so a
-dropped session can resume from it.
+Last updated 2026-10-19. Read this first when picking the work back up,
+then `docs/parity-delta-2026-10-18.md` (the v0.204.7 run's list and
+decisions), `todo.md` and `AGENTS.md`. **Keep this file current after every
+step**, so a dropped session can resume from it.
 
-## State (2026-10-18, evening) — read this first
+## State (2026-10-19, morning) — read this first
 Rules: commit **and push** per milestone (the user authorized pushing);
 test with `RAYON_NUM_THREADS=2 cargo test -p X -j 2 -- --test-threads=2`,
 one crate at a time (the user saw 10 GB / all cores otherwise); build with
 `cargo -j 2`; run `cargo clean` when free disk drops under 8 GB.
 
-Done today, all pushed (newest last):
-- happypaint v0.204.7 parity: Knockout, mask density/feather, Blend If,
-  vector masks, Align on the active layer, Mix colour grid, side sliders
-  (details in `docs/parity-delta-2026-10-18.md`).
-- Exposure, Vibrance, Photo Filter, Channel Mixer (CPU, GPU, PSD, panels).
-- PSD: live Levels, Curves, Hue/Sat, Color Balance (midtones), B&W (kind
-  only), Gradient Map; untouched PSDs save back byte for byte and keep
-  untouched layers' records (spec 51).
-- 8-bit tiles in 8-bit GPU atlases (spec 49).
-- Spec 52, spatial adjustment layers on the GPU: Gaussian/motion blur,
-  sharpen, emboss, mosaic, ripple, halftone, crystallize, bloom, line art
-  (Sobel and XDoG), live at the top level or in isolated groups, stacked
-  too, up to three (3b: filtered tiles in their own texture, jobs staged by
-  depth; each pass of a submit got its own buffers, as fill passes had
-  shared one set and run the last pass's jobs)
-  (`compose::spatial`, `gpu::spatial` + `spatial.wgsl`,
-  `Session::display_doc_gpu`).
+Overnight (2026-10-18 → 19), all pushed, newest last:
+- Spec 52 3b: stacked spatial layers on the GPU (up to three; planning
+  grows ninefold per layer). Found on the way: every pass of a submit had
+  shared one params/jobs/ops buffer set, so fill passes ran the last pass's
+  jobs; each pass now has its own.
+- Spec 53: whole-canvas filter layers on the GPU. A lone twirl, pinch,
+  polar, chromatic aberration, radial, spin, tilt-shift, iris or field blur
+  layer runs live (`gpu::whole`, `whole.wgsl`): changed backdrop tiles fill
+  the segment cache and are copied into a backdrop image, one pass filters
+  it, composites read the result. Up to 4096² (the gallery 2048²).
+  Mid-stroke, refilters over ~8 ms of work (radial 4096²: 173 ms; tilt-shift
+  2048²: 56 ms) keep the layer's image until the stroke ends, as the CPU
+  path does. Fixed on the way: the image rounded the level size up, so
+  clamped taps read a half-off-document texel.
+- Spec 54: tiles whose sources can't be resident go to the CPU next frame
+  (`take_failed`) instead of drawing with layers missing; a lost GPU device
+  writes the autosave at once and asks for a restart (eframe can't make a
+  new device).
+- `scripts/bench-gate/gate.sh save|check`: the perf-budget gate for
+  AGENTS.md's 5% rule, on criterion's saved baselines (checked: the 9
+  engine hot-path benches came out within 5% of themselves).
 
-- 2026-10-19 (overnight): spec 53, whole-canvas filter layers. A lone
-  twirl, pinch, polar, chromatic aberration, radial, spin, tilt-shift,
-  iris or field blur layer runs live on the GPU
-  (one pass over the document reading backdrop tiles from the segment
-  cache into a backdrop image; `gpu::whole`, `whole.wgsl`), in documents
-  up to 4096² (the gallery 2048²). Mid-stroke, filters over ~8 ms (radial
-  4096², the gallery) keep their image until the stroke ends.
+Earlier on 2026-10-18 (pushed): the happypaint v0.204.7 parity items, four
+more adjustment kinds, live PSD adjustments and byte-for-byte round trips
+(spec 51), 8-bit GPU atlases (spec 49), spec 52 phases 1–3a.
 
-- 2026-10-19: spec 54. Tiles whose sources don't fit go to the CPU
-  (`GpuCompositor::take_failed`) instead of drawing with layers missing;
-  a lost GPU device saves the work at once and asks for a restart.
-
-Next (the user's order: recommended list, then robustness):
-1. Robustness: a perf-budget gate (benches checked against a budget).
+Next, unless you redirect:
+1. Ghost pegs on the GPU (`todo.md` §2.1, the last big CPU fallback), or
+   imported pattern fills and sand screentone.
+2. Oil paint on the GPU would need a different quadrant rule (divergence),
+   so it waits for your call.
 
 Open decisions for the user: workspace layout (happypaint's menu bar /
 title-bar header, divergences 41–42), licence (happypaint is PolyForm NC,
