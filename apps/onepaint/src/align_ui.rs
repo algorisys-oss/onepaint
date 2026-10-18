@@ -57,7 +57,12 @@ pub fn panel(app: &mut App, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     crate::dock::fit_width(ui, 240.0);
     app.layer_picks.retain(|id| app.session.doc().find(id).is_some());
-    let subjects = app.session.transformable_ids(&app.layer_picks);
+    // With nothing multi-selected the panel acts on the active layer, as the
+    // Move tool does (happypaint v0.204.1): a tap makes a layer active, not
+    // picked, and a tablet has no Ctrl/Shift-click.
+    let using_active = app.layer_picks.is_empty();
+    let picks = if using_active { vec![app.session.active().to_string()] } else { app.layer_picks.clone() };
+    let subjects = app.session.transformable_ids(&picks);
     let count = subjects.len();
     let mut op = None;
     widgets::section_label(ui, "Align");
@@ -133,7 +138,9 @@ pub fn panel(app: &mut App, ui: &mut Ui) {
         }
     });
     let hint = if count == 0 {
-        "Pick layers in the Layers panel (Ctrl/⌘-click or Shift-click) to align them.".to_string()
+        "Choose a visible, unlocked layer in the Layers panel to align it.".to_string()
+    } else if using_active {
+        "Aligning the current layer. To align several, Ctrl/⌘- or Shift-click their rows.".to_string()
     } else {
         format!("{count} layer{} selected · moved by their artwork's bounding box", if count == 1 { "" } else { "s" })
     };
@@ -156,6 +163,11 @@ fn run(app: &mut App, ui: &Ui, op: Op, subjects: &[String]) {
     }
     let (moves, done) = match op {
         Op::Align(mode) => {
+            // One layer aligned to its own bounds never moves: say what would help.
+            if app.align_to_selection && items.len() == 1 && app.session.selection_bounds().is_none() {
+                app.notify("Draw a selection to align to, or set Align to: Canvas", now);
+                return;
+            }
             let target = if app.align_to_selection {
                 app.session.selection_bounds().or_else(|| align::union_bounds(&items))
             } else {

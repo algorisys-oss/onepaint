@@ -49,12 +49,19 @@ onepaint ports it in. Fold each item into `feature-parity.md` as it lands.
 
 - [ ] `phfl` Photo Filter colour decode (v0.204.7): v3 holds D50 XYZ
       (1.0 = 32768); v2 Lab binary colours rescaled; also fixes Gradient Map
-      stops stored as Lab or grey.
+      stops stored as Lab or grey. **Blocked:** onepaint has no Photo Filter
+      adjustment yet, and its PSD reader imports only invert, posterize,
+      threshold and brightness/contrast (`todo.md`, new adjustments and the
+      PSD codec). Lands with them; happypaint's decode is in
+      `storage/psd/adjust-blocks.ts` `readPhotoFilter`.
 
 ## Input
 
-- [ ] A pointer pressed outside the canvas is remembered until it lifts and
-      never "healed" into a stroke (v0.204.7, `pointer-router.ts`).
+- [x] A pointer pressed outside the canvas is remembered until it lifts and
+      never "healed" into a stroke (v0.204.7, `pointer-router.ts`). Not
+      applicable: onepaint has no missed-pointerdown heal; a stroke only
+      starts from a press on the canvas (egui keeps a drag with the widget it
+      began on), as `strokes_on_the_chrome_do_not_paint` checks.
 
 ## UI
 
@@ -62,8 +69,9 @@ onepaint ports it in. Fold each item into `feature-parity.md` as it lands.
       OKLab or RGB mixing, save as palette.
 - [ ] Side sliders anywhere (v0.204.0): edges, floating, with the tools; a
       typed value entry from the end icon (v0.204.7).
-- [ ] Align acts on the active layer when nothing is multi-selected
-      (v0.204.1).
+- [x] Align acts on the active layer when nothing is multi-selected
+      (v0.204.1), with happypaint's hint and its "Draw a selection to align
+      to" notice for one layer aligned to itself.
 - [ ] Tooltips on tool icons (v0.202.3), Save / Save As (v0.204.2), the
       header as a title bar (v0.204.3): check against onepaint's chrome.
 

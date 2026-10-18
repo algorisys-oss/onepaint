@@ -1669,6 +1669,30 @@ mod tests {
     }
 
     #[test]
+    fn align_acts_on_the_active_layer_when_nothing_is_picked() {
+        let mut h = harness();
+        h.run();
+        // Some paint in the active layer's top-left corner.
+        let s = &mut h.state_mut().session;
+        s.execute(Command::SetColor { rgba: onepaint_color::Rgba::new(1.0, 0.0, 0.0, 1.0) }).unwrap();
+        let sel = onepaint_selection::rect_polygon([10.0, 10.0], [40.0, 40.0]);
+        s.execute(Command::SelectShape { contours: vec![sel], mode: onepaint_selection::Mode::Replace }).unwrap();
+        s.execute(Command::FillSelection).unwrap();
+        s.execute(Command::Deselect).unwrap();
+        let id = s.active().to_string();
+        let st = h.state_mut();
+        st.layout.set_placement(layout::PanelId::Align, layout::Placement::Float { x: 300.0, y: 200.0 }, None);
+        st.layout.set_open(layout::PanelId::Align, true);
+        assert!(st.layer_picks.is_empty());
+        h.run();
+        h.get_by_label("Align right edges").click();
+        h.run();
+        let w = h.state().session.doc().width as i32;
+        let l = h.state().session.doc().layer(&id).unwrap();
+        assert!(l.pixels.get(w - 2, 20)[3] > 0.99 && l.pixels.get(20, 20)[3] == 0.0);
+    }
+
+    #[test]
     fn top_bar_buttons_open_popovers_and_add_layers() {
         let mut h = harness();
         h.run();
