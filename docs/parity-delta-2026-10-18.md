@@ -81,8 +81,14 @@ onepaint ports it in. Fold each item into `feature-parity.md` as it lands.
 - [x] Align acts on the active layer when nothing is multi-selected
       (v0.204.1), with happypaint's hint and its "Draw a selection to align
       to" notice for one layer aligned to itself.
-- [ ] Tooltips on tool icons (v0.202.3), Save / Save As (v0.204.2), the
-      header as a title bar (v0.204.3): check against onepaint's chrome.
+- [x] Tooltips on tool icons (v0.202.3), Save / Save As (v0.204.2), the
+      header as a title bar (v0.204.3): checked against onepaint's chrome.
+      egui draws tooltips in a layer above every panel and keeps them on
+      screen, so the clipping bug can't happen; Save (Ctrl+S, asks only the
+      first time) and Save As (Ctrl+Shift+S) already exist. The two-row
+      header and the merged desktop title bar belong to happypaint's
+      menu-bar workspace, which onepaint hasn't adopted (divergences 41–42):
+      they wait for that decision.
 
 ## Notes: vector masks (happypaint v0.202.1, read 2026-10-18)
 

@@ -75,6 +75,13 @@ Split into 3a (density + Blend If, per tile) and 3b (feather, spatial).
 
 ### Step 4 done; Blend If bar keys done (arrows ±1, Shift ±10).
 
+### Run status (2026-10-18, evening)
+All six steps are done and committed locally (not pushed): 4e2116f Knockout,
+c1c2d56 density + Blend If, 9bad5ed feather, f19e6d5 vector masks,
+382840d Align, a442802 Mix grid, 0945a10 side sliders. Open: PSD `phfl`
+(needs the Photo Filter adjustment, `todo.md` new adjustments), the
+title-bar workspace decision, the licence question (delta doc).
+
 ## Earlier session (2026-10-10, evening, unattended)
 Items 1–5 from the earlier list; every step pushed as it landed.
 
