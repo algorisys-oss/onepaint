@@ -619,3 +619,51 @@ fn eight_bit_documents_blend_in_gamma_space_like_the_cpu() {
         }
     }
 }
+
+/// Every layer's pixel and mask tiles stored 8-bit, as an 8-bit document keeps them (spec 49).
+fn quantized(mut doc: Document) -> Document {
+    use onepaint_raster::Store;
+    fn walk(nodes: &mut [Node]) {
+        for n in nodes {
+            match n {
+                Node::Layer(l) => {
+                    for s in std::iter::once(&mut l.pixels).chain(l.mask.as_mut()) {
+                        for (tx, ty) in s.tile_keys() {
+                            let t = s.tile(tx, ty).map(|t| t.to_store(Store::Unorm8));
+                            s.set_tile(tx, ty, t.map(Arc::new));
+                        }
+                    }
+                }
+                Node::Group(g) => walk(&mut g.children),
+            }
+        }
+    }
+    doc.depth = onepaint_doc::Depth::Rgba8;
+    walk(&mut doc.root);
+    doc
+}
+
+/// 8-bit tiles live in `Rgba8Unorm` atlases (half the memory) and read back
+/// their exact bytes, so the result matches the CPU oracle as before.
+#[test]
+fn eight_bit_tiles_use_8_bit_atlases() {
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let mut gc = GpuCompositor::new(&device, 64 << 20);
+    let (w, h) = (300, 300);
+    let tex = target(&device, w, h);
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
+    for seed in 0..8 {
+        let doc = quantized(with_adjustments(random_doc(seed, w, h, false), seed));
+        gc.run(&device, &queue, &programs(&doc, None), &view, [w, h]);
+        assert_adjusted(&doc, &read(&device, &queue, &tex), &format!("seed {seed}"));
+    }
+    let [f16, u8s] = gc.atlas_counts();
+    assert!(u8s >= 1, "8-bit tiles went to an 8-bit atlas ({f16} f16, {u8s} 8-bit)");
+    // A 16-bit document never makes one.
+    let mut plain = GpuCompositor::new(&device, 64 << 20);
+    plain.run(&device, &queue, &programs(&random_doc(3, w, h, false), None), &view, [w, h]);
+    assert_eq!(plain.atlas_counts()[1], 0);
+}

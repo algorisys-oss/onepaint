@@ -61,8 +61,13 @@ Paths are under `happypaint/frontend/src`.
 
 ### Elsewhere
 - The history byte budget counts actual tile bytes.
-- GPU uploads decode to f16 (`f16_data`). Spec 49 halves CPU memory; 8-bit
-  atlases on the GPU (halving VRAM) are a later step.
+- GPU: 8-bit tiles live in `Rgba8Unorm` atlases (2026-10-18), half an f16
+  atlas's memory, uploaded as their bytes (exact, where f16 rounded them).
+  Each atlas has one format; an 8-bit tile falls back to an f16 atlas when
+  no 8-bit one has room, never the other way. The atlas budget is in bytes,
+  so an 8-bit document fits twice the tiles. Their mips are rounded to bytes
+  at each level (`mip.wgsl` built for `rgba8unorm`). Stroke buffers and
+  derived tiles (feathered masks, vector mask coverage, relief) stay f16.
 - Compositing is unchanged: linear light (spec 50 changes it).
 - Recordings (`onepaint-rec`) still hold tiles as f16; replaying an 8-bit
   document requantizes them when they land.

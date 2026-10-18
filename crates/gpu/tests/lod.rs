@@ -286,3 +286,59 @@ fn sheets_composite_the_same_as_one_texture() {
         assert_eq!(a, b, "level {l}");
     }
 }
+
+/// Mip levels of 8-bit atlases (spec 39 on `Rgba8Unorm`) preview like the
+/// f16 ones: each level rounds to bytes once more, nothing else changes.
+#[test]
+fn eight_bit_atlases_preview_like_f16_ones() {
+    use onepaint_raster::Store;
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let sheets = Sheets::single([300, 300]);
+    let tex = target(&device, &sheets);
+    let doc = random_doc(5, 300, 300, false);
+    let mut q = doc.clone();
+    fn walk(nodes: &mut [Node]) {
+        for n in nodes {
+            match n {
+                Node::Layer(l) => {
+                    for (tx, ty) in l.pixels.tile_keys() {
+                        let t = l.pixels.tile(tx, ty).map(|t| std::sync::Arc::new(t.to_store(Store::Unorm8)));
+                        l.pixels.set_tile(tx, ty, t);
+                    }
+                }
+                Node::Group(g) => walk(&mut g.children),
+            }
+        }
+    }
+    walk(&mut q.root);
+    // The f16 reference holds the same (quantized) values.
+    let mut r = q.clone();
+    fn widen(nodes: &mut [Node]) {
+        for n in nodes {
+            match n {
+                Node::Layer(l) => {
+                    for (tx, ty) in l.pixels.tile_keys() {
+                        let t = l.pixels.tile(tx, ty).map(|t| std::sync::Arc::new(t.to_store(Store::F16)));
+                        l.pixels.set_tile(tx, ty, t);
+                    }
+                }
+                Node::Group(g) => widen(&mut g.children),
+            }
+        }
+    }
+    widen(&mut r.root);
+    let _ = doc;
+    for l in 1..=3 {
+        let mut a = GpuCompositor::new(&device, 64 << 20);
+        let mut b = GpuCompositor::new(&device, 64 << 20);
+        let got = run_at(&mut a, &device, &queue, &tex, &sheets, &programs(&q, None, None), l);
+        let want = run_at(&mut b, &device, &queue, &tex, &sheets, &programs(&r, None, None), l);
+        assert!(a.atlas_counts()[1] >= 1 && b.atlas_counts()[1] == 0);
+        let worst = got.iter().zip(&want).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
+        // Each level rounds to 1/255 once: within a few steps at level 3.
+        assert!(worst <= 4.0 / 255.0, "level {l}: {worst}");
+    }
+}

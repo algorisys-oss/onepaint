@@ -37,6 +37,9 @@ pub const DEFAULT_BUDGET: u64 = 1 << 30;
 /// room to spare (576 slots). At 256 MiB (384 slots) a 205-tile drag
 /// thrashed: 76 segments were recomposited every frame, tripling its time.
 pub const DEFAULT_CACHE_BUDGET: u64 = 384 << 20;
+/// Atlas formats: f16, and 8-bit (`free` and `grow` index by these).
+const F16: usize = 0;
+const U8: usize = 1;
 /// "Not used" in a job's `init` and `dest`.
 const NONE: u32 = u32::MAX;
 const OP_OVER_CACHE: u32 = 5;
@@ -259,11 +262,15 @@ pub struct GpuCompositor {
     /// Params, jobs and ops buffers for the fill pass and the composite pass.
     bufs: [PassBuffers; 2],
     dummy: wgpu::TextureView,
+    /// Atlases of either format: `Rgba16Float`, or `Rgba8Unorm` for 8-bit
+    /// documents' tiles (half the memory; their bytes exactly).
     atlases: Vec<(wgpu::Texture, wgpu::TextureView)>,
     per_atlas: u32,
-    max_atlases: usize,
+    /// GPU memory the atlases may take.
+    budget: u64,
     slots: HashMap<usize, Slot>,
-    free: Vec<u32>,
+    /// Free slots in f16 atlases, then in 8-bit ones.
+    free: [Vec<u32>; 2],
     clock: u64,
     /// Tiles uploaded since creation (for tests and stats).
     pub uploads: u64,
@@ -429,7 +436,6 @@ impl GpuCompositor {
             .create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() });
         // WebGPU guarantees 256 layers; a program never needs more than `MAX_SOURCES` (128).
         let per_atlas = device.limits().max_texture_array_layers.clamp(1, 256);
-        let max_atlases = ((budget / TILE_BYTES) as usize).div_ceil(per_atlas as usize).clamp(1, ATLASES);
         let cache_layers = ((cache_budget / TILE_BYTES) as u32).min(device.limits().max_texture_array_layers);
         let dummy_store = device
             .create_texture(&wgpu::TextureDescriptor {
@@ -464,9 +470,9 @@ impl GpuCompositor {
             dummy,
             atlases: Vec::new(),
             per_atlas,
-            max_atlases,
+            budget,
             slots: HashMap::new(),
-            free: Vec::new(),
+            free: [Vec::new(), Vec::new()],
             clock: 0,
             uploads: 0,
             cache: None,
@@ -497,13 +503,35 @@ impl GpuCompositor {
         }
     }
 
-    /// Slots the atlases can hold at most.
+    /// Slots the atlases can hold at most, in f16 atlases (8-bit tiles fit
+    /// at least as many).
     pub fn capacity(&self) -> usize {
-        self.per_atlas as usize * self.max_atlases
+        self.per_atlas as usize * ((self.budget / self.atlas_bytes(F16)) as usize).clamp(1, ATLASES)
     }
 
-    fn grow(&mut self, device: &wgpu::Device) -> bool {
-        if self.atlases.len() >= self.max_atlases {
+    /// How many f16 and 8-bit atlases exist (for tests and stats).
+    pub fn atlas_counts(&self) -> [usize; 2] {
+        let u8s = (0..self.atlases.len()).filter(|&i| self.format_of(i) == U8).count();
+        [self.atlases.len() - u8s, u8s]
+    }
+
+    fn atlas_bytes(&self, format: usize) -> u64 {
+        self.per_atlas as u64 * TILE_BYTES / if format == U8 { 2 } else { 1 }
+    }
+
+    fn format_of(&self, atlas: usize) -> usize {
+        usize::from(self.atlases[atlas].0.format() == wgpu::TextureFormat::Rgba8Unorm)
+    }
+
+    /// Add an atlas of `format` while the budget allows; the first of each
+    /// format always fits.
+    fn grow(&mut self, device: &wgpu::Device, format: usize) -> bool {
+        if self.atlases.len() >= ATLASES {
+            return false;
+        }
+        let used: u64 = (0..self.atlases.len()).map(|i| self.atlas_bytes(self.format_of(i))).sum();
+        let first = !(0..self.atlases.len()).any(|i| self.format_of(i) == format);
+        if !first && used + self.atlas_bytes(format) > self.budget {
             return false;
         }
         let tex = device.create_texture(&wgpu::TextureDescriptor {
@@ -512,7 +540,7 @@ impl GpuCompositor {
             mip_level_count: crate::mip::LEVELS,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba16Float,
+            format: if format == U8 { wgpu::TextureFormat::Rgba8Unorm } else { wgpu::TextureFormat::Rgba16Float },
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::STORAGE_BINDING,
             view_formats: &[],
         });
@@ -520,14 +548,19 @@ impl GpuCompositor {
             tex.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() });
         let base = self.atlases.len() as u32 * self.per_atlas;
         self.atlases.push((tex, view));
-        self.free.extend((base..base + self.per_atlas).rev());
+        self.free[format].extend((base..base + self.per_atlas).rev());
         true
     }
 
-    /// The least recently used slot outside the current batch.
-    fn evict(&mut self) -> Option<u32> {
+    /// The least recently used slot of `format` outside the current batch.
+    fn evict(&mut self, format: usize) -> Option<u32> {
         let clock = self.clock;
-        let (&k, s) = self.slots.iter().filter(|(_, s)| s.used != clock).min_by_key(|(_, s)| s.used)?;
+        let per = self.per_atlas;
+        let (&k, s) = self
+            .slots
+            .iter()
+            .filter(|(_, s)| s.used != clock && self.format_of((s.idx / per) as usize) == format)
+            .min_by_key(|(_, s)| s.used)?;
         let idx = s.idx;
         self.slots.remove(&k);
         Some(idx)
@@ -540,23 +573,40 @@ impl GpuCompositor {
             s.used = self.clock;
             return Some(s.idx);
         }
-        let idx = match self.free.pop() {
-            Some(i) => i,
-            None if self.grow(device) => self.free.pop()?,
-            None => self.evict()?,
+        // An 8-bit tile prefers an 8-bit atlas and fits an f16 one exactly;
+        // an f16 tile only fits an f16 atlas.
+        let mut slot = |f: usize| match self.free[f].pop() {
+            Some(i) => Some(i),
+            None if self.grow(device, f) => self.free[f].pop(),
+            None => self.evict(f),
         };
-        let (atlas, _) = &self.atlases[(idx / self.per_atlas) as usize];
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: atlas,
-                mip_level: 0,
-                origin: wgpu::Origin3d { x: 0, y: 0, z: idx % self.per_atlas },
-                aspect: wgpu::TextureAspect::All,
-            },
-            bytemuck::cast_slice(&t.f16_data()),
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(TILE as u32 * 8), rows_per_image: Some(TILE as u32) },
-            wgpu::Extent3d { width: TILE as u32, height: TILE as u32, depth_or_array_layers: 1 },
-        );
+        let idx = match t.unorm8_data() {
+            Some(_) => slot(U8).or_else(|| slot(F16))?,
+            None => slot(F16)?,
+        };
+        let atlas_i = (idx / self.per_atlas) as usize;
+        let (atlas, _) = &self.atlases[atlas_i];
+        let origin = wgpu::TexelCopyTextureInfo {
+            texture: atlas,
+            mip_level: 0,
+            origin: wgpu::Origin3d { x: 0, y: 0, z: idx % self.per_atlas },
+            aspect: wgpu::TextureAspect::All,
+        };
+        let size = wgpu::Extent3d { width: TILE as u32, height: TILE as u32, depth_or_array_layers: 1 };
+        match t.unorm8_data().filter(|_| self.format_of(atlas_i) == U8) {
+            Some(bytes) => queue.write_texture(
+                origin,
+                bytes,
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(TILE as u32 * 4), rows_per_image: Some(TILE as u32) },
+                size,
+            ),
+            None => queue.write_texture(
+                origin,
+                bytemuck::cast_slice(&t.f16_data()),
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(TILE as u32 * 8), rows_per_image: Some(TILE as u32) },
+                size,
+            ),
+        }
         self.uploads += 1;
         self.slots.insert(k, Slot { idx, _tile: Arc::downgrade(t), used: self.clock, mipped: false });
         Some(idx)

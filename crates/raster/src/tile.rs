@@ -63,6 +63,14 @@ impl Tile {
         }
     }
 
+    /// The raw bytes of an 8-bit tile (`round(v · 255)` per channel); `None` for f16.
+    pub fn unorm8_data(&self) -> Option<&[u8]> {
+        match &self.data {
+            Data::Unorm8(d) => Some(d),
+            Data::F16(_) => None,
+        }
+    }
+
     /// Bytes the pixels take.
     pub fn byte_size(&self) -> usize {
         match &self.data {

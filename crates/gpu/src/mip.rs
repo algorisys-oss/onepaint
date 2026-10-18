@@ -25,6 +25,9 @@ pub struct Mipper {
     sheets: wgpu::ComputePipeline,
     array: wgpu::ComputePipeline,
     layout: wgpu::BindGroupLayout,
+    /// The same for `Rgba8Unorm` atlases (8-bit documents' tiles).
+    array8: wgpu::ComputePipeline,
+    layout8: wgpu::BindGroupLayout,
 }
 
 /// A single-level `D2Array` view (the composite sheets and the atlases).
@@ -39,8 +42,16 @@ pub fn level_view(tex: &wgpu::Texture, level: u32) -> wgpu::TextureView {
 
 impl Mipper {
     pub fn new(device: &wgpu::Device) -> Self {
-        let module = device
-            .create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("mip"), source: wgpu::ShaderSource::Wgsl(MIP_WGSL.into()) });
+        let (sheets, array, layout) = Self::build(device, wgpu::TextureFormat::Rgba16Float);
+        let (_, array8, layout8) = Self::build(device, wgpu::TextureFormat::Rgba8Unorm);
+        Self { sheets, array, layout, array8, layout8 }
+    }
+
+    /// The pipelines writing `format`.
+    fn build(device: &wgpu::Device, format: wgpu::TextureFormat) -> (wgpu::ComputePipeline, wgpu::ComputePipeline, wgpu::BindGroupLayout) {
+        let src = if format == wgpu::TextureFormat::Rgba8Unorm { MIP_WGSL.replace("rgba16float", "rgba8unorm") } else { MIP_WGSL.into() };
+        let module =
+            device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("mip"), source: wgpu::ShaderSource::Wgsl(src.into()) });
         let cs = wgpu::ShaderStages::COMPUTE;
         let common = [
             wgpu::BindGroupLayoutEntry {
@@ -73,11 +84,7 @@ impl Mipper {
         let store = |binding, dim| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: cs,
-            ty: wgpu::BindingType::StorageTexture {
-                access: wgpu::StorageTextureAccess::WriteOnly,
-                format: wgpu::TextureFormat::Rgba16Float,
-                view_dimension: dim,
-            },
+            ty: wgpu::BindingType::StorageTexture { access: wgpu::StorageTextureAccess::WriteOnly, format, view_dimension: dim },
             count: None,
         };
         let mut entries = common.to_vec();
@@ -98,7 +105,7 @@ impl Mipper {
                 cache: None,
             })
         };
-        Self { sheets: pipeline(&layout, "mip_sheets"), array: pipeline(&layout, "mip_array"), layout }
+        (pipeline(&layout, "mip_sheets"), pipeline(&layout, "mip_array"), layout)
     }
 
     /// Downsample tiles `keys` of the composite sheets `tex`, laid out as
@@ -132,7 +139,7 @@ impl Mipper {
                 sheet: sheets.sheet_at(l),
                 src_size: sheets.doc_at(l - 1),
             };
-            self.pass(device, enc, &self.sheets, &jobs, keys.len(), params, &src, &dst);
+            self.pass(device, enc, (&self.sheets, &self.layout), &jobs, keys.len(), params, &src, &dst);
         }
     }
 
@@ -141,6 +148,8 @@ impl Mipper {
         if slots.is_empty() {
             return;
         }
+        let pipeline =
+            if tex.format() == wgpu::TextureFormat::Rgba8Unorm { (&self.array8, &self.layout8) } else { (&self.array, &self.layout) };
         let keys: Vec<[u32; 2]> = slots.iter().map(|&s| [s, 0]).collect();
         let jobs = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("mip jobs"),
@@ -151,7 +160,7 @@ impl Mipper {
             let tile = (TILE as u32 >> l).max(1);
             let (src, dst) = (level_view(tex, l - 1), level_view(tex, l));
             let params = Params { dst_size: [tile, tile], tile, cols: 1, sheet: [tile, tile], src_size: [tile << 1, tile << 1] };
-            self.pass(device, enc, &self.array, &jobs, keys.len(), params, &src, &dst);
+            self.pass(device, enc, pipeline, &jobs, keys.len(), params, &src, &dst);
         }
     }
 
@@ -160,7 +169,7 @@ impl Mipper {
         &self,
         device: &wgpu::Device,
         enc: &mut wgpu::CommandEncoder,
-        pipeline: &wgpu::ComputePipeline,
+        (pipeline, layout): (&wgpu::ComputePipeline, &wgpu::BindGroupLayout),
         jobs: &wgpu::Buffer,
         n: usize,
         params: Params,
@@ -174,7 +183,7 @@ impl Mipper {
         });
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("mip"),
-            layout: &self.layout,
+            layout,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: params_buf.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: jobs.as_entire_binding() },
