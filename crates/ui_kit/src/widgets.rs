@@ -335,6 +335,21 @@ pub fn swatch(ui: &mut Ui, color: Rgba, size: f32, selected: bool) -> Response {
     resp
 }
 
+/// A square colour cell for colour grids (the Mix grid): an accent outline
+/// when it is the current colour, a quiet one on hover.
+pub fn color_cell(ui: &mut Ui, color: Rgba, size: Vec2, current: bool, label: &str) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    ui.painter().rect_filled(rect, 3.0, to_color32(color));
+    if current {
+        ui.painter().rect_stroke(rect.expand(1.0), 4.0, Stroke::new(2.0, t.accent), StrokeKind::Outside);
+    } else if resp.hovered() {
+        ui.painter().rect_stroke(rect, 3.0, Stroke::new(1.0, t.fg), StrokeKind::Outside);
+    }
+    resp
+}
+
 fn gradient_rect(painter: &egui::Painter, r: Rect, colors: &[Color32], vertical: bool, radius: f32) {
     let n = colors.len() - 1;
     let mut mesh = egui::Mesh::default();

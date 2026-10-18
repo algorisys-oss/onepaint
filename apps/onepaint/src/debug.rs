@@ -2,7 +2,7 @@
 //!
 //! - `ONEPAINT_SCREENSHOT=out.png` saves a screenshot of the window after a few frames.
 //! - `ONEPAINT_DEMO=1` paints a small demo scene first.
-//! - `ONEPAINT_POPOVER=layers|brushes|color|menu|new|studio|…` opens a popover.
+//! - `ONEPAINT_POPOVER=layers|brushes|color|mix|menu|new|studio|…` opens a popover (`mix`: Colour on its Mix grid).
 //! - `ONEPAINT_THEME=light` starts in the light theme.
 //! - `ONEPAINT_TRANSFORM=1` starts a rotated move on the active layer.
 //! - `ONEPAINT_TEXT=1` adds a text object and opens its editor.
@@ -84,7 +84,7 @@ impl Debug {
             popover: var("ONEPAINT_POPOVER").and_then(|p| match p.as_str() {
                 "layers" => Some(Popover::Layers),
                 "brushes" => Some(Popover::Brushes),
-                "color" => Some(Popover::Color),
+                "color" | "mix" => Some(Popover::Color),
                 "menu" => Some(Popover::Menu),
                 "new" => Some(Popover::NewDoc),
                 "selection" => Some(Popover::Selection),
@@ -405,6 +405,10 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
     }
     if frame == 3 && app.debug.popover.is_some() {
         app.popover = app.debug.popover;
+        // `mix` shows the Colour panel's Mix grid (in memory; not saved).
+        if std::env::var("ONEPAINT_POPOVER").as_deref() == Ok("mix") {
+            app.settings.color_mix_mode = true;
+        }
     }
     if frame == 8 && app.debug.popover == Some(Popover::BrushStudio) {
         let lin = app.session.color().to_linear_premul();

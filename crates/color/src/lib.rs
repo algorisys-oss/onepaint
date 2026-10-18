@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 pub mod cmyk;
 pub mod icc;
 pub mod median_cut;
+pub mod mix_grid;
 pub mod pigment;
 
 pub type Px = [f32; 4];

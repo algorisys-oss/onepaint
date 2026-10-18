@@ -2494,6 +2494,28 @@ mod tests {
     }
 
     #[test]
+    fn the_mix_grid_picks_colours_and_saves_a_palette() {
+        let mut h = harness();
+        h.run();
+        h.state_mut().settings.path = None;
+        h.state_mut().popover = Some(Popover::Color);
+        h.run();
+        h.get_by_label("Mix").click();
+        h.run();
+        assert!(h.state().settings.color_mix_mode);
+        // The default wells: the top-left corner cell is its exact colour.
+        h.get_by_label("Use #c0392b").click();
+        h.run();
+        assert_eq!(h.state().session.color().to_hex(), "#c0392b");
+        let n = h.state().palettes.palettes.len();
+        h.get_by_label("Save the whole grid as a new palette").click();
+        h.run();
+        let p = h.state().palettes.active();
+        assert_eq!((h.state().palettes.palettes.len(), p.name.as_str()), (n + 1, "Mix 5×7"));
+        assert_eq!(p.colors.len(), 35);
+    }
+
+    #[test]
     fn pen_builds_a_path_layer_and_edits_anchors() {
         let mut h = harness();
         h.run();

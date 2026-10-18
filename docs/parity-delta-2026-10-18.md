@@ -65,8 +65,12 @@ onepaint ports it in. Fold each item into `feature-parity.md` as it lands.
 
 ## UI
 
-- [ ] Mix colour mode (v0.203.0, v0.204.7): 2–6 wells, rows × cols grid,
-      OKLab or RGB mixing, save as palette.
+- [x] Mix colour mode (v0.203.0, v0.204.7): 2–6 wells, rows × cols grid,
+      OKLab or RGB mixing, save as palette. `color::mix_grid` (happypaint's
+      tests ported, byte-exact) and a Picker / Mix switch at the top of the
+      Colour panel; settings live in `settings.json` (`colorMixMode`, `mix`).
+      The Perceptual / RGB buttons have no tooltips yet (onepaint's segmented
+      control takes none).
 - [ ] Side sliders anywhere (v0.204.0): edges, floating, with the tools; a
       typed value entry from the end icon (v0.204.7).
 - [x] Align acts on the active layer when nothing is multi-selected

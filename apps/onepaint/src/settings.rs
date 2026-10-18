@@ -64,6 +64,10 @@ pub struct Settings {
     pub timeline_metric: TimelineMetric,
     /// Shortcut overrides: action id → combo (`keymap.rs`).
     pub keybindings: crate::keymap::Overrides,
+    /// The colour panel shows the Mix grid instead of the picker.
+    pub color_mix_mode: bool,
+    /// The Mix grid's wells, size and space (happypaint `mix-grid-store.ts`).
+    pub mix: onepaint_color::mix_grid::MixSettings,
     #[serde(skip)]
     pub path: Option<PathBuf>,
 }
@@ -84,6 +88,8 @@ impl Default for Settings {
             max_history_steps: DEFAULT_HISTORY_STEPS,
             keybindings: Default::default(),
             timeline_metric: TimelineMetric::Frames,
+            color_mix_mode: false,
+            mix: Default::default(),
             path: None,
         }
     }
@@ -112,6 +118,7 @@ impl Settings {
         self.max_open_tabs = self.max_open_tabs.clamp(MIN_OPEN_TABS, MAX_OPEN_TABS);
         self.cursor_thickness = self.cursor_thickness.clamp(1, 4);
         self.max_history_steps = self.max_history_steps.clamp(5, 1000);
+        self.mix = std::mem::take(&mut self.mix).sanitized();
         // Unknown actions and unreadable combos are dropped (happypaint keeps them).
         self.keybindings.retain(|id, combo| crate::keymap::Action::from_id(id).is_some() && crate::keymap::is_valid(combo));
     }

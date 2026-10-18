@@ -614,12 +614,21 @@ fn color(app: &mut App, ui: &mut Ui) {
         widgets::section_label(ui, "Colour");
     }
     ui.add_space(4.0);
-    let mut hsv = app.hsv;
-    if widgets::color_picker(ui, &mut hsv, 256.0) {
-        app.hsv = hsv;
-        let c = hsv.to_rgba();
-        let _ = app.session.execute(Command::SetColor { rgba: c });
-        app.hex = c.to_hex();
+    if let Some(i) = segmented(ui, &["Picker", "Mix"], usize::from(app.settings.color_mix_mode)) {
+        app.settings.color_mix_mode = i == 1;
+        app.settings.save();
+    }
+    ui.add_space(4.0);
+    if app.settings.color_mix_mode {
+        mix_section(app, ui);
+    } else {
+        let mut hsv = app.hsv;
+        if widgets::color_picker(ui, &mut hsv, 256.0) {
+            app.hsv = hsv;
+            let c = hsv.to_rgba();
+            let _ = app.session.execute(Command::SetColor { rgba: c });
+            app.hex = c.to_hex();
+        }
     }
     ui.add_space(6.0);
     ui.horizontal(|ui| {
@@ -2185,4 +2194,105 @@ fn vector_mask_controls(app: &mut App, ui: &mut Ui, v: onepaint_doc::VectorMask,
             set(app, Some(onepaint_doc::VectorMask { invert, ..v.clone() }));
         }
     });
+}
+
+/// Colour ▸ Mix (happypaint `mix-section.tsx`): 2–6 wells on a top and a
+/// bottom edge, and the grid of colours between them. Tap a well to set it
+/// to the current colour, a cell to paint with it.
+fn mix_section(app: &mut App, ui: &mut Ui) {
+    use onepaint_color::mix_grid::{MIX_COLS, MIX_COUNT_MAX, MIX_COUNT_MIN, MIX_ROWS, MixSlot, MixSpace, layout};
+    let t = Tokens::get(ui.ctx());
+    let now = ui.input(|i| i.time);
+    let current = app.session.color().to_hex();
+    let rgba = |h: &str| onepaint_color::mix_grid::hex_to_rgb01(h);
+    let to_rgba = |h: &str| {
+        let [r, g, b] = rgba(h);
+        onepaint_color::Rgba::new(r as f32, g as f32, b as f32, 1.0)
+    };
+    let (top, bottom) = layout(app.settings.mix.count);
+    let mut changed = false;
+    let grid = app.settings.mix.grid();
+    let cols = grid.first().map_or(1, Vec::len);
+    let gap = 2.0;
+    let cell = ((ui.available_width() - gap * (cols as f32 - 1.0)) / cols as f32).clamp(12.0, 28.0);
+    // The wells line up with the grid's corners and edges.
+    let grid_w = cell * cols as f32 + gap * (cols as f32 - 1.0);
+    let well_row = |app: &mut App, ui: &mut Ui, slots: &[MixSlot], changed: &mut bool| {
+        ui.horizontal(|ui| {
+            let w = grid_w;
+            let n = slots.len().max(1) as f32;
+            let gap = if slots.len() > 1 { (w - 22.0 * n) / (n - 1.0) } else { 0.0 };
+            if slots.len() == 1 {
+                ui.add_space((w - 22.0) / 2.0);
+            }
+            ui.spacing_mut().item_spacing.x = gap.max(4.0);
+            for &slot in slots {
+                let hex = app.settings.mix.wells[slot.index()].clone();
+                let tip = format!("{} colour, {hex}. Tap to set it to your colour", slot.name());
+                if widgets::swatch(ui, to_rgba(&hex), 22.0, false).on_hover_text(tip).clicked() {
+                    app.settings.mix.wells[slot.index()] = current.clone();
+                    *changed = true;
+                }
+            }
+        });
+    };
+    well_row(app, ui, top, &mut changed);
+    ui.spacing_mut().item_spacing = vec2(gap, gap);
+    for row in &grid {
+        ui.horizontal(|ui| {
+            for hex in row {
+                if widgets::color_cell(ui, to_rgba(hex), vec2(cell, cell), *hex == current, &format!("Use {hex}"))
+                    .on_hover_text(hex)
+                    .clicked()
+                {
+                    app.set_color(to_rgba(hex));
+                }
+            }
+        });
+    }
+    if grid.len() > 1 {
+        well_row(app, ui, bottom, &mut changed);
+    }
+    ui.spacing_mut().item_spacing = vec2(8.0, 4.0);
+    let m = &mut app.settings.mix;
+    let mut count = m.count as f32;
+    if widgets::slider_row(ui, "Colours", &mut count, MIX_COUNT_MIN as f32..=MIX_COUNT_MAX as f32, |v| format!("{v:.0}")).changed() {
+        m.count = count.round() as u32;
+        changed = true;
+    }
+    if !layout(m.count).1.is_empty() {
+        let mut rows = m.rows as f32;
+        if widgets::slider_row(ui, "Rows", &mut rows, MIX_ROWS.0 as f32..=MIX_ROWS.1 as f32, |v| format!("{v:.0}")).changed() {
+            m.rows = rows.round() as u32;
+            changed = true;
+        }
+    }
+    let (t_len, b_len) = (layout(m.count).0.len(), layout(m.count).1.len());
+    let min_cols = MIX_COLS.0.max(t_len as u32).max(b_len as u32);
+    let mut c = m.cols.max(min_cols) as f32;
+    if widgets::slider_row(ui, "Cols", &mut c, min_cols as f32..=MIX_COLS.1 as f32, |v| format!("{v:.0}")).changed() {
+        m.cols = c.round() as u32;
+        changed = true;
+    }
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Mixing").color(t.fg_muted));
+        let cur = usize::from(app.settings.mix.space == MixSpace::Rgb);
+        if let Some(i) = segmented(ui, &["Perceptual", "RGB"], cur) {
+            app.settings.mix.space = if i == 1 { MixSpace::Rgb } else { MixSpace::Oklab };
+            changed = true;
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if icons::button(ui, "plus", 24.0, false, "Save the whole grid as a new palette").clicked() {
+                let mut seen = std::collections::HashSet::new();
+                let colors: Vec<String> = grid.iter().flatten().filter(|h| seen.insert((*h).clone())).cloned().collect();
+                let name = format!("Mix {}×{}", grid.len(), cols);
+                let n = colors.len();
+                app.palettes.create(Some(&name), colors);
+                app.notify(format!("Saved {n} colours as “{name}”"), now);
+            }
+        });
+    });
+    if changed {
+        app.settings.save();
+    }
 }
