@@ -164,3 +164,51 @@ fn feather_blurs_the_mask_before_density() {
     let a = composite_px(&doc(vec![Node::Layer(l)]), 33, 10)[3];
     assert!((a - (1.0 - 0.5 * (1.0 - f[10 * 256 + 33]))).abs() < 1e-3);
 }
+
+fn rect_path(op: VectorOp, x0: f64, y0: f64, x1: f64, y1: f64) -> VectorPath {
+    let knots = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].iter().map(|p| [p[0], p[1], p[0], p[1], p[0], p[1]]).collect();
+    VectorPath { op, knots, ..Default::default() }
+}
+
+#[test]
+fn a_vector_mask_hides_outside_its_paths_and_ignores_density() {
+    let mut l = layer("red", RED);
+    fill(&mut l.pixels, Rect::new(0, 0, 64, 64), RED);
+    let mut vm = VectorMask { paths: vec![rect_path(VectorOp::Combine, 0.0, 0.0, 32.0, 64.0)], ..Default::default() };
+    l.set_vector_mask(Some(vm.clone()));
+    let d = doc(vec![Node::Layer(l.clone())]);
+    assert!(close(composite_px(&d, 10, 10), RED));
+    assert_eq!(composite_px(&d, 40, 10)[3], 0.0);
+    // Far tiles: nothing to draw at all.
+    fill(&mut l.pixels, Rect::new(300, 300, 4, 4), RED);
+    assert_eq!(composite_px(&doc(vec![Node::Layer(l.clone())]), 301, 301)[3], 0.0);
+    // It multiplies the pixel mask; density only weakens the pixel mask.
+    let mut m = Surface::new();
+    fill(&mut m, Rect::new(0, 0, 64, 64), BLACK);
+    l.mask = Some(m);
+    l.set_mask_density(0.5);
+    let d = doc(vec![Node::Layer(l.clone())]);
+    assert!(close(composite_px(&d, 10, 10), [0.5, 0.0, 0.0, 0.5]));
+    assert_eq!(composite_px(&d, 40, 10)[3], 0.0);
+    // Disabled: kept, but hides nothing.
+    vm.disabled = true;
+    l.set_vector_mask(Some(vm));
+    assert!(close(composite_px(&doc(vec![Node::Layer(l)]), 40, 10), [0.5, 0.0, 0.0, 0.5]));
+}
+
+#[test]
+fn a_vector_mask_shapes_the_knockout_and_the_adjustment() {
+    let mut inv = Layer::new("invert");
+    inv.adjustment = Some(Box::new(Adjustment { kind: "invert".into(), params: Default::default() }));
+    inv.set_vector_mask(Some(VectorMask { paths: vec![rect_path(VectorOp::Combine, 0.0, 0.0, 32.0, 64.0)], ..Default::default() }));
+    let d = doc(vec![Node::Layer(layer("bg", WHITE)), Node::Layer(inv)]);
+    assert!(close(composite_px(&d, 2, 2), [0.0, 0.0, 0.0, 1.0]));
+    // Pixel (7, 7) of the 8 × 8 background lies inside x < 32: inverted too.
+    let mut bg = layer("bg", WHITE);
+    fill(&mut bg.pixels, Rect::new(0, 0, 64, 64), WHITE);
+    let mut inv2 = Layer::new("invert");
+    inv2.adjustment = Some(Box::new(Adjustment { kind: "invert".into(), params: Default::default() }));
+    inv2.set_vector_mask(Some(VectorMask { paths: vec![rect_path(VectorOp::Combine, 0.0, 0.0, 32.0, 64.0)], ..Default::default() }));
+    let d = doc(vec![Node::Layer(bg), Node::Layer(inv2)]);
+    assert!(close(composite_px(&d, 40, 2), WHITE));
+}

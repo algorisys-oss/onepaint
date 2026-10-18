@@ -80,7 +80,7 @@ struct Job {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
-struct GpuOp([u32; 16]);
+struct GpuOp([u32; OP_WORDS]);
 
 const F_INHERIT: u32 = 1;
 const F_TINT: u32 = 2;
@@ -90,6 +90,9 @@ const F_MASK: u32 = 16;
 const F_MASK_ZERO: u32 = 32;
 const F_MASK_STROKE: u32 = 64;
 const F_RELIEF: u32 = 128;
+const F_VMASK: u32 = 256;
+/// Five vec4<u32>s (compose.wgsl `Op`).
+const OP_WORDS: usize = 20;
 
 struct Slot {
     idx: u32,
@@ -159,7 +162,7 @@ fn is_simple(ops: &[&Op]) -> bool {
         matches!(
             op,
             Op::Layer {
-                content: Content { base: Some(_), stroke: None, mask: MaskSrc::None, mask_stroke: None, relief: None, .. },
+                content: Content { base: Some(_), stroke: None, mask: MaskSrc::None, mask_stroke: None, relief: None, vmask: None, .. },
                 mode: BlendMode::Normal,
                 inherit_alpha: false,
                 blend_if: None,
@@ -171,7 +174,7 @@ fn is_simple(ops: &[&Op]) -> bool {
 
 /// Lay cache slot `slot` over the register (`S + (1 − S.a) · x`).
 fn over_cache(slot: u32) -> GpuOp {
-    let mut o = [0u32; 16];
+    let mut o = [0u32; OP_WORDS];
     (o[0], o[1]) = (OP_OVER_CACHE, slot);
     GpuOp(o)
 }
@@ -564,7 +567,7 @@ impl GpuCompositor {
         self.slots.get(&key(t)).map_or(0, |s| s.idx)
     }
 
-    fn encode_content(&self, o: &mut [u32; 16], c: &Content) {
+    fn encode_content(&self, o: &mut [u32; OP_WORDS], c: &Content) {
         let stroke = |s: &StrokeSrc| {
             let (kind, mode) = stroke_code(s.mode);
             (self.slot(&s.tile), kind | (mode.effective() as u32) << 8, s.opacity.to_bits())
@@ -583,6 +586,7 @@ impl GpuCompositor {
             let [cc, l, rt, u, d] = r.tiles.each_ref().map(|t| t.as_ref().map_or(0xffff, |t| self.slot(t) & 0xffff));
             (o[12], o[13], o[14]) = (cc | l << 16, rt | u << 16, d);
         }
+        self.encode_vmask(o, &c.vmask);
         if !self.encode_mask(o, &c.mask, c.density) {
             return;
         }
@@ -592,8 +596,16 @@ impl GpuCompositor {
         }
     }
 
+    /// The vector mask's coverage slot in `e.x`.
+    fn encode_vmask(&self, o: &mut [u32; OP_WORDS], v: &Option<Arc<Tile>>) {
+        if let Some(t) = v {
+            o[3] |= F_VMASK;
+            o[16] = self.slot(t);
+        }
+    }
+
     /// The mask's slot and flags, and its density in `d.w`; false without one.
-    fn encode_mask(&self, o: &mut [u32; 16], m: &MaskSrc, density: f32) -> bool {
+    fn encode_mask(&self, o: &mut [u32; OP_WORDS], m: &MaskSrc, density: f32) -> bool {
         match m {
             MaskSrc::None => return false,
             MaskSrc::Tile(t) => {
@@ -607,14 +619,15 @@ impl GpuCompositor {
     }
 
     fn encode(&self, op: &Op, adj: &mut AdjTable) -> GpuOp {
-        let mut o = [0u32; 16];
+        let mut o = [0u32; OP_WORDS];
         match op {
             Op::Coverage(c) => (o[0], o[8]) = (OP_COVERAGE, self.slot(&c.tile)),
             Op::Paper { shade, .. } => {
                 o[0] = OP_PAPER;
                 (o[4], o[5]) = ((shade.tex.tile_px() as f32).to_bits(), shade.amt.to_bits());
             }
-            Op::Adjust { adjust, mask, density, mode, opacity, blend_if } => {
+            Op::Adjust { adjust, mask, density, vmask, mode, opacity, blend_if } => {
+                self.encode_vmask(&mut o, vmask);
                 (o[0], o[1], o[2]) = (OP_ADJUST, mode_word(*mode, blend_if, adj), opacity.to_bits());
                 (o[4], o[5]) = adj.add(&adjust.gpu);
                 o[6] = adjust.gpu.code;

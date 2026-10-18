@@ -479,11 +479,37 @@ impl Session {
             }
         }
         self.mark_dirty(f.bounds.union(&f.preview_bounds));
-        if !changes.is_empty() {
-            self.record(Change::Tiles { layer: f.layer, plane: Plane::Pixels, tiles: changes }, bytes);
-            self.doc.touch();
-            self.history_changed();
+        let mapped = self.mapped_vector_mask(&f);
+        if !changes.is_empty() || mapped.is_some() {
+            self.history.begin_transaction();
+            if !changes.is_empty() {
+                self.record(Change::Tiles { layer: f.layer.clone(), plane: Plane::Pixels, tiles: changes }, bytes);
+                self.doc.touch();
+                self.history_changed();
+            }
+            if let Some(v) = mapped {
+                let id = f.layer.clone();
+                let _ = self.tree_edit(None, |s| {
+                    if let Some(l) = s.doc.layer_mut(&id) {
+                        l.set_vector_mask(Some(v));
+                    }
+                    Ok(())
+                });
+            }
+            self.history.end_transaction();
         }
+    }
+
+    /// The layer's vector mask through an affine transform's map: `None`
+    /// without one, when it is unlinked, or for a warp or distort, which
+    /// leave it in place (happypaint `commitVectorMaskTransform`).
+    fn mapped_vector_mask(&self, f: &Floating) -> Option<onepaint_doc::VectorMask> {
+        let m = f.matrix;
+        if f.warp.is_some() || m == Affine::IDENTITY {
+            return None;
+        }
+        let v = self.doc.layer(&f.layer)?.vector_mask().filter(|v| !v.unlinked)?;
+        Some(v.transformed([m.a, m.b, m.c, m.d, m.e, m.f]))
     }
 }
 
@@ -509,7 +535,11 @@ impl Session {
         let (w, h, space) = (self.doc.width, self.doc.height, self.doc.space());
         let id = f.layer.clone();
         let uniform = (m.a - m.d).abs() < 1e-6 && (m.b + m.c).abs() < 1e-6 && m.a * m.d - m.b * m.c > 0.0;
+        let mapped = self.mapped_vector_mask(&f);
         let _ = self.tree_edit(None, move |s| {
+            if let (Some(v), Some(l)) = (mapped, s.doc.layer_mut(&id)) {
+                l.set_vector_mask(Some(v));
+            }
             let paths = s.paths(&id);
             let texts = s.texts(&id);
             let Some(l) = s.doc.layer_mut(&id) else { return Ok(()) };

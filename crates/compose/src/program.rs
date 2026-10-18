@@ -54,6 +54,8 @@ pub struct Content {
     pub relief: Option<Arc<Relief>>,
     /// The mask's density: it multiplies by `1 − density · (1 − m)`.
     pub density: f32,
+    /// The vector mask's coverage here (`None`: no vector mask, or it covers the tile).
+    pub vmask: Option<Arc<Tile>>,
 }
 
 /// The height tiles relief reads for tile `(tx, ty)` (spec 45): its own and
@@ -144,7 +146,21 @@ pub struct PlanCache {
     /// Feathered mask tiles by the mask tiles they read (held weakly, so a
     /// freed address can't match), the feather, the tile and the document size.
     feather: std::sync::Mutex<std::collections::HashMap<u64, Feathered>>,
+    /// Flattened vector masks by their JSON, and their coverage by mask and tile.
+    vflat: std::sync::Mutex<std::collections::HashMap<String, Arc<crate::vmask::Flat>>>,
+    vcover: std::sync::Mutex<std::collections::HashMap<(u64, i32, i32), VCover>>,
 }
+
+/// A vector mask's coverage of one tile, as the planner keeps it.
+#[derive(Clone, Debug)]
+pub enum VCover {
+    Empty,
+    Full,
+    Partial(Arc<Tile>),
+}
+
+/// Cached vector mask coverage tiles kept at most; past this the cache starts over.
+const MAX_CACHED_VCOVER: usize = 4096;
 
 type Feathered = (Vec<Option<std::sync::Weak<Tile>>>, Option<Arc<Tile>>);
 
@@ -217,6 +233,43 @@ impl PlanCache {
         v
     }
 
+    /// `v`'s coverage of tile `(tx, ty)`, flattened once per mask.
+    fn vector_cover(&self, v: &onepaint_doc::VectorMask, tx: i32, ty: i32) -> VCover {
+        let json = v.key();
+        let flat = {
+            let hit = self.vflat.lock().ok().and_then(|m| m.get(&json).cloned());
+            hit.unwrap_or_else(|| {
+                let f = Arc::new(crate::vmask::flatten(v));
+                if let Ok(mut m) = self.vflat.lock() {
+                    if m.len() >= MAX_CACHED_ADJUST {
+                        m.clear();
+                    }
+                    m.insert(json.clone(), f.clone());
+                }
+                f
+            })
+        };
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        json.hash(&mut h);
+        let key = (h.finish(), tx, ty);
+        if let Some(hit) = self.vcover.lock().ok().and_then(|m| m.get(&key).cloned()) {
+            return hit;
+        }
+        let c = match crate::vmask::cover(&flat, tx, ty) {
+            crate::vmask::Cover::Empty => VCover::Empty,
+            crate::vmask::Cover::Full => VCover::Full,
+            crate::vmask::Cover::Partial(t) => VCover::Partial(Arc::new(t)),
+        };
+        if let Ok(mut m) = self.vcover.lock() {
+            if m.len() >= MAX_CACHED_VCOVER {
+                m.clear();
+            }
+            m.insert(key, c.clone());
+        }
+        c
+    }
+
     /// Whether every pixel of `t` has alpha exactly 1, cached by tile.
     fn opaque(&self, t: &Arc<Tile>) -> bool {
         let key = Arc::as_ptr(t) as usize;
@@ -275,7 +328,15 @@ pub enum Op {
     /// Adjust the top register, mask the result and blend it back
     /// (`draw_adjustment`, spec 42).
     /// `mask` is never [`MaskSrc::Zero`] unless `density` < 1.
-    Adjust { adjust: Arc<Adjust>, mask: MaskSrc, density: f32, mode: BlendMode, opacity: f32, blend_if: Option<BlendIf> },
+    Adjust {
+        adjust: Arc<Adjust>,
+        mask: MaskSrc,
+        density: f32,
+        vmask: Option<Arc<Tile>>,
+        mode: BlendMode,
+        opacity: f32,
+        blend_if: Option<BlendIf>,
+    },
     /// Shade the finished tile `(tx, ty)` with the paper's tooth (spec 43).
     Paper { shade: Arc<PaperShade>, tx: i32, ty: i32 },
     /// Multiply the top register by a panel frame's coverage (spec 44).
@@ -340,13 +401,13 @@ pub struct Split {
 /// Every source tile `ops` read, in op order (with repeats).
 pub fn op_sources(ops: &[Op]) -> impl Iterator<Item = &Arc<Tile>> {
     ops.iter().flat_map(|op| {
-        let (c, adjust_mask) = match op {
+        let (c, extra): (Option<&Content>, [Option<&Arc<Tile>>; 2]) = match op {
             Op::Layer { content, .. } | Op::PushContent(content) | Op::Clip { content, .. } | Op::Knockout { content, .. } => {
-                (Some(content), None)
+                (Some(content), [None, None])
             }
-            Op::Adjust { mask: MaskSrc::Tile(m), .. } => (None, Some(m)),
-            Op::Coverage(c) => (None, Some(&c.tile)),
-            _ => (None, None),
+            Op::Adjust { mask, vmask, .. } => (None, [if let MaskSrc::Tile(m) = mask { Some(m) } else { None }, vmask.as_ref()]),
+            Op::Coverage(c) => (None, [Some(&c.tile), None]),
+            _ => (None, [None, None]),
         };
         let content = c.into_iter().flat_map(|c| {
             let mask = match &c.mask {
@@ -354,9 +415,15 @@ pub fn op_sources(ops: &[Op]) -> impl Iterator<Item = &Arc<Tile>> {
                 _ => None,
             };
             let relief = c.relief.iter().flat_map(|r| r.tiles.iter().flatten());
-            c.base.iter().chain(c.stroke.iter().map(|s| &s.tile)).chain(mask).chain(c.mask_stroke.iter().map(|s| &s.tile)).chain(relief)
+            c.base
+                .iter()
+                .chain(c.stroke.iter().map(|s| &s.tile))
+                .chain(mask)
+                .chain(c.mask_stroke.iter().map(|s| &s.tile))
+                .chain(relief)
+                .chain(c.vmask.iter())
         });
-        content.chain(adjust_mask)
+        content.chain(extra.into_iter().flatten())
     })
 }
 
@@ -407,6 +474,7 @@ pub fn segment_key(ops: &[Op], at: [i32; 2]) -> u64 {
         }
         mask_key(&c.mask, h);
         c.density.to_bits().hash(h);
+        c.vmask.as_ref().map(ptr).hash(h);
         // Relief depends on where the tile is (taps clamp at the document's edge).
         if let Some(r) = &c.relief {
             (r.tx, r.ty, r.doc).hash(h);
@@ -432,8 +500,9 @@ pub fn segment_key(ops: &[Op], at: [i32; 2]) -> u64 {
                 (4u8, *mode as u8, opacity.to_bits(), *clip, blend_if).hash(&mut h);
                 tint.map(|t| t.map(f32::to_bits)).hash(&mut h);
             }
-            Op::Adjust { adjust, mask, density, mode, opacity, blend_if } => {
+            Op::Adjust { adjust, mask, density, vmask, mode, opacity, blend_if } => {
                 (5u8, *mode as u8, opacity.to_bits(), adjust.gpu.code, density.to_bits(), blend_if).hash(&mut h);
+                vmask.as_ref().map(ptr).hash(&mut h);
                 adjust.gpu.params.map(f32::to_bits).hash(&mut h);
                 adjust.gpu.lut.hash(&mut h);
                 adjust.gpu.table.iter().flatten().for_each(|e| e.map(f32::to_bits).hash(&mut h));
@@ -602,7 +671,12 @@ impl Planner<'_> {
             let doc = [self.frame.doc_w as i32, self.frame.doc_h as i32];
             tiles.iter().any(Option::is_some).then(|| Arc::new(Relief { tiles, tx, ty, doc }))
         });
-        let mut c = Content { base, stroke, mask: MaskSrc::None, mask_stroke: None, relief, density: 1.0 };
+        let vmask = match self.vector_cover(l) {
+            Some(VCover::Empty) => return Ok(None),
+            Some(VCover::Partial(t)) => Some(t),
+            Some(VCover::Full) | None => None,
+        };
+        let mut c = Content { base, stroke, mask: MaskSrc::None, mask_stroke: None, relief, density: 1.0, vmask };
         if l.mask_enabled
             && let Some(mask) = &l.mask
         {
@@ -618,6 +692,20 @@ impl Planner<'_> {
             c.mask_stroke = mask_stroke;
         }
         Ok(Some(c))
+    }
+
+    /// `l`'s active vector mask over this tile, through the cache.
+    fn vector_cover(&self, l: &Layer) -> Option<VCover> {
+        let v = l.vector_mask().filter(|v| v.active())?;
+        let (tx, ty) = (self.tx, self.ty);
+        let Some(cache) = self.cache else {
+            return Some(match crate::vmask::cover(&crate::vmask::flatten(&v), tx, ty) {
+                crate::vmask::Cover::Empty => VCover::Empty,
+                crate::vmask::Cover::Full => VCover::Full,
+                crate::vmask::Cover::Partial(t) => VCover::Partial(Arc::new(t)),
+            });
+        };
+        Some(cache.vector_cover(&v, tx, ty))
     }
 
     /// `l`'s mask tile here, blurred by its feather (`feather.rs`) through
@@ -696,9 +784,14 @@ impl Planner<'_> {
             },
             _ => MaskSrc::None,
         };
+        let vmask = match self.vector_cover(l) {
+            Some(VCover::Empty) => return Ok(()),
+            Some(VCover::Partial(t)) => Some(t),
+            Some(VCover::Full) | None => None,
+        };
         let adjust = Arc::new(Adjust { prepared, gpu, at: [self.tx * TILE, self.ty * TILE] });
         let blend_if = if l.clipped { None } else { l.blend_if() };
-        self.ops.push(Op::Adjust { adjust, mask, density, mode: l.blend_mode.effective(), opacity: l.opacity, blend_if });
+        self.ops.push(Op::Adjust { adjust, mask, density, vmask, mode: l.blend_mode.effective(), opacity: l.opacity, blend_if });
         Ok(())
     }
 
@@ -726,7 +819,8 @@ impl Planner<'_> {
         if self.snapshot && self.depth == 1 {
             return;
         }
-        let plain = matches!(c.mask, MaskSrc::None) && c.stroke.is_none() && c.mask_stroke.is_none() && c.relief.is_none();
+        let plain =
+            matches!(c.mask, MaskSrc::None) && c.stroke.is_none() && c.mask_stroke.is_none() && c.relief.is_none() && c.vmask.is_none();
         if l.blend_mode != BlendMode::Normal || l.opacity != 1.0 || l.inherit_alpha || !plain || l.blend_if().is_some() {
             return;
         }
@@ -925,16 +1019,24 @@ fn eval(c: &Content, i: usize, space: Space, at: [i32; 2]) -> Px {
             crate::relief::light_px(&mut p, [r.height(x - 1, y), r.height(x + 1, y), r.height(x, y - 1), r.height(x, y + 1)]);
         }
     }
-    let mut m = match &c.mask {
-        MaskSrc::None => return p,
-        MaskSrc::Tile(t) => load(t, i),
-        MaskSrc::Zero => [0.0; 4],
+    let m = match &c.mask {
+        MaskSrc::None => None,
+        MaskSrc::Tile(t) => Some(load(t, i)),
+        MaskSrc::Zero => Some([0.0; 4]),
     };
-    if let Some(s) = &c.mask_stroke {
-        m = apply_stroke_px(m, load(&s.tile, i), s.opacity, s.mode);
+    if let Some(mut m) = m {
+        if let Some(s) = &c.mask_stroke {
+            m = apply_stroke_px(m, load(&s.tile, i), s.opacity, s.mode);
+        }
+        let k = mask_k(c.density, m[0]);
+        p = p.map(|v| v * k);
     }
-    let k = mask_k(c.density, m[0]);
-    p.map(|v| v * k)
+    // The vector mask after the pixel mask, as `layer_content` does.
+    if let Some(v) = &c.vmask {
+        let k = load(v, i)[0];
+        p = p.map(|x| x * k);
+    }
+    p
 }
 
 /// Run `ops` on one pixel, starting from the register `init`; `at` is the
@@ -986,7 +1088,7 @@ fn exec(ops: &[Op], init: Px, i: usize, stack: &mut Vec<Px>, space: Space, at: [
                 *dst = std::array::from_fn(|c| dst[c] * (1.0 - opacity) + v[c] * opacity);
             }
             Op::Clip { content, opacity } => *top = clip_over(*top, eval(content, i, space, at), *opacity),
-            Op::Adjust { adjust, mask, density, mode, opacity, blend_if } => {
+            Op::Adjust { adjust, mask, density, vmask, mode, opacity, blend_if } => {
                 let (x, y) = (adjust.at[0] + (i % TILE as usize) as i32, adjust.at[1] + (i / TILE as usize) as i32);
                 let mut o = adjust.prepared.color_px(*top, x, y);
                 let m = match mask {
@@ -997,6 +1099,10 @@ fn exec(ops: &[Op], init: Px, i: usize, stack: &mut Vec<Px>, space: Space, at: [
                 if let Some(m) = m {
                     let k = mask_k(*density, m);
                     o = o.map(|v| v * k);
+                }
+                if let Some(v) = vmask {
+                    let k = load(v, i)[0];
+                    o = o.map(|c| c * k);
                 }
                 *top = blend_at(space, *mode, *top, o, *opacity, x, y, blend_if.as_ref());
             }

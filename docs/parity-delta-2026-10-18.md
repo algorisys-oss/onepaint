@@ -37,9 +37,13 @@ onepaint ports it in. Fold each item into `feature-parity.md` as it lands.
         it shows unfeathered, as happypaint's live preview does. Mask edits
         redraw as far as the blur reaches. A GPU blur pass would make big
         feathers cheaper to rebuild (todo).
-      - Not yet: arrow keys on the Blend If bar.
-- [ ] Vector masks (v0.202.1): PSD `vmsk`/`vsms` both ways, live in the
-      compositor, the Pen's Create Vector Mask, transforms map the knots.
+- [x] Vector masks (v0.202.1): `doc::vector_mask`, the per-tile rasterizer
+      (`compose::vmask`, divergence 47), CPU oracle and GPU (ops are five
+      vec4s now, `e.x` the coverage slot), PSD `vmsk`/`vsms`, Create Vector
+      Mask (the path menu's "Mask from path" now makes a vector mask, as
+      happypaint's does), Free Transform / crop / resize / scale map the
+      knots (Free Transform in the same undo step, not when unlinked),
+      Properties (Apply, Invert, Delete, path count) and a layer-row tag.
 
 ## PSD
 

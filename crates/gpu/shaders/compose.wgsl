@@ -3,13 +3,15 @@
 // crates/compose/src/blend.rs line for line; the CPU compositor is the
 // oracle in the tests. Pixels are premultiplied linear light.
 //
-// Op layout (four vec4<u32>):
+// Op layout (five vec4<u32>):
 //   a: kind, blend mode, opacity (f32 bits), flags
 //   b: base slot, stroke slot, stroke code, stroke opacity
 //   c: mask slot, mask stroke slot, mask stroke code, mask stroke opacity
 //   d: ghost tint rgb (f32 bits); for content with F_RELIEF, the height
 //      slots (centre | left << 16, right | up << 16, down), 0xffff for none;
 //      d.w the mask's density (f32 bits) when F_MASK is set
+//   e: the vector mask's coverage slot when F_VMASK is set (it multiplies
+//      after the mask; density never touches it)
 // The mode word of a layer, adjust or pop op is `mode | bif << 8`: `bif` is
 // 0, or 1 + where its Blend If ranges start in `adj` (eight vec4s: gray,
 // red, green, blue; This Layer then Underlying Layer, in 0..255).
@@ -54,6 +56,7 @@ struct Op {
     b: vec4<u32>,
     c: vec4<u32>,
     d: vec4<u32>,
+    e: vec4<u32>,
 }
 
 struct Km {
@@ -107,6 +110,7 @@ const F_MASK: u32 = 16u;
 const F_MASK_ZERO: u32 = 32u;
 const F_MASK_STROKE: u32 = 64u;
 const F_RELIEF: u32 = 128u;
+const F_VMASK: u32 = 256u;
 
 const M_NORMAL: u32 = 0u;
 const M_MULTIPLY: u32 = 1u;
@@ -880,6 +884,9 @@ fn content(o: Op, p: vec2<i32>) -> vec4<f32> {
         }
         c *= 1.0 - bitcast<f32>(o.d.w) * (1.0 - m.x);
     }
+    if ((flags & F_VMASK) != 0u) {
+        c *= load(o.e.x, p).x;
+    }
     return c;
 }
 
@@ -990,6 +997,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                         m = load(o.c.x, p).x;
                     }
                     v *= 1.0 - bitcast<f32>(o.d.w) * (1.0 - m);
+                }
+                if ((o.a.w & F_VMASK) != 0u) {
+                    v *= load(o.e.x, p).x;
                 }
                 top = blend_word(o.a.y, top, v, opacity);
             }

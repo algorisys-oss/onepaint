@@ -89,7 +89,39 @@ pub fn range_bar(ui: &mut Ui, range: &mut [u8; 4], tint: Color32, split: bool, l
         } else {
             Some(Part::Both)
         };
-        ui.data_mut(|d| d.insert_temp(id, Grab { handle, part }));
+        ui.data_mut(|d| {
+            d.insert_temp(id, Grab { handle, part });
+            d.insert_temp(resp.id.with("keys"), handle);
+        });
+        resp.request_focus();
+    }
+    // Keys (`blend-if-bar.tsx`): ←/↓ and →/↑ move the slider last held (black
+    // at first) by 1, or 10 with Shift, keeping a split slider's width.
+    if resp.clicked() {
+        resp.request_focus();
+    }
+    if resp.has_focus() {
+        let filter = egui::EventFilter { horizontal_arrows: true, vertical_arrows: true, ..Default::default() };
+        ui.memory_mut(|m| m.set_focus_lock_filter(resp.id, filter));
+        let step = ui.input(|i| {
+            let k = if i.modifiers.shift { 10 } else { 1 };
+            let up = i.key_pressed(egui::Key::ArrowRight) || i.key_pressed(egui::Key::ArrowUp);
+            let down = i.key_pressed(egui::Key::ArrowLeft) || i.key_pressed(egui::Key::ArrowDown);
+            i32::from(up) * k - i32::from(down) * k
+        });
+        if step != 0 {
+            let handle = ui.data(|d| d.get_temp::<Handle>(resp.id.with("keys"))).unwrap_or(Handle::Black);
+            let lo = match handle {
+                Handle::Black => range[0],
+                Handle::White => range[2],
+            };
+            let v = (i32::from(lo) + step).clamp(0, 255) as u8;
+            let next = move_handle(*range, handle, v, Part::Both);
+            if next != *range {
+                *range = next;
+                resp.mark_changed();
+            }
+        }
     }
     if resp.dragged()
         && let (Some(p), Some(mut g)) = (resp.interact_pointer_pos(), ui.data(|d| d.get_temp::<Grab>(id)))

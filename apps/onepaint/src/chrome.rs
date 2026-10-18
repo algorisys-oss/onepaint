@@ -948,6 +948,10 @@ fn layers(app: &mut App, ui: &mut Ui) {
                     if l.alpha_lock {
                         tags.push("α-lock".into());
                     }
+                    // happypaint's badge: shown while the vector mask applies.
+                    if l.vector_mask().is_some_and(|v| v.active()) {
+                        tags.push("vector mask".into());
+                    }
                 }
                 ui.label(RichText::new(tags.join(" · ")).font(theme::medium(10.5)).color(t.fg_faint));
             });
@@ -1097,6 +1101,9 @@ fn layers(app: &mut App, ui: &mut Ui) {
                 });
             }
         });
+        if let Some(v) = l.vector_mask() {
+            vector_mask_controls(app, ui, v, &active);
+        }
         blend_if_controls(app, ui, l.blend_if(), &active);
         if l.adjustment.is_none() {
             bevel_controls(app, ui, &active);
@@ -1802,7 +1809,10 @@ fn pen_options(app: &mut App, ui: &mut Ui) {
                 let (tool, simulate_pressure) = (app.canvas.options.stroke_path_tool, app.canvas.options.stroke_path_pressure);
                 run(app, Command::StrokePath { tool, simulate_pressure });
             }
-            if widgets::menu_item(ui, Some("contrast"), "Mask from path", "").clicked() {
+            if widgets::menu_item(ui, Some("contrast"), "Create Vector Mask", "")
+                .on_hover_text("Mask the paint layer below with these paths")
+                .clicked()
+            {
                 run(app, Command::MaskFromPath);
             }
         });
@@ -2139,4 +2149,40 @@ fn blend_if_controls(app: &mut App, ui: &mut Ui, current: Option<BlendIf>, activ
         let props = LayerProps { blend_if: Some(Some(b)), ..Default::default() };
         let _ = app.session.execute(Command::SetLayerProps { id: active.to_string(), props });
     }
+}
+
+/// Properties ▸ Vector mask (happypaint `layer-look-editor.tsx`): Apply,
+/// Invert, Delete and the path count. Each change is one undo step.
+fn vector_mask_controls(app: &mut App, ui: &mut Ui, v: onepaint_doc::VectorMask, active: &str) {
+    let t = Tokens::get(ui.ctx());
+    let set = |app: &mut App, v: Option<onepaint_doc::VectorMask>| {
+        let props = LayerProps { vector_mask: Some(v), ..Default::default() };
+        let _ = app.session.execute(Command::SetLayerProps { id: active.to_string(), props });
+    };
+    ui.horizontal(|ui| {
+        widgets::section_label(ui, "Vector mask");
+        let n = v.paths.len();
+        ui.label(RichText::new(format!("{n} path{}", if n == 1 { "" } else { "s" })).color(t.fg_muted));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if widgets::secondary_button(ui, "Delete", 64.0)
+                .on_hover_text("Remove the vector mask (the layer's pixels are untouched)")
+                .clicked()
+            {
+                set(app, None);
+            }
+        });
+    });
+    ui.horizontal(|ui| {
+        let mut apply = !v.disabled;
+        if widgets::toggle(ui, &mut apply, "Apply")
+            .on_hover_text("Keep the paths but stop hiding with them (Photoshop's Shift-click)")
+            .changed()
+        {
+            set(app, Some(onepaint_doc::VectorMask { disabled: !apply, ..v.clone() }));
+        }
+        let mut invert = v.invert;
+        if widgets::toggle(ui, &mut invert, "Invert").on_hover_text("Show outside the paths instead of inside").changed() {
+            set(app, Some(onepaint_doc::VectorMask { invert, ..v.clone() }));
+        }
+    });
 }

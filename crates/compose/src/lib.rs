@@ -9,6 +9,7 @@ pub mod program;
 pub mod relief;
 #[doc(hidden)]
 pub mod testdocs;
+pub mod vmask;
 
 use blend::{blend_px_alpha_lock_at, blend_px_alpha_lock_in, blend_px_at, blend_px_if, blend_px_in, clip_over};
 use onepaint_color::Space;
@@ -126,7 +127,24 @@ fn layer_content(l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, frame:
             }
         }
     }
+    // The vector mask multiplies after the pixel mask (density never touches it).
+    match vector_cover(l, tx, ty) {
+        Some(vmask::Cover::Empty) => return None,
+        Some(vmask::Cover::Partial(v)) => {
+            for (i, p) in buf.chunks_exact_mut(4).enumerate() {
+                let k = v.get(i % TILE as usize, i / TILE as usize)[0];
+                p.iter_mut().for_each(|c| *c *= k);
+            }
+        }
+        Some(vmask::Cover::Full) | None => {}
+    }
     Some(buf)
+}
+
+/// `l`'s active vector mask over tile `(tx, ty)`.
+fn vector_cover(l: &Layer, tx: i32, ty: i32) -> Option<vmask::Cover> {
+    let v = l.vector_mask().filter(|v| v.active())?;
+    Some(vmask::cover(&vmask::flatten(&v), tx, ty))
 }
 
 /// `l`'s mask on tile `(tx, ty)` blurred by its feather, as RGBA: `None`
@@ -482,6 +500,10 @@ fn draw_adjustment(target: &mut Buf, l: &Layer, adj: &onepaint_doc::Adjustment, 
     {
         return; // fully masked out on this tile
     }
+    let vcover = vector_cover(l, tx, ty);
+    if let Some(vmask::Cover::Empty) = vcover {
+        return;
+    }
     let mut out = vec![0.0; target.len()];
     for i in (0..target.len()).step_by(4) {
         let p = (i / 4) as i32;
@@ -491,6 +513,10 @@ fn draw_adjustment(target: &mut Buf, l: &Layer, adj: &onepaint_doc::Adjustment, 
             Some(Some(m)) => o = o.map(|v| v * mask_k(density, m[i])),
             Some(None) => o = o.map(|v| v * (1.0 - density)),
             None => {}
+        }
+        if let Some(vmask::Cover::Partial(v)) = &vcover {
+            let k = v.get((p % TILE) as usize, (p / TILE) as usize)[0];
+            o = o.map(|c| c * k);
         }
         out[i..i + 4].copy_from_slice(&o);
     }

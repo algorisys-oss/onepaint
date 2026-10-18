@@ -1632,9 +1632,40 @@ mod tests {
         let id = h.state().session.active().to_string();
         let b = h.state().session.doc().layer(&id).unwrap().blend_if().expect("Blend If set");
         assert!(b.0[0].src[2] < 200 && b.0[0].src[2] == b.0[0].src[3], "{:?}", b.0[0]);
+        // The keys move the slider last held: Shift+← takes the white one down 10.
+        let before = h.state().session.doc().layer(&id).unwrap().blend_if().unwrap().0[0].src;
+        h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::ArrowLeft);
+        h.run();
+        let after = h.state().session.doc().layer(&id).unwrap().blend_if().unwrap().0[0].src;
+        assert_eq!((after[2], after[3]), (before[2] - 10, before[3] - 10));
         h.get_by_label("Reset").click();
         h.run();
         assert_eq!(h.state().session.doc().layer(&id).unwrap().blend_if(), None);
+    }
+
+    #[test]
+    fn vector_mask_properties_invert_apply_and_delete() {
+        let mut h = harness();
+        h.run();
+        let id = h.state().session.active().to_string();
+        let knots = [[10.0, 10.0], [60.0, 10.0], [60.0, 60.0]].iter().map(|p| [p[0], p[1], p[0], p[1], p[0], p[1]]).collect();
+        let v = onepaint_doc::VectorMask { paths: vec![onepaint_doc::VectorPath { knots, ..Default::default() }], ..Default::default() };
+        let props = onepaint_engine::LayerProps { vector_mask: Some(Some(v)), ..Default::default() };
+        h.state_mut().session.execute(Command::SetLayerProps { id: id.clone(), props }).unwrap();
+        h.get_by_label("Layers").click();
+        h.run();
+        let vm = |h: &Harness<'_, App>| h.state().session.doc().layer(&id).unwrap().vector_mask();
+        h.get_by_label("Invert").click();
+        h.run();
+        assert!(vm(&h).unwrap().invert);
+        h.get_by_label("Apply").click();
+        h.run();
+        assert!(vm(&h).unwrap().disabled);
+        // The section's own Delete (the panel has others): on the heading's row.
+        let y = h.get_by_label("1 path").rect().center().y;
+        h.get_all_by_label("Delete").find(|n| (n.rect().center().y - y).abs() < 12.0).unwrap().click();
+        h.run();
+        assert!(vm(&h).is_none());
     }
 
     #[test]

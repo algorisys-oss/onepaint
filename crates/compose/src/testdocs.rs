@@ -154,11 +154,42 @@ fn looks(r: &mut Rng, nodes: &mut [Node], adjust_only: bool) {
                 if r.chance(0.2) {
                     l.set_blend_if(Some(random_blend_if(r)));
                 }
+                if r.chance(0.15) {
+                    l.set_vector_mask(Some(random_vector_mask(r)));
+                }
             }
             Node::Layer(_) => {}
             Node::Group(g) => looks(r, &mut g.children, adjust_only),
         }
     }
+}
+
+/// One to three random paths (some curved) in random ops and rules, over a
+/// 600 × 300 area so some tiles are missed, cut, or covered.
+pub fn random_vector_mask(r: &mut Rng) -> onepaint_doc::VectorMask {
+    use onepaint_doc::{FillRule, VectorOp, VectorPath};
+    let ops = [VectorOp::Combine, VectorOp::Subtract, VectorOp::Intersect, VectorOp::Exclude];
+    let paths = (0..1 + r.below(3))
+        .map(|_| {
+            let n = 3 + r.below(4) as usize;
+            let (cx, cy, rad) = (r.f() as f64 * 600.0, r.f() as f64 * 300.0, 20.0 + r.f() as f64 * 200.0);
+            let knots = (0..n)
+                .map(|k| {
+                    let a = k as f64 / n as f64 * std::f64::consts::TAU;
+                    let (x, y) = (cx + rad * a.cos() * (0.5 + r.f() as f64), cy + rad * a.sin() * (0.5 + r.f() as f64));
+                    let (hx, hy) = if r.chance(0.5) { ((r.f() as f64 - 0.5) * 80.0, (r.f() as f64 - 0.5) * 80.0) } else { (0.0, 0.0) };
+                    [x - hx, y - hy, x, y, x + hx, y + hy]
+                })
+                .collect();
+            VectorPath {
+                open: r.chance(0.1),
+                op: ops[r.below(4) as usize],
+                rule: if r.chance(0.5) { FillRule::EvenOdd } else { FillRule::NonZero },
+                knots,
+            }
+        })
+        .collect();
+    onepaint_doc::VectorMask { paths, invert: r.chance(0.2), disabled: r.chance(0.1), unlinked: false }
 }
 
 /// One or two channels with random (often split) sliders.

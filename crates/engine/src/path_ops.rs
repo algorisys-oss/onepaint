@@ -260,28 +260,19 @@ impl Session {
         })
     }
 
+    /// Create Vector Mask (happypaint `maskFromPaths`): the active path
+    /// layer's paths become the vector mask of the paint layer below,
+    /// replacing any vector mask it had; its pixel mask stays.
     pub(crate) fn mask_from_path(&mut self) -> Result<(), EngineError> {
-        let target = self.path_op_target().ok_or_else(|| EngineError::Invalid("no paint layer below the path".into()))?;
-        let Some(cov) = self.path_coverage() else { return Ok(()) };
-        let (w, h) = (self.doc.width, self.doc.height);
+        let target = self.path_op_target().ok_or_else(|| {
+            EngineError::Invalid("Create Vector Mask masks the paint layer directly below the path — there isn’t one".into())
+        })?;
+        let v =
+            vector_mask_from_paths(&self.paths(&self.active)).ok_or_else(|| EngineError::Invalid("That path encloses no area".into()))?;
         self.tree_edit(None, |s| {
-            let Some(l) = s.doc.layer_mut(&target) else { return Ok(()) };
-            let old = l.mask.take();
-            let mut m = Surface::new();
-            let data: Vec<f32> = cov
-                .data()
-                .iter()
-                .enumerate()
-                .flat_map(|(i, &v)| {
-                    let (x, y) = ((i as u32 % w) as i32, (i as u32 / w) as i32);
-                    let keep = old.as_ref().map_or(1.0, |o| o.get(x, y)[0]);
-                    let g = keep * v as f32 / 255.0;
-                    [g, g, g, 1.0]
-                })
-                .collect();
-            m.write_rect(Rect::new(0, 0, w as i32, h as i32), &data);
-            l.mask = Some(m);
-            l.mask_enabled = true;
+            if let Some(l) = s.doc.layer_mut(&target) {
+                l.set_vector_mask(Some(v));
+            }
             Ok(())
         })
     }
@@ -392,4 +383,35 @@ impl Session {
             Ok(())
         })
     }
+}
+
+/// Pen paths as a vector mask (`vectorMaskFromPathSpecs`): each subpath of
+/// two or more anchors becomes a combined, even-odd path with absolute
+/// handles (a missing handle sits on its anchor). Like happypaint, an open
+/// subpath is filled as closed through its end handles.
+pub fn vector_mask_from_paths(specs: &[PathSpec]) -> Option<onepaint_doc::VectorMask> {
+    use onepaint_doc::{VectorMask, VectorPath};
+    let paths: Vec<VectorPath> = specs
+        .iter()
+        .flat_map(|p| &p.subpaths)
+        .filter(|sub| sub.anchors.len() >= 2)
+        .map(|sub| VectorPath {
+            knots: sub
+                .anchors
+                .iter()
+                .map(|a| {
+                    [
+                        a.x + a.in_x.unwrap_or(0.0),
+                        a.y + a.in_y.unwrap_or(0.0),
+                        a.x,
+                        a.y,
+                        a.x + a.out_x.unwrap_or(0.0),
+                        a.y + a.out_y.unwrap_or(0.0),
+                    ]
+                })
+                .collect(),
+            ..Default::default()
+        })
+        .collect();
+    (!paths.is_empty()).then(|| VectorMask { paths, ..Default::default() })
 }

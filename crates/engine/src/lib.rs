@@ -174,6 +174,9 @@ pub struct LayerProps {
     /// `Some(None)` resets Blend If; layers only.
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "some_option")]
     pub blend_if: Option<Option<BlendIf>>,
+    /// Set (to change Apply / Invert) or, with `Some(None)`, delete the vector mask; layers only.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "some_option")]
+    pub vector_mask: Option<Option<onepaint_doc::VectorMask>>,
 }
 
 /// Keep an explicit `null` as `Some(None)`, so "clear" survives a replay.
@@ -197,6 +200,7 @@ impl LayerProps {
             (self.mask_density.is_some(), "density"),
             (self.mask_feather.is_some(), "feather"),
             (self.blend_if.is_some(), "blendIf"),
+            (self.vector_mask.is_some(), "vectorMask"),
         ] {
             if set {
                 k.push_str(name);
@@ -1595,6 +1599,9 @@ impl Session {
                     }
                     if let Some(v) = p.blend_if {
                         l.set_blend_if(v);
+                    }
+                    if let Some(v) = p.vector_mask {
+                        l.set_vector_mask(v);
                     }
                 }
                 Node::Group(g) => {

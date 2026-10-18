@@ -6,15 +6,17 @@ then `docs/parity-delta-2026-10-18.md` (this run's list and decisions),
 dropped session can resume from it.
 
 ## Current run: happypaint v0.201.7 → v0.204.7 parity (2026-10-18)
-Rules for the run: commit locally per milestone, **do not push**; build with
+Rules for the run: commit locally per milestone, **do not push**; test with
+`RAYON_NUM_THREADS=2 cargo test -p X -j 2 -- --test-threads=2` (the user saw
+10 GB / all cores otherwise); build with
 `cargo -j 2` and test one crate at a time (RAM ~3 GB free, disk 95%).
 
 Order (✓ done, ▶ in progress):
 1. ✓ Photoshop blend modes + Pass Through groups — `aaed348`.
 2. ✓ Knockout (v0.202.2) — committed.
 3. ✓ Mask density/feather + Blend If (v0.202.0) — c1c2d56 and the feather commit.
-4. ▶ Vector masks (v0.202.1) — spec notes at the end of the delta doc.
-5. PSD `phfl` Photo Filter decode; pointer-router "pressed outside canvas" fix.
+4. ✓ Vector masks (v0.202.1) — committed.
+5. ▶ PSD `phfl` Photo Filter decode; pointer-router "pressed outside canvas" fix.
 6. UI: Mix colour grid, side sliders + typed values, Align on active layer.
 
 ### Step 2, Knockout — done
@@ -70,6 +72,8 @@ Split into 3a (density + Blend If, per tile) and 3b (feather, spatial).
   slider 0–250 px step .5, tooltip "Soften the mask's edges, without
   changing the mask (Photoshop's Feather)").
 - TODO: range bar keyboard (arrows ±1, Shift ±10) — not done.
+
+### Step 4 done; Blend If bar keys done (arrows ±1, Shift ±10).
 
 ## Earlier session (2026-10-10, evening, unattended)
 Items 1–5 from the earlier list; every step pushed as it landed.

@@ -278,6 +278,20 @@ fn an_adjustment_at_or_above_the_hot_layer_keeps_the_tile_unsplit() {
     use onepaint_compose::testdocs::{Rng, random_adjustment};
     use onepaint_doc::Layer;
     let mut doc = random_doc(7, 300, 300, false);
+    // Blend If keeps tiles unsplit too, and a vector mask may empty the
+    // layer here: this is about adjustments only.
+    fn plain(nodes: &mut [Node]) {
+        for n in nodes {
+            match n {
+                Node::Layer(l) => {
+                    l.set_blend_if(None);
+                    l.set_vector_mask(None);
+                }
+                Node::Group(g) => plain(&mut g.children),
+            }
+        }
+    }
+    plain(&mut doc.root);
     let below = doc.root.iter().find_map(|n| matches!(n, Node::Layer(_)).then(|| n.id().to_string())).unwrap();
     let mut adj = Layer::new("adj");
     adj.adjustment = Some(Box::new(random_adjustment(&mut Rng::new(3))));

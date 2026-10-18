@@ -145,7 +145,14 @@ fn layers_under_an_opaque_tile_are_skipped_exactly() {
     use onepaint_compose::program::{PlanCache, plan_tiles_cached};
     let (mut shorter, mut hidden) = (0, 0);
     for seed in 0..30 {
-        let doc = with_opaque_layers(random_doc(seed, 300, 300, true), seed);
+        let mut doc = with_opaque_layers(random_doc(seed, 300, 300, true), seed);
+        // A vector mask can empty a hidden layer's unit, which then still
+        // splits (harmlessly): this is about occlusion only.
+        for n in &mut doc.root {
+            if let Node::Layer(l) = n {
+                l.set_vector_mask(None);
+            }
+        }
         let keys: Vec<_> = doc.bounds().tiles().collect();
         let cache = PlanCache::default();
         let (cut, cpu) = plan_tiles_cached(&doc, &keys, None, None, Some(&cache));

@@ -59,6 +59,10 @@ impl Session {
         let old = Rect::new(dx, dy, self.doc.width as i32, self.doc.height as i32);
         let new = Rect::new(0, 0, width as i32, height as i32);
         map_layers(&mut self.doc.root, &mut |l| {
+            // Vector masks move with the content, linked or not.
+            if let Some(v) = l.vector_mask() {
+                l.set_vector_mask(Some(v.transformed([1.0, 0.0, 0.0, 1.0, dx as f64, dy as f64])));
+            }
             l.pixels = l.pixels.translated(dx, dy);
             l.height = l.height.as_ref().map(|h| h.translated(dx, dy));
             if let Some(m) = &l.mask {
@@ -106,6 +110,9 @@ impl Session {
             f.preview
         };
         map_layers(&mut self.doc.root, &mut |l| {
+            if let Some(v) = l.vector_mask() {
+                l.set_vector_mask(Some(v.transformed([sx, 0.0, 0.0, sy, 0.0, 0.0])));
+            }
             l.pixels = resample(&l.pixels);
             // Relief keeps its height; only its footprint is resampled.
             l.height = l.height.as_ref().map(&resample);

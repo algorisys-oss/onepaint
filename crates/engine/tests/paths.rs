@@ -94,9 +94,12 @@ fn path_ops_select_fill_mask_and_stroke_onto_the_layer_below() {
     assert!(p[1] > 0.99 && p[3] > 0.99, "{p:?}");
     assert_eq!(px(&s, &below, 5, 5)[3], 0.0);
 
+    // Create Vector Mask: the paths become the layer's vector mask.
     s.execute(Command::MaskFromPath).unwrap();
-    let m = s.doc().layer(&below).unwrap().mask.clone().unwrap();
-    assert!(m.get(50, 45)[0] > 0.99 && m.get(5, 5)[0] < 0.01);
+    let v = s.doc().layer(&below).unwrap().vector_mask().unwrap();
+    assert_eq!(v.paths.len(), 1);
+    assert_eq!(v.paths[0].knots[2], [80.0, 70.0, 80.0, 70.0, 80.0, 70.0]);
+    assert!(s.doc().layer(&below).unwrap().mask.is_none(), "no pixel mask");
 
     s.execute(Command::SetColor { rgba: Rgba::new(1.0, 0.0, 1.0, 1.0) }).unwrap();
     let h1 = s.history_len();

@@ -9,8 +9,10 @@ use serde::{Deserialize, Serialize};
 
 pub mod look;
 pub mod paper;
+pub mod vector_mask;
 pub use look::{BlendIf, BlendRange, ChannelRanges, FULL_RANGE, mask_k};
 pub use paper::{PAPER_PRESETS, Paper, PaperPreset, paper_preset_id};
+pub use vector_mask::{FillRule, VectorKnot, VectorMask, VectorOp, VectorPath};
 
 pub type NodeId = String;
 pub type Extra = serde_json::Map<String, serde_json::Value>;

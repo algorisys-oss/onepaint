@@ -110,6 +110,35 @@ fn mask_density_feather_and_blend_if_round_trip() {
 }
 
 #[test]
+fn vector_masks_round_trip_as_vmsk() {
+    // psd-roundtrip.test.ts: a 32 × 32 triangle (8, 4), (28, 28), (4, 28).
+    let mut d = Document::new(32, 32, Some(Rgba::WHITE));
+    let mut l = Layer::new("Masked");
+    fill(&mut l.pixels, 0, 0, 32, 32, Rgba::new(0.0, 0.0, 1.0, 1.0).to_linear_premul());
+    let tri: Vec<VectorKnot> =
+        [[8.0, 4.0], [28.0, 28.0], [4.0, 28.0]].iter().map(|p| [p[0] - 1.5, p[1], p[0], p[1], p[0] + 1.5, p[1]]).collect();
+    let v = VectorMask {
+        paths: vec![
+            VectorPath { knots: tri.clone(), ..Default::default() },
+            VectorPath { op: VectorOp::Subtract, rule: FillRule::NonZero, open: true, knots: tri },
+        ],
+        invert: true,
+        ..Default::default()
+    };
+    l.set_vector_mask(Some(v.clone()));
+    d.root.push(Node::Layer(l));
+    let r = read_psd(&write_psd(&d, &vec![1.0f32; 32 * 32 * 4]).unwrap()).unwrap();
+    let got = r.root.iter().filter_map(|n| n.as_layer()).find(|l| l.name == "Masked").unwrap().vector_mask().unwrap();
+    assert_eq!((got.invert, got.disabled, got.unlinked, got.paths.len()), (true, false, false, 2));
+    for (a, b) in got.paths.iter().zip(&v.paths) {
+        assert_eq!((a.op, a.rule, a.open, a.knots.len()), (b.op, b.rule, b.open, b.knots.len()));
+        for (ka, kb) in a.knots.iter().zip(&b.knots) {
+            assert!(ka.iter().zip(kb).all(|(x, y)| (x - y).abs() < 1e-4), "{ka:?} {kb:?}");
+        }
+    }
+}
+
+#[test]
 fn reads_a_file_written_by_ag_psd() {
     let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/agpsd.psd")).unwrap();
     let d = read_psd(&bytes).unwrap();

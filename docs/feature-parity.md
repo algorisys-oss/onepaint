@@ -68,6 +68,7 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] Opacity, visibility and color labels
 - [x] Layer masks (add, which can come from the selection; paint, enable, apply, delete)
 - [x] Mask density and feather, and Blend If on layers, on the GPU, in PSD and in Properties (happypaint v0.202.0)
+- [x] Vector masks: live paths with combine/subtract/intersect/exclude, invert and apply, from the Pen's Create Vector Mask, mapped by transforms, on the GPU and in PSD `vmsk` (happypaint v0.202.1)
 - [x] Clipping masks (clip families)
 - [x] Alpha lock
 - [x] Off-canvas pixel overflow (transforms keep off-canvas content; saved as the `overflow` chunk)

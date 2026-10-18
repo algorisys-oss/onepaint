@@ -269,6 +269,9 @@ fn layer_record(l: &Layer, doc: Rect, frame: onepaint_filters::Frame) -> Record 
         extra.push((*b"knko", vec![if k == onepaint_doc::Knockout::Deep { 2 } else { 1 }, 0, 0, 0]));
     }
     let ranges = l.blend_if().map_or_else(Vec::new, |b| b.0.iter().flat_map(|c| c.src.into_iter().chain(c.dst)).collect());
+    if let Some(v) = l.vector_mask().filter(|v| !v.paths.is_empty()) {
+        extra.push((*b"vmsk", write_vmsk(&v, doc.w as f64, doc.h as f64)));
+    }
     let hidden = if l.visible { 0 } else { 2 };
     Record {
         rect,
@@ -528,6 +531,7 @@ struct RRec {
     knockout: u8,
     mask_look: (f32, f32),
     blend_if: Option<onepaint_doc::BlendIf>,
+    vector_mask: Option<onepaint_doc::VectorMask>,
 }
 
 fn decode_channel(c: &mut Cur, len: usize, w: usize, h: usize, depth: u16, psb: bool) -> Result<Vec<u8>, FormatError> {
@@ -600,6 +604,80 @@ fn surface_from(planes: &[(i16, Vec<u8>)], rect: Rect, gray: bool, doc: Rect) ->
 }
 
 /// Read a PSD/PSB into a document.
+/// Path operations in Photoshop's order (ag-psd `booleanOperations`).
+const VMSK_OPS: [onepaint_doc::VectorOp; 4] =
+    [onepaint_doc::VectorOp::Exclude, onepaint_doc::VectorOp::Combine, onepaint_doc::VectorOp::Subtract, onepaint_doc::VectorOp::Intersect];
+
+/// A `vmsk` / `vsms` block: version 3, flags (1 invert, 2 not linked,
+/// 4 disabled), then 26-byte path records. Knots are three points, y before
+/// x, in 8.24 fixed point of the document's height and width.
+fn read_vmsk(d: &[u8], w: f64, h: f64) -> Option<onepaint_doc::VectorMask> {
+    use onepaint_doc::{FillRule, VectorMask, VectorOp, VectorPath};
+    let be32 = |o: usize| d.get(o..o + 4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]));
+    if be32(0)? != 3 {
+        return None;
+    }
+    let flags = be32(4)?;
+    let mut v = VectorMask { invert: flags & 1 != 0, unlinked: flags & 2 != 0, disabled: flags & 4 != 0, paths: Vec::new() };
+    let mut at = 8;
+    while at + 26 <= d.len() {
+        let r = &d[at..at + 26];
+        let sel = u16::from_be_bytes([r[0], r[1]]);
+        match sel {
+            0 | 3 => {
+                let op = i16::from_be_bytes([r[4], r[5]]);
+                let rule = u16::from_be_bytes([r[6], r[7]]);
+                v.paths.push(VectorPath {
+                    open: sel == 3,
+                    op: usize::try_from(op).ok().and_then(|i| VMSK_OPS.get(i).copied()).unwrap_or(VectorOp::Combine),
+                    rule: if rule == 2 { FillRule::NonZero } else { FillRule::EvenOdd },
+                    knots: Vec::new(),
+                });
+            }
+            1 | 2 | 4 | 5 => {
+                let f =
+                    |i: usize| i32::from_be_bytes([r[2 + i * 4], r[3 + i * 4], r[4 + i * 4], r[5 + i * 4]]) as f64 / (1u32 << 24) as f64;
+                if let Some(p) = v.paths.last_mut() {
+                    p.knots.push([f(1) * w, f(0) * h, f(3) * w, f(2) * h, f(5) * w, f(4) * h]);
+                }
+            }
+            _ => {}
+        }
+        at += 26;
+    }
+    v.paths.retain(|p| !p.knots.is_empty());
+    (!v.paths.is_empty()).then_some(v)
+}
+
+fn write_vmsk(v: &onepaint_doc::VectorMask, w: f64, h: f64) -> Vec<u8> {
+    use onepaint_doc::VectorOp;
+    let mut o = W(Vec::new());
+    o.u32(3);
+    o.u32(u32::from(v.invert) | u32::from(v.unlinked) << 1 | u32::from(v.disabled) << 2);
+    // The path fill rule record, then the initial fill.
+    o.u16(6);
+    o.bytes(&[0; 24]);
+    o.u16(8);
+    o.u16(u16::from(matches!(v.paths.first().map(|p| p.op), Some(VectorOp::Subtract | VectorOp::Intersect))));
+    o.bytes(&[0; 22]);
+    let fixed = |x: f64, size: f64| ((x / size) * (1u32 << 24) as f64).round().clamp(i32::MIN as f64, i32::MAX as f64) as i32;
+    for p in &v.paths {
+        o.u16(if p.open { 3 } else { 0 });
+        o.u16(p.knots.len() as u16);
+        o.i16(VMSK_OPS.iter().position(|&x| x == p.op).unwrap_or(1) as i16);
+        o.u16(if p.rule == onepaint_doc::FillRule::NonZero { 2 } else { 1 });
+        o.bytes(&[0; 18]);
+        for k in &p.knots {
+            o.u16(if p.open { 4 } else { 1 });
+            for i in [0, 2, 4] {
+                o.i32(fixed(k[i + 1], h));
+                o.i32(fixed(k[i], w));
+            }
+        }
+    }
+    o.0
+}
+
 pub fn read_psd(bytes: &[u8]) -> Result<Document, FormatError> {
     read_psd_with(bytes, &crate::Progress::default())
 }
@@ -717,6 +795,8 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                 let mut lsct = None;
                 let mut adjustment = None;
                 let mut knockout = 0;
+                let mut vector_mask = None;
+                let mut vector_fill = false;
                 while c.p + 12 <= ex_end {
                     let sig = c.take(4)?;
                     if sig != b"8BIM" && sig != b"8B64" {
@@ -764,6 +844,9 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                             lsct = Some((t, blend));
                         }
                         b"knko" => knockout = d.u8()?,
+                        b"vmsk" | b"vsms" => vector_mask = vector_mask.or_else(|| read_vmsk(data, w as f64, h as f64)),
+                        // A shape layer: its pixels are already cut to the path.
+                        b"SoCo" | b"GdFl" | b"PtFl" | b"vscg" => vector_fill = true,
                         b"nvrt" => adjustment = adj("invert", Default::default()),
                         b"post" => {
                             adjustment = adj(
@@ -807,6 +890,7 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                     knockout,
                     mask_look,
                     blend_if,
+                    vector_mask: vector_mask.filter(|_| !vector_fill),
                 });
             }
             // Channel image data, record by record.
@@ -877,6 +961,7 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                             l.set_mask_feather(rec.mask_look.1);
                         }
                         l.set_blend_if(rec.blend_if);
+                        l.set_vector_mask(rec.vector_mask);
                         l.mask = mask;
                         l.adjustment = rec.adjustment.map(Box::new);
                         l.set_knockout(match rec.knockout {
