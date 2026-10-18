@@ -107,7 +107,17 @@ pub fn rendered(doc: &Document) -> Document {
 
 /// Kinds whose filter has a GPU pass.
 pub fn gpu_kind(kind: Kind) -> bool {
-    matches!(kind, Kind::GaussianBlur | Kind::MotionBlur | Kind::Sharpen)
+    matches!(
+        kind,
+        Kind::GaussianBlur
+            | Kind::MotionBlur
+            | Kind::Sharpen
+            | Kind::Emboss
+            | Kind::Mosaic
+            | Kind::Ripple
+            | Kind::Halftone
+            | Kind::Crystallize
+    )
 }
 
 /// A spatial layer's pixels on one tile, as a program computes them: its

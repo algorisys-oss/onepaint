@@ -683,7 +683,7 @@ fn spatial_layers_match_the_rendered_document() {
     let tex = target(&device, w, h);
     let view = onepaint_gpu::mip::level_view(&tex, 0);
     let mut ran = 0;
-    for seed in 0..8 {
+    for seed in 0..16 {
         let doc = with_spatial(random_doc(seed, w, h, seed % 2 == 0), seed);
         let progs: Vec<TileProgram> = doc.bounds().tiles().filter_map(|(tx, ty)| plan_tile(&doc, tx, ty, None)).collect();
         // Stacked spatial layers stay on the CPU (spec 52, phase 1).
@@ -701,5 +701,5 @@ fn spatial_layers_match_the_rendered_document() {
         gc.run(&device, &queue, &progs, &view, [w, h]);
         assert_eq!(gc.filters, again, "seed {seed}: cached");
     }
-    assert!(ran >= 5, "{ran} documents ran on the GPU");
+    assert!(ran >= 10, "{ran} documents ran on the GPU");
 }

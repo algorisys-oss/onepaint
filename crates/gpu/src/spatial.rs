@@ -28,7 +28,39 @@ struct Prm {
     radius: f32,
     amount: f32,
     out_slot: u32,
-    _p: [u32; 3],
+    kind: u32,
+    gamma: u32,
+    _p0: u32,
+    doc: [f32; 2],
+    scale: f32,
+    _p1: f32,
+    k0: [f32; 4],
+    k1: [f32; 4],
+}
+
+/// A per-pixel kind's code in `spatial.wgsl` (`kind_px`) and its params.
+fn kind_params(kind: Kind, p: &onepaint_filters::Params) -> Option<(u32, [f32; 4])> {
+    Some(match kind {
+        Kind::Emboss => {
+            let a = p.angle.unwrap_or(135.0).to_radians();
+            let h = p.distance.unwrap_or(3.0).max(0.5);
+            let mono = if p.mono.unwrap_or(true) { 1.0 } else { 0.0 };
+            (1, [a.cos() * h, -a.sin() * h, p.amount.unwrap_or(0.5).max(0.0), mono])
+        }
+        Kind::Mosaic => (2, [p.cell_size.unwrap_or(16.0).max(2.0), 0.0, 0.0, 0.0]),
+        Kind::Ripple => {
+            let a = p.angle.unwrap_or(0.0).to_radians();
+            let len = p.wavelength.unwrap_or(60.0).max(2.0);
+            (3, [a.cos(), -a.sin(), std::f32::consts::TAU / len.max(1.0), p.amplitude.unwrap_or(0.0).max(0.0)])
+        }
+        Kind::Halftone => {
+            let a = p.angle.unwrap_or(15.0).to_radians();
+            let keep = if p.mono.unwrap_or(false) { 0.0 } else { 1.0 };
+            (4, [a.cos(), a.sin(), p.cell_size.unwrap_or(6.0).max(2.0), keep])
+        }
+        Kind::Crystallize => (5, [p.cell_size.unwrap_or(16.0).max(2.0), 0.0, 0.0, 0.0]),
+        _ => return None,
+    })
 }
 
 /// One filter job: the source, where its result goes, and the cache slot of
@@ -183,6 +215,8 @@ impl SpatialPass {
         let scale = 1.0 / k as f32;
         let p = &s.params;
         let identity = is_identity(s.kind, p);
+        let (kind, k0) = kind_params(s.kind, p).unwrap_or((0, [0.0; 4]));
+        let gamma = u32::from(s.frame.space == onepaint_color::Space::Gamma);
         // (dir, radius) of the region pass and of the output pass, and the output mode.
         let (first, second, mode, amount) = match s.kind {
             Kind::GaussianBlur => {
@@ -206,7 +240,14 @@ impl SpatialPass {
             radius,
             amount,
             out_slot: job.out,
-            _p: [0; 3],
+            kind,
+            gamma,
+            _p0: 0,
+            doc: [s.frame.doc_w as f32, s.frame.doc_h as f32],
+            scale: k as f32,
+            _p1: 0.0,
+            k0,
+            k1: [0.0; 4],
         };
         let slots = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("spatial slots"),
@@ -242,8 +283,15 @@ impl SpatialPass {
         let size = [region[2], region[3]];
         // The region from the backdrop slots into A.
         pass(&self.assemble, prm([0.0; 2], 0.0, 0), [cache, &self.b.1, &self.a.0, &self.dummy_out, &self.b.1], size);
-        if identity {
-            pass(&self.blur_out, prm([0.0; 2], 0.0, 2), [&self.dummy_array, &self.a.1, &self.dummy_store, cache_out, &self.a.1], [edge; 2]);
+        if identity || kind != 0 {
+            // A copy, or a per-pixel kind reading the region.
+            let mode = if identity { 2 } else { 3 };
+            pass(
+                &self.blur_out,
+                prm([0.0; 2], 0.0, mode),
+                [&self.dummy_array, &self.a.1, &self.dummy_store, cache_out, &self.a.1],
+                [edge; 2],
+            );
             return;
         }
         let src = match first {

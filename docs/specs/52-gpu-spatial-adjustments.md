@@ -3,7 +3,9 @@
 ## Status
 Phase 1 built (2026-10-18): Gaussian blur, motion blur and sharpen, live on
 the GPU when the layer is the document's only spatial layer and sits at the
-top level. Everything else renders on the CPU as before.
+top level. Phase 2a: emboss, mosaic, ripple, halftone and crystallize too
+(`kind_px` in `spatial.wgsl`, a port of `stylize.rs` / `distort.rs`).
+Everything else renders on the CPU as before.
 
 ## Why
 A spatial adjustment layer (blur, sharpen, distort…) is rendered on the
@@ -54,8 +56,14 @@ backdrop.
 ## Phases
 1. Oracle in `compose`; `Op::Spatial` with the CPU interpreter and program
    tests; Gaussian blur, motion blur, sharpen on the GPU; engine wiring.
-2. The other blur kinds, then distort and stylize kinds, each with its GPU
-   pass checked against the oracle.
+2. The other kinds, each with its GPU pass checked against the oracle.
+   - 2a ✓ emboss, mosaic, ripple, halftone, crystallize (one pass).
+   - 2b bloom, oil paint, line art (several passes over the region).
+   - Not planned for the tile path: wind and glitch hash with `sin` of
+     large arguments, which GPUs round differently (divergence 17), and the
+     kinds with a whole-canvas reach (radial, spin, tilt-shift, iris and
+     field blur, twirl, pinch, polar, chromatic aberration) need the whole
+     backdrop at once, a design of their own.
 3. Spatial layers inside groups (the group's register as the backdrop).
 
 ## Acceptance criteria

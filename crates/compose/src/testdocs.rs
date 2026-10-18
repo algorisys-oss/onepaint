@@ -419,18 +419,23 @@ pub fn with_relief(mut doc: Document, seed: u64) -> Document {
     doc
 }
 
-/// `doc` with a spatial adjustment layer (Gaussian blur, motion blur or
-/// sharpen) dropped into its top level (spec 52).
+/// `doc` with a spatial adjustment layer of a kind with a GPU pass dropped
+/// into its top level (spec 52).
 pub fn with_spatial(mut doc: Document, seed: u64) -> Document {
     use serde_json::json;
     let mut r = Rng::new(seed ^ 0x5ba7);
     {
         let i = 0;
-        let kinds = ["gaussian-blur", "motion-blur", "sharpen"];
-        let kind = kinds[r.below(3) as usize];
+        let kinds = ["gaussian-blur", "motion-blur", "sharpen", "emboss", "mosaic", "ripple", "halftone", "crystallize"];
+        let kind = kinds[r.below(kinds.len() as u32) as usize];
         let params = match kind {
             "gaussian-blur" => json!({"radius": 1.0 + r.f() * 40.0}),
             "motion-blur" => json!({"angle": r.f() * 360.0, "distance": 1.0 + r.f() * 40.0}),
+            "emboss" => json!({"angle": r.f() * 360.0, "distance": 0.5 + r.f() * 10.0, "amount": r.f(), "mono": r.chance(0.5)}),
+            "mosaic" => json!({"cellSize": 2.0 + r.f() * 40.0}),
+            "ripple" => json!({"amplitude": r.f() * 30.0, "wavelength": 10.0 + r.f() * 100.0, "angle": r.f() * 360.0}),
+            "halftone" => json!({"cellSize": 2.0 + r.f() * 20.0, "angle": r.f() * 90.0, "mono": r.chance(0.5)}),
+            "crystallize" => json!({"cellSize": 2.0 + r.f() * 60.0}),
             _ => json!({"amount": r.f()}),
         };
         let mut l = Layer::new(&format!("spatial{i}"));
