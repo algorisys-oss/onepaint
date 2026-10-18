@@ -93,6 +93,51 @@ params! {
     cyan_red: f32,
     magenta_green: f32,
     yellow_blue: f32,
+    // exposure: stops, offset (−0.5..0.5), gamma (0.01..9.99)
+    exposure: f32,
+    exp_offset: f32,
+    exp_gamma: f32,
+    // vibrance (both −1..1)
+    vibrance: f32,
+    vib_saturation: f32,
+    // photo-filter: straight sRGB 0..1, density 0..1
+    filter_color: [f32; 3],
+    filter_density: f32,
+    preserve_lum: bool,
+    // channel-mixer: rows R, G, B and the grey (K) row; C is the constant (−2..2)
+    #[serde(rename = "mixRR")]
+    mix_rr: f32,
+    #[serde(rename = "mixRG")]
+    mix_rg: f32,
+    #[serde(rename = "mixRB")]
+    mix_rb: f32,
+    #[serde(rename = "mixRC")]
+    mix_rc: f32,
+    #[serde(rename = "mixGR")]
+    mix_gr: f32,
+    #[serde(rename = "mixGG")]
+    mix_gg: f32,
+    #[serde(rename = "mixGB")]
+    mix_gb: f32,
+    #[serde(rename = "mixGC")]
+    mix_gc: f32,
+    #[serde(rename = "mixBR")]
+    mix_br: f32,
+    #[serde(rename = "mixBG")]
+    mix_bg: f32,
+    #[serde(rename = "mixBB")]
+    mix_bb: f32,
+    #[serde(rename = "mixBC")]
+    mix_bc: f32,
+    #[serde(rename = "mixKR")]
+    mix_kr: f32,
+    #[serde(rename = "mixKG")]
+    mix_kg: f32,
+    #[serde(rename = "mixKB")]
+    mix_kb: f32,
+    #[serde(rename = "mixKC")]
+    mix_kc: f32,
+    mix_mono: bool,
     gradient_stops: Vec<Stop>,
     shadow: [f32; 3],
     highlight: [f32; 3],

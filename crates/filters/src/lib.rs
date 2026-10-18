@@ -21,7 +21,7 @@ mod tex;
 pub mod ui;
 
 pub use colour::{MAX_COLOR_SAMPLES, fill_stops, rgb01_to_hsv, selective_color_rgb};
-pub use kind::{Kind, SECTIONS, default_params, field_blur_max, is_identity};
+pub use kind::{Kind, SECTIONS, channel_mixer_rows, default_params, field_blur_max, is_identity};
 pub use params::{BlurPin, ColorSample, FillStop, Params, Stop};
 pub use tex::Frame;
 
@@ -213,6 +213,42 @@ impl Prepared {
                 let k = 1.0 - (2.0 * l - 1.0).abs();
                 let d = [p.cyan_red.unwrap_or(0.0), p.magenta_green.unwrap_or(0.0), p.yellow_blue.unwrap_or(0.0)];
                 [0, 1, 2].map(|i| c01(w[i] + d[i] * 0.5 * k))
+            }
+            Kind::Exposure => {
+                // In linear light, like a camera (EXPOSURE_SRC).
+                let gain = 2f32.powf(p.exposure.unwrap_or(0.0));
+                let off = p.exp_offset.unwrap_or(0.0);
+                let inv_g = 1.0 / p.exp_gamma.unwrap_or(1.0).max(0.01);
+                w.map(|v| {
+                    let lin = onepaint_color::srgb_to_linear(c01(v));
+                    onepaint_color::linear_to_srgb(c01((lin * gain + off).max(0.0).powf(inv_g)))
+                })
+            }
+            Kind::Vibrance => {
+                // Muted colours gain more than vivid ones (VIBRANCE_SRC).
+                let rgb = w.map(c01);
+                let sat = rgb[0].max(rgb[1]).max(rgb[2]) - rgb[0].min(rgb[1]).min(rgb[2]);
+                let k = p.vibrance.unwrap_or(0.0) * (1.0 - sat);
+                let l = luma(rgb);
+                let v = rgb.map(|c| l + (c - l) * (1.0 + k));
+                let l = luma(v.map(c01));
+                let s = p.vib_saturation.unwrap_or(0.0);
+                v.map(|c| c01(l + (c - l) * (1.0 + s)))
+            }
+            Kind::PhotoFilter => {
+                let rgb = w.map(c01);
+                let f = p.filter_color.unwrap_or([236.0 / 255.0, 138.0 / 255.0, 0.0]);
+                let d = p.filter_density.unwrap_or(0.25);
+                let mut o = [0, 1, 2].map(|i| rgb[i] + (rgb[i] * f[i] - rgb[i]) * d);
+                if p.preserve_lum.unwrap_or(true) {
+                    o = colour::set_lum(o, colour::lum_w3c(rgb));
+                }
+                o.map(c01)
+            }
+            Kind::ChannelMixer => {
+                let rgb = w.map(c01);
+                let r = channel_mixer_rows(p);
+                [0, 1, 2].map(|i| c01(r[i][0] * rgb[0] + r[i][1] * rgb[1] + r[i][2] * rgb[2] + r[i][3]))
             }
             Kind::GradientMap => {
                 let l = luma(w.map(c01));

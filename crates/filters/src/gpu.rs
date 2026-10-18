@@ -72,6 +72,28 @@ pub fn gpu_adjust(kind: Kind, p: &Params, frame: Frame) -> Option<GpuAdjust> {
             lut = Some(Box::new(build_gradient_lut(p)));
             10
         }
+        Kind::Exposure => {
+            let gain = 2f32.powf(p.exposure.unwrap_or(0.0));
+            put(0, &[gain, p.exp_offset.unwrap_or(0.0), 1.0 / p.exp_gamma.unwrap_or(1.0).max(0.01)]);
+            19
+        }
+        Kind::Vibrance => {
+            put(0, &[p.vibrance.unwrap_or(0.0), p.vib_saturation.unwrap_or(0.0)]);
+            20
+        }
+        Kind::PhotoFilter => {
+            put(0, &p.filter_color.unwrap_or([236.0 / 255.0, 138.0 / 255.0, 0.0]));
+            put(3, &[p.filter_density.unwrap_or(0.25)]);
+            put(4, &[if p.preserve_lum.unwrap_or(true) { 1.0 } else { 0.0 }]);
+            21
+        }
+        Kind::ChannelMixer => {
+            // Rows r, g, b as vec4s: the three weights and the constant.
+            for (i, row) in crate::channel_mixer_rows(p)[..3].iter().enumerate() {
+                put(i * 4, row);
+            }
+            22
+        }
         Kind::ColorToAlpha => {
             put(0, &p.target.unwrap_or([1.0; 3]));
             put(3, &[p.threshold.unwrap_or(0.0)]);
@@ -163,7 +185,7 @@ mod tests {
     fn colour_kinds_pack_and_the_rest_stay_on_the_cpu() {
         let f = Frame::default();
         let gpu: Vec<Kind> = Kind::ALL.into_iter().filter(|&k| gpu_adjust(k, &crate::default_params(k), f).is_some()).collect();
-        assert_eq!(gpu.len(), 18);
+        assert_eq!(gpu.len(), 22);
         assert!(gpu.iter().all(|k| k.is_color()));
         for k in [Kind::GaussianBlur, Kind::Clouds] {
             assert!(gpu_adjust(k, &crate::default_params(k), f).is_none(), "{k:?}");

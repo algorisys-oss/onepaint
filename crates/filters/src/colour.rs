@@ -360,3 +360,25 @@ pub(crate) fn px(kind: crate::Kind, p: &Params, e: &Extra, s: Px, x: i32, y: i32
         _ => return None,
     })
 }
+
+/// The W3C / PDF blend luminosity (0.3, 0.59, 0.11).
+pub(crate) fn lum_w3c(c: [f32; 3]) -> f32 {
+    0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2]
+}
+
+/// W3C SetLum with ClipColor: `c` moved to luminosity `l`, kept in gamut
+/// (happypaint `setLum`, PHOTO_FILTER_SRC).
+pub(crate) fn set_lum(c: [f32; 3], l: f32) -> [f32; 3] {
+    let d = l - lum_w3c(c);
+    let mut c = c.map(|v| v + d);
+    let ll = lum_w3c(c);
+    let n = c[0].min(c[1]).min(c[2]);
+    let x = c[0].max(c[1]).max(c[2]);
+    if n < 0.0 {
+        c = c.map(|v| ll + (v - ll) * ll / (ll - n).max(1e-6));
+    }
+    if x > 1.0 {
+        c = c.map(|v| ll + (v - ll) * (1.0 - ll) / (x - ll).max(1e-6));
+    }
+    c
+}

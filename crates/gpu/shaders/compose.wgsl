@@ -637,6 +637,33 @@ fn pattern_at(lut: u32, i: vec2<i32>, sz: vec2<i32>) -> vec4<f32> {
 }
 
 // `pos`: the pixel in doc px (noise and fills depend on it, spec 46).
+fn srgb2lin3(c: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(srgb2lin(c.x), srgb2lin(c.y), srgb2lin(c.z));
+}
+
+fn lin2srgb3(c: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(lin2srgb(c.x), lin2srgb(c.y), lin2srgb(c.z));
+}
+
+fn lum_w3c(c: vec3<f32>) -> f32 {
+    return dot(c, vec3<f32>(0.3, 0.59, 0.11));
+}
+
+// W3C SetLum with ClipColor (filters colour.rs `set_lum`).
+fn set_lum_w3c(c0: vec3<f32>, l: f32) -> vec3<f32> {
+    var c = c0 + (l - lum_w3c(c0));
+    let ll = lum_w3c(c);
+    let n = min(c.x, min(c.y, c.z));
+    let x = max(c.x, max(c.y, c.z));
+    if (n < 0.0) {
+        c = ll + (c - ll) * ll / max(ll - n, 1e-6);
+    }
+    if (x > 1.0) {
+        c = ll + (c - ll) * (1.0 - ll) / max(x - ll, 1e-6);
+    }
+    return c;
+}
+
 fn adjust(op: Op, s: vec4<f32>, pos: vec2<i32>) -> vec4<f32> {
     let base = op.b.x;
     let lut = op.b.y;
@@ -683,6 +710,34 @@ fn adjust(op: Op, s: vec4<f32>, pos: vec2<i32>) -> vec4<f32> {
         }
         case 10u: {
             o = lut3(lut, vec3<f32>(luma(w)));
+        }
+        case 19u: {
+            // Exposure, in linear light: gain, offset, then 1 / gamma.
+            let lin = pow(max(srgb2lin3(c01(w)) * p0.x + p0.y, vec3<f32>(0.0)), vec3<f32>(p0.z));
+            o = lin2srgb3(c01(lin));
+        }
+        case 20u: {
+            // Vibrance: muted colours gain more; then plain saturation.
+            let rgb = c01(w);
+            let sat = max(rgb.x, max(rgb.y, rgb.z)) - min(rgb.x, min(rgb.y, rgb.z));
+            let k = p0.x * (1.0 - sat);
+            var l = luma(rgb);
+            let v = mix(vec3<f32>(l), rgb, 1.0 + k);
+            l = luma(c01(v));
+            o = c01(mix(vec3<f32>(l), v, 1.0 + p0.y));
+        }
+        case 21u: {
+            // Photo Filter: multiply at the density; keep the luminosity if asked.
+            let rgb = c01(w);
+            var c = mix(rgb, rgb * p0.xyz, p0.w);
+            if (p1.x > 0.5) {
+                c = set_lum_w3c(c, lum_w3c(rgb));
+            }
+            o = c01(c);
+        }
+        case 22u: {
+            let rgb = vec4<f32>(c01(w), 1.0);
+            o = c01(vec3<f32>(dot(p0, rgb), dot(p1, rgb), dot(adj[base + 2u], rgb)));
         }
         case 11u: {
             let t = p0.xyz;

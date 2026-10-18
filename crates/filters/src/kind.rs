@@ -39,7 +39,11 @@ kinds! {
     Posterize = "posterize", "Posterize", "Color";
     Levels = "levels", "Levels", "Color";
     Curves = "curves", "Curves", "Color";
+    Exposure = "exposure", "Exposure", "Color";
+    Vibrance = "vibrance", "Vibrance", "Color";
     ColorBalance = "color-balance", "Color Balance", "Color";
+    PhotoFilter = "photo-filter", "Photo Filter", "Color";
+    ChannelMixer = "channel-mixer", "Channel Mixer", "Color";
     GradientMap = "gradient-map", "Gradient Map", "Color";
     ColorToAlpha = "color-to-alpha", "Color to Alpha", "Color";
     ReplaceColor = "replace-color", "Replace Color", "Color";
@@ -115,6 +119,10 @@ impl Kind {
                 | Kind::Levels
                 | Kind::Curves
                 | Kind::ColorBalance
+                | Kind::Exposure
+                | Kind::Vibrance
+                | Kind::PhotoFilter
+                | Kind::ChannelMixer
                 | Kind::GradientMap
                 | Kind::Noise
                 | Kind::ColorToAlpha
@@ -173,6 +181,20 @@ pub fn default_params(k: Kind) -> Params {
             p.curve_mode = Some("smooth".into());
         }
         Kind::ColorBalance => (p.cyan_red, p.magenta_green, p.yellow_blue) = (Some(0.0), Some(0.0), Some(0.0)),
+        Kind::Exposure => (p.exposure, p.exp_offset, p.exp_gamma) = (Some(0.0), Some(0.0), Some(1.0)),
+        Kind::Vibrance => (p.vibrance, p.vib_saturation) = (Some(0.0), Some(0.0)),
+        // Photoshop's default: Warming Filter (85), 25% density, luminosity kept.
+        Kind::PhotoFilter => {
+            (p.filter_color, p.filter_density, p.preserve_lum) = (Some([236.0 / 255.0, 138.0 / 255.0, 0.0]), Some(0.25), Some(true))
+        }
+        Kind::ChannelMixer => {
+            let rows = channel_mixer_identity();
+            (p.mix_rr, p.mix_rg, p.mix_rb, p.mix_rc) = (Some(rows[0][0]), Some(rows[0][1]), Some(rows[0][2]), Some(rows[0][3]));
+            (p.mix_gr, p.mix_gg, p.mix_gb, p.mix_gc) = (Some(rows[1][0]), Some(rows[1][1]), Some(rows[1][2]), Some(rows[1][3]));
+            (p.mix_br, p.mix_bg, p.mix_bb, p.mix_bc) = (Some(rows[2][0]), Some(rows[2][1]), Some(rows[2][2]), Some(rows[2][3]));
+            p.mix_mono = Some(false);
+            (p.mix_kr, p.mix_kg, p.mix_kb, p.mix_kc) = (Some(0.4), Some(0.4), Some(0.2), Some(0.0));
+        }
         Kind::GradientMap => p.gradient_stops = Some(vec![Stop { pos: 0.0, color: [0.0; 3] }, Stop { pos: 1.0, color: [1.0; 3] }]),
         Kind::ColorToAlpha => (p.target, p.threshold) = (Some([1.0; 3]), Some(0.0)),
         Kind::ReplaceColor => (p.target, p.replace, p.threshold) = (Some([1.0; 3]), Some([0.2, 0.45, 1.0]), Some(0.3)),
@@ -280,6 +302,26 @@ pub fn default_params(k: Kind) -> Params {
     p
 }
 
+fn channel_mixer_identity() -> [[f32; 4]; 3] {
+    [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]]
+}
+
+/// The mixer's rows `[r, g, b, constant]` for red, green and blue, then the
+/// grey row; monochrome uses the grey row for all three (`channelMixerMatrix`).
+pub fn channel_mixer_rows(p: &Params) -> [[f32; 4]; 4] {
+    let o = |v: Option<f32>, d: f32| v.unwrap_or(d);
+    let grey = [o(p.mix_kr, 0.4), o(p.mix_kg, 0.4), o(p.mix_kb, 0.2), o(p.mix_kc, 0.0)];
+    if p.mix_mono.unwrap_or(false) {
+        return [grey; 4];
+    }
+    [
+        [o(p.mix_rr, 1.0), o(p.mix_rg, 0.0), o(p.mix_rb, 0.0), o(p.mix_rc, 0.0)],
+        [o(p.mix_gr, 0.0), o(p.mix_gg, 1.0), o(p.mix_gb, 0.0), o(p.mix_gc, 0.0)],
+        [o(p.mix_br, 0.0), o(p.mix_bg, 0.0), o(p.mix_bb, 1.0), o(p.mix_bc, 0.0)],
+        grey,
+    ]
+}
+
 fn curve_is_identity(c: &Option<Vec<CurvePoint>>) -> bool {
     c.as_ref().is_none_or(|c| c.len() < 2 || c.iter().all(|p| (p.y - p.x).abs() < 1e-3))
 }
@@ -306,6 +348,10 @@ pub fn is_identity(k: Kind, p: &Params) -> bool {
         }
         Kind::Curves => [&p.curve, &p.curve_r, &p.curve_g, &p.curve_b].into_iter().all(curve_is_identity),
         Kind::ColorBalance => z(p.cyan_red) && z(p.magenta_green) && z(p.yellow_blue),
+        Kind::Exposure => z(p.exposure) && z(p.exp_offset) && p.exp_gamma.unwrap_or(1.0) == 1.0,
+        Kind::Vibrance => z(p.vibrance) && z(p.vib_saturation),
+        Kind::PhotoFilter => le0(p.filter_density),
+        Kind::ChannelMixer => !p.mix_mono.unwrap_or(false) && channel_mixer_rows(p)[..3] == channel_mixer_identity()[..],
         Kind::SelectiveColor => {
             !p.show_range.unwrap_or(false)
                 && !p

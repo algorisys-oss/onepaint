@@ -9,8 +9,8 @@ fn p(json: &str) -> Params {
 }
 
 #[test]
-fn all_48_kinds_parse_and_have_a_section() {
-    assert_eq!(Kind::ALL.len(), 48);
+fn all_52_kinds_parse_and_have_a_section() {
+    assert_eq!(Kind::ALL.len(), 52);
     for k in Kind::ALL {
         assert_eq!(Kind::parse(k.as_str()), Some(k));
         assert!(SECTIONS.contains(&k.section()), "{k:?}");
@@ -172,4 +172,13 @@ fn every_new_kind_has_a_panel() {
         );
         assert_eq!(ui::controls(k).is_empty(), spec10, "{k:?}");
     }
+}
+
+#[test]
+fn the_channel_mixer_panel_shows_colour_rows_or_the_grey_row() {
+    let cs = ui::controls(Kind::ChannelMixer);
+    let shown = |p: &Params| cs.iter().filter(|c| ui::visible(Kind::ChannelMixer, c, p)).count();
+    let p = default_params(Kind::ChannelMixer);
+    assert_eq!(shown(&p), 1 + 12);
+    assert_eq!(shown(&Params { mix_mono: Some(true), ..p }), 1 + 4);
 }

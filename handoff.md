@@ -82,6 +82,27 @@ c1c2d56 density + Blend If, 9bad5ed feather, f19e6d5 vector masks,
 (needs the Photo Filter adjustment, `todo.md` new adjustments), the
 title-bar workspace decision, the licence question (delta doc).
 
+### Done: Exposure, Vibrance, Photo Filter, Channel Mixer (2026-10-18, committed)
+Next per the recommended order: the PSD codec (live Levels/Curves/Hue-Sat/
+Gradient Map import, untouched round trips), then perf (8-bit atlases,
+spatial adjustments on the GPU), then photocraft robustness items.
+Pushed 14e05aa first. Spec (happypaint `adjustment-renderer.ts` :1048-1118,
+:2370-2401, `psd-map.ts` :206-234/:357-381, `psd/adjust-blocks.ts`):
+all run on sRGB-encoded 0..1 (toWork), input clamped.
+- exposure {exposure 0, expOffset 0, expGamma 1}: lin = srgb2lin(rgb);
+  lin = pow(max(lin·2^exp + off, 0), 1/max(.01,gamma)); o = lin2srgb(clamp01).
+- vibrance {vibrance 0, vibSaturation 0}: k = vib·(1 − (max−min));
+  rgb = mix(lum601, rgb, 1+k); lum601 of clamped; rgb = mix(lum, rgb, 1+sat).
+- photo-filter {filterColor [236,138,0]/255, filterDensity .25, preserveLum
+  true}: o = mix(rgb, rgb·f, d); keepLum → setLum(o, lum(.3,.59,.11) of rgb)
+  with ClipColor. Identity when density ≤ 0.
+- channel-mixer {mixRR/GG/BB 1, rest 0, mixMono false, mixKR .4 KG .4 KB .2
+  KC 0}: o = clamp(M·rgb + C); mono uses the K row for all three.
+- UI fields: Exposure −20..20 (.01), Offset −.5...5 (.001), Gamma .01..9.99;
+  Vibrance/Saturation −100..100 %; Colour, Density 0..100 %, Preserve
+  luminosity; Monochrome, "Red ← Red"… "Red constant" −200..200 %.
+- PSD: expA, vibA, phfl (v3 XYZ/32768 via MI, v2 colour), mixr.
+
 ## Earlier session (2026-10-10, evening, unattended)
 Items 1–5 from the earlier list; every step pushed as it landed.
 

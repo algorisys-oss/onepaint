@@ -236,3 +236,79 @@ fn imported_patterns_tile_from_their_data_url() {
     p.pattern_image = Some("data:image/png;base64,AAAA".into());
     assert_eq!(prepare_in(Kind::PatternFill, &p, frame).color_px([0.0; 4], 5, 5), [0.0; 4]);
 }
+
+/// Exposure, Vibrance, Photo Filter and Channel Mixer (happypaint
+/// EXPOSURE_SRC … CHANNEL_MIXER_SRC, which run on sRGB values).
+#[test]
+fn exposure_works_in_linear_light() {
+    for k in [Kind::Exposure, Kind::Vibrance, Kind::PhotoFilter, Kind::ChannelMixer] {
+        assert!(k.is_color() && k.section() == "Color");
+    }
+    assert!(is_identity(Kind::Exposure, &default_params(Kind::Exposure)));
+    let p = Params { exposure: Some(1.0), ..default_params(Kind::Exposure) };
+    assert!(!is_identity(Kind::Exposure, &p));
+    // +1 stop doubles the light: sRGB 0.5 → linear 0.214 → 0.428 → sRGB 0.686.
+    let want = linear_to_srgb(srgb_to_linear(0.5) * 2.0);
+    assert!(near3(srgb(run(Kind::Exposure, &p, rgb([0.5; 3]))), [want; 3], 1e-4));
+    // Offset lifts black; gamma bends the midtones.
+    let p = Params { exp_offset: Some(0.1), ..default_params(Kind::Exposure) };
+    assert!(near3(srgb(run(Kind::Exposure, &p, rgb([0.0; 3]))), [linear_to_srgb(0.1); 3], 1e-4));
+    let p = Params { exp_gamma: Some(2.0), ..default_params(Kind::Exposure) };
+    let want = linear_to_srgb(srgb_to_linear(0.5).sqrt());
+    assert!(near3(srgb(run(Kind::Exposure, &p, rgb([0.5; 3]))), [want; 3], 1e-4));
+}
+
+#[test]
+fn vibrance_boosts_muted_colours_more() {
+    let p = Params { vibrance: Some(1.0), ..default_params(Kind::Vibrance) };
+    // Grey stays grey.
+    assert!(near3(srgb(run(Kind::Vibrance, &p, rgb([0.5; 3]))), [0.5; 3], 1e-4));
+    // A muted colour (sat 0.2) gains k = 0.8; a vivid one (sat 1) none.
+    let muted = [0.6, 0.5, 0.4];
+    let l = 0.299 * 0.6 + 0.587 * 0.5 + 0.114 * 0.4;
+    let want = muted.map(|c| l + (c - l) * 1.8);
+    assert!(near3(srgb(run(Kind::Vibrance, &p, rgb(muted))), want, 1e-3));
+    assert!(near3(srgb(run(Kind::Vibrance, &p, rgb([1.0, 0.0, 0.0]))), [1.0, 0.0, 0.0], 1e-4));
+    // Saturation −1 is grey.
+    let p = Params { vib_saturation: Some(-1.0), ..default_params(Kind::Vibrance) };
+    let o = srgb(run(Kind::Vibrance, &p, rgb([1.0, 0.0, 0.0])));
+    assert!(near3(o, [0.299; 3], 1e-3), "{o:?}");
+}
+
+#[test]
+fn photo_filter_tints_and_keeps_luminosity() {
+    let mut p = default_params(Kind::PhotoFilter);
+    assert!(!is_identity(Kind::PhotoFilter, &p));
+    // Without preserving: white × the filter at 25 %.
+    p.preserve_lum = Some(false);
+    let f = [236.0 / 255.0, 138.0 / 255.0, 0.0];
+    let want = f.map(|c| 1.0 + (c - 1.0) * 0.25);
+    assert!(near3(srgb(run(Kind::PhotoFilter, &p, rgb([1.0; 3]))), want, 1e-3));
+    // Preserving: the W3C luminosity of a mid grey stays, the hue warms.
+    p.preserve_lum = Some(true);
+    let o = srgb(run(Kind::PhotoFilter, &p, rgb([0.5; 3])));
+    assert!((0.3 * o[0] + 0.59 * o[1] + 0.11 * o[2] - 0.5).abs() < 1e-3 && o[0] > o[2], "{o:?}");
+    p.filter_density = Some(0.0);
+    assert!(is_identity(Kind::PhotoFilter, &p));
+}
+
+#[test]
+fn channel_mixer_mixes_rows_and_monochrome_uses_the_grey_row() {
+    let p = default_params(Kind::ChannelMixer);
+    assert!(is_identity(Kind::ChannelMixer, &p));
+    assert!(near3(srgb(run(Kind::ChannelMixer, &p, rgb([0.2, 0.5, 0.8]))), [0.2, 0.5, 0.8], 1e-4));
+    // Red from green, plus a constant on blue.
+    let q = Params { mix_rr: Some(0.0), mix_rg: Some(1.0), mix_bc: Some(0.1), ..p.clone() };
+    assert!(!is_identity(Kind::ChannelMixer, &q));
+    assert!(near3(srgb(run(Kind::ChannelMixer, &q, rgb([0.2, 0.5, 0.6]))), [0.5, 0.5, 0.7], 1e-4));
+    // Monochrome: 0.4 r + 0.4 g + 0.2 b everywhere, never an identity.
+    let m = Params { mix_mono: Some(true), ..p };
+    assert!(!is_identity(Kind::ChannelMixer, &m));
+    let g = 0.4 * 0.2 + 0.4 * 0.5 + 0.2 * 0.6;
+    assert!(near3(srgb(run(Kind::ChannelMixer, &m, rgb([0.2, 0.5, 0.6]))), [g; 3], 1e-4));
+    // The JSON keys are happypaint's.
+    let j = serde_json::to_value(&m).unwrap();
+    assert!(j.get("mixRR").is_some() && j.get("mixKC").is_some() && j["mixMono"] == true);
+    let e = serde_json::to_value(default_params(Kind::Exposure)).unwrap();
+    assert!(e.get("expOffset").is_some() && e.get("expGamma").is_some());
+}

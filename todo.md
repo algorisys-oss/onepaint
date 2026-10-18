@@ -210,7 +210,8 @@ See `docs/parity-delta-2026-10-10.md`.
       empty; damp veil 0.12 in 8-bit; granulation sign
 - [ ] 8 blend modes + Pass Through groups
 - [ ] Layer styles (v0.196.x)
-- [ ] New adjustments: Exposure, Vibrance, Photo Filter, Channel Mixer, CMYK
+- [~] New adjustments: Exposure, Vibrance, Photo Filter, Channel Mixer done
+      (CPU, GPU, PSD expA/vibA/phfl/mixr, panels; 2026-10-18). Left: CMYK
       Selective Color, Color Lookup; B&W hue weights + tint; Color Balance ranges
 - [ ] PSD codec parity (modes, 32-bit, round trip, live adjustments, fills, styles)
 - [ ] Wet physics v0.199 (paper absorbs, halo, wash fill, tip-shaped dabs)

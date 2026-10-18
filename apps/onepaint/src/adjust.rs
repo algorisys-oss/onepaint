@@ -254,6 +254,9 @@ fn generic(ui: &mut Ui, kind: Kind, p: &mut Params, colour: onepaint_color::Rgba
     let mut m = p.to_json();
     let mut ch = false;
     for c in onepaint_filters::ui::controls(kind) {
+        if !onepaint_filters::ui::visible(kind, c, p) {
+            continue;
+        }
         match *c {
             Control::Slider { key, label, min, max, scale, unit, default } => {
                 let mut v = m.get(key).and_then(Value::as_f64).map(|v| v as f32);

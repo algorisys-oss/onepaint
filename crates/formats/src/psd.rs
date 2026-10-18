@@ -261,7 +261,7 @@ fn layer_record(l: &Layer, doc: Rect, frame: onepaint_filters::Frame) -> Record 
                 w.u8(0);
                 extra.push((*b"brit", w.0));
             }
-            _ => {}
+            _ => extra.extend(crate::psd_adjust::write(a)),
         }
     }
     // Knockout: one byte (1 shallow, 2 deep) padded to four, written only when set.
@@ -848,6 +848,7 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                         // A shape layer: its pixels are already cut to the path.
                         b"SoCo" | b"GdFl" | b"PtFl" | b"vscg" => vector_fill = true,
                         b"nvrt" => adjustment = adj("invert", Default::default()),
+                        b"expA" | b"vibA" | b"phfl" | b"mixr" => adjustment = crate::psd_adjust::read(&k, data),
                         b"post" => {
                             adjustment = adj(
                                 "posterize",

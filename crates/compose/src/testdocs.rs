@@ -270,6 +270,10 @@ pub fn random_adjustment(r: &mut Rng) -> onepaint_doc::Adjustment {
         "gradient-fill",
         "tone",
         "pattern-fill",
+        "exposure",
+        "vibrance",
+        "photo-filter",
+        "channel-mixer",
     ];
     let kind = kinds[r.below(kinds.len() as u32) as usize];
     let mut c = || [r.f(), r.f(), r.f()];
@@ -306,6 +310,22 @@ pub fn random_adjustment(r: &mut Rng) -> onepaint_doc::Adjustment {
             json!({"colorSamples": samples, "showRange": c()[0] < 0.2})
         }
         "noise" => json!({"amount": c()[0], "mono": c()[1] < 0.5}),
+        "exposure" => {
+            let k = c();
+            json!({"exposure": (k[0] - 0.5) * 4.0, "expOffset": (k[1] - 0.5) * 0.4, "expGamma": 0.3 + k[2] * 2.0})
+        }
+        "vibrance" => json!({"vibrance": c()[0] * 2.0 - 1.0, "vibSaturation": c()[1] * 2.0 - 1.0}),
+        "photo-filter" => json!({"filterColor": c(), "filterDensity": c()[0], "preserveLum": c()[1] < 0.6}),
+        "channel-mixer" => {
+            let mut m = serde_json::Map::new();
+            for a in ["R", "G", "B", "K"] {
+                for b in ["R", "G", "B", "C"] {
+                    m.insert(format!("mix{a}{b}"), json!((c()[0] - 0.5) * 2.0));
+                }
+            }
+            m.insert("mixMono".into(), json!(c()[0] < 0.3));
+            serde_json::Value::Object(m)
+        }
         "pattern-fill" => {
             let k = c();
             let ids = ["checker", "stripes", "dots", "grid", "brick", "crosshatch", "halftone", "weave"];
@@ -348,6 +368,11 @@ pub fn with_adjustments(mut doc: Document, seed: u64) -> Document {
             l.id = format!("adj{id}");
             l.adjustment = Some(Box::new(random_adjustment(r)));
             l.blend_mode = if r.chance(0.6) { BlendMode::Normal } else { mode(r, false) };
+            // Hard Mix flips at b + s = 1, and an inverted backdrop sits exactly
+            // there: rounding alone decides every pixel, on either side.
+            if l.blend_mode == BlendMode::HardMix && l.adjustment.as_ref().is_some_and(|a| a.kind == "invert") {
+                l.blend_mode = BlendMode::Normal;
+            }
             l.opacity = if r.chance(0.5) { 1.0 } else { r.f() };
             l.visible = !r.chance(0.1);
             if r.chance(0.3) {

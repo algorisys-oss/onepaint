@@ -9,6 +9,7 @@ mod image;
 pub mod palette;
 mod progress;
 pub mod psd;
+pub mod psd_adjust;
 pub mod tiff_cmyk;
 pub mod video;
 pub mod zip;

@@ -92,11 +92,65 @@ const GEN: &[Control] = &[
     Control::Seed { key: "genSeed", label: "Re-roll" },
 ];
 
+const fn mix(key: &'static str, label: &'static str, default: f32) -> Control {
+    Control::Slider { key, label, min: -200.0, max: 200.0, scale: 0.01, unit: "%", default }
+}
+
+const MIXER: &[Control] = &[
+    toggle("mixMono", "Monochrome", false),
+    mix("mixRR", "Red ← Red", 1.0),
+    mix("mixRG", "Red ← Green", 0.0),
+    mix("mixRB", "Red ← Blue", 0.0),
+    mix("mixRC", "Red constant", 0.0),
+    mix("mixGR", "Green ← Red", 0.0),
+    mix("mixGG", "Green ← Green", 1.0),
+    mix("mixGB", "Green ← Blue", 0.0),
+    mix("mixGC", "Green constant", 0.0),
+    mix("mixBR", "Blue ← Red", 0.0),
+    mix("mixBG", "Blue ← Green", 0.0),
+    mix("mixBB", "Blue ← Blue", 1.0),
+    mix("mixBC", "Blue constant", 0.0),
+    mix("mixKR", "Grey ← Red", 0.4),
+    mix("mixKG", "Grey ← Green", 0.4),
+    mix("mixKB", "Grey ← Blue", 0.2),
+    mix("mixKC", "Grey constant", 0.0),
+];
+
+/// Whether `c` shows for these params: the Channel Mixer shows its colour
+/// rows, or only the grey row when Monochrome is on.
+pub fn visible(kind: Kind, c: &Control, p: &crate::Params) -> bool {
+    let Control::Slider { key, .. } = c else { return true };
+    if kind != Kind::ChannelMixer {
+        return true;
+    }
+    key.starts_with("mixK") == p.mix_mono.unwrap_or(false)
+}
+
 /// The panel for a spec-18 kind. Empty for spec-10 kinds (the app has bespoke
 /// panels for those), selective colour and field blur (their lists are edited
 /// by dedicated widgets).
 pub fn controls(kind: Kind) -> &'static [Control] {
     match kind {
+        Kind::Exposure => {
+            const {
+                &[
+                    num("exposure", "Exposure", -20.0, 20.0, 0.0),
+                    num("expOffset", "Offset", -0.5, 0.5, 0.0),
+                    num("expGamma", "Gamma", 0.01, 9.99, 1.0),
+                ]
+            }
+        }
+        Kind::Vibrance => const { &[spct("vibrance", "Vibrance", 0.0), spct("vibSaturation", "Saturation", 0.0)] },
+        Kind::PhotoFilter => {
+            const {
+                &[
+                    colour("filterColor", "Colour", [236.0 / 255.0, 138.0 / 255.0, 0.0]),
+                    pct("filterDensity", "Density", 0.25),
+                    toggle("preserveLum", "Preserve luminosity", true),
+                ]
+            }
+        }
+        Kind::ChannelMixer => MIXER,
         Kind::ColorToAlpha => const { &[colour("target", "Colour", [1.0; 3]), pct("threshold", "Threshold", 0.0)] },
         Kind::ReplaceColor => {
             const { &[colour("target", "Find", [1.0; 3]), colour("replace", "Replace with", [0.2, 0.45, 1.0]), pct("threshold", "Range", 0.3)] }
