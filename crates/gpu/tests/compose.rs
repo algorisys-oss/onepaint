@@ -1004,3 +1004,35 @@ fn heavy_whole_canvas_filters_wait_for_the_stroke_to_end() {
         assert!(over as f64 <= (1.5e-3 * (n * n) as f64).ceil(), "{kind} after the stroke: {over} px over");
     }
 }
+
+/// A tile whose sources can't all be resident isn't composited: the GPU
+/// reports it for the CPU and leaves its pixels as they were.
+#[test]
+fn tiles_that_dont_fit_are_left_for_the_cpu() {
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let mut gc = GpuCompositor::with_atlas_layers(&device, 2);
+    let (w, h) = (512, 256);
+    let tex = target(&device, w, h);
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
+    let mut doc = Document::new(w, h, None);
+    for i in 0..3 {
+        let mut l = Layer::new(&format!("l{i}"));
+        l.pixels.set(10 + i, 10, [0.5, 0.2, 0.1, 0.5]);
+        if i == 0 {
+            l.pixels.set(300, 10, [0.1, 0.2, 0.9, 1.0]);
+        }
+        doc.root.push(Node::Layer(l));
+    }
+    // Tile (1, 0) reads one tile and fits; (0, 0) reads three and doesn't.
+    let progs: Vec<_> = [(1, 0), (0, 0)].iter().map(|&(tx, ty)| plan_tile(&doc, tx, ty, None).unwrap()).collect();
+    gc.run(&device, &queue, &progs, &view, [w, h]);
+    assert_eq!(gc.take_failed(), vec![(0, 0)]);
+    let px = read(&device, &queue, &tex);
+    let at = |x: u32, y: u32| px[((y * w + x) * 4) as usize..][..4].to_vec();
+    assert!(at(300, 10)[3] > 0.99, "the tile that fits composites");
+    assert_eq!(at(10, 10), vec![0.0; 4], "the one that doesn't is left alone");
+    assert!(gc.take_failed().is_empty(), "taken once");
+}

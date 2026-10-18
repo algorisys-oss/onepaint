@@ -100,6 +100,8 @@ struct CanvasCallback {
     space: onepaint_color::Space,
     /// A stroke is in progress: heavy whole-canvas filters wait (spec 53).
     interactive: bool,
+    /// Where tiles the GPU couldn't take go, for the CPU next frame.
+    failed: Arc<std::sync::Mutex<Vec<(i32, i32)>>>,
 }
 
 impl CallbackTrait for CanvasCallback {
@@ -118,6 +120,10 @@ impl CallbackTrait for CanvasCallback {
             gpu.mip_tiles(device, queue, &uploaded, 0);
             gpu.set_interactive(self.interactive);
             gpu.composite(device, queue, &self.programs, self.level);
+            let failed = gpu.take_failed();
+            if !failed.is_empty() {
+                self.failed.lock().unwrap_or_else(|e| e.into_inner()).extend(failed);
+            }
             gpu.warm(device, queue, &self.warm, self.lod);
             gpu.set_lod(self.lod);
             if let Some(sel) = &self.selection {
@@ -341,6 +347,10 @@ pub struct Canvas {
     /// Composite tiles still waiting for a frame's budget.
     /// Tiles stale per level of detail (spec 39).
     levels: crate::levels::Levels,
+    /// Tiles the GPU compositor couldn't take, reported by the paint
+    /// callback; the next frame composites them on the CPU.
+    gpu_failed: Arc<std::sync::Mutex<Vec<(i32, i32)>>>,
+    cpu_only: std::collections::BTreeSet<(i32, i32)>,
     /// The level shown, from the zoom.
     lod: usize,
     /// Spec 38 warm-up: the layer it is for, and its tiles still to warm.
@@ -400,6 +410,8 @@ impl Canvas {
             xform: TransformParams::default(),
             hold: HoldTracker::default(),
             levels: Default::default(),
+            gpu_failed: Default::default(),
+            cpu_only: Default::default(),
             lod: 0,
             warm_layer: None,
             warm_queue: Vec::new(),
@@ -1298,6 +1310,11 @@ impl Canvas {
 
         // ── Display ──
         self.levels.dirty(session.take_dirty_tiles());
+        let failed = std::mem::take(&mut *self.gpu_failed.lock().unwrap_or_else(|e| e.into_inner()));
+        if !failed.is_empty() {
+            self.levels.dirty(failed.iter().copied());
+            self.cpu_only.extend(failed);
+        }
         // The level shown; without the GPU compositor tiles are composited at
         // full size and downsampled, so every level stays exact.
         self.lod = crate::levels::display_level(self.view.scale * ppp as f64);
@@ -1339,6 +1356,7 @@ impl Canvas {
                     press: self.press.clone(),
                     space: session.doc().space(),
                     interactive: session.is_stroking(),
+                    failed: self.gpu_failed.clone(),
                 },
             ));
         }
@@ -1426,11 +1444,14 @@ impl Canvas {
         if gpu {
             // A tile at level L is 4^L times cheaper, so a frame does more of them.
             let n = order.len().min((GPU_TILES_PER_FRAME << (2 * level)).min(MAX_GPU_TILES_PER_FRAME));
-            let (progs, cpu) = session.plan(&order[..n]);
+            // Tiles the GPU couldn't take last time go to the CPU.
+            let (forced, gpu_keys): (Vec<_>, Vec<_>) = order[..n].iter().partition(|k| self.cpu_only.contains(k));
+            let (progs, mut cpu) = session.plan(&gpu_keys);
             for p in &progs {
                 self.levels.composited((p.tx, p.ty), level);
             }
             programs = progs;
+            cpu.extend(forced);
             order = cpu;
         }
         let batch = rayon::current_num_threads().max(1);
@@ -1441,6 +1462,7 @@ impl Canvas {
             // CPU tiles upload at full size and are downsampled: exact everywhere.
             for k in chunk {
                 self.levels.composited(*k, 0);
+                self.cpu_only.remove(k);
             }
             if start.elapsed().as_secs_f64() * 1000.0 >= crate::progressive::BUDGET_MS {
                 break;

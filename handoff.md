@@ -37,9 +37,12 @@ Done today, all pushed (newest last):
   up to 4096² (the gallery 2048²). Mid-stroke, filters over ~8 ms (radial
   4096², the gallery) keep their image until the stroke ends.
 
+- 2026-10-19: spec 54. Tiles whose sources don't fit go to the CPU
+  (`GpuCompositor::take_failed`) instead of drawing with layers missing;
+  a lost GPU device saves the work at once and asks for a restart.
+
 Next (the user's order: recommended list, then robustness):
-1. Robustness (photocraft list, `todo.md` §2.1): working-set checks,
-   device-loss handling, a perf-budget gate.
+1. Robustness: a perf-budget gate (benches checked against a budget).
 
 Open decisions for the user: workspace layout (happypaint's menu bar /
 title-bar header, divergences 41–42), licence (happypaint is PolyForm NC,

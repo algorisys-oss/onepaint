@@ -234,6 +234,9 @@ pub struct App {
     pub palette_rename: Option<String>,
     pub thumbs: thumbs::Thumbs,
     pub toast: Option<(String, f64)>,
+    /// Whether the canvas's GPU device was lost, and if that was handled.
+    pub gpu_health: Option<onepaint_gpu::health::Health>,
+    gpu_lost_handled: bool,
     pub new_doc: [u32; 2],
     pub gpu_ok: bool,
     /// The canvas composites on the GPU (else on the CPU).
@@ -334,6 +337,8 @@ impl App {
             palette_rename: None,
             thumbs: thumbs::Thumbs::default(),
             toast: None,
+            gpu_health: cc.wgpu_render_state.as_ref().map(|rs| onepaint_gpu::health::Health::watch(&rs.device)),
+            gpu_lost_handled: false,
             new_doc: [2048, 1536],
             gpu_ok,
             gpu_compose,
@@ -388,6 +393,22 @@ impl App {
 
     pub fn notify(&mut self, msg: impl Into<String>, now: f64) {
         self.toast = Some((msg.into(), now + 2.5));
+    }
+
+    /// If the GPU device was lost: save the work now and say so. The canvas
+    /// can't draw again until onepaint restarts.
+    fn check_gpu(&mut self, now: f64) {
+        if self.gpu_lost_handled {
+            return;
+        }
+        let Some(why) = self.gpu_health.as_ref().and_then(|h| h.lost()) else { return };
+        self.gpu_lost_handled = true;
+        log::error!("GPU lost ({why}); saving the document");
+        let msg = match self.autosave.save_now(self.session.doc()) {
+            Ok(_) => "The graphics card stopped responding. Your work is saved; restart onepaint to keep painting.".to_string(),
+            Err(e) => format!("The graphics card stopped responding, and the work couldn't be saved ({e}). Save it now, then restart."),
+        };
+        self.toast = Some((msg, now + 30.0));
     }
 
     pub fn set_color(&mut self, c: Rgba) {
@@ -1428,6 +1449,7 @@ impl eframe::App for App {
             }
         }
         let now = ctx.input(|i| i.time);
+        self.check_gpu(now);
         let (dirty, busy) = (self.dirty(), self.session.is_stroking() || self.session.transform_active());
         let doc = &self.session;
         if !self.debug.scripted() {
@@ -1485,6 +1507,24 @@ mod tests {
 
     fn harness() -> Harness<'static, App> {
         Harness::builder().with_size(vec2(1200.0, 800.0)).with_max_steps(400).build_eframe(|cc| App::new(cc, None))
+    }
+
+    /// A lost GPU device: the app saves (here there's no autosave folder,
+    /// so it says it couldn't) and keeps the message up.
+    #[test]
+    fn a_lost_gpu_is_reported_once() {
+        let mut h = harness();
+        h.run();
+        let health = onepaint_gpu::health::Health::default();
+        h.state_mut().gpu_health = Some(health.clone());
+        health.mark_lost("Unknown: test");
+        // Single steps: a run would wait the toast's repaints out.
+        h.step();
+        let toast = h.state().toast.clone().map(|t| t.0).unwrap_or_default();
+        assert!(toast.contains("stopped responding") && toast.contains("couldn't be saved"), "{toast}");
+        h.state_mut().toast = None;
+        h.step();
+        assert!(h.state().toast.is_none(), "handled once");
     }
 
     fn press(h: &mut Harness<'_, App>, p: egui::Pos2, pressed: bool) {

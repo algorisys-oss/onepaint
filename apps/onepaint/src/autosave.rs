@@ -51,6 +51,14 @@ impl Autosave {
         true
     }
 
+    /// Write `doc` now, on this thread (the GPU is gone and the app may not
+    /// last another frame). The path written, or why not.
+    pub fn save_now(&mut self, doc: &onepaint_doc::Document) -> Result<PathBuf, String> {
+        let path = self.path_for(&doc.id).ok_or("no autosave folder")?;
+        write(&path, doc)?;
+        Ok(path)
+    }
+
     /// Forget the autosave for this document (after a real save, New or Open).
     pub fn clear(&mut self, doc_id: &str) {
         if let Some(p) = self.path_for(doc_id) {
@@ -83,6 +91,18 @@ pub fn write(path: &Path, doc: &onepaint_doc::Document) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saves_now_on_the_calling_thread() {
+        let dir = std::env::temp_dir().join(format!("onepaint-autosave-now-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = Autosave::new(Some(dir.clone()));
+        let doc = onepaint_doc::Document::new(64, 64, None);
+        let path = a.save_now(&doc).unwrap();
+        assert!(path.exists(), "written before it returns");
+        assert!(Autosave::new(None).save_now(&doc).is_err(), "no folder, no save");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn writes_in_background_and_offers_the_leftover() {

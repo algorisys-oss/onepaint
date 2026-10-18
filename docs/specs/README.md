@@ -64,3 +64,4 @@ The happypaint references are relative to `../happypaint/frontend/src/`.
 | 51 | [PSD files save back as they were](51-psd-round-trip.md) | doc, formats |
 | 52 | [Spatial adjustment layers on the GPU](52-gpu-spatial-adjustments.md) | compose, gpu, engine |
 | 53 | [Whole-canvas filter layers on the GPU](53-gpu-whole-canvas-filters.md) | compose, gpu, engine |
+| 54 | [When the GPU can't take the work](54-gpu-robustness.md) | gpu, app |

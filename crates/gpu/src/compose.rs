@@ -318,6 +318,9 @@ pub struct GpuCompositor {
     whole: crate::whole::WholePass,
     /// A stroke is in progress (see [`GpuCompositor::set_interactive`]).
     interactive: bool,
+    /// Tiles a run couldn't composite (their sources didn't fit): the
+    /// caller composites them on the CPU ([`GpuCompositor::take_failed`]).
+    failed: Vec<(i32, i32)>,
     spatial_slots: HashMap<u64, u32>,
     /// Filtered tiles: written by the spatial pass, read by fills and composites.
     filtered: Option<(wgpu::Texture, wgpu::TextureView, Vec<wgpu::TextureView>)>,
@@ -342,6 +345,15 @@ impl GpuCompositor {
     /// images get [`DEFAULT_CACHE_BUDGET`] on top.
     pub fn new(device: &wgpu::Device, budget: u64) -> Self {
         Self::with_cache(device, budget, DEFAULT_CACHE_BUDGET)
+    }
+
+    /// Atlases of `layers` slots each, one of them: a working set that
+    /// can't fit, for tests of what the CPU then takes.
+    #[doc(hidden)]
+    pub fn with_atlas_layers(device: &wgpu::Device, layers: u32) -> Self {
+        let mut c = Self::new(device, 0);
+        c.per_atlas = layers.max(1);
+        c
     }
 
     /// As [`GpuCompositor::new`], with `cache_budget` bytes for segment images.
@@ -551,6 +563,7 @@ impl GpuCompositor {
             spatial: crate::spatial::SpatialPass::new(device),
             whole: crate::whole::WholePass::new(device),
             interactive: false,
+            failed: Vec::new(),
             spatial_slots: HashMap::new(),
             filtered: None,
             filtered_layers: (cache_layers / 2).clamp(16, device.limits().max_texture_array_layers),
@@ -566,6 +579,36 @@ impl GpuCompositor {
     /// [`INTERACTIVE_READS`] then keeps its image until it ends (spec 53).
     pub fn set_interactive(&mut self, on: bool) {
         self.interactive = on;
+    }
+
+    /// The tiles runs since the last call couldn't composite, because what
+    /// they read didn't fit the atlases or the cache. Their pixels on the
+    /// target are left as they were; composite them on the CPU.
+    pub fn take_failed(&mut self) -> Vec<(i32, i32)> {
+        std::mem::take(&mut self.failed)
+    }
+
+    /// Drop the cache and filtered slots claimed this batch for `dests` and
+    /// `outs`: their fills didn't run, so the images aren't there.
+    fn forget(&mut self, dests: &HashSet<u32>, outs: &HashSet<u32>) {
+        let clock = self.clock;
+        let (mut cache_free, mut filtered_free) = (Vec::new(), Vec::new());
+        self.cache_slots.retain(|_, c| {
+            let gone = c.used == clock && dests.contains(&c.idx);
+            if gone {
+                cache_free.push(c.idx);
+            }
+            !gone
+        });
+        self.filtered_slots.retain(|_, c| {
+            let gone = c.used == clock && outs.contains(&c.idx);
+            if gone {
+                filtered_free.push(c.idx);
+            }
+            !gone
+        });
+        self.cache_free.extend(cache_free);
+        self.filtered_free.extend(filtered_free);
     }
 
     pub fn capacity(&self) -> usize {
@@ -829,13 +872,21 @@ impl GpuCompositor {
             .iter()
             .flat_map(|p| onepaint_compose::program::op_contents(&p.ops))
             .find_map(|c| c.spatial.as_ref().and_then(|s| s.whole.clone()));
-        if let Some(w) = whole {
-            self.prepare_whole(device, queue, &w, sheets);
+        let mut kept: Vec<&TileProgram> = programs.iter().collect();
+        if let Some(w) = whole
+            && !self.prepare_whole(device, queue, &w, sheets)
+        {
+            // Every tile reading the layer's image fails with it.
+            let reads = |p: &TileProgram| {
+                onepaint_compose::program::op_contents(&p.ops).any(|c| c.spatial.as_ref().is_some_and(|s| s.whole.is_some()))
+            };
+            self.failed.extend(programs.iter().filter(|p| reads(p)).map(|p| (p.tx, p.ty)));
+            kept.retain(|p| !reads(p));
         }
         let cap = self.capacity();
         // Each program may need two cache slots; keep a batch within the cache.
         let cache_cap = (self.cache_layers as usize / 2).max(1);
-        let mut order: Vec<&TileProgram> = programs.iter().collect();
+        let mut order = kept;
         // A frame bigger than the atlas runs in several batches. Alternate the
         // direction each time, so the LRU keeps what the next frame starts on
         // instead of evicting exactly that (photocraft gpu/src/lib.rs:886-930).
@@ -1067,12 +1118,14 @@ impl GpuCompositor {
     /// the image doesn't already hold it: fill the backdrop tiles whose
     /// segment changed (in chunks the cache holds), copy each into the
     /// backdrop image, then one pass over the document.
-    fn prepare_whole(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, w: &onepaint_compose::spatial::Whole, sheets: &Sheets) {
-        let key = self.level_key(w.key);
+    ///
+    /// False when the backdrop didn't fit: the image is then unusable.
+    fn prepare_whole(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, w: &onepaint_compose::spatial::Whole, sheets: &Sheets) -> bool {
+        let wkey = self.level_key(w.key);
         let doc = [w.frame.doc_w, w.frame.doc_h];
         self.whole.back(device, doc, self.level);
-        if self.whole.key == Some(key) && self.whole.view().is_some() {
-            return;
+        if self.whole.key == Some(wkey) && self.whole.view().is_some() {
+            return true;
         }
         // Mid-stroke, a filter too heavy for the frame keeps this layer's
         // image until the stroke ends, as the CPU path does.
@@ -1083,7 +1136,7 @@ impl GpuCompositor {
             && self.whole.layer.as_deref() == Some(w.id.as_str())
             && self.whole.view().is_some()
         {
-            return;
+            return true;
         }
         self.ensure_cache(device);
         let edge = (TILE as u32) >> self.level;
@@ -1093,8 +1146,25 @@ impl GpuCompositor {
             .map(|(at, bp)| (*at, bp, self.level_key(onepaint_compose::program::segment_key(&bp.ops, bp.origin()))))
             .filter(|(at, _, k)| self.whole.back_tiles.get(at) != Some(k))
             .collect();
-        let chunk = (self.cache_layers as usize / 2).clamp(1, MAX_JOBS);
-        for part in changed.chunks(chunk) {
+        // Chunks the cache and the atlases hold: a chunk's fills and their
+        // sources stay resident until its copies run.
+        let most = (self.cache_layers as usize / 2).clamp(1, MAX_JOBS);
+        let cap = self.capacity();
+        let mut parts: Vec<&[_]> = Vec::new();
+        let (mut start, mut seen) = (0, HashSet::new());
+        for (i, (_, bp, _)) in changed.iter().enumerate() {
+            let fresh = op_sources(&bp.ops).map(key).filter(|k| !seen.contains(k)).count();
+            if i > start && (i - start >= most || seen.len() + fresh > cap) {
+                parts.push(&changed[start..i]);
+                start = i;
+                seen.clear();
+            }
+            seen.extend(op_sources(&bp.ops).map(key));
+        }
+        if start < changed.len() {
+            parts.push(&changed[start..]);
+        }
+        for part in parts {
             self.clock += 1;
             let mut copies = Vec::new();
             let mut fills = Vec::new();
@@ -1113,12 +1183,18 @@ impl GpuCompositor {
                 copies.push(((*x, *y), slot, *k));
             }
             self.fills += fills.len() as u64;
+            let mut fit = copies.len() == part.len();
             for wk in &fills {
                 for t in wk.ops.iter().flat_map(|op| op_sources(std::slice::from_ref(*op))) {
-                    if self.resident(device, queue, t).is_none() {
-                        log::error!("compose atlas full; a whole-canvas backdrop tile at {:?} skipped", wk.origin);
-                    }
+                    fit &= self.resident(device, queue, t).is_some();
                 }
+            }
+            if !fit {
+                log::warn!("compose atlas full; a whole-canvas layer goes to the CPU");
+                let dests = fills.iter().map(|w| w.dest).collect();
+                self.forget(&dests, &HashSet::new());
+                self.whole.key = None;
+                return false;
             }
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("compose whole backdrop") });
             self.mip_sources(device, &mut enc, fills.iter());
@@ -1158,8 +1234,9 @@ impl GpuCompositor {
         self.whole.record(device, &mut enc, w, self.level);
         self.filters += 1;
         queue.submit([enc.finish()]);
-        self.whole.key = Some(key);
+        self.whole.key = Some(wkey);
         self.whole.layer = Some(w.id.clone());
+        true
     }
 
     fn ensure_filtered(&mut self, device: &wgpu::Device) {
@@ -1210,12 +1287,21 @@ impl GpuCompositor {
         let stages = self.plan_spatial(device, batch);
         self.fills += fills.len() as u64;
         let stage_fills = stages.iter().flat_map(|(f, _)| f.iter());
+        let mut fit = true;
         for w in fills.iter().chain(&main).chain(stage_fills) {
             for t in w.ops.iter().flat_map(|op| op_sources(std::slice::from_ref(*op))) {
-                if self.resident(device, queue, t).is_none() {
-                    log::error!("compose atlas full; a tile at {:?} skipped", w.origin);
-                }
+                fit &= self.resident(device, queue, t).is_some();
             }
+        }
+        if !fit {
+            // What the batch reads doesn't fit: leave its tiles as they are
+            // for the CPU, and forget the cache images it claimed.
+            log::warn!("compose atlas full; {} tiles go to the CPU", batch.len());
+            let dests = fills.iter().chain(stages.iter().flat_map(|(f, _)| f.iter())).map(|w| w.dest).collect();
+            let outs = stages.iter().flat_map(|(_, j)| j.iter().map(|j| j.out)).collect();
+            self.forget(&dests, &outs);
+            self.failed.extend(batch.iter().map(|p| (p.tx, p.ty)));
+            return;
         }
         self.ensure_paper(device, queue, main.iter().flat_map(|w| w.ops.iter()));
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("compose") });

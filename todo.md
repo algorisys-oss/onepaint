@@ -134,8 +134,9 @@ an item changes there, change it here too.
         line art layers run live on the GPU, stacked too, at the top level or
         in isolated groups; a lone twirl, pinch, polar, chromatic
         aberration, radial, spin, tilt-shift, iris or field blur layer too
-        (spec 53; heavy ones wait mid-stroke in large documents). Oil paint, wind, glitch, light rays and ones in
-        Pass Through groups still render on the CPU
+        (spec 53; heavy ones wait mid-stroke in large documents). Oil
+        paint, wind, glitch, light rays and ones in Pass Through groups
+        still render on the CPU
   - [x] Relief lighting (impasto height) (spec 45)
   - [x] Paper shading (spec 43)
   - [x] Partial panel clips (spec 44)
@@ -170,13 +171,14 @@ an item changes there, change it here too.
   - [x] Split the canvas composite into sheets for documents above the GPU
         texture limit (spec 40); the app now asks for the adapter's limits
   - [x] Store 8-bit documents as 8-bit tiles (spec 49; halves RAM)
-  - [ ] 8-bit atlases on the GPU (halves VRAM for 8-bit documents)
+  - [x] 8-bit atlases on the GPU (halves VRAM for 8-bit documents; spec 49)
   - [x] Wet GPU stepper: key its paper buffer on the grain's `Arc`, not its
         address (as specs 43 and 48 now do)
   - [x] Gamma-space compositing for 8-bit documents (spec 50, B)
-  - [ ] Check a full refresh's working set fits before starting; route the
-        rest to the CPU instead of skipping (photocraft `gpu/src/lib.rs:663-687`)
-  - [ ] Bounded submits and GPU device-loss handling (`gpu/src/health.rs`)
+  - [x] Check a full refresh's working set fits before starting; route the
+        rest to the CPU instead of skipping (spec 54)
+  - [x] Bounded submits and GPU device-loss handling (spec 54: save at
+        once and ask for a restart; eframe can't make a new device)
   - [x] Open files in the background with progress and cancel (spec 41)
   - [ ] Perf budgets with a baseline and a regression gate (`perf/budgets.toml`)
   - [x] Skip layers under fully opaque tiles when planning (spec 47)

@@ -9,6 +9,7 @@
 //! `docs/specs/13-gpu-compositor.md`.
 
 pub mod compose;
+pub mod health;
 pub mod mip;
 pub mod sheets;
 pub mod spatial;
@@ -90,6 +91,8 @@ pub struct CanvasGpu {
     max_dim: u32,
     max_layers: u32,
     compositor: Option<compose::GpuCompositor>,
+    /// Tiles the compositor couldn't take (see [`CanvasGpu::take_failed`]).
+    failed: Vec<(i32, i32)>,
     mipper: mip::Mipper,
     /// The level the present pass samples (spec 39).
     lod: u32,
@@ -209,6 +212,7 @@ impl CanvasGpu {
             max_dim: device.limits().max_texture_dimension_2d,
             max_layers: device.limits().max_texture_array_layers,
             compositor: None,
+            failed: Vec::new(),
             mipper: mip::Mipper::new(device),
             lod: 0,
             view: [[0.0; 4]; 3],
@@ -359,8 +363,16 @@ impl CanvasGpu {
         }
         let level = level.min(t.storage.len() as u32 - 1);
         c.run_level(device, queue, programs, &t.storage[level as usize], &t.sheets, level);
-        let keys: Vec<(i32, i32)> = programs.iter().map(|p| (p.tx, p.ty)).collect();
+        let failed = c.take_failed();
+        let keys: Vec<(i32, i32)> = programs.iter().map(|p| (p.tx, p.ty)).filter(|k| !failed.contains(k)).collect();
+        self.failed.extend(failed);
         self.mip_tiles(device, queue, &keys, level);
+    }
+
+    /// Tiles composites since the last call couldn't take (what they read
+    /// didn't fit the GPU): composite them on the CPU.
+    pub fn take_failed(&mut self) -> Vec<(i32, i32)> {
+        std::mem::take(&mut self.failed)
     }
 
     /// Downsample tiles from `from` into every coarser level.
