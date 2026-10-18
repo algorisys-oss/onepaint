@@ -111,6 +111,7 @@ const F_MASK_ZERO: u32 = 32u;
 const F_MASK_STROKE: u32 = 64u;
 const F_RELIEF: u32 = 128u;
 const F_VMASK: u32 = 256u;
+const F_SPATIAL: u32 = 512u;
 
 const M_NORMAL: u32 = 0u;
 const M_MULTIPLY: u32 = 1u;
@@ -922,6 +923,9 @@ fn content(o: Op, p: vec2<i32>) -> vec4<f32> {
     var c = vec4<f32>(0.0);
     if ((flags & F_BASE) != 0u) {
         c = load(o.b.x, p);
+    } else if ((flags & F_SPATIAL) != 0u) {
+        // A spatial layer's filtered tile, in the segment cache (spec 52).
+        c = load_cache(o.b.x, p);
     }
     if ((flags & F_STROKE) != 0u) {
         c = apply_stroke(c, load(o.b.y, p), bitcast<f32>(o.b.w), o.b.z);

@@ -431,6 +431,14 @@ pub fn op_sources(ops: &[Op]) -> Box<dyn Iterator<Item = &Arc<Tile>> + '_> {
     }))
 }
 
+/// Every content the ops draw.
+pub fn op_contents(ops: &[Op]) -> impl Iterator<Item = &Content> {
+    ops.iter().filter_map(|op| match op {
+        Op::Layer { content, .. } | Op::PushContent(content) | Op::Clip { content, .. } | Op::Knockout { content, .. } => Some(content),
+        _ => None,
+    })
+}
+
 impl TileProgram {
     /// Every source tile the program reads, in op order (with repeats).
     pub fn sources(&self) -> impl Iterator<Item = &Arc<Tile>> {
@@ -559,6 +567,9 @@ struct Planner<'a> {
     /// The Background snapshot was taken: top-level ops can't be cut, and
     /// the program can't split (a cached prefix would lose it).
     snapshot: bool,
+    /// A spatial layer was planned: no split (the GPU fills segments in a
+    /// pass that can't read the filtered images; spec 52).
+    spatial: std::cell::Cell<bool>,
 }
 
 /// A top-level node (with its clip family) and the ops it produced.
@@ -645,6 +656,7 @@ fn plan(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, hot: Optio
         reveal: Reveal::Clear,
         background: crate::background_reveals(&doc.root),
         snapshot: false,
+        spatial: Default::default(),
     };
     p.nodes(&doc.root).ok()?;
     // The paper shades the finished composite (spec 43), after every unit.
@@ -654,7 +666,7 @@ fn plan(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, hot: Optio
             p.ops.push(Op::Paper { shade: Arc::new(PaperShade { tex, amt }), tx, ty });
         }
     }
-    let split = hot.filter(|_| !p.snapshot).and_then(|_| split(&p.ops, &p.units, [tx * TILE, ty * TILE]));
+    let split = hot.filter(|_| !p.snapshot && !p.spatial.get()).and_then(|_| split(&p.ops, &p.units, [tx * TILE, ty * TILE]));
     let prog = TileProgram { tx, ty, ops: p.ops, split, space: doc.space() };
     let mut seen: Vec<*const Tile> = prog.sources().map(Arc::as_ptr).collect();
     seen.sort_unstable();
@@ -687,6 +699,12 @@ impl Planner<'_> {
             .tiles()
             .map(|(x, y)| plan(&sub, x, y, self.ov, None, self.cache).map(|p| ((x, y), Arc::new(p))).ok_or(Unsupported))
             .collect::<Result<Vec<_>, _>>()?;
+        // Stacked spatial layers would need their filters in order: CPU for now.
+        let nested = |p: &TileProgram| op_contents(&p.ops).any(|c| c.spatial.is_some());
+        if backdrop.iter().any(|(_, p)| nested(p)) {
+            return Err(Unsupported);
+        }
+        self.spatial.set(true);
         let src = crate::spatial::SpatialSrc::new(kind, params, (tx, ty), region, self.frame, backdrop);
         self.content_with(l, Some(Arc::new(src)))
     }

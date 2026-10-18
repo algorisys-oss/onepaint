@@ -667,3 +667,39 @@ fn eight_bit_tiles_use_8_bit_atlases() {
     plain.run(&device, &queue, &programs(&random_doc(3, w, h, false), None), &view, [w, h]);
     assert_eq!(plain.atlas_counts()[1], 0);
 }
+
+/// Spatial adjustment layers (spec 52): blur, motion blur and sharpen run
+/// as GPU filter passes over the backdrop and match the rendered document.
+#[test]
+fn spatial_layers_match_the_rendered_document() {
+    use onepaint_compose::spatial::rendered;
+    use onepaint_compose::testdocs::with_spatial;
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let mut gc = GpuCompositor::new(&device, 64 << 20);
+    let (w, h) = (300, 300);
+    let tex = target(&device, w, h);
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
+    let mut ran = 0;
+    for seed in 0..8 {
+        let doc = with_spatial(random_doc(seed, w, h, seed % 2 == 0), seed);
+        let progs: Vec<TileProgram> = doc.bounds().tiles().filter_map(|(tx, ty)| plan_tile(&doc, tx, ty, None)).collect();
+        // Stacked spatial layers stay on the CPU (spec 52, phase 1).
+        if progs.len() < doc.bounds().tiles().count() {
+            continue;
+        }
+        ran += 1;
+        let before = gc.filters;
+        gc.run(&device, &queue, &progs, &view, [w, h]);
+        assert!(gc.filters > before, "seed {seed}: filters ran");
+        let (e, at) = max_error(&rendered(&doc), None, &read(&device, &queue, &tex));
+        assert!(e <= TOL, "seed {seed}: error {e} at {at:?}");
+        // A second frame reuses the filtered tiles.
+        let again = gc.filters;
+        gc.run(&device, &queue, &progs, &view, [w, h]);
+        assert_eq!(gc.filters, again, "seed {seed}: cached");
+    }
+    assert!(ran >= 5, "{ran} documents ran on the GPU");
+}

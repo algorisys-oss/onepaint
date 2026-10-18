@@ -94,6 +94,8 @@ const F_MASK_ZERO: u32 = 32;
 const F_MASK_STROKE: u32 = 64;
 const F_RELIEF: u32 = 128;
 const F_VMASK: u32 = 256;
+/// The content's pixels are a filtered tile in the segment cache (spec 52).
+const F_SPATIAL: u32 = 512;
 /// Five vec4<u32>s (compose.wgsl `Op`).
 const OP_WORDS: usize = 20;
 
@@ -299,6 +301,12 @@ pub struct GpuCompositor {
     paper_dummy: wgpu::TextureView,
     /// Segment images computed since creation (for tests and stats).
     pub fills: u64,
+    /// Spatial adjustment layers' filter (spec 52), and where this batch's
+    /// filtered tiles are, by their source's key.
+    spatial: crate::spatial::SpatialPass,
+    spatial_slots: HashMap<u64, u32>,
+    /// Filtered tiles computed since creation (for tests and stats).
+    pub filters: u64,
 }
 
 fn storage(device: &wgpu::Device, label: &str, size: u64) -> wgpu::Buffer {
@@ -500,6 +508,9 @@ impl GpuCompositor {
                 })
                 .create_view(&Default::default()),
             fills: 0,
+            spatial: crate::spatial::SpatialPass::new(device),
+            spatial_slots: HashMap::new(),
+            filters: 0,
         }
     }
 
@@ -625,6 +636,10 @@ impl GpuCompositor {
         if let Some(b) = &c.base {
             o[3] |= F_BASE;
             o[4] = self.slot(b);
+        }
+        if let Some(s) = &c.spatial {
+            o[3] |= F_SPATIAL;
+            o[4] = self.spatial_slots.get(&s.key).copied().unwrap_or(0);
         }
         if let Some(s) = &c.stroke {
             o[3] |= F_STROKE;
@@ -770,17 +785,28 @@ impl GpuCompositor {
         }
         let mut start = 0;
         let mut need: HashSet<usize> = HashSet::new();
+        // Cache slots this batch's spatial layers take: their backdrops and result (spec 52).
+        let spatial_need = |p: &TileProgram| {
+            onepaint_compose::program::op_contents(&p.ops).filter_map(|c| c.spatial.as_ref()).map(|s| s.backdrop.len() + 1).sum::<usize>()
+        };
+        let mut cache_used = 0;
         for (i, p) in order.iter().enumerate() {
             let mut fresh: Vec<usize> = self.batch_sources(p).map(key).filter(|k| !need.contains(k)).collect();
             fresh.sort_unstable();
             fresh.dedup();
-            let full = need.len() + fresh.len() > cap || i - start >= MAX_JOBS || (self.split_cache && i - start >= cache_cap);
+            let more = spatial_need(p);
+            let full = need.len() + fresh.len() > cap
+                || i - start >= MAX_JOBS
+                || (self.split_cache && i - start >= cache_cap)
+                || (more > 0 && cache_used + more > self.cache_layers as usize);
             if i > start && full {
                 self.flush(device, queue, &order[start..i], target, sheets);
                 start = i;
                 need.clear();
+                cache_used = 0;
             }
             need.extend(fresh);
+            cache_used += more;
         }
         if start < order.len() {
             self.flush(device, queue, &order[start..], target, sheets);
@@ -827,8 +853,13 @@ impl GpuCompositor {
 
     /// The cache slot for a segment this batch: `(slot, needs a fill)`.
     fn cache_slot(&mut self, seg: &Segment, ops: &[Op]) -> Option<(u32, bool)> {
+        self.cache_slot_key(seg.key, ops)
+    }
+
+    /// The cache slot for an image keyed `key` that `ops` read: `(slot, new)`.
+    fn cache_slot_key(&mut self, key: u64, ops: &[Op]) -> Option<(u32, bool)> {
         let clock = self.clock;
-        let key = self.level_key(seg.key);
+        let key = self.level_key(key);
         if let Some(c) = self.cache_slots.get_mut(&key) {
             c.used = clock;
             return Some((c.idx, false));
@@ -888,9 +919,62 @@ impl GpuCompositor {
         (fills, main)
     }
 
+    /// The filter jobs for the spatial layers `batch` draws (spec 52); the
+    /// backdrop images they need go into `fills`.
+    fn plan_spatial<'a>(
+        &mut self,
+        device: &wgpu::Device,
+        batch: &[&'a TileProgram],
+        fills: &mut Vec<Work<'a>>,
+    ) -> Vec<crate::spatial::Job<'a>> {
+        self.spatial_slots.clear();
+        let mut jobs = Vec::new();
+        let edge = (TILE as u32) >> self.level;
+        for &p in batch {
+            for c in onepaint_compose::program::op_contents(&p.ops) {
+                let Some(s) = c.spatial.as_deref() else { continue };
+                if self.spatial_slots.contains_key(&s.key) {
+                    continue;
+                }
+                self.ensure_cache(device);
+                let reads: Vec<Op> = Vec::new();
+                let Some((out, fresh)) = self.cache_slot_key(s.key, &reads) else {
+                    log::error!("compose cache full; a spatial layer at {},{} skipped", s.tx, s.ty);
+                    continue;
+                };
+                self.spatial_slots.insert(s.key, out);
+                if !fresh {
+                    continue;
+                }
+                let gx = s.backdrop.iter().map(|b| b.0.0).min().unwrap_or(s.tx);
+                let gy = s.backdrop.iter().map(|b| b.0.1).min().unwrap_or(s.ty);
+                let cols = (s.backdrop.iter().map(|b| b.0.0).max().unwrap_or(s.tx) - gx + 1) as usize;
+                let rows = (s.backdrop.iter().map(|b| b.0.1).max().unwrap_or(s.ty) - gy + 1) as usize;
+                let mut grid = vec![crate::spatial::NONE; cols * rows];
+                for ((x, y), bp) in &s.backdrop {
+                    let key = onepaint_compose::program::segment_key(&bp.ops, bp.origin());
+                    let Some((idx, fresh)) = self.cache_slot_key(key, &bp.ops) else { continue };
+                    if fresh {
+                        fills.push(Work {
+                            origin: [*x as u32 * edge, *y as u32 * edge],
+                            ops: bp.ops.iter().collect(),
+                            over: None,
+                            init: NONE,
+                            dest: idx,
+                        });
+                    }
+                    grid[(*y - gy) as usize * cols + (*x - gx) as usize] = idx;
+                }
+                jobs.push(crate::spatial::Job { src: s, out, grid });
+            }
+        }
+        jobs
+    }
+
     fn flush(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, batch: &[&TileProgram], target: &wgpu::TextureView, sheets: &Sheets) {
         self.clock += 1;
-        let (fills, main) = self.plan_batch(device, batch);
+        let (mut fills, main) = self.plan_batch(device, batch);
+        let jobs = self.plan_spatial(device, batch, &mut fills);
         self.fills += fills.len() as u64;
         for w in fills.iter().chain(&main) {
             for t in w.ops.iter().flat_map(|op| op_sources(std::slice::from_ref(*op))) {
@@ -904,6 +988,13 @@ impl GpuCompositor {
         self.mip_sources(device, &mut enc, fills.iter().chain(&main));
         // Fills and composites can't share a dispatch: one writes the cache, the other reads it.
         self.dispatch(device, queue, &mut enc, &fills, sheets, Some(target), true);
+        // The spatial layers' filters read the backdrop fills; the composite reads them.
+        if let Some((_, read, write)) = &self.cache {
+            for job in &jobs {
+                self.spatial.record(device, &mut enc, job, self.level, read, &write[self.level as usize]);
+            }
+            self.filters += jobs.len() as u64;
+        }
         self.dispatch(device, queue, &mut enc, &main, sheets, Some(target), false);
         // Submit per batch: the next batch's uploads may evict slots this one reads.
         queue.submit([enc.finish()]);

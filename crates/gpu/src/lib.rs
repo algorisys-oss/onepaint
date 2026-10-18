@@ -11,6 +11,7 @@
 pub mod compose;
 pub mod mip;
 pub mod sheets;
+pub mod spatial;
 pub mod wet;
 
 pub use mip::L_MAX;

@@ -14,6 +14,7 @@ onepaint-brush = { workspace = true }
 onepaint-color = { workspace = true }
 onepaint-compose = { workspace = true }
 onepaint-doc = { workspace = true }
+onepaint-filters = { workspace = true }
 wgpu = { workspace = true, features = ["std", "wgsl"] }
 bytemuck = { workspace = true }
 half = { workspace = true }

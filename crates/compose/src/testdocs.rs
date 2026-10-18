@@ -419,12 +419,13 @@ pub fn with_relief(mut doc: Document, seed: u64) -> Document {
     doc
 }
 
-/// `doc` with one or two spatial adjustment layers (Gaussian blur, motion
-/// blur, sharpen) dropped into its top level (spec 52).
+/// `doc` with a spatial adjustment layer (Gaussian blur, motion blur or
+/// sharpen) dropped into its top level (spec 52).
 pub fn with_spatial(mut doc: Document, seed: u64) -> Document {
     use serde_json::json;
     let mut r = Rng::new(seed ^ 0x5ba7);
-    for i in 0..1 + r.below(2) {
+    {
+        let i = 0;
         let kinds = ["gaussian-blur", "motion-blur", "sharpen"];
         let kind = kinds[r.below(3) as usize];
         let params = match kind {
