@@ -27,8 +27,19 @@ fn blend_mode_strings() {
     }
     assert_eq!(BlendMode::parse("color-dodge"), BlendMode::ColorDodge);
     assert_eq!(BlendMode::parse("nonsense"), BlendMode::Normal);
-    assert_eq!(BlendMode::ALL.len(), 20);
+    assert_eq!(BlendMode::parse("pass-through"), BlendMode::PassThrough);
+    // happypaint's BLEND_MODE_INDEX codes.
+    assert_eq!(BlendMode::VividLight as u32, 20);
+    assert_eq!(BlendMode::Dissolve as u32, 27);
     assert!(!BlendMode::LAYER_MODES.contains(&BlendMode::Pigment));
+    assert!(!BlendMode::LAYER_MODES.contains(&BlendMode::PassThrough));
+    assert_eq!(BlendMode::GROUP_MODES[0], BlendMode::PassThrough);
+    assert_eq!(BlendMode::BRUSH_MODES[27], BlendMode::Pigment);
+    // Every mode but the two special ones is in the layer menu once.
+    for m in BlendMode::ALL {
+        let n = BlendMode::LAYER_MODES.iter().filter(|x| **x == m).count();
+        assert_eq!(n, usize::from(!matches!(m, BlendMode::Pigment | BlendMode::PassThrough)), "{m:?}");
+    }
 }
 
 #[test]

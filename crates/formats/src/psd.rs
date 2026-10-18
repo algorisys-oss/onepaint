@@ -66,7 +66,7 @@ pub fn unpackbits(data: &[u8], len: usize) -> Result<Vec<u8>, FormatError> {
 
 // ── Blend keys (psd-blend.ts) ──
 
-const KEYS: [(BlendMode, &[u8; 4]); 19] = [
+const KEYS: [(BlendMode, &[u8; 4]); 28] = [
     (BlendMode::Normal, b"norm"),
     (BlendMode::Multiply, b"mul "),
     (BlendMode::Screen, b"scrn"),
@@ -86,40 +86,35 @@ const KEYS: [(BlendMode, &[u8; 4]); 19] = [
     (BlendMode::Saturation, b"sat "),
     (BlendMode::Color, b"colr"),
     (BlendMode::Luminosity, b"lum "),
+    (BlendMode::VividLight, b"vLit"),
+    (BlendMode::LinearLight, b"lLit"),
+    (BlendMode::PinLight, b"pLit"),
+    (BlendMode::HardMix, b"hMix"),
+    (BlendMode::Subtract, b"fsub"),
+    (BlendMode::DarkerColor, b"dkCl"),
+    (BlendMode::LighterColor, b"lgCl"),
+    (BlendMode::Dissolve, b"diss"),
+    (BlendMode::PassThrough, b"pass"),
 ];
 
-/// Photoshop modes onepaint doesn't composite yet, by happypaint's name.
-const RAW_KEYS: [(&str, &[u8; 4]); 9] = [
-    ("pass-through", b"pass"),
-    ("dissolve", b"diss"),
-    ("darker-color", b"dkCl"),
-    ("lighter-color", b"lgCl"),
-    ("vivid-light", b"vLit"),
-    ("linear-light", b"lLit"),
-    ("pin-light", b"pLit"),
-    ("hard-mix", b"hMix"),
-    ("subtract", b"fsub"),
-];
-
+/// A layer's key; Pigment and a layer's Pass Through are Normal.
 fn key_of(m: BlendMode) -> &'static [u8; 4] {
-    KEYS.iter().find(|k| k.0 == m).map_or(b"norm", |k| k.1)
+    KEYS.iter().find(|k| k.0 == m && m != BlendMode::PassThrough).map_or(b"norm", |k| k.1)
 }
 
-/// The node's key, its kept happypaint mode first (see `RAW_BLEND_KEY`).
-fn key_for(m: BlendMode, extra: &onepaint_doc::Extra) -> &'static [u8; 4] {
-    let raw = extra.get(onepaint_doc::RAW_BLEND_KEY).and_then(|v| v.as_str());
-    raw.and_then(|r| RAW_KEYS.iter().find(|k| k.0 == r)).map_or_else(|| key_of(m), |k| k.1)
+/// A group's `lsct` key, Pass Through included.
+fn group_key_of(m: BlendMode) -> &'static [u8; 4] {
+    if m == BlendMode::PassThrough { b"pass" } else { key_of(m) }
 }
 
+/// A layer record's key (Pass Through only means something on a group).
 fn mode_of(k: &[u8]) -> BlendMode {
-    KEYS.iter().find(|e| &e.1[..] == k).map_or(BlendMode::Normal, |e| e.0)
+    KEYS.iter().find(|e| &e.1[..] == k).map_or(BlendMode::Normal, |e| e.0).effective()
 }
 
-/// Keep a mode onepaint can't composite yet under its happypaint name.
-fn keep_raw(k: &[u8], extra: &mut onepaint_doc::Extra) {
-    if let Some((name, _)) = RAW_KEYS.iter().find(|e| &e.1[..] == k) {
-        extra.insert(onepaint_doc::RAW_BLEND_KEY.into(), serde_json::Value::String((*name).into()));
-    }
+/// A group's mode from its `lsct` key.
+fn group_mode_of(k: &[u8]) -> BlendMode {
+    if k == b"pass" { BlendMode::PassThrough } else { mode_of(k) }
 }
 
 // ── Writer ──
@@ -269,7 +264,7 @@ fn layer_record(l: &Layer, doc: Rect, frame: onepaint_filters::Frame) -> Record 
     Record {
         rect,
         channels,
-        key: *key_for(l.blend_mode, &l.extra),
+        key: *key_of(l.blend_mode),
         opacity: (l.opacity.clamp(0.0, 1.0) * 255.0).round() as u8,
         clipping: l.clipped as u8,
         flags: 0x08 | hidden | if l.adjustment.is_some() { 0x10 } else { 0 },
@@ -302,15 +297,11 @@ fn flatten(nodes: &[Node], doc: Rect, frame: onepaint_filters::Frame, out: &mut 
                 flatten(&g.children, doc, frame, out);
                 let mut lsct = 1u32.to_be_bytes().to_vec();
                 lsct.extend_from_slice(b"8BIM");
-                lsct.extend_from_slice(key_for(g.blend_mode, &g.extra));
+                lsct.extend_from_slice(group_key_of(g.blend_mode));
                 lsct.extend_from_slice(&0u32.to_be_bytes());
                 let flags = 0x08 | 0x10 | if g.visible { 0 } else { 2 };
                 // Photoshop writes a pass-through group's own record as Normal.
-                let rec_key = match key_for(g.blend_mode, &g.extra) {
-                    b"pass" => b"norm",
-                    k => k,
-                };
-                out.push(empty_record(&g.name, *rec_key, (g.opacity.clamp(0.0, 1.0) * 255.0).round() as u8, flags, lsct));
+                out.push(empty_record(&g.name, *key_of(g.blend_mode), (g.opacity.clamp(0.0, 1.0) * 255.0).round() as u8, flags, lsct));
             }
         }
     }
@@ -808,9 +799,7 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                         g.children = children;
                         g.visible = rec.flags & 2 == 0;
                         g.opacity = rec.opacity as f32 / 255.0;
-                        let key = rec.lsct.and_then(|l| l.1).unwrap_or(rec.key);
-                        g.blend_mode = mode_of(&key);
-                        keep_raw(&key, &mut g.extra);
+                        g.blend_mode = group_mode_of(&rec.lsct.and_then(|l| l.1).unwrap_or(rec.key));
                         if let Some(top) = stack.last_mut() {
                             top.push(Node::Group(g));
                         }
@@ -820,7 +809,6 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                         l.visible = rec.flags & 2 == 0;
                         l.opacity = rec.opacity as f32 / 255.0;
                         l.blend_mode = mode_of(&rec.key);
-                        keep_raw(&rec.key, &mut l.extra);
                         l.clipped = rec.clipping != 0;
                         l.pixels = pixels.unwrap_or_default();
                         l.mask_enabled = rec.mask.is_none_or(|m| m.2 & 2 == 0);

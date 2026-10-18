@@ -17,7 +17,9 @@ pub fn new_id() -> NodeId {
     uuid::Uuid::new_v4().to_string()
 }
 
-/// happypaint `engine/layer.ts:14-35`, in the same order.
+/// happypaint `engine/layer.ts:14-50`. The order is the GPU code (`as u32`)
+/// and matches happypaint's `BLEND_MODE_INDEX` through `Dissolve` (27);
+/// menus use [`BlendMode::LAYER_MODES`] and friends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BlendMode {
@@ -43,33 +45,126 @@ pub enum BlendMode {
     Luminosity,
     /// Kubelka–Munk glaze; brush-only.
     Pigment,
+    VividLight,
+    LinearLight,
+    PinLight,
+    HardMix,
+    Subtract,
+    DarkerColor,
+    LighterColor,
+    /// Normal, with the coverage turned into a per-pixel random dither.
+    Dissolve,
+    /// Groups only: the children composite straight onto what is below.
+    /// Anywhere else it reads as Normal.
+    PassThrough,
 }
 
-/// A blend mode happypaint knows and onepaint doesn't yet (Pass Through,
-/// Dissolve, Vivid Light, …) is kept under this key in the node's `extra`,
-/// so the file saves it back; it composites as Normal meanwhile. Setting a
-/// mode clears it.
+/// A blend mode a file names that onepaint doesn't know is kept under this
+/// key in the node's `extra`, so the file saves it back; it composites as
+/// Normal meanwhile. Setting a mode clears it.
 pub const RAW_BLEND_KEY: &str = "blendMode";
 
 impl BlendMode {
-    pub const ALL: [BlendMode; 20] = {
+    /// Every mode, in code order.
+    pub const ALL: [BlendMode; 29] = {
         use BlendMode::*;
         [
-            Normal, Multiply, Screen, Overlay, Add, Darken, Lighten, ColorDodge, ColorBurn, HardLight, SoftLight, Difference, Exclusion,
-            LinearBurn, Divide, Hue, Saturation, Color, Luminosity, Pigment,
+            Normal,
+            Multiply,
+            Screen,
+            Overlay,
+            Add,
+            Darken,
+            Lighten,
+            ColorDodge,
+            ColorBurn,
+            HardLight,
+            SoftLight,
+            Difference,
+            Exclusion,
+            LinearBurn,
+            Divide,
+            Hue,
+            Saturation,
+            Color,
+            Luminosity,
+            Pigment,
+            VividLight,
+            LinearLight,
+            PinLight,
+            HardMix,
+            Subtract,
+            DarkerColor,
+            LighterColor,
+            Dissolve,
+            PassThrough,
         ]
     };
 
-    /// Modes offered for layers (everything but the brush-only `pigment`).
-    pub const LAYER_MODES: [BlendMode; 19] = {
-        let mut out = [BlendMode::Normal; 19];
+    /// Modes offered for layers, in Photoshop's menu order
+    /// (`layer-panel/blend-modes.ts` BLEND_MODES).
+    pub const LAYER_MODES: [BlendMode; 27] = {
+        use BlendMode::*;
+        [
+            Normal,
+            Dissolve,
+            Darken,
+            Multiply,
+            ColorBurn,
+            LinearBurn,
+            DarkerColor,
+            Lighten,
+            Screen,
+            ColorDodge,
+            Add,
+            LighterColor,
+            Overlay,
+            SoftLight,
+            HardLight,
+            VividLight,
+            LinearLight,
+            PinLight,
+            HardMix,
+            Difference,
+            Exclusion,
+            Subtract,
+            Divide,
+            Hue,
+            Saturation,
+            Color,
+            Luminosity,
+        ]
+    };
+
+    /// Modes offered for groups: Pass Through first (GROUP_BLEND_MODES).
+    pub const GROUP_MODES: [BlendMode; 28] = {
+        let mut out = [BlendMode::PassThrough; 28];
         let mut i = 0;
-        while i < 19 {
-            out[i] = Self::ALL[i];
+        while i < 27 {
+            out[i + 1] = Self::LAYER_MODES[i];
             i += 1;
         }
         out
     };
+
+    /// Modes offered for brushes: the layer modes plus Pigment Glaze
+    /// (BRUSH_BLEND_MODES).
+    pub const BRUSH_MODES: [BlendMode; 28] = {
+        let mut out = [BlendMode::Pigment; 28];
+        let mut i = 0;
+        while i < 27 {
+            out[i] = Self::LAYER_MODES[i];
+            i += 1;
+        }
+        out
+    };
+
+    /// The mode a blend uses: Pass Through outside a passing-through group
+    /// is Normal.
+    #[inline]
+    pub fn effective(self) -> Self {
+        if self == BlendMode::PassThrough { BlendMode::Normal } else { self }
+    }
 
     pub fn as_str(self) -> &'static str {
         use BlendMode::*;
@@ -94,9 +189,19 @@ impl BlendMode {
             Color => "color",
             Luminosity => "luminosity",
             Pigment => "pigment",
+            VividLight => "vivid-light",
+            LinearLight => "linear-light",
+            PinLight => "pin-light",
+            HardMix => "hard-mix",
+            Subtract => "subtract",
+            DarkerColor => "darker-color",
+            LighterColor => "lighter-color",
+            Dissolve => "dissolve",
+            PassThrough => "pass-through",
         }
     }
 
+    /// The menu label (`blend-modes.ts`).
     pub fn label(self) -> &'static str {
         use BlendMode::*;
         match self {
@@ -104,7 +209,7 @@ impl BlendMode {
             Multiply => "Multiply",
             Screen => "Screen",
             Overlay => "Overlay",
-            Add => "Add",
+            Add => "Add (Linear Dodge)",
             Darken => "Darken",
             Lighten => "Lighten",
             ColorDodge => "Color Dodge",
@@ -119,7 +224,16 @@ impl BlendMode {
             Saturation => "Saturation",
             Color => "Color",
             Luminosity => "Luminosity",
-            Pigment => "Pigment",
+            Pigment => "Pigment Glaze",
+            VividLight => "Vivid Light",
+            LinearLight => "Linear Light",
+            PinLight => "Pin Light",
+            HardMix => "Hard Mix",
+            Subtract => "Subtract",
+            DarkerColor => "Darker Color",
+            LighterColor => "Lighter Color",
+            Dissolve => "Dissolve",
+            PassThrough => "Pass Through",
         }
     }
 

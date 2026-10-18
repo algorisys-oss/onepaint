@@ -43,7 +43,7 @@ pub use onepaint_selection::{Mask, Mode as SelectMode};
 
 use onepaint_brush::{BrushPreset, StrokeEngine};
 use onepaint_color::Rgba;
-use onepaint_compose::{StrokeMode, StrokeOverlay, apply_stroke_px, composite_tile};
+use onepaint_compose::{StrokeMode, StrokeOverlay, apply_stroke_px_at, composite_tile};
 use onepaint_doc::{BlendMode, Document, Group, Layer, Node, NodeId};
 pub use onepaint_formats::Progress;
 use onepaint_history::History;
@@ -956,6 +956,8 @@ impl Session {
             self.height_carve(&st.layer, &st.buffer, st.opacity);
         }
         let relief = st.height.take().and_then(|h| self.height_end(h));
+        // Masks hold coverage, not colour: no space.
+        let space = if st.mask { onepaint_color::Space::Linear } else { self.doc.space() };
         let Some(layer) = self.doc.layer_mut(&st.layer) else {
             return;
         };
@@ -977,11 +979,15 @@ impl Session {
                 if s[i + 3] == 0.0 && s[i] == 0.0 && s[i + 1] == 0.0 && s[i + 2] == 0.0 {
                     continue;
                 }
-                let o = apply_stroke_px(
+                let p = (i / 4) as i32;
+                let o = apply_stroke_px_at(
+                    space,
                     [dst[i], dst[i + 1], dst[i + 2], dst[i + 3]],
                     [s[i], s[i + 1], s[i + 2], s[i + 3]],
                     st.opacity,
                     st.mode,
+                    tx * TILE + p % TILE,
+                    ty * TILE + p / TILE,
                 );
                 dst[i..i + 4].copy_from_slice(&o);
             }

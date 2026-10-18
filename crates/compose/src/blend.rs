@@ -64,6 +64,31 @@ pub fn bc(m: BlendMode, b: f32, s: f32) -> f32 {
             }
         }
         Add => b + s,
+        VividLight => {
+            if s <= 0.5 {
+                let x = 2.0 * s;
+                if x <= 0.0 { 0.0 } else { 1.0 - ((1.0 - b) / x).min(1.0) }
+            } else {
+                let x = 2.0 * (s - 0.5);
+                if x >= 1.0 { 1.0 } else { (b / (1.0 - x)).min(1.0) }
+            }
+        }
+        LinearLight => (b + 2.0 * s - 1.0).clamp(0.0, 1.0),
+        PinLight => {
+            if s <= 0.5 {
+                b.min(2.0 * s)
+            } else {
+                b.max(2.0 * s - 1.0)
+            }
+        }
+        HardMix => {
+            if b + s >= 1.0 {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        Subtract => (b - s).max(0.0),
         _ => s,
     }
 }
@@ -116,6 +141,21 @@ pub fn blend_color(m: BlendMode, b: [f32; 3], s: [f32; 3]) -> [f32; 3] {
         Luminosity => set_lum(b, lum(s)),
         // Subtractive glaze: Kubelka–Munk 50/50 of backdrop and source (compositor.ts:376).
         Pigment => onepaint_color::pigment::pigment_mix(b, s, 0.5),
+        // The whole colour with the lower (higher) luminosity.
+        DarkerColor => {
+            if lum(s) < lum(b) {
+                s
+            } else {
+                b
+            }
+        }
+        LighterColor => {
+            if lum(s) > lum(b) {
+                s
+            } else {
+                b
+            }
+        }
         _ => [bc(m, b[0], s[0]), bc(m, b[1], s[1]), bc(m, b[2], s[2])],
     }
 }
@@ -125,7 +165,57 @@ fn straight(p: Px) -> [f32; 3] {
     if p[3] > 0.0 { [p[0] / p[3], p[1] / p[3], p[2] / p[3]] } else { [0.0; 3] }
 }
 
-/// Composite `src · opacity` over backdrop `bp` with mode `m`.
+/// Dissolve's per-pixel threshold in [0, 1) at doc pixel (x, y): a PCG hash,
+/// mirrored in `compose.wgsl` so the CPU and GPU dither identically.
+/// happypaint uses a GPU `sin` hash (divergence 17).
+#[inline]
+pub fn dissolve_noise(x: i32, y: i32) -> f32 {
+    fn pcg(v: u32) -> u32 {
+        let s = v.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
+        let w = ((s >> ((s >> 28) + 4)) ^ s).wrapping_mul(277_803_737);
+        (w >> 22) ^ w
+    }
+    (pcg(x as u32 ^ pcg(y as u32)) >> 8) as f32 / 16_777_216.0
+}
+
+/// [`blend_px_in`] at doc pixel (x, y), which Dissolve needs: each pixel is
+/// wholly the source colour (at full alpha) or the backdrop, with the
+/// source's coverage as the odds (happypaint `compositor.ts` u_mode 27).
+#[inline]
+pub fn blend_px_at(space: Space, m: BlendMode, bp: Px, src: Px, opacity: f32, x: i32, y: i32) -> Px {
+    if m != BlendMode::Dissolve {
+        return blend_px_in(space, m, bp, src, opacity);
+    }
+    let a = src[3] * opacity;
+    if a > 0.0 && dissolve_noise(x, y) < a {
+        let c = straight(src);
+        let o = [c[0], c[1], c[2], 1.0];
+        if space == Space::Gamma { o.map(|v| v.clamp(0.0, 1.0)) } else { o }
+    } else {
+        bp
+    }
+}
+
+/// [`blend_px_alpha_lock_in`] at doc pixel (x, y): Dissolve recolours a
+/// pixel wholly or not at all.
+#[inline]
+pub fn blend_px_alpha_lock_at(space: Space, m: BlendMode, bp: Px, src: Px, opacity: f32, x: i32, y: i32) -> Px {
+    if m != BlendMode::Dissolve {
+        return blend_px_alpha_lock_in(space, m, bp, src, opacity);
+    }
+    let a = src[3] * opacity;
+    if a > 0.0 && dissolve_noise(x, y) < a {
+        let c = straight(src);
+        let o = [c[0] * bp[3], c[1] * bp[3], c[2] * bp[3], bp[3]];
+        if space == Space::Gamma { o.map(|v| v.clamp(0.0, 1.0)) } else { o }
+    } else {
+        bp
+    }
+}
+
+/// Composite `src · opacity` over backdrop `bp` with mode `m`. Dissolve
+/// needs a position ([`blend_px_at`]) and is Normal here; so is Pass
+/// Through.
 #[inline]
 pub fn blend_px(m: BlendMode, bp: Px, src: Px, opacity: f32) -> Px {
     let sp = src.map(|v| v * opacity);
@@ -133,7 +223,7 @@ pub fn blend_px(m: BlendMode, bp: Px, src: Px, opacity: f32) -> Px {
         return bp;
     }
     match m {
-        BlendMode::Normal => {
+        BlendMode::Normal | BlendMode::Dissolve | BlendMode::PassThrough => {
             let k = 1.0 - sp[3];
             [sp[0] + bp[0] * k, sp[1] + bp[1] * k, sp[2] + bp[2] * k, sp[3] + bp[3] * k]
         }
@@ -169,7 +259,7 @@ pub fn blend_px_in(space: Space, m: BlendMode, bp: Px, src: Px, opacity: f32) ->
         return bp;
     }
     let o = match m {
-        BlendMode::Normal => {
+        BlendMode::Normal | BlendMode::Dissolve | BlendMode::PassThrough => {
             let k = 1.0 - sp[3];
             [sp[0] + bp[0] * k, sp[1] + bp[1] * k, sp[2] + bp[2] * k, sp[3] + bp[3] * k]
         }
@@ -197,7 +287,7 @@ pub fn blend_px_in(space: Space, m: BlendMode, bp: Px, src: Px, opacity: f32) ->
 /// [`blend_px_alpha_lock`] in `space` (spec 50): gamma blends the stored values.
 #[inline]
 pub fn blend_px_alpha_lock_in(space: Space, m: BlendMode, bp: Px, src: Px, opacity: f32) -> Px {
-    if space == Space::Linear || m == BlendMode::Normal {
+    if space == Space::Linear || matches!(m, BlendMode::Normal | BlendMode::Dissolve | BlendMode::PassThrough) {
         return blend_px_alpha_lock(m, bp, src, opacity);
     }
     let sp = src.map(|v| v * opacity);
@@ -221,7 +311,7 @@ pub fn blend_px_alpha_lock(m: BlendMode, bp: Px, src: Px, opacity: f32) -> Px {
     if sp[3] <= 0.0 {
         return bp;
     }
-    if m == BlendMode::Normal {
+    if matches!(m, BlendMode::Normal | BlendMode::Dissolve | BlendMode::PassThrough) {
         let k = 1.0 - sp[3];
         return [sp[0] * bp[3] + bp[0] * k, sp[1] * bp[3] + bp[1] * k, sp[2] * bp[3] + bp[2] * k, bp[3]];
     }

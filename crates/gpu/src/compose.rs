@@ -43,6 +43,8 @@ const OP_OVER_CACHE: u32 = 5;
 const OP_ADJUST: u32 = 6;
 const OP_PAPER: u32 = 7;
 const OP_COVERAGE: u32 = 8;
+const OP_PUSH_COPY: u32 = 9;
+const OP_MIX: u32 = 10;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -145,7 +147,7 @@ fn uses_pigment(ops: &[&Op]) -> bool {
         Op::Layer { content, mode, .. } => pig(*mode) || stroke(&content.stroke) || stroke(&content.mask_stroke),
         Op::PushContent(c) | Op::Clip { content: c, .. } => stroke(&c.stroke) || stroke(&c.mask_stroke),
         Op::Pop { mode, .. } | Op::Adjust { mode, .. } => pig(*mode),
-        Op::PushZero | Op::Paper { .. } | Op::Coverage(_) => false,
+        Op::PushZero | Op::Paper { .. } | Op::Coverage(_) | Op::PushCopy | Op::Mix { .. } => false,
     })
 }
 
@@ -539,7 +541,7 @@ impl GpuCompositor {
     fn encode_content(&self, o: &mut [u32; 16], c: &Content) {
         let stroke = |s: &StrokeSrc| {
             let (kind, mode) = stroke_code(s.mode);
-            (self.slot(&s.tile), kind | (mode as u32) << 8, s.opacity.to_bits())
+            (self.slot(&s.tile), kind | (mode.effective() as u32) << 8, s.opacity.to_bits())
         };
         if let Some(b) = &c.base {
             o[3] |= F_BASE;
@@ -594,6 +596,8 @@ impl GpuCompositor {
                 self.encode_content(&mut o, content);
             }
             Op::PushZero => o[0] = 1,
+            Op::PushCopy => o[0] = OP_PUSH_COPY,
+            Op::Mix { opacity } => (o[0], o[2]) = (OP_MIX, opacity.to_bits()),
             Op::PushContent(c) => {
                 o[0] = 2;
                 self.encode_content(&mut o, c);

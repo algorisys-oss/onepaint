@@ -429,7 +429,7 @@ fn section(app: &mut App, ui: &mut Ui, name: &str, params: &[Param], b: &mut Bru
                 ui.label(RichText::new("Blend").color(t.fg_muted));
                 let mut mode = b.blend_mode();
                 egui::ComboBox::from_id_salt("studio-blend").selected_text(mode.label()).width(160.0).show_ui(ui, |ui| {
-                    for m in onepaint_doc::BlendMode::ALL {
+                    for m in onepaint_doc::BlendMode::BRUSH_MODES {
                         ui.selectable_value(&mut mode, m, m.label());
                     }
                 });

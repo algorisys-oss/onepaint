@@ -90,6 +90,8 @@ const OP_OVER_CACHE: u32 = 5u;
 const OP_ADJUST: u32 = 6u;
 const OP_PAPER: u32 = 7u;
 const OP_COVERAGE: u32 = 8u;
+const OP_PUSH_COPY: u32 = 9u;
+const OP_MIX: u32 = 10u;
 
 const F_INHERIT: u32 = 1u;     // Layer: inherit alpha; Pop: clip instead of blend
 const F_TINT: u32 = 2u;
@@ -120,6 +122,14 @@ const M_SATURATION: u32 = 16u;
 const M_COLOR: u32 = 17u;
 const M_LUMINOSITY: u32 = 18u;
 const M_PIGMENT: u32 = 19u;
+const M_VIVID_LIGHT: u32 = 20u;
+const M_LINEAR_LIGHT: u32 = 21u;
+const M_PIN_LIGHT: u32 = 22u;
+const M_HARD_MIX: u32 = 23u;
+const M_SUBTRACT: u32 = 24u;
+const M_DARKER_COLOR: u32 = 25u;
+const M_LIGHTER_COLOR: u32 = 26u;
+const M_DISSOLVE: u32 = 27u;
 
 const STACK: u32 = 8u;
 
@@ -221,6 +231,23 @@ fn bc(m: u32, b: f32, s: f32) -> f32 {
             return min(b / s, 1.0);
         }
         case M_ADD: { return b + s; }
+        case M_VIVID_LIGHT: {
+            if (s <= 0.5) {
+                let x = 2.0 * s;
+                if (x <= 0.0) { return 0.0; }
+                return 1.0 - min((1.0 - b) / x, 1.0);
+            }
+            let x = 2.0 * (s - 0.5);
+            if (x >= 1.0) { return 1.0; }
+            return min(b / (1.0 - x), 1.0);
+        }
+        case M_LINEAR_LIGHT: { return clamp(b + 2.0 * s - 1.0, 0.0, 1.0); }
+        case M_PIN_LIGHT: {
+            if (s <= 0.5) { return min(b, 2.0 * s); }
+            return max(b, 2.0 * s - 1.0);
+        }
+        case M_HARD_MIX: { return select(0.0, 1.0, b + s >= 1.0); }
+        case M_SUBTRACT: { return max(b - s, 0.0); }
         default: { return s; }
     }
 }
@@ -272,6 +299,8 @@ fn blend_color(m: u32, b: vec3<f32>, s: vec3<f32>) -> vec3<f32> {
             }
             return s;
         }
+        case M_DARKER_COLOR: { return select(b, s, lum(s) < lum(b)); }
+        case M_LIGHTER_COLOR: { return select(b, s, lum(s) > lum(b)); }
         default: { return vec3<f32>(bc(m, b.x, s.x), bc(m, b.y, s.y), bc(m, b.z, s.z)); }
     }
 }
@@ -295,7 +324,33 @@ fn blend_gamma(m: u32, bp: vec4<f32>, sp: vec4<f32>) -> vec4<f32> {
     }
 }
 
-fn blend_px(m: u32, bp: vec4<f32>, src: vec4<f32>, opacity: f32) -> vec4<f32> {
+// This invocation's pixel in level-0 document px (Dissolve's dither).
+var<private> doc_px: vec2<i32>;
+
+// Dissolve's threshold (compose blend.rs `dissolve_noise`; `pcg` is below).
+fn dissolve_hit(a: f32) -> bool {
+    let r = f32(pcg(bitcast<u32>(doc_px.x) ^ pcg(bitcast<u32>(doc_px.y))) >> 8u) / 16777216.0;
+    return a > 0.0 && r < a;
+}
+
+// A reduced level previews Dissolve as Normal: the dither's average.
+fn previewed(m: u32) -> u32 {
+    return select(m, M_NORMAL, m == M_DISSOLVE && prm.level != 0u);
+}
+
+fn blend_px(mode: u32, bp: vec4<f32>, src: vec4<f32>, opacity: f32) -> vec4<f32> {
+    let m = previewed(mode);
+    if (m == M_DISSOLVE) {
+        // Wholly the source colour or wholly the backdrop (blend.rs `blend_px_at`).
+        if (dissolve_hit(src.w * opacity)) {
+            let o = vec4<f32>(straight(src), 1.0);
+            if (prm.gamma != 0u) {
+                return clamp(o, vec4<f32>(0.0), vec4<f32>(1.0));
+            }
+            return o;
+        }
+        return bp;
+    }
     let sp = src * opacity;
     if (sp.w <= 0.0 && sp.x == 0.0 && sp.y == 0.0 && sp.z == 0.0) {
         return bp;
@@ -321,7 +376,18 @@ fn blend_px(m: u32, bp: vec4<f32>, src: vec4<f32>, opacity: f32) -> vec4<f32> {
     return prem_srgb_to_lin(vec4<f32>(o, ao));
 }
 
-fn blend_px_alpha_lock(m: u32, bp: vec4<f32>, src: vec4<f32>, opacity: f32) -> vec4<f32> {
+fn blend_px_alpha_lock(mode: u32, bp: vec4<f32>, src: vec4<f32>, opacity: f32) -> vec4<f32> {
+    let m = previewed(mode);
+    if (m == M_DISSOLVE) {
+        if (dissolve_hit(src.w * opacity)) {
+            let o = vec4<f32>(straight(src) * bp.w, bp.w);
+            if (prm.gamma != 0u) {
+                return clamp(o, vec4<f32>(0.0), vec4<f32>(1.0));
+            }
+            return o;
+        }
+        return bp;
+    }
     let sp = src * opacity;
     if (sp.w <= 0.0) {
         return bp;
@@ -778,6 +844,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let p = vec2<i32>(gid.xy);
+    doc_px = (tile_origin + p) * i32(1u << prm.level);
     // The top of the stack lives in `top`; `stack` holds the registers under it.
     var stack: array<vec4<f32>, STACK>;
     var top = vec4<f32>(0.0);
@@ -822,6 +889,16 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
             case OP_CLIP: {
                 top = clip_over(top, content(o, p), opacity);
+            }
+            case OP_PUSH_COPY: {
+                stack[sp] = top;
+                sp += 1u;
+            }
+            case OP_MIX: {
+                // A Pass Through group fades with its backdrop.
+                let v = top;
+                sp -= 1u;
+                top = stack[sp] * (1.0 - opacity) + v * opacity;
             }
             case OP_OVER_CACHE: {
                 let c = load_cache(o.a.y, p);

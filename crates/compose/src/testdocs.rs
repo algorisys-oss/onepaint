@@ -59,9 +59,16 @@ pub fn noise(s: &mut Surface, r: &mut Rng, area: Rect) {
     }
 }
 
+/// A layer mode (Pigment if asked); now and then Pass Through, which a
+/// layer reads as Normal.
 fn mode(r: &mut Rng, pigment: bool) -> BlendMode {
-    let n = if pigment { BlendMode::ALL.len() } else { BlendMode::ALL.len() - 1 };
-    BlendMode::ALL[r.below(n as u32) as usize]
+    if pigment && r.chance(0.05) {
+        return BlendMode::Pigment;
+    }
+    if r.chance(0.03) {
+        return BlendMode::PassThrough;
+    }
+    BlendMode::LAYER_MODES[r.below(BlendMode::LAYER_MODES.len() as u32) as usize]
 }
 
 fn layer(r: &mut Rng, id: &mut u32, w: u32, h: u32, pigment: bool) -> Layer {
@@ -96,7 +103,11 @@ fn nodes(r: &mut Rng, id: &mut u32, depth: u32, w: u32, h: u32, pigment: bool) -
                 let mut g = Group::new(&format!("g{id}"));
                 g.id = format!("g{id}");
                 g.children = nodes(r, id, depth + 1, w, h, pigment);
-                g.blend_mode = if r.chance(0.5) { BlendMode::Normal } else { mode(r, pigment) };
+                g.blend_mode = match r.below(4) {
+                    0 | 1 => BlendMode::Normal,
+                    2 => BlendMode::PassThrough,
+                    _ => mode(r, pigment),
+                };
                 g.opacity = if r.chance(0.5) { 1.0 } else { r.f() };
                 g.visible = !r.chance(0.08);
                 if r.chance(0.15) {
@@ -111,7 +122,8 @@ fn nodes(r: &mut Rng, id: &mut u32, depth: u32, w: u32, h: u32, pigment: bool) -
 }
 
 /// A random document `w × h` mixing every blend mode (Pigment if asked),
-/// groups, clip families, masks, inherit alpha and ghost tints.
+/// groups (Pass Through ones too), clip families, masks, inherit alpha and
+/// ghost tints.
 pub fn random_doc(seed: u64, w: u32, h: u32, pigment: bool) -> Document {
     let mut r = Rng::new(seed);
     let mut d = Document::new(w, h, None);

@@ -216,6 +216,23 @@ fn uniform_tiles_composite_exactly_at_every_level() {
     }
 }
 
+/// Hard Mix and Darker/Lighter Color threshold each pixel, so a preview
+/// blends the averaged inputs into a coarser on/off pattern rather than the
+/// fine one's average. A preview draws Dissolve as Normal, the dither's
+/// average, but a nonlinear blend above the dither doesn't average the same
+/// way. No bulk bound holds for these on noise, so they become Normal here
+/// (level 0 is exact for them, and idle frames refine to it).
+fn unthreshold(nodes: &mut [Node]) {
+    for n in nodes {
+        if matches!(n.blend_mode(), BlendMode::HardMix | BlendMode::DarkerColor | BlendMode::LighterColor | BlendMode::Dissolve) {
+            n.set_blend_mode(BlendMode::Normal);
+        }
+        if let Node::Group(g) = n {
+            unthreshold(&mut g.children);
+        }
+    }
+}
+
 #[test]
 fn random_documents_preview_within_the_bound() {
     let Some((device, queue)) = device() else {
@@ -226,7 +243,8 @@ fn random_documents_preview_within_the_bound() {
     let tex = target(&device, &sheets);
     let mut gc = GpuCompositor::new(&device, 64 << 20);
     for seed in 0..16 {
-        let doc = random_doc(seed, 300, 300, seed % 2 == 0);
+        let mut doc = random_doc(seed, 300, 300, seed % 2 == 0);
+        unthreshold(&mut doc.root);
         let stroke = random_stroke(seed, &doc);
         let ov = stroke.as_ref().map(|(buf, id, opacity, mode, mask)| StrokeOverlay {
             layer_id: id,

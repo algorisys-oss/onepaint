@@ -75,17 +75,20 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] Adjustment layers and fill layers (colour, fill and spatial kinds all composite live)
 - [x] Per-layer smart-filter stacks (add from any filter, toggle, edit, remove, bake; cached; exported)
 
-## Blend modes (20)
-The modes are:
+## Blend modes (29)
+The modes are, in the layer menu's order (`layer-panel/blend-modes.ts`):
 
-- normal, multiply, screen, overlay, add
-- darken, lighten, color-dodge, color-burn
-- hard-light, soft-light, difference, exclusion
-- linear-burn, divide
+- normal, dissolve
+- darken, multiply, color-burn, linear-burn, darker-color
+- lighten, screen, color-dodge, add (linear dodge), lighter-color
+- overlay, soft-light, hard-light, vivid-light, linear-light, pin-light, hard-mix
+- difference, exclusion, subtract, divide
 - hue, saturation, color, luminosity
+- pass-through (groups only)
 - pigment (brush only)
 
-- [~] All of them on the GPU, matching the CPU oracle (all 19 modes, groups, clip families, masks, inherit alpha, ghost tints and strokes in progress composite on the GPU, as do colour adjustment, noise, screentone and fill layers, relief, paper and panel clips (specs 42–46); view modes run in the present pass (spec 48). Tiles with sand screentone, imported pattern images or ghost pegs still use the CPU compositor; spatial adjustment layers are rendered on the CPU, reused mid-stroke, and composite on the GPU as pixels)
+- [x] The CPU oracle, `.happypaint` and PSD keys for all 29; Pass Through groups composite their children onto the backdrop and fade with it below 100%, and stay isolated (as Normal) when a panel frame, ghost or clipped layer needs them as one picture (happypaint v0.200.1)
+- [~] All of them on the GPU, matching the CPU oracle (all 28 modes, Pass Through groups, groups, clip families, masks, inherit alpha, ghost tints and strokes in progress composite on the GPU, as do colour adjustment, noise, screentone and fill layers, relief, paper and panel clips (specs 42–46); view modes run in the present pass (spec 48). Tiles with sand screentone, imported pattern images or ghost pegs still use the CPU compositor; spatial adjustment layers are rendered on the CPU, reused mid-stroke, and composite on the GPU as pixels)
 
 ## Adjustments and filters (48 kinds)
 Each kind works destructively, as an adjustment layer, and as a smart filter.

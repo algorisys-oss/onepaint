@@ -9,7 +9,7 @@ pub mod relief;
 #[doc(hidden)]
 pub mod testdocs;
 
-use blend::{blend_px_alpha_lock_in, blend_px_in, clip_over};
+use blend::{blend_px_alpha_lock_at, blend_px_alpha_lock_in, blend_px_at, blend_px_in, clip_over};
 use onepaint_color::Space;
 use onepaint_doc::{BlendMode, Document, Layer, Node};
 use onepaint_filters::Frame;
@@ -42,6 +42,16 @@ pub fn apply_stroke_px_in(space: Space, dst: Px, src: Px, opacity: f32, mode: St
             dst.map(|v| v * k)
         }
         StrokeMode::AlphaLock(m) => blend_px_alpha_lock_in(space, m, dst, src, opacity),
+    }
+}
+
+/// [`apply_stroke_px_in`] at doc pixel (x, y), where a Dissolve stroke dithers.
+#[inline]
+pub fn apply_stroke_px_at(space: Space, dst: Px, src: Px, opacity: f32, mode: StrokeMode, x: i32, y: i32) -> Px {
+    match mode {
+        StrokeMode::Paint(m) => blend_px_at(space, m, dst, src, opacity, x, y),
+        StrokeMode::AlphaLock(m) => blend_px_alpha_lock_at(space, m, dst, src, opacity, x, y),
+        StrokeMode::Erase => apply_stroke_px_in(space, dst, src, opacity, mode),
     }
 }
 
@@ -78,7 +88,9 @@ fn layer_content(l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, frame:
     if let Some((o, st)) = stroke {
         let s = st.to_f32();
         for i in (0..buf.len()).step_by(4) {
-            let r = apply_stroke_px_in(frame.space, px(&buf, i), px(&s, i), o.opacity, o.mode);
+            let p = (i / 4) as i32;
+            let (x, y) = (tx * TILE + p % TILE, ty * TILE + p / TILE);
+            let r = apply_stroke_px_at(frame.space, px(&buf, i), px(&s, i), o.opacity, o.mode, x, y);
             buf[i..i + 4].copy_from_slice(&r);
         }
     }
@@ -112,8 +124,19 @@ fn layer_content(l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, frame:
     Some(buf)
 }
 
-fn blend_into(target: &mut [f32], src: &[f32], mode: BlendMode, opacity: f32, space: Space) {
+/// Blend a tile's worth of `src` onto `target`; the tile's origin places
+/// Dissolve's dither.
+fn blend_into(target: &mut [f32], src: &[f32], mode: BlendMode, opacity: f32, space: Space, (tx, ty): (i32, i32)) {
     if opacity <= 0.0 {
+        return;
+    }
+    let mode = mode.effective();
+    if mode == BlendMode::Dissolve {
+        for i in (0..target.len()).step_by(4) {
+            let p = (i / 4) as i32;
+            let r = blend_px_at(space, mode, px(target, i), px(src, i), opacity, tx * TILE + p % TILE, ty * TILE + p / TILE);
+            target[i..i + 4].copy_from_slice(&r);
+        }
         return;
     }
     if mode == BlendMode::Normal && space == Space::Linear {
@@ -179,7 +202,11 @@ fn composite_nodes(nodes: &[Node], tx: i32, ty: i32, target: &mut Buf, ov: Optio
         match &nodes[i] {
             Node::Group(g) => {
                 let clip = panel_clip(g, tx, ty);
-                if g.visible && g.opacity > 0.0 && !g.children.is_empty() && clip != Some(TileCoverage::Empty) {
+                if passes_through(g, &nodes[i + 1..j]) {
+                    if g.visible && g.opacity > 0.0 {
+                        pass_through(&g.children, g.opacity, tx, ty, target, ov, frame);
+                    }
+                } else if g.visible && g.opacity > 0.0 && !g.children.is_empty() && clip != Some(TileCoverage::Empty) {
                     let mut buf = match ghost_peg(g) {
                         Some(peg) => pegged(&g.children, peg, tx, ty, ov, frame),
                         None => {
@@ -196,7 +223,7 @@ fn composite_nodes(nodes: &[Node], tx: i32, ty: i32, target: &mut Buf, ov: Optio
                     }
                     draw_clipped(&mut buf, &nodes[i + 1..j], tx, ty, ov, frame);
                     ghost_tint(&mut buf, g);
-                    blend_into(target, &buf, g.blend_mode, g.opacity, frame.space);
+                    blend_into(target, &buf, g.blend_mode, g.opacity, frame.space, (tx, ty));
                 }
             }
             Node::Layer(l) => {
@@ -210,13 +237,40 @@ fn composite_nodes(nodes: &[Node], tx: i32, ty: i32, target: &mut Buf, ov: Optio
                         if l.inherit_alpha {
                             clip_into(target, &fam, l.opacity);
                         } else {
-                            blend_into(target, &fam, l.blend_mode, l.opacity, frame.space);
+                            blend_into(target, &fam, l.blend_mode, l.opacity, frame.space, (tx, ty));
                         }
                     }
                 }
             }
         }
         i = j;
+    }
+}
+
+/// Whether a Pass Through group composites its children straight onto the
+/// backdrop. A group that has to be one picture first (a panel frame, a
+/// view-only ghost, layers clipped to it) stays isolated and blends as
+/// Normal (happypaint `compositeNodes`, v0.200.1).
+pub(crate) fn passes_through(g: &onepaint_doc::Group, riders: &[Node]) -> bool {
+    g.blend_mode == BlendMode::PassThrough
+        && !g.extra.contains_key("panel")
+        && !g.extra.contains_key(GHOST_PEG_KEY)
+        && !g.extra.contains_key(GHOST_TINT_KEY)
+        && !riders.iter().any(|r| r.visible() && r.opacity() > 0.0)
+}
+
+/// A Pass Through group (`Compositor.passThroughGroup`): the children
+/// composite onto the target; below 100% the result fades with the
+/// backdrop, `out = backdrop·(1 − o) + result·o`.
+fn pass_through(children: &[Node], opacity: f32, tx: i32, ty: i32, target: &mut Buf, ov: Option<&StrokeOverlay>, frame: Frame) {
+    if opacity >= 1.0 {
+        composite_nodes(children, tx, ty, target, ov, frame);
+        return;
+    }
+    let backdrop = target.clone();
+    composite_nodes(children, tx, ty, target, ov, frame);
+    for (o, b) in target.iter_mut().zip(&backdrop) {
+        *o = b * (1.0 - opacity) + *o * opacity;
     }
 }
 
@@ -338,7 +392,7 @@ fn draw_adjustment(target: &mut Buf, l: &Layer, adj: &onepaint_doc::Adjustment, 
         }
         out[i..i + 4].copy_from_slice(&o);
     }
-    blend_into(target, &out, l.blend_mode, l.opacity, frame.space);
+    blend_into(target, &out, l.blend_mode, l.opacity, frame.space, (tx, ty));
 }
 
 fn draw_layer(target: &mut Buf, l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, frame: Frame) {
@@ -353,7 +407,7 @@ fn draw_layer(target: &mut Buf, l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeO
             }
         }
     }
-    blend_into(target, &c, l.blend_mode, l.opacity, frame.space);
+    blend_into(target, &c, l.blend_mode, l.opacity, frame.space, (tx, ty));
 }
 
 /// The document as a filter frame (size, DPI and space for tone and fill

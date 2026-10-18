@@ -8,8 +8,8 @@ commit for the spec.
 
 ## Bugs and data loss in onepaint (fix first)
 
-All five are fixed (2026-10-10). Item 1 keeps the mode by name until
-the modes are implemented.
+All five are fixed (2026-10-10). Item 1 kept the mode by name until the
+modes landed (2026-10-18); only names onepaint doesn't know are kept now.
 1. **New blend modes are lost on save.** `.happypaint` files with
    `pass-through`, `dissolve`, `darker-color`, `lighter-color`,
    `vivid-light`, `linear-light`, `pin-light`, `hard-mix` or `subtract`
@@ -28,9 +28,9 @@ the modes are implemented.
 
 ## Missing features
 ### Compositing and layers
-- 8 blend modes (Dissolve, Darker Color, Lighter Color, Vivid Light,
+- ~~8 blend modes (Dissolve, Darker Color, Lighter Color, Vivid Light,
   Linear Light, Pin Light, Hard Mix, Subtract) and Pass Through groups
-  (v0.200.1, fd8e45b).
+  (v0.200.1, fd8e45b).~~ Done 2026-10-18; see `feature-parity.md`.
 - Layer styles (v0.196.0–0.196.8):
   - Blending Options: Stroke, Drop and Inner Shadow, Outer and Inner Glow,
     Colour and Gradient Overlay, Fill opacity;

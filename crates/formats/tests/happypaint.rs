@@ -232,28 +232,29 @@ fn reads_count_progress_and_stop_when_cancelled() {
 }
 
 #[test]
-fn blend_modes_onepaint_cannot_composite_yet_survive_a_round_trip() {
+fn photoshop_modes_and_pass_through_survive_a_round_trip() {
     let mut d = Document::new(300, 200, Some(Rgba::WHITE));
     let mut g = Group::new("g");
-    g.extra.insert(RAW_BLEND_KEY.into(), serde_json::json!("pass-through"));
+    g.blend_mode = BlendMode::PassThrough;
     let mut l = Layer::new("ink");
     fill(&mut l.pixels, 10, 10, 50, 50, [0.2, 0.1, 0.0, 1.0]);
-    l.extra.insert(RAW_BLEND_KEY.into(), serde_json::json!("vivid-light"));
+    l.blend_mode = BlendMode::VividLight;
     g.children.push(Node::Layer(l));
+    let mut f = Layer::new("future");
+    f.extra.insert(RAW_BLEND_KEY.into(), serde_json::json!("some-future-mode"));
+    g.children.push(Node::Layer(f));
     d.root.push(Node::Group(g));
-    let raw = |d: &Document| -> Vec<String> {
+    let modes = |d: &Document| -> Vec<BlendMode> {
         let Node::Group(g) = d.root.last().unwrap() else { panic!("a group") };
-        let Node::Layer(l) = &g.children[0] else { panic!("a layer") };
-        [&g.extra, &l.extra].map(|e| e.get(RAW_BLEND_KEY).and_then(|v| v.as_str()).unwrap_or("").to_string()).to_vec()
+        vec![g.blend_mode, g.children[0].blend_mode()]
     };
     let back = read_happypaint(&write_happypaint(&d, None, "t").unwrap()).unwrap();
-    assert_eq!(raw(&back), ["pass-through", "vivid-light"]);
+    assert_eq!(modes(&back), [BlendMode::PassThrough, BlendMode::VividLight]);
+    // A name onepaint doesn't know is kept and saved back.
+    let Node::Group(g) = back.root.last().unwrap() else { panic!("a group") };
+    let Node::Layer(f) = &g.children[1] else { panic!("a layer") };
+    assert_eq!(f.extra.get(RAW_BLEND_KEY).and_then(|v| v.as_str()), Some("some-future-mode"));
     let flat = vec![1.0f32; 300 * 200 * 4];
     let psd = psd::read_psd(&psd::write_psd(&back, &flat).unwrap()).unwrap();
-    assert_eq!(raw(&psd), ["pass-through", "vivid-light"]);
-    // Choosing a mode in onepaint replaces the kept one.
-    let mut n = back.root.last().unwrap().clone();
-    n.set_blend_mode(BlendMode::Multiply);
-    let Node::Group(g) = n else { panic!("a group") };
-    assert!(!g.extra.contains_key(RAW_BLEND_KEY));
+    assert_eq!(modes(&psd), [BlendMode::PassThrough, BlendMode::VividLight]);
 }

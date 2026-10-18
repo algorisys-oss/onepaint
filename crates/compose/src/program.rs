@@ -7,8 +7,10 @@
 //! on the CPU. [`run`] interprets a program on the CPU, which tests the
 //! flattening against [`crate::composite_tile`].
 
-use crate::blend::{blend_px_in, clip_over};
-use crate::{GHOST_PEG_KEY, GHOST_TINT_KEY, StrokeMode, StrokeOverlay, apply_stroke_px, apply_stroke_px_in, panel_clip, riders};
+use crate::blend::{blend_px_at, blend_px_in, clip_over};
+use crate::{
+    GHOST_PEG_KEY, GHOST_TINT_KEY, StrokeMode, StrokeOverlay, apply_stroke_px, apply_stroke_px_at, panel_clip, passes_through, riders,
+};
 use onepaint_color::Space;
 use onepaint_doc::{BlendMode, Document, Layer, Node};
 pub use onepaint_filters::gpu::GpuAdjust;
@@ -243,6 +245,11 @@ pub enum Op {
     Paper { shade: Arc<PaperShade>, tx: i32, ty: i32 },
     /// Multiply the top register by a panel frame's coverage (spec 44).
     Coverage(Arc<Coverage>),
+    /// Push a copy of the top register (a Pass Through group starts).
+    PushCopy,
+    /// Pop the top register `v` and fade it with the next one `d`:
+    /// `d·(1 − o) + v·o` (a Pass Through group ends).
+    Mix { opacity: f32 },
 }
 
 #[derive(Clone, Debug)]
@@ -307,17 +314,25 @@ impl TileProgram {
 }
 
 impl TileProgram {
+    /// The tile's top-left corner in doc px.
+    pub fn origin(&self) -> [i32; 2] {
+        [self.tx * TILE, self.ty * TILE]
+    }
+
     /// The ops in `r` (a split's range).
     pub fn at(&self, r: &Range<usize>) -> &[Op] {
         &self.ops[r.clone()]
     }
 }
 
-/// A content key for `ops`: their kinds and parameters, and the address of
-/// every source tile (copy-on-write moves an edited tile to a new address).
-pub fn segment_key(ops: &[Op]) -> u64 {
+/// A content key for `ops` on the tile at `at` (doc px): their kinds and
+/// parameters, and the address of every source tile (copy-on-write moves an
+/// edited tile to a new address). The position counts too: Dissolve's
+/// dither depends on it.
+pub fn segment_key(ops: &[Op], at: [i32; 2]) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
+    at.hash(&mut h);
     let ptr = |t: &Arc<Tile>| Arc::as_ptr(t) as usize;
     let content = |c: &Content, h: &mut std::collections::hash_map::DefaultHasher| {
         c.base.as_ref().map(ptr).hash(h);
@@ -374,6 +389,8 @@ pub fn segment_key(ops: &[Op]) -> u64 {
                 (shade.tex.mask().data.as_ptr() as usize).hash(&mut h);
             }
             Op::Coverage(c) => (7u8, ptr(&c.tile)).hash(&mut h),
+            Op::PushCopy => 8u8.hash(&mut h),
+            Op::Mix { opacity } => (9u8, opacity.to_bits()).hash(&mut h),
         }
     }
     h.finish()
@@ -477,7 +494,7 @@ fn plan(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, hot: Optio
             p.ops.push(Op::Paper { shade: Arc::new(PaperShade { tex, amt }), tx, ty });
         }
     }
-    let split = hot.and_then(|_| split(&p.ops, &p.units));
+    let split = hot.and_then(|_| split(&p.ops, &p.units, [tx * TILE, ty * TILE]));
     let prog = TileProgram { tx, ty, ops: p.ops, split, space: doc.space() };
     let mut seen: Vec<*const Tile> = prog.sources().map(Arc::as_ptr).collect();
     seen.sort_unstable();
@@ -571,7 +588,7 @@ impl Planner<'_> {
             _ => None,
         };
         let adjust = Arc::new(Adjust { prepared, gpu, at: [self.tx * TILE, self.ty * TILE] });
-        self.ops.push(Op::Adjust { adjust, mask, mode: l.blend_mode, opacity: l.opacity });
+        self.ops.push(Op::Adjust { adjust, mask, mode: l.blend_mode.effective(), opacity: l.opacity });
         Ok(())
     }
 
@@ -588,7 +605,7 @@ impl Planner<'_> {
     fn pop(&mut self, mode: BlendMode, opacity: f32, clip: bool, tint: Option<[f32; 3]>) {
         self.depth -= 1;
         self.regs.pop();
-        self.ops.push(Op::Pop { mode, opacity, clip, tint });
+        self.ops.push(Op::Pop { mode: mode.effective(), opacity, clip, tint });
     }
 
     /// A normal, fully opaque layer replaces its register (`c + top · 0`):
@@ -645,6 +662,15 @@ impl Planner<'_> {
             let top = self.depth == 1;
             let mut start = self.ops.len();
             match &nodes[i] {
+                Node::Group(g) if passes_through(g, &nodes[i + 1..j]) => {
+                    if g.visible && g.opacity > 0.0 && !g.children.is_empty() {
+                        self.push(Op::PushCopy)?;
+                        self.nodes(&g.children)?;
+                        self.depth -= 1;
+                        self.regs.pop();
+                        self.ops.push(Op::Mix { opacity: g.opacity });
+                    }
+                }
                 Node::Group(g) => {
                     let clip = self.panel_clip(g);
                     if g.visible && g.opacity > 0.0 && !g.children.is_empty() && !matches!(clip, Some(Clip::Empty)) {
@@ -671,7 +697,7 @@ impl Planner<'_> {
                                 self.occlude(l, &content);
                                 self.ops.push(Op::Layer {
                                     content,
-                                    mode: l.blend_mode,
+                                    mode: l.blend_mode.effective(),
                                     opacity: l.opacity,
                                     inherit_alpha: l.inherit_alpha,
                                 });
@@ -694,11 +720,15 @@ impl Planner<'_> {
                     start = start.min(c);
                 }
                 let hot = self.hot.is_some_and(|id| nodes[i..j].iter().any(|n| contains(n, id)));
-                let folds = match &nodes[i] {
-                    Node::Group(g) => g.blend_mode == BlendMode::Normal,
-                    Node::Layer(l) => l.blend_mode == BlendMode::Normal && !l.inherit_alpha,
-                };
-                self.units.push(Unit { start, end: self.ops.len(), hot, folds, adjust: false });
+                // A Pass Through group reads the backdrop, like its children.
+                let through = matches!(&nodes[i], Node::Group(g) if passes_through(g, &nodes[i + 1..j]));
+                let folds = !through
+                    && match &nodes[i] {
+                        Node::Group(g) => g.blend_mode.effective() == BlendMode::Normal,
+                        Node::Layer(l) => l.blend_mode.effective() == BlendMode::Normal && !l.inherit_alpha,
+                    };
+                let adjust = through && self.ops[start..].iter().any(|o| matches!(o, Op::Adjust { .. }));
+                self.units.push(Unit { start, end: self.ops.len(), hot, folds, adjust });
             }
             i = j;
         }
@@ -707,7 +737,7 @@ impl Planner<'_> {
 }
 
 /// Cut `ops` at the hot unit (spec 38): `None` when no unit holds it.
-fn split(ops: &[Op], units: &[Unit]) -> Option<Split> {
+fn split(ops: &[Op], units: &[Unit], at: [i32; 2]) -> Option<Split> {
     let h = units.iter().position(|u| u.hot)?;
     // An adjustment layer at or above the hot one would read the cached f16
     // image below it, and the stronger ones (hue near grey, threshold,
@@ -721,7 +751,7 @@ fn split(ops: &[Op], units: &[Unit]) -> Option<Split> {
     let folds = after.iter().take_while(|u| u.folds).count();
     let fold_end = if folds == 0 { hot_unit.end } else { after[folds - 1].end };
     let worth = |r: &Range<usize>| op_sources(&ops[r.clone()]).nth(MIN_SEGMENT_SOURCES - 1).is_some();
-    let segment = |r: Range<usize>| Segment { key: segment_key(&ops[r.clone()]), range: r };
+    let segment = |r: Range<usize>| Segment { key: segment_key(&ops[r.clone()], at), range: r };
     // A segment not worth caching runs with its neighbour instead.
     let (prefix, hot_start) = match 0..hot_unit.start {
         r if worth(&r) => (Some(segment(r)), hot_unit.start),
@@ -740,10 +770,17 @@ fn load(t: &Tile, i: usize) -> Px {
     t.get(i % TILE as usize, i / TILE as usize)
 }
 
-fn eval(c: &Content, i: usize, space: Space) -> Px {
+/// Doc pixel `i` of the tile whose origin is `at`.
+#[inline]
+fn pos(at: [i32; 2], i: usize) -> (i32, i32) {
+    (at[0] + (i % TILE as usize) as i32, at[1] + (i / TILE as usize) as i32)
+}
+
+fn eval(c: &Content, i: usize, space: Space, at: [i32; 2]) -> Px {
     let mut p = c.base.as_ref().map_or([0.0; 4], |t| load(t, i));
     if let Some(s) = &c.stroke {
-        p = apply_stroke_px_in(space, p, load(&s.tile, i), s.opacity, s.mode);
+        let (x, y) = pos(at, i);
+        p = apply_stroke_px_at(space, p, load(&s.tile, i), s.opacity, s.mode, x, y);
     }
     if let Some(r) = &c.relief {
         let (x, y) = (r.tx * TILE + (i % TILE as usize) as i32, r.ty * TILE + (i / TILE as usize) as i32);
@@ -762,28 +799,39 @@ fn eval(c: &Content, i: usize, space: Space) -> Px {
     p.map(|v| v * m[0])
 }
 
-/// Run `ops` on one pixel, starting from the register `init`.
-fn exec(ops: &[Op], init: Px, i: usize, stack: &mut Vec<Px>, space: Space) -> Px {
+/// Run `ops` on one pixel, starting from the register `init`; `at` is the
+/// tile's origin in doc px.
+fn exec(ops: &[Op], init: Px, i: usize, stack: &mut Vec<Px>, space: Space, at: [i32; 2]) -> Px {
     stack.clear();
     stack.push(init);
+    let (x, y) = pos(at, i);
     for op in ops {
         // The stack is never empty: the planner pairs every push with a pop.
         let Some(top) = stack.last_mut() else { break };
         match op {
             Op::Layer { content, mode, opacity, inherit_alpha } => {
-                let mut c = eval(content, i, space);
+                let mut c = eval(content, i, space, at);
                 if *inherit_alpha {
                     let a = top[3];
                     c = c.map(|v| v * a);
                 }
-                *top = blend_px_in(space, *mode, *top, c, *opacity);
+                *top = blend_px_at(space, *mode, *top, c, *opacity, x, y);
             }
             Op::PushZero => stack.push([0.0; 4]),
             Op::PushContent(c) => {
-                let v = eval(c, i, space);
+                let v = eval(c, i, space, at);
                 stack.push(v);
             }
-            Op::Clip { content, opacity } => *top = clip_over(*top, eval(content, i, space), *opacity),
+            Op::PushCopy => {
+                let v = *top;
+                stack.push(v);
+            }
+            Op::Mix { opacity } => {
+                let Some(v) = stack.pop() else { break };
+                let Some(dst) = stack.last_mut() else { break };
+                *dst = std::array::from_fn(|c| dst[c] * (1.0 - opacity) + v[c] * opacity);
+            }
+            Op::Clip { content, opacity } => *top = clip_over(*top, eval(content, i, space, at), *opacity),
             Op::Adjust { adjust, mask, mode, opacity } => {
                 let (x, y) = (adjust.at[0] + (i % TILE as usize) as i32, adjust.at[1] + (i / TILE as usize) as i32);
                 let mut o = adjust.prepared.color_px(*top, x, y);
@@ -791,7 +839,7 @@ fn exec(ops: &[Op], init: Px, i: usize, stack: &mut Vec<Px>, space: Space) -> Px
                     let k = load(m, i)[0];
                     o = o.map(|v| v * k);
                 }
-                *top = blend_px_in(space, *mode, *top, o, *opacity);
+                *top = blend_px_at(space, *mode, *top, o, *opacity, x, y);
             }
             Op::Coverage(c) => {
                 let k = c.values[i];
@@ -813,7 +861,7 @@ fn exec(ops: &[Op], init: Px, i: usize, stack: &mut Vec<Px>, space: Space) -> Px
                     }
                 }
                 let Some(dst) = stack.last_mut() else { break };
-                *dst = if *clip { clip_over(*dst, v, *opacity) } else { blend_px_in(space, *mode, *dst, v, *opacity) };
+                *dst = if *clip { clip_over(*dst, v, *opacity) } else { blend_px_at(space, *mode, *dst, v, *opacity, x, y) };
             }
         }
     }
@@ -825,7 +873,7 @@ pub fn run(prog: &TileProgram) -> Vec<f32> {
     let mut out = vec![0.0; TILE_PX * 4];
     let mut stack: Vec<Px> = Vec::with_capacity(MAX_STACK);
     for i in 0..TILE_PX {
-        let v = exec(&prog.ops, [0.0; 4], i, &mut stack, prog.space);
+        let v = exec(&prog.ops, [0.0; 4], i, &mut stack, prog.space, prog.origin());
         out[i * 4..i * 4 + 4].copy_from_slice(&v);
     }
     out
@@ -838,13 +886,14 @@ pub fn run_split(prog: &TileProgram) -> Vec<f32> {
     let mut out = vec![0.0; TILE_PX * 4];
     let mut stack: Vec<Px> = Vec::with_capacity(MAX_STACK);
     for i in 0..TILE_PX {
-        let base = s.prefix.as_ref().map_or([0.0; 4], |p| exec(prog.at(&p.range), [0.0; 4], i, &mut stack, prog.space));
-        let mut v = exec(prog.at(&s.hot), base, i, &mut stack, prog.space);
+        let at = prog.origin();
+        let base = s.prefix.as_ref().map_or([0.0; 4], |p| exec(prog.at(&p.range), [0.0; 4], i, &mut stack, prog.space, at));
+        let mut v = exec(prog.at(&s.hot), base, i, &mut stack, prog.space, at);
         if let Some(sfx) = &s.suffix {
-            let img = exec(prog.at(&sfx.range), [0.0; 4], i, &mut stack, prog.space);
+            let img = exec(prog.at(&sfx.range), [0.0; 4], i, &mut stack, prog.space, at);
             v = blend_px_in(prog.space, BlendMode::Normal, v, img, 1.0);
         }
-        v = exec(prog.at(&s.tail), v, i, &mut stack, prog.space);
+        v = exec(prog.at(&s.tail), v, i, &mut stack, prog.space, at);
         out[i * 4..i * 4 + 4].copy_from_slice(&v);
     }
     out

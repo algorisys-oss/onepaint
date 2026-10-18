@@ -1015,8 +1015,9 @@ fn layers(app: &mut App, ui: &mut Ui) {
     ui.horizontal(|ui| {
         ui.label(RichText::new("Blend").color(t.fg_muted));
         let mut mode = node.blend_mode();
+        let modes: &[BlendMode] = if node.as_layer().is_some() { &BlendMode::LAYER_MODES } else { &BlendMode::GROUP_MODES };
         egui::ComboBox::from_id_salt("blend").selected_text(mode.label()).width(160.0).show_ui(ui, |ui| {
-            for m in BlendMode::LAYER_MODES {
+            for &m in modes {
                 ui.selectable_value(&mut mode, m, m.label());
             }
         });

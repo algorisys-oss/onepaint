@@ -2,7 +2,7 @@
 //! `paths` (verbatim JSON); the pixels are always their rendering.
 
 use super::*;
-use onepaint_compose::{StrokeMode, apply_stroke_px};
+use onepaint_compose::{StrokeMode, apply_stroke_px, apply_stroke_px_at};
 use onepaint_selection::{Mask, Mode, rasterize_polygons};
 use onepaint_stroke::bezier::{PathSpec, area_contours, flatten_subpath, simulated_pressure};
 
@@ -38,11 +38,11 @@ pub(crate) fn read_paths(l: &Layer) -> Vec<PathSpec> {
     l.extra.get("paths").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default()
 }
 
-fn composite_onto(dst: &mut Surface, src: &Surface, opacity: f32) {
-    composite_mode(dst, src, opacity, BlendMode::Normal);
+fn composite_onto(dst: &mut Surface, src: &Surface, opacity: f32, space: onepaint_color::Space) {
+    composite_mode(dst, src, opacity, BlendMode::Normal, space);
 }
 
-fn composite_mode(dst: &mut Surface, src: &Surface, opacity: f32, mode: BlendMode) {
+fn composite_mode(dst: &mut Surface, src: &Surface, opacity: f32, mode: BlendMode, space: onepaint_color::Space) {
     for (tx, ty) in src.tile_keys() {
         let Some(s) = src.tile(tx, ty) else { continue };
         let s = s.to_f32();
@@ -51,11 +51,15 @@ fn composite_mode(dst: &mut Surface, src: &Surface, opacity: f32, mode: BlendMod
             if s[i + 3] == 0.0 {
                 continue;
             }
-            let o = apply_stroke_px(
+            let p = (i / 4) as i32;
+            let o = apply_stroke_px_at(
+                space,
                 [d[i], d[i + 1], d[i + 2], d[i + 3]],
                 [s[i], s[i + 1], s[i + 2], s[i + 3]],
                 opacity,
                 StrokeMode::Paint(mode),
+                tx * TILE + p % TILE,
+                ty * TILE + p / TILE,
             );
             d[i..i + 4].copy_from_slice(&o);
         }
@@ -89,7 +93,7 @@ pub fn render_paths(specs: &[PathSpec], w: u32, h: u32, space: onepaint_color::S
                     .collect();
                 buf.write_rect(Rect::new(0, 0, w as i32, h as i32), &data);
                 buf.prune_empty();
-                composite_onto(&mut out, &buf, f.opacity.clamp(0.0, 1.0));
+                composite_onto(&mut out, &buf, f.opacity.clamp(0.0, 1.0), space);
             }
         }
         let Some(st) = &spec.stroke else { continue };
@@ -116,7 +120,7 @@ pub fn render_paths(specs: &[PathSpec], w: u32, h: u32, space: onepaint_color::S
             for d in &dabs {
                 eng.rasterize(&mut buf, d, None);
             }
-            composite_mode(&mut out, &buf, st.opacity.clamp(0.0, 1.0), brush.blend_mode());
+            composite_mode(&mut out, &buf, st.opacity.clamp(0.0, 1.0), brush.blend_mode(), space);
         }
     }
     out.prune_empty();
