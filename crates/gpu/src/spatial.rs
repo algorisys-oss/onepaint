@@ -59,6 +59,11 @@ fn kind_params(kind: Kind, p: &onepaint_filters::Params) -> Option<(u32, [f32; 4
             (4, [a.cos(), a.sin(), p.cell_size.unwrap_or(6.0).max(2.0), keep])
         }
         Kind::Crystallize => (5, [p.cell_size.unwrap_or(16.0).max(2.0), 0.0, 0.0, 0.0]),
+        Kind::LineArt => {
+            let line = if p.mono.unwrap_or(false) { 1.0 } else { 0.0 };
+            let strength = 1.0 + p.amount.unwrap_or(0.5) * 4.0;
+            (7, [p.radius.unwrap_or(1.0).max(1.0), p.threshold.unwrap_or(0.12), strength, line])
+        }
         _ => return None,
     })
 }
@@ -73,12 +78,14 @@ pub struct Job<'a> {
 
 pub struct SpatialPass {
     assemble: wgpu::ComputePipeline,
+    bright: wgpu::ComputePipeline,
     blur_region: wgpu::ComputePipeline,
     blur_out: wgpu::ComputePipeline,
     layout: wgpu::BindGroupLayout,
     /// Scratch images: the assembled region, and a blur pass's output.
     a: (wgpu::TextureView, wgpu::TextureView),
     b: (wgpu::TextureView, wgpu::TextureView),
+    c: (wgpu::TextureView, wgpu::TextureView),
     dummy_store: wgpu::TextureView,
     dummy_out: wgpu::TextureView,
     dummy_array: wgpu::TextureView,
@@ -179,11 +186,13 @@ impl SpatialPass {
         let storage = wgpu::TextureUsages::STORAGE_BINDING;
         Self {
             assemble: pipeline("assemble"),
+            bright: pipeline("bright"),
             blur_region: pipeline("blur_region"),
             blur_out: pipeline("blur_out"),
             layout,
             a: scratch(device, "spatial scratch a"),
             b: scratch(device, "spatial scratch b"),
+            c: scratch(device, "spatial scratch c"),
             dummy_store: tiny(device, wgpu::TextureFormat::Rgba32Float, storage, false),
             dummy_out: tiny(device, wgpu::TextureFormat::Rgba16Float, storage, true),
             dummy_array: tiny(device, wgpu::TextureFormat::Rgba16Float, sampled, true),
@@ -227,8 +236,13 @@ impl SpatialPass {
                 let t = p.angle.unwrap_or(0.0).to_radians();
                 (None, ([t.cos(), t.sin()], p.distance.unwrap_or(0.0) * scale), 0, 0.0)
             }
+            Kind::Bloom => {
+                let r = p.radius.unwrap_or(15.0) * scale;
+                (Some(([1.0, 0.0], r)), ([0.0, 1.0], r), 4, p.amount.unwrap_or(0.5))
+            }
             _ => (Some(([1.0, 0.0], 2.0 * scale)), ([0.0, 1.0], 2.0 * scale), 1, p.amount.unwrap_or(0.0) * 3.0),
         };
+        let k0 = if s.kind == Kind::Bloom { [p.threshold.unwrap_or(0.6), 0.0, 0.0, 0.0] } else { k0 };
         let prm = |dir: [f32; 2], radius: f32, mode: u32| Prm {
             region,
             tile: [s.tx * edge, s.ty * edge],
@@ -294,12 +308,19 @@ impl SpatialPass {
             );
             return;
         }
+        // Bloom blurs the light map (B, from A), not the source.
+        let blur_src = if s.kind == Kind::Bloom {
+            pass(&self.bright, prm([0.0; 2], 0.0, 0), [&self.dummy_array, &self.a.1, &self.b.0, &self.dummy_out, &self.a.1], size);
+            &self.b.1
+        } else {
+            &self.a.1
+        };
         let src = match first {
             Some((dir, r)) => {
-                pass(&self.blur_region, prm(dir, r, 0), [&self.dummy_array, &self.a.1, &self.b.0, &self.dummy_out, &self.a.1], size);
-                &self.b.1
+                pass(&self.blur_region, prm(dir, r, 0), [&self.dummy_array, blur_src, &self.c.0, &self.dummy_out, &self.a.1], size);
+                &self.c.1
             }
-            None => &self.a.1,
+            None => blur_src,
         };
         let (dir, r) = second;
         pass(&self.blur_out, prm(dir, r, mode), [&self.dummy_array, src, &self.dummy_store, cache_out, &self.a.1], [edge; 2]);

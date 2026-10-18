@@ -15,14 +15,15 @@ struct Prm {
     level: i32,
     // The backdrop grid: first tile column and row, columns.
     grid: vec3<i32>,
-    // 0 blur, 1 sharpen (combine with `orig`), 2 copy, 3 a per-pixel kind.
+    // 0 blur, 1 sharpen (combine with `orig`), 2 copy, 3 a per-pixel kind,
+    // 4 bloom (screen the blurred glow over `orig`).
     mode: u32,
     dir: vec2<f32>,
     radius: f32,
     amount: f32,
     out_slot: u32,
-    // The per-pixel kind (`filter_px`): 1 emboss, 2 mosaic, 3 ripple,
-    // 4 halftone, 5 crystallize.
+    // The per-pixel kind (`kind_px`): 1 emboss, 2 mosaic, 3 ripple,
+    // 4 halftone, 5 crystallize, 7 line art (Sobel).
     kind: u32,
     // 1 when values are sRGB (8-bit documents, spec 50).
     gamma: u32,
@@ -100,6 +101,21 @@ fn blur(x: f32, y: f32) -> vec4<f32> {
     return acc / max(wsum, 1e-4);
 }
 
+// BLOOM_BRIGHT_SRC over the region: the straight light map of what clears
+// the threshold (k0.x), read as stored (no `to_work`).
+@compute @workgroup_size(8, 8, 1)
+fn bright(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let l = vec2<i32>(gid.xy);
+    if (any(l >= prm.region.zw)) {
+        return;
+    }
+    let s = textureLoad(src, l, 0);
+    let rgb = clamp(unpremul(s), vec3<f32>(0.0), vec3<f32>(1.0));
+    let thr = prm.k0.x;
+    let k = smoothstep(thr, min(thr + 0.25, 1.0), dot(rgb, LUMA)) * select(1.0, 0.0, s.w < 0.0001);
+    textureStore(dst, l, vec4<f32>(rgb * k, 1.0));
+}
+
 @compute @workgroup_size(8, 8, 1)
 fn blur_region(@builtin(global_invocation_id) gid: vec3<u32>) {
     let l = vec2<i32>(gid.xy);
@@ -154,6 +170,12 @@ fn px(q: vec2<f32>) -> vec4<f32> {
 fn emboss_height(q: vec2<f32>) -> f32 {
     let t = px(q);
     return dot(to_work(t.xyz + 1.0 - t.w), LUMA);
+}
+
+// Line art's `lum`: luma, transparent = white.
+fn line_lum(t: vec4<f32>) -> f32 {
+    let l = dot(clamp(unpremul(t), vec3<f32>(0.0), vec3<f32>(1.0)), LUMA);
+    return select(l, 1.0, t.w < 0.0001);
 }
 
 fn hash2(p0: vec2<f32>) -> vec2<f32> {
@@ -222,6 +244,23 @@ fn kind_px(l: vec2<i32>, q: vec2<f32>) -> vec4<f32> {
             }
             return repremul(mix(vec3<f32>(1.0), dot_c, ink), a);
         }
+        case 7u: {
+            // Line art, Sobel: k0 = offset, threshold, strength, line.
+            let o = k0.x;
+            let tl = line_lum(px(q + vec2<f32>(-1.0, 1.0) * o));
+            let t = line_lum(px(q + vec2<f32>(0.0, 1.0) * o));
+            let tr = line_lum(px(q + vec2<f32>(1.0, 1.0) * o));
+            let lf = line_lum(px(q + vec2<f32>(-1.0, 0.0) * o));
+            let rt = line_lum(px(q + vec2<f32>(1.0, 0.0) * o));
+            let bl = line_lum(px(q + vec2<f32>(-1.0, -1.0) * o));
+            let b = line_lum(px(q + vec2<f32>(0.0, -1.0) * o));
+            let br = line_lum(px(q + vec2<f32>(1.0, -1.0) * o));
+            let gx = (tr + 2.0 * rt + br) - (tl + 2.0 * lf + bl);
+            let gy = (tl + 2.0 * t + tr) - (bl + 2.0 * b + br);
+            let mag = length(vec2<f32>(gx, gy)) * k0.z;
+            let a = clamp(smoothstep(k0.y, k0.y + 0.15, mag), 0.0, 1.0);
+            return vec4<f32>(vec3<f32>(k0.w * a), a);
+        }
         default: {
             // CRYSTALLIZE_SRC: Voronoi facets, seed 1; k0.x = cell.
             let cell = k0.x;
@@ -268,6 +307,12 @@ fn blur_out(@builtin(global_invocation_id) gid: vec3<u32>) {
             if (prm.mode == 1u) {
                 let a = textureLoad(orig, l, 0);
                 v = clamp(a + (a - v) * prm.amount, vec4<f32>(0.0), vec4<f32>(1.0));
+            } else if (prm.mode == 4u) {
+                // BLOOM_COMBINE_SRC: screen the glow over the source; alpha kept.
+                let s = textureLoad(orig, l, 0);
+                let base = to_work(unpremul(s));
+                let gl = to_work(clamp(v.xyz, vec3<f32>(0.0), vec3<f32>(1.0))) * prm.amount;
+                v = repremul(1.0 - (1.0 - base) * (1.0 - gl), s.w);
             }
         }
     }

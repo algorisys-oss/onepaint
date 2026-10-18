@@ -58,7 +58,15 @@ backdrop.
    tests; Gaussian blur, motion blur, sharpen on the GPU; engine wiring.
 2. The other kinds, each with its GPU pass checked against the oracle.
    - 2a ✓ emboss, mosaic, ripple, halftone, crystallize (one pass).
-   - 2b bloom, oil paint, line art (several passes over the region).
+   - 2b ✓ bloom (bright pass, blur, screen) and Sobel line art. XDoG line
+     art (two blurs) is next.
+   - Oil paint stays on the CPU: its quadrant choice turns on variances
+     that cancel to rounding noise, so a GPU picks another quadrant at
+     edges and pixels jump by whole values.
+   - Cell kinds (mosaic, halftone, crystallize) step at cell edges, where
+     WGSL's division (2.5 ulp) can put a pixel in the next cell; the tests
+     allow those pixels as they do Hard Mix's, crystallize ten times as
+     many (its site hash chains multiply-adds a GPU may fuse).
    - Not planned for the tile path: wind and glitch hash with `sin` of
      large arguments, which GPUs round differently (divergence 17), and the
      kinds with a whole-canvas reach (radial, spin, tilt-shift, iris and

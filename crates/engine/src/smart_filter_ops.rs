@@ -218,7 +218,7 @@ impl Session {
         let kind = onepaint_compose::spatial::spatial_kind(l)?;
         let params = l.adjustment.as_ref().map(|a| a.params.clone()).unwrap_or_default();
         let top = nodes.iter().any(|n| n.id() == l.id);
-        (top && onepaint_compose::spatial::gpu_kind(kind) && onepaint_filters::reach(kind, &params) <= onepaint_raster::TILE)
+        (top && onepaint_compose::spatial::gpu_supported(kind, &params) && onepaint_filters::reach(kind, &params) <= onepaint_raster::TILE)
             .then(|| l.id.clone())
     }
 

@@ -683,7 +683,7 @@ fn spatial_layers_match_the_rendered_document() {
     let tex = target(&device, w, h);
     let view = onepaint_gpu::mip::level_view(&tex, 0);
     let mut ran = 0;
-    for seed in 0..16 {
+    for seed in 0..24 {
         let doc = with_spatial(random_doc(seed, w, h, seed % 2 == 0), seed);
         let progs: Vec<TileProgram> = doc.bounds().tiles().filter_map(|(tx, ty)| plan_tile(&doc, tx, ty, None)).collect();
         // Stacked spatial layers stay on the CPU (spec 52, phase 1).
@@ -694,12 +694,75 @@ fn spatial_layers_match_the_rendered_document() {
         let before = gc.filters;
         gc.run(&device, &queue, &progs, &view, [w, h]);
         assert!(gc.filters > before, "seed {seed}: filters ran");
-        let (e, at) = max_error(&rendered(&doc), None, &read(&device, &queue, &tex));
-        assert!(e <= TOL, "seed {seed}: error {e} at {at:?}");
+        let kind = doc
+            .root
+            .iter()
+            .filter_map(|n| n.as_layer())
+            .find_map(|l| l.adjustment.as_ref().filter(|_| l.id == "spatial0"))
+            .map(|a| a.kind.clone());
+        // Mosaic, halftone and crystallize step at cell edges, where the GPU's
+        // division (2.5 ulp in WGSL) may put a pixel in the next cell.
+        // Crystallize's site hash chains multiply-adds the GPU may fuse, so
+        // its facet edges move by a hair: allow it ten times the share.
+        let gpu = read(&device, &queue, &tex);
+        let over = over_tolerance(&rendered(&doc), None, &gpu, TOL);
+        let share = if kind.as_deref() == Some("crystallize") { 1e-3 } else { STEP_OVER };
+        assert!(over as f64 <= (share * (w * h) as f64).ceil(), "seed {seed} ({kind:?}): {over} px over");
         // A second frame reuses the filtered tiles.
         let again = gc.filters;
         gc.run(&device, &queue, &progs, &view, [w, h]);
         assert_eq!(gc.filters, again, "seed {seed}: cached");
     }
-    assert!(ran >= 10, "{ran} documents ran on the GPU");
+    assert!(ran >= 16, "{ran} documents ran on the GPU");
+}
+
+/// Bloom and Sobel line art on content they act on strongly (the random
+/// documents rarely do): bright shapes, a low threshold, full intensity.
+#[test]
+fn bloom_and_line_art_layers_match_the_rendered_document() {
+    use onepaint_compose::spatial::rendered;
+    use onepaint_doc::Adjustment;
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let mut gc = GpuCompositor::new(&device, 64 << 20);
+    let (w, h) = (300, 300);
+    let tex = target(&device, w, h);
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
+    let mut base = Document::new(w, h, None);
+    let mut l = Layer::new("shapes");
+    for (x0, y0, c) in [(40, 40, [1.0, 0.9, 0.2, 1.0]), (150, 120, [0.2, 0.6, 1.0, 1.0]), (230, 230, [0.9, 0.9, 0.9, 1.0])] {
+        for y in y0..y0 + 50 {
+            for x in x0..x0 + 50 {
+                if x < w as i32 && y < h as i32 {
+                    l.pixels.set(x, y, c);
+                }
+            }
+        }
+    }
+    base.root = vec![Node::Layer(l)];
+    for (kind, params) in [
+        ("bloom", serde_json::json!({"threshold": 0.3, "amount": 1.0, "radius": 12.0})),
+        ("line-art", serde_json::json!({"lineMode": "sobel", "radius": 1.5, "threshold": 0.05, "amount": 0.8, "mono": true})),
+    ] {
+        let mut doc = base.clone();
+        if kind == "line-art" {
+            // A gentle ramp: the edge strength sits mid-way up the smoothstep.
+            let mut ramp = Layer::new("ramp");
+            for y in 0..h as i32 {
+                for x in 0..w as i32 {
+                    let v = 0.2 + 0.6 * x as f32 / w as f32 + 0.1 * (y as f32 / 40.0).sin();
+                    ramp.pixels.set(x, y, [v, v, v, 1.0]);
+                }
+            }
+            doc.root = vec![Node::Layer(ramp)];
+        }
+        let mut s = Layer::new(kind);
+        s.adjustment = Some(Box::new(Adjustment { kind: kind.into(), params: serde_json::from_value(params).unwrap() }));
+        doc.root.push(Node::Layer(s));
+        gc.run(&device, &queue, &programs(&doc, None), &view, [w, h]);
+        let (e, at) = max_error(&rendered(&doc), None, &read(&device, &queue, &tex));
+        assert!(e <= TOL, "{kind}: error {e} at {at:?}");
+    }
 }

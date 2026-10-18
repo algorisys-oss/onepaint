@@ -426,7 +426,8 @@ pub fn with_spatial(mut doc: Document, seed: u64) -> Document {
     let mut r = Rng::new(seed ^ 0x5ba7);
     {
         let i = 0;
-        let kinds = ["gaussian-blur", "motion-blur", "sharpen", "emboss", "mosaic", "ripple", "halftone", "crystallize"];
+        let kinds =
+            ["gaussian-blur", "motion-blur", "sharpen", "emboss", "mosaic", "ripple", "halftone", "crystallize", "line-art", "bloom"];
         let kind = kinds[r.below(kinds.len() as u32) as usize];
         let params = match kind {
             "gaussian-blur" => json!({"radius": 1.0 + r.f() * 40.0}),
@@ -436,6 +437,10 @@ pub fn with_spatial(mut doc: Document, seed: u64) -> Document {
             "ripple" => json!({"amplitude": r.f() * 30.0, "wavelength": 10.0 + r.f() * 100.0, "angle": r.f() * 360.0}),
             "halftone" => json!({"cellSize": 2.0 + r.f() * 20.0, "angle": r.f() * 90.0, "mono": r.chance(0.5)}),
             "crystallize" => json!({"cellSize": 2.0 + r.f() * 60.0}),
+            "line-art" => {
+                json!({"lineMode": "sobel", "radius": 1.0 + r.f() * 4.0, "threshold": r.f() * 0.3, "amount": r.f(), "mono": r.chance(0.5)})
+            }
+            "bloom" => json!({"threshold": r.f(), "amount": r.f(), "radius": 1.0 + r.f() * 40.0}),
             _ => json!({"amount": r.f()}),
         };
         let mut l = Layer::new(&format!("spatial{i}"));

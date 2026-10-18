@@ -684,7 +684,7 @@ impl Planner<'_> {
     fn spatial_content(&self, l: &Layer, kind: onepaint_filters::Kind, below: &[Node]) -> Result<Option<Content>, Unsupported> {
         let params = l.adjustment.as_ref().map(|a| a.params.clone()).unwrap_or_default();
         let r = onepaint_filters::reach(kind, &params);
-        if self.depth != 1 || !crate::spatial::gpu_kind(kind) || r > TILE {
+        if self.depth != 1 || !crate::spatial::gpu_supported(kind, &params) || r > TILE {
             return Err(Unsupported);
         }
         let (tx, ty) = (self.tx, self.ty);

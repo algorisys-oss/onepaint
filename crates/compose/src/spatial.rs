@@ -105,19 +105,24 @@ pub fn rendered(doc: &Document) -> Document {
 
 // ── The GPU path (spec 52) ──
 
-/// Kinds whose filter has a GPU pass.
-pub fn gpu_kind(kind: Kind) -> bool {
-    matches!(
-        kind,
+/// Whether the filter has a GPU pass with these params (line art only in
+/// its Sobel mode so far). Oil paint stays on the CPU: its quadrant choice
+/// turns on variances that cancel to rounding noise, so GPUs pick other
+/// quadrants at edges and pixels jump by whole values.
+pub fn gpu_supported(kind: Kind, p: &Params) -> bool {
+    match kind {
         Kind::GaussianBlur
-            | Kind::MotionBlur
-            | Kind::Sharpen
-            | Kind::Emboss
-            | Kind::Mosaic
-            | Kind::Ripple
-            | Kind::Halftone
-            | Kind::Crystallize
-    )
+        | Kind::MotionBlur
+        | Kind::Sharpen
+        | Kind::Emboss
+        | Kind::Mosaic
+        | Kind::Ripple
+        | Kind::Halftone
+        | Kind::Crystallize
+        | Kind::Bloom => true,
+        Kind::LineArt => p.line_mode.as_deref() != Some("xdog"),
+        _ => false,
+    }
 }
 
 /// A spatial layer's pixels on one tile, as a program computes them: its
