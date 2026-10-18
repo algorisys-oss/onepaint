@@ -5,106 +5,38 @@ then `docs/parity-delta-2026-10-18.md` (this run's list and decisions),
 `todo.md` and `AGENTS.md`. **Keep this file current after every step**, so a
 dropped session can resume from it.
 
-## Current run: happypaint v0.201.7 → v0.204.7 parity (2026-10-18)
-Rules for the run: commit locally per milestone, **do not push**; test with
-`RAYON_NUM_THREADS=2 cargo test -p X -j 2 -- --test-threads=2` (the user saw
-10 GB / all cores otherwise); build with
-`cargo -j 2` and test one crate at a time (RAM ~3 GB free, disk 95%).
+## State (2026-10-18, evening) — read this first
+Rules: commit **and push** per milestone (the user authorized pushing);
+test with `RAYON_NUM_THREADS=2 cargo test -p X -j 2 -- --test-threads=2`,
+one crate at a time (the user saw 10 GB / all cores otherwise); build with
+`cargo -j 2`; run `cargo clean` when free disk drops under 8 GB.
 
-Order (✓ done, ▶ in progress):
-1. ✓ Photoshop blend modes + Pass Through groups — `aaed348`.
-2. ✓ Knockout (v0.202.2) — committed.
-3. ✓ Mask density/feather + Blend If (v0.202.0) — c1c2d56 and the feather commit.
-4. ✓ Vector masks (v0.202.1) — committed.
-5. ✓ PSD `phfl` blocked on the Photo Filter kind (todo); pointer fix not applicable (no heal).
-6. ✓ UI: Mix colour grid, side sliders + typed values, Align on active layer.
+Done today, all pushed (newest last):
+- happypaint v0.204.7 parity: Knockout, mask density/feather, Blend If,
+  vector masks, Align on the active layer, Mix colour grid, side sliders
+  (details in `docs/parity-delta-2026-10-18.md`).
+- Exposure, Vibrance, Photo Filter, Channel Mixer (CPU, GPU, PSD, panels).
+- PSD: live Levels, Curves, Hue/Sat, Color Balance (midtones), B&W (kind
+  only), Gradient Map; untouched PSDs save back byte for byte and keep
+  untouched layers' records (spec 51).
+- 8-bit tiles in 8-bit GPU atlases (spec 49).
+- Spec 52, spatial adjustment layers on the GPU: Gaussian/motion blur,
+  sharpen, emboss, mosaic, ripple, halftone, crystallize, bloom, line art
+  (Sobel and XDoG), live when the layer is the document's only spatial
+  layer, at the top level or in isolated groups (`compose::spatial`,
+  `gpu::spatial` + `spatial.wgsl`, `Session::display_doc_gpu`).
 
-### Step 2, Knockout — done
-Semantics (happypaint `compositor.ts` `knockoutPunch`): before a knocked-out
-layer draws, `target = mix(target, reveal, content.a · opacity)`. Reveal =
-the Background snapshot at the top level, a Pass Through group's backdrop,
-or transparency in an isolated group. Stored in `extra["knockout"]`.
-Oracle `crates/compose/tests/knockout.rs`; GPU `OP_KNOCKOUT`/`OP_SNAPSHOT`;
-PSD `knko`; `LayerProps::knockout`; Properties select.
+Next (the user's order: recommended list, then robustness):
+1. Spec 52 3b: stacked spatial layers — filtered tiles in a texture of
+   their own, so the fill pass can read a lower layer's filtered tiles.
+2. Spec 52 whole-canvas kinds (radial/spin/tilt-shift/iris/field blur,
+   twirl, pinch, polar, chromatic) — needs its own design.
+3. Robustness (photocraft list, `todo.md` §2.1): working-set checks,
+   device-loss handling, a perf-budget gate.
 
-### Step 3, mask density/feather + Blend If — state
-Spec (happypaint `look-meta.ts`, `compositor.ts` MASKMUL :72, BLEND :375,
-`lookMask` :1668, `storage/psd/mask-params.ts`; docs/graphics/01 :307-334):
-- Layer-only fields `maskDensity` (0..1, absent=1), `maskFeather` (doc px,
-  absent=0), `blendIf` ([gray,R,G,B] of {src,dst} [bl,bh,wl,wh] 0..255,
-  absent=full [0,0,255,255]); omitted when default in `.happypaint`.
-- Mask: feather first = Gaussian σ = feather px (clamp to edge), then
-  `m' = 1 − d·(1 − m)`. Density doesn't touch the vector mask.
-- Blend If: on sRGB straight colour (doc converted), values rounded to
-  0..255, gray = .3R+.59G+.11B; weight = Π over gray,R,G,B of
-  w(src,Cs)·w(dst,Cb); w = 0 outside [bl,wh], ramps (v−bl)/(bh−bl) and
-  (wh−v)/(wh−wl). Multiplies src alpha (after opacity/mask, after
-  dissolve) before blending. Transparent backdrop → Cb = 0.
-  Ignored for clipped riders, clipped adjustments, inherit-alpha, groups;
-  a clip family's base applies it to the whole family; unclipped
-  adjustments honour it. Knockout punch ignores it. Merge Down honours all.
-- PSD: mask body byte 17 flags 0x10 → byte 18 `which`, then bit0 density u8,
-  bit1 feather f64 BE (bit2/3 vector ones). Blend ranges: 8 bytes/channel
-  (src4,dst4), gray first; RGB only. Tests in `mask-params.test.ts`.
-- UI (Properties, under Mask): Density 0–100 %, Feather 0–250 px step .5;
-  Blend If: channel select, Split, This Layer / Underlying Layer bars, Reset.
-
-Split into 3a (density + Blend If, per tile) and 3b (feather, spatial).
-3a progress (uncommitted):
-- ✓ `doc::look` (`BlendIf`, `ChannelRanges`, `mask_k`, Layer accessors, serde).
-- ✓ compose oracle (`blend_if_weight`, `blend_px_if`; tests `tests/look.rs`).
-- ✓ program: `Content::density`, `blend_if` on Layer/Pop/Adjust ops, Adjust
-  mask is a `MaskSrc`; Blend If units don't fold or occlude. testdocs adds
-  random looks (mutation check: 8 program tests fail without Blend If).
-- ✓ GPU: mode word `mode | (bif+1) << 8`, ranges in the adj table, density
-  in `d.w`. A Blend If unit at/above the hot one disables the split (its
-  steps flipped on the f16 prefix: 27–36 px over). All GPU suites green;
-  `lod.rs` drops Blend If like the other tone steps.
-- ✓ PSD mask params + blend ranges (writer/reader + test).
-- ✓ Engine LayerProps mask_density/mask_feather/blend_if (+ test).
-- ✓ App test `blend_if_unfolds_and_reset_clears_it`.
-- 3a committed (c1c2d56). 3b feather: `compose::feather` wired into the
-  oracle and planner (PlanCache, Weak-keyed), unfeathered while a mask
-  stroke runs, engine `mark_dirty` pads by the largest reach, Feather slider
-  back. All suites green; committed.
-- ✓ UI: Density slider, Blend If section (`ui_kit::range_bar`). Feather
-  slider held back until 3b renders it (code in scratchpad feather_ui.rs:
-  slider 0–250 px step .5, tooltip "Soften the mask's edges, without
-  changing the mask (Photoshop's Feather)").
-- TODO: range bar keyboard (arrows ±1, Shift ±10) — not done.
-
-### Step 4 done; Blend If bar keys done (arrows ±1, Shift ±10).
-
-### Run status (2026-10-18, evening)
-All six steps are done and committed locally (not pushed): 4e2116f Knockout,
-c1c2d56 density + Blend If, 9bad5ed feather, f19e6d5 vector masks,
-382840d Align, a442802 Mix grid, 0945a10 side sliders. Open: PSD `phfl`
-(needs the Photo Filter adjustment, `todo.md` new adjustments), the
-title-bar workspace decision, the licence question (delta doc).
-
-### Done: Exposure, Vibrance, Photo Filter, Channel Mixer (2026-10-18, committed)
-PSD live adjustments done too (levl curv hue2 blnc blwh grdm in
-`formats::psd_adjust`). 8-bit atlases done (spec 49 GPU note), pushed 25a4a5c.
-User chose both, in order. (a) PSD round trips done (spec 51). (b) next:
-spatial adjustment layers on the GPU (padded backdrop pass + per-kind
-compute shaders, Gaussian/motion blur and sharpen first). (8-bit atlases,
-spatial adjustments on the GPU), then photocraft robustness items.
-Pushed 14e05aa first. Spec (happypaint `adjustment-renderer.ts` :1048-1118,
-:2370-2401, `psd-map.ts` :206-234/:357-381, `psd/adjust-blocks.ts`):
-all run on sRGB-encoded 0..1 (toWork), input clamped.
-- exposure {exposure 0, expOffset 0, expGamma 1}: lin = srgb2lin(rgb);
-  lin = pow(max(lin·2^exp + off, 0), 1/max(.01,gamma)); o = lin2srgb(clamp01).
-- vibrance {vibrance 0, vibSaturation 0}: k = vib·(1 − (max−min));
-  rgb = mix(lum601, rgb, 1+k); lum601 of clamped; rgb = mix(lum, rgb, 1+sat).
-- photo-filter {filterColor [236,138,0]/255, filterDensity .25, preserveLum
-  true}: o = mix(rgb, rgb·f, d); keepLum → setLum(o, lum(.3,.59,.11) of rgb)
-  with ClipColor. Identity when density ≤ 0.
-- channel-mixer {mixRR/GG/BB 1, rest 0, mixMono false, mixKR .4 KG .4 KB .2
-  KC 0}: o = clamp(M·rgb + C); mono uses the K row for all three.
-- UI fields: Exposure −20..20 (.01), Offset −.5...5 (.001), Gamma .01..9.99;
-  Vibrance/Saturation −100..100 %; Colour, Density 0..100 %, Preserve
-  luminosity; Monochrome, "Red ← Red"… "Red constant" −200..200 %.
-- PSD: expA, vibA, phfl (v3 XYZ/32768 via MI, v2 colour), mixr.
+Open decisions for the user: workspace layout (happypaint's menu bar /
+title-bar header, divergences 41–42), licence (happypaint is PolyForm NC,
+onepaint AGPL), vector support scope.
 
 ## Earlier session (2026-10-10, evening, unattended)
 Items 1–5 from the earlier list; every step pushed as it landed.
