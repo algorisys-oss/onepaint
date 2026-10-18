@@ -170,6 +170,28 @@ struct Record {
     /// Blend If, as Photoshop's blend ranges (empty: none).
     ranges: Vec<u8>,
     extra: Vec<([u8; 4], Vec<u8>)>,
+    /// An untouched layer's original record and channel data, written as they are.
+    raw: Option<(Vec<u8>, Vec<Vec<u8>>)>,
+}
+
+impl Record {
+    fn raw(src: &crate::psd_source::PsdSource, r: &crate::psd_source::RawRecord) -> Self {
+        let b = &src.bytes;
+        Record {
+            rect: Rect::default(),
+            channels: Vec::new(),
+            key: *b"norm",
+            opacity: 255,
+            clipping: 0,
+            flags: 0,
+            name: String::new(),
+            mask: None,
+            mask_look: (1.0, 0.0),
+            ranges: Vec::new(),
+            extra: Vec::new(),
+            raw: Some((b[r.record.clone()].to_vec(), r.channels.iter().map(|c| b[c.clone()].to_vec()).collect())),
+        }
+    }
 }
 
 fn rle_channel(rows: &[Vec<u8>]) -> Vec<u8> {
@@ -285,6 +307,7 @@ fn layer_record(l: &Layer, doc: Rect, frame: onepaint_filters::Frame) -> Record 
         mask_look: (l.mask_density(), l.mask_feather()),
         ranges,
         extra,
+        raw: None,
     }
 }
 
@@ -301,16 +324,24 @@ fn empty_record(name: &str, key: [u8; 4], opacity: u8, flags: u8, lsct: Vec<u8>)
         mask_look: (1.0, 0.0),
         ranges: Vec::new(),
         extra: vec![(*b"lsct", lsct)],
+        raw: None,
     }
 }
 
-fn flatten(nodes: &[Node], doc: Rect, frame: onepaint_filters::Frame, out: &mut Vec<Record>) {
+/// The records for `nodes`, bottom up; a node `src` still matches reuses
+/// its original record.
+fn flatten(nodes: &[Node], doc: Rect, frame: onepaint_filters::Frame, src: Option<&crate::psd_source::PsdSource>, out: &mut Vec<Record>) {
     for n in nodes {
+        let raw = src.and_then(|s| s.record(n).map(|r| Record::raw(s, r)));
         match n {
-            Node::Layer(l) => out.push(layer_record(l, doc, frame)),
+            Node::Layer(l) => out.push(raw.unwrap_or_else(|| layer_record(l, doc, frame))),
             Node::Group(g) => {
                 out.push(empty_record("</Layer group>", *b"norm", 255, 0x08 | 0x10, 3u32.to_be_bytes().to_vec()));
-                flatten(&g.children, doc, frame, out);
+                flatten(&g.children, doc, frame, src, out);
+                if let Some(r) = raw {
+                    out.push(r);
+                    continue;
+                }
                 let mut lsct = 1u32.to_be_bytes().to_vec();
                 lsct.extend_from_slice(b"8BIM");
                 lsct.extend_from_slice(group_key_of(g.blend_mode));
@@ -340,10 +371,17 @@ pub fn write_psd(doc: &Document, composite: &[f32]) -> Result<Vec<u8>, FormatErr
     if doc.width > 30000 || doc.height > 30000 {
         return Err(bad("PSD is limited to 30000 px; PSB export is not supported yet"));
     }
+    // Opened from a PSD and not changed at all: the file as it was.
+    let src = crate::psd_source::PsdSource::of(doc);
+    if let Some(s) = src
+        && s.untouched(doc)
+    {
+        return Ok(s.bytes.to_vec());
+    }
     let bounds = doc.bounds();
     let mut records = Vec::new();
     let frame = onepaint_filters::Frame::region(0, 0, doc.width, doc.height, doc.dpi as f32).in_space(doc.space());
-    flatten(&doc.root, bounds, frame, &mut records);
+    flatten(&doc.root, bounds, frame, src, &mut records);
     let (w, h) = (doc.width as usize, doc.height as usize);
     let comp: Vec<[u8; 4]> = composite.chunks_exact(4).map(|p| doc.space().to_srgb8([p[0], p[1], p[2], p[3]])).collect();
     let has_alpha = comp.iter().any(|c| c[3] < 255);
@@ -357,8 +395,14 @@ pub fn write_psd(doc: &Document, composite: &[f32]) -> Result<Vec<u8>, FormatErr
     o.u16(8);
     o.u16(3);
     o.u32(0);
-    // Image resources: 1005 resolution info.
+    // Image resources: the original ones (guides, slices, ICC…) while the
+    // resolution is unchanged, else 1005 resolution info.
+    let resources = src.filter(|s| s.same_dpi(doc)).map(|s| &s.bytes[s.resources.clone()]);
     o.section(1, false, |r| {
+        if let Some(b) = resources {
+            r.bytes(b);
+            return;
+        }
         r.bytes(b"8BIM");
         r.u16(1005);
         r.u16(0);
@@ -375,6 +419,10 @@ pub fn write_psd(doc: &Document, composite: &[f32]) -> Result<Vec<u8>, FormatErr
         lm.section(4, true, |li| {
             li.i16(-(records.len() as i16));
             for rec in &records {
+                if let Some((bytes, _)) = &rec.raw {
+                    li.bytes(bytes);
+                    continue;
+                }
                 li.i32(rec.rect.y);
                 li.i32(rec.rect.x);
                 li.i32(rec.rect.bottom());
@@ -434,12 +482,20 @@ pub fn write_psd(doc: &Document, composite: &[f32]) -> Result<Vec<u8>, FormatErr
                 });
             }
             for rec in &records {
+                if let Some((_, chans)) = &rec.raw {
+                    chans.iter().for_each(|c| li.bytes(c));
+                    continue;
+                }
                 for (_, data) in &rec.channels {
                     li.bytes(data);
                 }
             }
         });
-        lm.u32(0);
+        // The global layer mask and file-wide additional info, kept from the original.
+        match src {
+            Some(s) => lm.bytes(&s.bytes[s.tail.clone()]),
+            None => lm.u32(0),
+        }
     });
     // Merged composite, RLE, partial alpha matted against white.
     o.u16(1);
@@ -532,6 +588,8 @@ struct RRec {
     mask_look: (f32, f32),
     blend_if: Option<onepaint_doc::BlendIf>,
     vector_mask: Option<onepaint_doc::VectorMask>,
+    /// Where the record and its channel data sit in the file.
+    raw: crate::psd_source::RawRecord,
 }
 
 fn decode_channel(c: &mut Cur, len: usize, w: usize, h: usize, depth: u16, psb: bool) -> Result<Vec<u8>, FormatError> {
@@ -712,6 +770,7 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
     doc.root.clear();
     doc.name = "Imported PSD".into();
     let ir = c.u32()? as usize;
+    let ir_start = c.p;
     let ir_end = c.p + ir;
     while c.p + 12 <= ir_end {
         if c.take(4)? != b"8BIM" {
@@ -731,6 +790,10 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
     let lm_len = c.len(psb)?;
     let lm_end = c.p + lm_len;
     let bounds = doc.bounds();
+    // An 8-bit RGB PSD is what onepaint writes: keep its records to save
+    // untouched layers back as they were.
+    let mut src = (depth == 8 && mode == 3 && !psb)
+        .then(|| crate::psd_source::PsdSource::new(std::sync::Arc::new(bytes.to_vec()), &doc, ir_start..ir_end, lm_end..lm_end));
     if lm_len > 0 {
         let li_len = c.len(psb)?;
         let li_end = c.p + li_len;
@@ -738,6 +801,7 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
             let count = c.i16()?.unsigned_abs() as usize;
             let mut recs = Vec::with_capacity(count);
             for _ in 0..count {
+                let rec_start = c.p;
                 let (top, left, bottom, right) = (c.i32()?, c.i32()?, c.i32()?, c.i32()?);
                 let n = c.u16()? as usize;
                 let mut channels = Vec::new();
@@ -894,12 +958,13 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                     mask_look,
                     blend_if,
                     vector_mask: vector_mask.filter(|_| !vector_fill),
+                    raw: crate::psd_source::RawRecord { record: rec_start..ex_end, channels: Vec::new() },
                 });
             }
             // Channel image data, record by record.
             let mut nodes_flat: Vec<(RRec, Option<Surface>, Option<Surface>)> = Vec::new();
             progress.set_total(recs.len() as u64);
-            for rec in recs {
+            for mut rec in recs {
                 progress.check()?;
                 let mut planes = Vec::new();
                 let mut mask_px = None;
@@ -909,7 +974,9 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                     } else {
                         (rec.rect.w.max(0) as usize, rec.rect.h.max(0) as usize)
                     };
+                    let at = c.p;
                     let data = decode_channel(&mut c, l, cw, ch, depth, psb)?;
+                    rec.raw.channels.push(at..at + l);
                     if id == -2 {
                         mask_px = Some(data);
                     } else {
@@ -938,7 +1005,12 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
             let mut stack: Vec<Vec<Node>> = vec![Vec::new()];
             for (rec, pixels, mask) in nodes_flat {
                 match rec.lsct.map(|l| l.0) {
-                    Some(3) => stack.push(Vec::new()),
+                    Some(3) => {
+                        if let Some(s) = src.as_mut() {
+                            s.divider();
+                        }
+                        stack.push(Vec::new())
+                    }
                     Some(1) | Some(2) => {
                         let children = if stack.len() > 1 { stack.pop().unwrap_or_default() } else { Vec::new() };
                         let mut g = Group::new(&rec.name);
@@ -946,6 +1018,9 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                         g.visible = rec.flags & 2 == 0;
                         g.opacity = rec.opacity as f32 / 255.0;
                         g.blend_mode = group_mode_of(&rec.lsct.and_then(|l| l.1).unwrap_or(rec.key));
+                        if let Some(s) = src.as_mut() {
+                            s.node(&g.id, rec.raw.clone());
+                        }
                         if let Some(top) = stack.last_mut() {
                             top.push(Node::Group(g));
                         }
@@ -972,6 +1047,9 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                             2 => Some(onepaint_doc::Knockout::Deep),
                             _ => None,
                         });
+                        if let Some(s) = src.as_mut() {
+                            s.node(&l.id, rec.raw.clone());
+                        }
                         if let Some(top) = stack.last_mut() {
                             top.push(Node::Layer(l));
                         }
@@ -987,6 +1065,9 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
             doc.root = stack.pop().unwrap_or_default();
         }
         c.p = li_end;
+        if let Some(s) = src.as_mut() {
+            s.tail = li_end..lm_end;
+        }
     }
     c.p = lm_end;
     if doc.root.is_empty() {
@@ -1018,6 +1099,10 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
         let mut l = Layer::new("Background");
         l.pixels = surface_from(&planes, bounds, gray, bounds);
         doc.root.push(Node::Layer(l));
+    }
+    if let Some(mut s) = src.filter(|s| s.has_records()) {
+        s.fingerprint(&doc.root);
+        doc.source = Some(std::sync::Arc::new(s));
     }
     Ok(doc)
 }

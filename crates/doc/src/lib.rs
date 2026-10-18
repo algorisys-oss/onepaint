@@ -504,6 +504,10 @@ pub struct Document {
     pub root: Vec<Node>,
     /// Unmodelled `doc` keys (paper, animation, guides, savedSelections…).
     pub extra: Extra,
+    /// The file the document was opened from, as its reader keeps it (a PSD's
+    /// original records, so untouched layers save back as they were). Never
+    /// saved; a format's writer downcasts it.
+    pub source: Option<std::sync::Arc<dyn std::any::Any + Send + Sync>>,
 }
 
 fn now_ms() -> f64 {
@@ -541,6 +545,7 @@ impl Document {
             updated_at: now,
             root,
             extra: Extra::new(),
+            source: None,
         }
     }
 
@@ -558,6 +563,7 @@ impl Document {
             updated_at: self.updated_at,
             root: Vec::new(),
             extra: Extra::new(),
+            source: self.source.clone(),
         }
     }
 

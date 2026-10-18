@@ -340,3 +340,19 @@ fn merging_keeps_the_lower_layers_mask_off_its_pixels() {
     assert!(l.mask.is_some());
     assert_eq!(l.pixels.get(100, 100), [0.5, 0.25, 0.125, 1.0]);
 }
+
+#[test]
+fn an_opened_psd_saves_back_unchanged_until_edited() {
+    let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../formats/tests/fixtures/agpsd.psd")).unwrap();
+    let mut s = new_session();
+    s.open_psd(&bytes, "agpsd.psd").unwrap();
+    assert!(s.export_psd().unwrap() == bytes, "untouched");
+    // Undoable edits don't count once undone: the same tiles come back.
+    let id = s.active().to_string();
+    s.execute(Command::SetLayerProps { id, props: LayerProps { opacity: Some(0.3), ..Default::default() } }).unwrap();
+    assert!(s.export_psd().unwrap() != bytes);
+    s.execute(Command::Undo).unwrap();
+    assert!(s.export_psd().unwrap() == bytes, "undone");
+    draw_line(&mut s, 20.0);
+    assert!(s.export_psd().unwrap() != bytes);
+}

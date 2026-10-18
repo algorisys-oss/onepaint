@@ -197,3 +197,55 @@ fn adjustment_layers_survive_a_psd_round_trip() {
         assert_eq!(l.adjustment.as_ref().map(|a| a.kind.as_str()), Some(k));
     }
 }
+
+fn find(hay: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty() && hay.windows(needle.len()).any(|w| w == needle)
+}
+
+#[test]
+fn an_untouched_psd_saves_back_byte_for_byte() {
+    // A file another program wrote, and one onepaint wrote.
+    let agpsd = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/agpsd.psd")).unwrap();
+    let mut d = Document::new(40, 30, Some(Rgba::WHITE));
+    let mut l = Layer::new("Box");
+    fill(&mut l.pixels, 5, 5, 10, 10, Rgba::new(1.0, 0.0, 0.0, 1.0).to_linear_premul());
+    d.root.push(Node::Layer(l));
+    let ours = write_psd(&d, &vec![1.0f32; 40 * 30 * 4]).unwrap();
+    for bytes in [agpsd, ours] {
+        let doc = read_psd(&bytes).unwrap();
+        let flat = vec![0.5f32; (doc.width * doc.height * 4) as usize];
+        assert!(write_psd(&doc, &flat).unwrap() == bytes, "untouched round trip changed the file");
+    }
+}
+
+#[test]
+fn edits_rewrite_only_the_changed_layers() {
+    let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/agpsd.psd")).unwrap();
+    let mut doc = read_psd(&bytes).unwrap();
+    let flat = vec![0.5f32; (doc.width * doc.height * 4) as usize];
+    // Paint on "Red box" (a new tile), rename the folder.
+    if let Node::Layer(l) = &mut doc.root[1] {
+        l.pixels.set(30, 20, [0.0, 0.0, 1.0, 1.0]);
+    }
+    if let Node::Group(g) = &mut doc.root[2] {
+        g.name = "Renamed".into();
+    }
+    let out = write_psd(&doc, &flat).unwrap();
+    assert!(out != bytes);
+    // The untouched "Background" and "Masked" records are in the new file as they were.
+    let fresh = read_psd(&bytes).unwrap();
+    let src = onepaint_formats::psd_source::PsdSource::of(&fresh).unwrap();
+    for i in [0, 3] {
+        let rec = src.record_bytes(&fresh.root[i]).unwrap();
+        assert!(find(&out, rec), "{} kept", fresh.root[i].name());
+    }
+    // The edits read back.
+    let back = read_psd(&out).unwrap();
+    let names: Vec<&str> = back.root.iter().map(|n| n.name()).collect();
+    assert_eq!(names, vec!["Background", "Red box", "Renamed", "Masked"]);
+    let red = back.root[1].as_layer().unwrap();
+    assert!(red.pixels.get(30, 20)[2] > 0.99, "{:?}", red.pixels.get(30, 20));
+    assert!(red.pixels.get(10, 10)[0] > 0.99);
+    // A document not from a PSD writes as before (no source).
+    assert!(Document::new(8, 8, None).source.is_none());
+}
