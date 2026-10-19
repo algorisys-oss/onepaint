@@ -31,9 +31,10 @@ fn scene(oil: bool, tilt: [f32; 2], paper: Option<onepaint_doc::Paper>) -> Fluid
         dry: 0.0,
         grain_thr: 0.0,
         halo: 1.0,
+        rot: 0.0,
     };
-    s.deposit(&(0..50).map(|i| dab(80.0 + i as f64 * 3.0, 100.0, [0.02, 0.1, 0.7], 6.0)).collect::<Vec<_>>(), None);
-    s.deposit(&(0..20).map(|i| dab(160.0, 70.0 + i as f64 * 3.0, [0.9, 0.75, 0.02], 0.0)).collect::<Vec<_>>(), None);
+    s.deposit(&(0..50).map(|i| dab(80.0 + i as f64 * 3.0, 100.0, [0.02, 0.1, 0.7], 6.0)).collect::<Vec<_>>(), None, None);
+    s.deposit(&(0..20).map(|i| dab(160.0, 70.0 + i as f64 * 3.0, [0.9, 0.75, 0.02], 0.0)).collect::<Vec<_>>(), None, None);
     s
 }
 

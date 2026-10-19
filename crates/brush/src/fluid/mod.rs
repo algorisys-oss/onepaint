@@ -17,7 +17,9 @@ pub mod dab;
 mod step;
 
 pub use backend::{StepBackend, StepJob};
-pub use dab::{ClockState, DabAmounts, Fluid, WetClock, dab_amounts, dry_brush, dry_grain_threshold, reservoir};
+pub use dab::{
+    ClockState, DabAmounts, Fluid, WetClock, WetTipForm, dab_amounts, dry_brush, dry_grain_threshold, reservoir, wet_dab_rotation,
+};
 
 use onepaint_color::pigment::pigment_mix;
 use onepaint_raster::{Rect, Surface, TILE, Tile};
@@ -58,6 +60,62 @@ pub struct WetDab {
     pub grain_thr: f64,
     /// Water reaches `radius · halo` (≥ 1; spec 58).
     pub halo: f64,
+    /// The tip's rotation (radians), for a shaped [`WetTip`].
+    pub rot: f64,
+}
+
+/// The brush tip a live stroke deposits through (happypaint v0.195.3,
+/// `tipCoverage`): an image mask, squashed by roundness, or the round
+/// dab squashed. `None` per stroke = the plain disc.
+#[derive(Clone, Debug)]
+pub struct WetTip {
+    pub mask: Option<std::sync::Arc<crate::TipMask>>,
+    /// Minor / major axis, 0.05..1.
+    pub roundness: f32,
+}
+
+impl WetTip {
+    /// The tip and its orientation for a brush, or `None` for a plain round
+    /// tip (`resolveWetTip`).
+    pub fn of(b: &crate::BrushPreset) -> Option<(WetTip, WetTipForm)> {
+        let mask = match crate::tip_for(&b.tip_id) {
+            crate::Tip::Image(m) => Some(m),
+            _ => None,
+        };
+        let roundness = match b.tip_roundness {
+            Some(r) if r.is_finite() => r.clamp(0.05, 1.0),
+            _ => 1.0,
+        };
+        if mask.is_none() && roundness >= 1.0 {
+            return None;
+        }
+        let rotation = b.dynamics.as_ref().and_then(|d| d.rotation.as_ref());
+        let form = WetTipForm {
+            source: rotation.map(|r| r.source.clone()),
+            offset: rotation.and_then(|r| r.offset).unwrap_or(0.0).to_radians(),
+            angle: -b.tip_angle_deg.unwrap_or(0.0).to_radians(),
+            tilt_strength: b.tilt_strength,
+        };
+        Some((WetTip { mask, roundness: roundness as f32 }, form))
+    }
+}
+
+/// A dab's coverage at local (lx, ly) (dab radii), turned by `rot`:
+/// through the tip, or the round falloff from `soft` (`tipCoverage`).
+fn tip_coverage(tip: Option<&WetTip>, lx: f64, ly: f64, rot: f64, soft: f32) -> f32 {
+    let Some(tip) = tip else { return 1.0 - smoothstep(soft, 1.0, lx.hypot(ly) as f32) };
+    let (c, s) = (rot.cos(), rot.sin());
+    let tx = lx * c + ly * s;
+    let ty = (-lx * s + ly * c) / f64::from(tip.roundness.max(0.05));
+    match &tip.mask {
+        Some(m) => {
+            if tx.abs() > 1.0 || ty.abs() > 1.0 {
+                return 0.0;
+            }
+            m.sample(tx * 0.5 + 0.5, ty * 0.5 + 0.5)
+        }
+        None => 1.0 - smoothstep(soft, 1.0, tx.hypot(ty) as f32),
+    }
 }
 
 /// Colours this close mix to themselves within 8-bit precision: skip KM.
@@ -302,8 +360,9 @@ impl FluidSim {
 
     /// Lay down a batch of dabs: drag the wet state along the brush, lift
     /// re-wetted paint off `layer`, then water (MAX) and pigment (source-over,
-    /// KM pre-mixed with the paint under it). Returns the doc rect touched.
-    pub fn deposit(&mut self, dabs: &[WetDab], layer: Option<&mut Surface>) -> Rect {
+    /// KM pre-mixed with the paint under it), shaped by `tip`. Returns the
+    /// doc rect touched.
+    pub fn deposit(&mut self, dabs: &[WetDab], tip: Option<&WetTip>, layer: Option<&mut Surface>) -> Rect {
         if dabs.is_empty() {
             return Rect::default();
         }
@@ -397,7 +456,7 @@ impl FluidSim {
             for y in y0..y1 {
                 for x in x0..x1 {
                     let (lx, ly) = ((x as f64 + 0.5 - cx) / r, (y as f64 + 0.5 - cy) / r);
-                    let cov = (1.0 - smoothstep(0.55, 1.0, lx.hypot(ly) as f32)) * d.water as f32 * self.dry_gate(x, y, d);
+                    let cov = tip_coverage(tip, lx, ly, d.rot, 0.55) * d.water as f32 * self.dry_gate(x, y, d);
                     let s = &mut self.sim[(y * w + x) as usize];
                     s[0] = s[0].max(cov);
                 }
@@ -419,7 +478,7 @@ impl FluidSim {
             for y in y0..y1 {
                 for x in x0..x1 {
                     let (lx, ly) = ((x as f64 + 0.5 - cx) / d.radius, (y as f64 + 0.5 - cy) / d.radius);
-                    let cov = (1.0 - smoothstep(0.45, 1.0, lx.hypot(ly) as f32)) * d.pigment as f32 * self.dry_gate(x, y, d);
+                    let cov = tip_coverage(tip, lx, ly, d.rot, 0.45) * d.pigment as f32 * self.dry_gate(x, y, d);
                     if cov <= 0.0 {
                         continue;
                     }

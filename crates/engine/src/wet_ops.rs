@@ -21,6 +21,10 @@ pub(crate) struct WetStroke {
     last: Option<(f64, f64)>,
     /// Path length so far; the reservoir empties with it.
     travel: f64,
+    /// The brush tip the dabs take, and its orientation (spec 58 B).
+    tip: Option<(fluid::WetTip, fluid::WetTipForm)>,
+    /// Stroke direction (radians), held through sub-pixel moves.
+    dir_angle: f64,
 }
 
 /// Wet paint on one layer, not yet committed to history.
@@ -162,6 +166,8 @@ impl Session {
             transforms: self.symmetry_transforms(),
             last: None,
             travel: 0.0,
+            tip: fluid::WetTip::of(&self.brush),
+            dir_angle: 0.0,
         });
         self.wet_deposit(&first);
     }
@@ -215,9 +221,14 @@ impl Session {
             if dl > 1e-3 {
                 (dir_x, dir_y) = (dx / dl, dy / dl);
             }
+            if dl > 0.25 {
+                ws.dir_angle = dy.atan2(dx);
+            }
+            let rot = ws.tip.as_ref().map_or(0.0, |(_, form)| fluid::wet_dab_rotation(form, ws.dir_angle, p.twist, p.tilt_x, p.tilt_y));
             (px, py) = (p.x, p.y);
             let (vx, vy) = (dir_x * speed, dir_y * speed);
-            let mut push = |x: f64, y: f64, vx: f64, vy: f64| {
+            let shaped = ws.tip.is_some();
+            let mut push = |x: f64, y: f64, vx: f64, vy: f64, rot: f64| {
                 dabs.push(WetDab {
                     x,
                     y,
@@ -231,6 +242,7 @@ impl Session {
                     dry,
                     grain_thr,
                     halo: ws.fluid.halo(),
+                    rot,
                 });
                 if ws.impasto > 0.0 {
                     relief.push(HeightDab { x, y, radius, amount: ws.impasto * 0.12 * (0.4 + 0.6 * pressure) });
@@ -238,13 +250,13 @@ impl Session {
                 s.grow(x, y, radius * ws.fluid.halo());
             };
             if ws.transforms.is_empty() {
-                push(p.x, p.y, vx, vy);
+                push(p.x, p.y, vx, vy, rot);
             } else {
                 // Mirrored strokes shove their paint the mirrored way.
                 for tf in &ws.transforms {
                     let (tx, ty) = tf.apply(p.x, p.y);
                     let (tx2, ty2) = tf.apply(p.x + vx, p.y + vy);
-                    push(tx, ty, tx2 - tx, ty2 - ty);
+                    push(tx, ty, tx2 - tx, ty2 - ty, if shaped { tf.map_angle(rot) } else { 0.0 });
                 }
             }
         }
@@ -252,7 +264,8 @@ impl Session {
         let rewet = ws.fluid.rewet > 0.0;
         let layer_id = s.layer.clone();
         let layer = if rewet { self.doc.layer_mut(&layer_id).map(|l| &mut l.pixels) } else { None };
-        let r = s.sim.deposit(&dabs, layer);
+        let tip = self.wet_stroke.as_ref().and_then(|w| w.tip.as_ref()).map(|(t, _)| t);
+        let r = s.sim.deposit(&dabs, tip, layer);
         s.clock.deposit_water(max_water);
         s.preview = s.sim.preview();
         let sim_rect = s.sim.rect();

@@ -92,6 +92,32 @@ pub fn dab_amounts(f: &Fluid, pressure: f64, reservoir: f64) -> DabAmounts {
     }
 }
 
+/// The brush's tip orientation, as the dry stamp reads it (happypaint
+/// `WetTipForm`): the dynamics rotation source (absent = pen-tilt azimuth),
+/// its offset and the static tip angle (radians, y-down), and tilt strength.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WetTipForm {
+    pub source: Option<String>,
+    pub offset: f64,
+    pub angle: f64,
+    pub tilt_strength: f64,
+}
+
+/// A live dab's tip rotation (radians), matching the dry stamp's: the
+/// source (stroke direction, barrel twist in degrees, pen-tilt azimuth or
+/// none) plus its offset and the tip angle (`wetDabRotation`). No jitter
+/// or spin: a recorded stroke replays exactly.
+pub fn wet_dab_rotation(form: &WetTipForm, dir_angle: f64, twist: f64, tilt_x: f64, tilt_y: f64) -> f64 {
+    let rot = match form.source.as_deref() {
+        Some("angle") => dir_angle,
+        Some("twist") => twist.rem_euclid(360.0) / 360.0 * std::f64::consts::TAU,
+        Some("none") => 0.0,
+        _ if form.tilt_strength > 0.0 && tilt_x.hypot(tilt_y) >= 1e-4 => tilt_y.atan2(tilt_x),
+        _ => 0.0,
+    };
+    rot + form.offset + form.angle
+}
+
 /// Dryness bookkeeping from counts, never readbacks: deterministic.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct WetClock {
@@ -187,6 +213,28 @@ mod tests {
         assert_eq!(dab_amounts(&oil, 0.5, 0.25), dab_amounts(&oil, 0.5, 1.0));
         let water = Fluid { water: 1.6, rewet: 0.9, ..Default::default() };
         assert!(close(dab_amounts(&water, 0.7, 0.3).rewet, 0.9 * (0.35 + 0.65 * 0.7) * 0.08, 1e-9));
+    }
+
+    // happypaint wet-dab.test.ts `wetDabRotation`.
+    #[test]
+    fn a_live_dab_turns_like_the_dry_stamp() {
+        use std::f64::consts::PI;
+        let f = |source: Option<&str>, offset: f64, angle: f64, tilt: f64| WetTipForm {
+            source: source.map(String::from),
+            offset,
+            angle,
+            tilt_strength: tilt,
+        };
+        let pen = (90.0, 0.5, 0.5);
+        let r = |form: &WetTipForm, dir: f64, p: (f64, f64, f64)| wet_dab_rotation(form, dir, p.0, p.1, p.2);
+        assert!(close(r(&f(Some("angle"), 0.0, 0.0, 0.0), 1.2, pen), 1.2, 1e-9));
+        assert!(close(r(&f(Some("angle"), 0.3, -0.5, 0.0), 1.2, pen), 1.0, 1e-9));
+        assert!(close(r(&f(Some("twist"), 0.0, 0.0, 0.0), 0.0, pen), PI / 2.0, 1e-9));
+        assert!(close(r(&f(Some("twist"), 0.0, 0.0, 0.0), 0.0, (-90.0, 0.5, 0.5)), 1.5 * PI, 1e-9));
+        assert!(close(r(&f(None, 0.0, 0.0, 0.5), 2.0, pen), PI / 4.0, 1e-9));
+        assert_eq!(r(&f(None, 0.0, 0.0, 0.0), 2.0, pen), 0.0);
+        assert!(close(r(&f(None, 0.0, 0.2, 0.5), 2.0, (0.0, 0.0, 0.0)), 0.2, 1e-9));
+        assert!(close(r(&f(Some("none"), 0.0, 0.7, 1.0), 2.0, pen), 0.7, 1e-9));
     }
 
     #[test]

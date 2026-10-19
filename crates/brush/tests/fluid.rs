@@ -6,12 +6,12 @@ use onepaint_raster::{Rect, Surface};
 const DOC: Rect = Rect::new(0, 0, 400, 300);
 
 fn dab(x: f64, y: f64, water: f64, pigment: f64, color: [f32; 3]) -> WetDab {
-    WetDab { x, y, radius: 20.0, water, pigment, color, vx: 0.0, vy: 0.0, rewet: 0.0, dry: 0.0, grain_thr: 0.0, halo: 1.0 }
+    WetDab { x, y, radius: 20.0, water, pigment, color, vx: 0.0, vy: 0.0, rewet: 0.0, dry: 0.0, grain_thr: 0.0, halo: 1.0, rot: 0.0 }
 }
 
 fn stroke(sim: &mut FluidSim, y: f64, water: f64, pigment: f64, color: [f32; 3]) {
     let dabs: Vec<_> = (0..40).map(|i| dab(150.0 + i as f64 * 2.5, y, water, pigment, color)).collect();
-    sim.deposit(&dabs, None);
+    sim.deposit(&dabs, None, None);
 }
 
 fn layer_mass(l: &Surface) -> f64 {
@@ -108,7 +108,7 @@ fn rewet_lifts_dried_paint_back_into_suspension() {
     // One dab moves mass exactly (overlapping dabs all lift from the
     // pre-batch layer, as in happypaint).
     let dabs = [WetDab { rewet: 0.9 * 0.8 * 0.08, ..dab(200.0, 150.0, 2.4, 0.0, [0.0; 3]) }];
-    sim.deposit(&dabs, Some(&mut layer));
+    sim.deposit(&dabs, None, Some(&mut layer));
     let lifted = before - layer_mass(&layer);
     assert!(lifted > 1.0, "paint left the layer");
     assert!((sim.suspended_mass() - lifted).abs() < lifted * 0.01, "and went into suspension");
@@ -133,7 +133,7 @@ fn the_simulation_is_deterministic_and_drags_with_the_brush() {
         let mut sim = FluidSim::new(DOC, Rect::new(140, 130, 140, 40), false);
         stroke(&mut sim, 150.0, 2.0, 0.4, [0.3, 0.3, 0.9]);
         let push: Vec<_> = (0..20).map(|i| WetDab { vx: 8.0, ..dab(160.0 + i as f64 * 4.0, 150.0, 0.0, 0.0, [0.0; 3]) }).collect();
-        sim.deposit(&push, None);
+        sim.deposit(&push, None, None);
         let mut layer = Surface::new();
         steps(&mut sim, &mut layer, 30);
         (layer.read_rect(DOC), sim.preview().read_rect(sim.rect()))
@@ -146,7 +146,7 @@ fn the_simulation_is_deterministic_and_drags_with_the_brush() {
 #[test]
 fn a_halo_wets_past_the_pigment() {
     let mut sim = FluidSim::new(DOC, Rect::new(150, 120, 100, 60), false);
-    sim.deposit(&[WetDab { halo: 1.5, ..dab(200.0, 150.0, 2.0, 0.6, [0.1, 0.2, 0.8]) }], None);
+    sim.deposit(&[WetDab { halo: 1.5, ..dab(200.0, 150.0, 2.0, 0.6, [0.1, 0.2, 0.8]) }], None, None);
     // 25 px out: past the 20 px radius, inside the 30 px halo.
     let (w, a) = sim.at(225, 150);
     assert!(w > 0.5 && a == 0.0, "water {w}, pigment {a}");
@@ -154,7 +154,7 @@ fn a_halo_wets_past_the_pigment() {
     assert_eq!(w, 0.0);
     // No halo: no water past the radius.
     let mut plain = FluidSim::new(DOC, Rect::new(150, 120, 100, 60), false);
-    plain.deposit(&[dab(200.0, 150.0, 2.0, 0.6, [0.1, 0.2, 0.8])], None);
+    plain.deposit(&[dab(200.0, 150.0, 2.0, 0.6, [0.1, 0.2, 0.8])], None, None);
     assert_eq!(plain.at(225, 150).0, 0.0);
     // The preset's field: absent = 1, clamped to 1..3.
     let f: Fluid = serde_json::from_str(r#"{"water":1.6,"pigment":0.65}"#).unwrap();
@@ -171,7 +171,7 @@ fn damp_paint_stays_put_and_soaking_paint_spreads() {
     // Water 3 px past the dab's 20 px radius after a second.
     let past_edge = |water: f64| {
         let mut sim = FluidSim::new(DOC, Rect::new(150, 120, 100, 60), false);
-        sim.deposit(&[dab(200.0, 150.0, water, 0.5, [0.1, 0.2, 0.8])], None);
+        sim.deposit(&[dab(200.0, 150.0, water, 0.5, [0.1, 0.2, 0.8])], None, None);
         let mut layer = Surface::new();
         steps(&mut sim, &mut layer, 60);
         sim.at(223, 150).0
@@ -180,4 +180,49 @@ fn damp_paint_stays_put_and_soaking_paint_spreads() {
     assert!(damp < 1e-3, "a damp patch stays inside its dab: {damp}");
     // Dry paper drinks the front: before v0.199 this reached ~1.5.
     assert!(soaking > 0.05 && soaking < 0.5, "a soaking one spreads, slowly: {soaking}");
+}
+
+/// Spec 58 B (happypaint v0.195.3): live dabs take the brush tip. A
+/// squashed tip lays a squashed dab, turned by the dab's rotation; an image
+/// tip lays its own shape.
+#[test]
+fn live_dabs_take_the_tip() {
+    let wet = |tip: Option<&WetTip>, rot: f64, x: i32, y: i32| {
+        let mut sim = FluidSim::new(DOC, Rect::new(150, 120, 100, 60), false);
+        sim.deposit(&[WetDab { rot, ..dab(200.0, 150.0, 2.0, 0.6, [0.1, 0.2, 0.8]) }], tip, None);
+        sim.at(x, y)
+    };
+    let flat = WetTip { mask: None, roundness: 0.3 };
+    // 12 px off-centre: inside the round dab, outside the squashed one (6 px half-height)…
+    assert!(wet(None, 0.0, 200, 162).0 > 0.5);
+    assert_eq!(wet(Some(&flat), 0.0, 200, 162), (0.0, 0.0));
+    assert!(wet(Some(&flat), 0.0, 212, 150).1 > 0.0, "still long across");
+    // …and turned a quarter, the other way round.
+    assert!(wet(Some(&flat), std::f64::consts::FRAC_PI_2, 200, 162).1 > 0.0);
+    assert_eq!(wet(Some(&flat), std::f64::consts::FRAC_PI_2, 212, 150), (0.0, 0.0));
+    // An image tip: nothing outside its square, its own coverage inside.
+    let mask = std::sync::Arc::new(onepaint_brush::TipMask { size: 2, data: vec![1.0, 1.0, 0.0, 0.0] });
+    let half = WetTip { mask: Some(mask), roundness: 1.0 };
+    assert!(wet(Some(&half), 0.0, 200, 140).0 > 1.0, "top half wet");
+    assert_eq!(wet(Some(&half), 0.0, 200, 160).0, 0.0, "bottom half dry");
+}
+
+/// Which brushes shape their live dabs (`resolveWetTip`): image tips and
+/// squashed tips; a plain round tip keeps the disc.
+#[test]
+fn the_tip_a_live_brush_paints_with() {
+    let mut b = onepaint_brush::preset("watercolor-live-wet").unwrap();
+    b.tip_id = "round".into();
+    b.tip_roundness = None;
+    assert!(WetTip::of(&b).is_none());
+    b.tip_roundness = Some(0.4);
+    b.tip_angle_deg = Some(30.0);
+    let (tip, form) = WetTip::of(&b).unwrap();
+    assert!(tip.mask.is_none() && tip.roundness == 0.4);
+    assert!((form.angle + 30f64.to_radians()).abs() < 1e-12, "degrees counter-clockwise, y down");
+    b.tip_roundness = Some(-3.0);
+    assert_eq!(WetTip::of(&b).unwrap().0.roundness, 0.05);
+    b.tip_roundness = None;
+    b.tip_id = "bristle".into();
+    assert!(WetTip::of(&b).unwrap().0.mask.is_some());
 }

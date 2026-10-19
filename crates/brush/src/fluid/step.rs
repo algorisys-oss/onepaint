@@ -385,9 +385,10 @@ mod tests {
                 dry: 0.0,
                 grain_thr: 0.0,
                 halo: 1.0,
+                rot: 0.0,
             })
             .collect();
-        sim.deposit(&dabs, None);
+        sim.deposit(&dabs, None, None);
         let mut layer = Surface::new();
         for _ in 0..30 {
             let r = sim.rect();

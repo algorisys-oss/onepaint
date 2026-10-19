@@ -1,8 +1,9 @@
 # 58: Wet physics, v0.195.3–v0.199
 
 ## Status
-Phase A built (2026-10-19): paper absorbs and the water halo, in the CPU
-step (the oracle) and the GPU step. Phases B (tip-shaped dabs) and C
+Phases A and B built (2026-10-19): paper absorbs and the water halo, in
+the CPU step (the oracle) and the GPU step; live dabs take the brush tip
+(`fluid::WetTip`, `wet_dab_rotation`; deposits are CPU-only). Phase C
 (wash fill) to come; D is not needed (below).
 
 ## Source
@@ -28,9 +29,15 @@ sim-rect shrinking).
 - `wetModel`: new drawings are stamped 2 (`CURRENT_WET_MODEL`); like
   happypaint, every drawing runs the current physics.
 
-## B. Tip-shaped dabs (to come)
-Water and pigment deposits take the brush tip (image mask, roundness,
-angle with its rotation source); `wetDabRotation` and its tests.
+## B. Tip-shaped dabs
+Water and pigment deposits take the brush tip: the local position turns
+by the dab's rotation, its minor axis divides by the roundness (0.05..1),
+and an image tip's mask is sampled over its square; other tips keep the
+round falloff (water 0.55, pigment 0.45), squashed. Drag, re-wet lift and
+relief stay round. The rotation is the dry stamp's source (stroke
+direction held through moves under 0.25 px, twist, pen tilt or none)
+plus its offset and the tip angle, no jitter or spin; symmetry maps it.
+A plain round tip keeps the disc.
 
 ## C. Wash fill (to come)
 The Fill tool's Wash: a chamfer distance field from the tap
