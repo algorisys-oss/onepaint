@@ -232,6 +232,77 @@ pub fn rotation_dial(ui: &mut Ui, angle: &mut f32, size: f32, tooltip: &str) -> 
     if tooltip.is_empty() { resp } else { resp.on_hover_text(tooltip) }
 }
 
+/// Snap step for [`angle_dial`] with Shift held.
+pub const DIAL_SNAP_DEG: f64 = 15.0;
+
+/// The angle (degrees counter-clockwise from pointing right, 0..360) of the
+/// offset (dx, dy) from a dial's centre, y down; snapped to 15° with
+/// `snap`; `None` at the centre (happypaint `dialAngleDeg`).
+pub fn dial_angle_deg(dx: f64, dy: f64, snap: bool) -> Option<f64> {
+    if dx == 0.0 && dy == 0.0 {
+        return None;
+    }
+    let deg = (-dy).atan2(dx).to_degrees();
+    let step = if snap { DIAL_SNAP_DEG } else { 1.0 };
+    Some(((deg / step).round() * step).rem_euclid(360.0))
+}
+
+/// A brush-angle dial (happypaint `angle-dial.tsx`): drag to point it
+/// (Shift snaps 15°), double-click resets to 0, arrows step 1° (15° with
+/// Shift), Home resets. `deg` is counter-clockwise from right, 0..360.
+pub fn angle_dial(ui: &mut Ui, deg: &mut f64, size: f32, tooltip: &str) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let (rect, mut resp) = ui.allocate_exact_size(vec2(size, size), Sense::click_and_drag());
+    let v = *deg;
+    resp.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), v, tooltip));
+    let c = rect.center();
+    let shift = ui.input(|i| i.modifiers.shift);
+    let mut target = None;
+    if resp.double_clicked() {
+        target = Some(0.0);
+    } else if (resp.dragged() || resp.drag_started())
+        && let Some(p) = resp.interact_pointer_pos()
+    {
+        target = dial_angle_deg(f64::from(p.x - c.x), f64::from(p.y - c.y), shift);
+    }
+    if resp.clicked() || resp.drag_started() {
+        resp.request_focus();
+    }
+    if resp.has_focus() {
+        let filter = egui::EventFilter { horizontal_arrows: true, vertical_arrows: true, ..Default::default() };
+        ui.memory_mut(|m| m.set_focus_lock_filter(resp.id, filter));
+        let step = if shift { DIAL_SNAP_DEG } else { 1.0 };
+        let (up, down, home) = ui.input(|i| {
+            (
+                i.key_pressed(egui::Key::ArrowUp) || i.key_pressed(egui::Key::ArrowRight),
+                i.key_pressed(egui::Key::ArrowDown) || i.key_pressed(egui::Key::ArrowLeft),
+                i.key_pressed(egui::Key::Home),
+            )
+        });
+        if home {
+            target = Some(0.0);
+        } else if up || down {
+            target = Some(*deg + if up { step } else { -step });
+        }
+    }
+    if let Some(d) = target.map(|d| d.rem_euclid(360.0))
+        && (d - *deg).abs() > 1e-9
+    {
+        *deg = d;
+        resp.mark_changed();
+    }
+    let r = size / 2.0 - 1.0;
+    let hot = resp.hovered() || resp.dragged() || resp.has_focus();
+    let p = ui.painter();
+    p.circle_stroke(c, r, Stroke::new(1.25, if hot { t.fg_muted } else { t.border }));
+    let a = (*deg as f32).to_radians();
+    let dir = vec2(a.cos(), -a.sin());
+    let k = r - 2.5;
+    p.line_segment([c - dir * k, c + dir * k], Stroke::new(1.25, t.fg_faint));
+    p.circle_filled(c + dir * k, 2.0, if hot { t.accent } else { t.fg_muted });
+    if tooltip.is_empty() { resp } else { resp.on_hover_text(tooltip) }
+}
+
 /// A thin progress track: filled to `fraction`, or an accent segment
 /// sweeping across while the amount is unknown (`None`).
 pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>, width: f32) -> Response {
@@ -519,4 +590,23 @@ pub fn curve_editor(ui: &mut Ui, points: &mut Vec<[f64; 2]>, size: f32, tint: Co
         ui.painter().circle_stroke(c, 4.5, Stroke::new(1.0, Color32::from_black_alpha(140)));
     }
     changed
+}
+
+#[cfg(test)]
+mod dial_tests {
+    use super::dial_angle_deg;
+
+    // happypaint angle-dial.test.ts.
+    #[test]
+    fn the_dial_reads_counter_clockwise_from_right() {
+        let d = |x: f64, y: f64, snap| dial_angle_deg(x, y, snap);
+        assert_eq!(
+            [d(10.0, 0.0, false), d(0.0, -10.0, false), d(-10.0, 0.0, false), d(0.0, 10.0, false)],
+            [Some(0.0), Some(90.0), Some(180.0), Some(270.0)]
+        );
+        assert_eq!((d(10.0, -10.0, false), d(10.0, 10.0, false)), (Some(45.0), Some(315.0)));
+        assert_eq!((d(10.0, -1.9, false), d(10.0, -1.9, true)), (Some(11.0), Some(15.0)));
+        assert_eq!(d(10.0, 0.5, true), Some(0.0), "357° snaps round to 0, not 360");
+        assert_eq!(d(0.0, 0.0, false), None);
+    }
 }

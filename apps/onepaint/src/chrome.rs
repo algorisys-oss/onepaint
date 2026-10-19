@@ -459,8 +459,9 @@ fn brushes(app: &mut App, ui: &mut Ui) {
         onepaint_brush::presets()
     };
     let mut delete = None;
-    // Fit the list below the top bar so the popover never overlaps it.
-    let room = (ui.ctx().content_rect().height() - ui.cursor().top() - 300.0).clamp(120.0, 360.0);
+    // Fit the list below the top bar so the popover never overlaps it: the
+    // footer below takes ~330 px (files, Size, Opacity, Flow, Angle, studio).
+    let room = (ui.ctx().content_rect().height() - ui.cursor().top() - 330.0).clamp(120.0, 360.0);
     egui::ScrollArea::vertical().max_height(room).show(ui, |ui| {
         for p in list.into_iter().filter(|p| if eraser { p.is_eraser() } else { p.category == category }) {
             let sel = p.id == current;
@@ -520,6 +521,7 @@ fn brushes(app: &mut App, ui: &mut Ui) {
     if widgets::slider_row(ui, "Flow", &mut flow, 0.01..=1.0, |v| format!("{:.0}%", v * 100.0)).changed() {
         let _ = app.session.execute(Command::SetBrushFlow { flow: flow as f64 });
     }
+    brush_angle(app, ui);
     ui.add_space(6.0);
     if widgets::secondary_button(ui, "Brush studio…", ui.available_width()).on_hover_text("Edit every setting and try the brush").clicked()
     {
@@ -1370,6 +1372,34 @@ fn saved_selections(app: &mut App, ui: &mut Ui, has: bool) {
                 }
             });
         });
+    }
+}
+
+/// The brush's tip angle (happypaint's options-row dial): the dial and the
+/// degrees; it does nothing while the brush is wet (the mixer shapes its
+/// own dab), so it shows dimmed then.
+fn brush_angle(app: &mut App, ui: &mut Ui) {
+    use onepaint_brush::studio::Param;
+    let t = Tokens::get(ui.ctx());
+    let mut b = app.session.current_brush().clone();
+    let wet = Param::Wetness.get(&b) > 0.0;
+    let mut deg = Param::Angle.get(&b);
+    let tip = if wet {
+        "Brush angle — no effect while Wet is above 0 (the wet mixer shapes its own dab)"
+    } else {
+        "Brush angle — drag the dial (Shift snaps 15°, double-click resets) or Shift+[ · Shift+]"
+    };
+    let changed = ui
+        .horizontal(|ui| {
+            ui.label(RichText::new("Angle").color(if wet { t.fg_faint } else { t.fg_muted }));
+            let r = widgets::angle_dial(ui, &mut deg, 22.0, tip).changed();
+            ui.label(RichText::new(format!("{deg:.0}°")).font(theme::mono(12.0)).color(if wet { t.fg_faint } else { t.fg }));
+            r
+        })
+        .inner;
+    if changed {
+        Param::Angle.set(&mut b, deg);
+        let _ = app.session.execute(Command::SetBrushPreset { preset: Box::new(b) });
     }
 }
 

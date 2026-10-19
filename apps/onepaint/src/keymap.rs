@@ -78,6 +78,8 @@ actions! {
     DocPrevTab = "doc-prev-tab", "Previous open drawing", Documents, ["ctrl+alt+arrowleft"];
     BrushSizeDown = "brush-size-down", "Brush size down", Brush, ["["];
     BrushSizeUp = "brush-size-up", "Brush size up", Brush, ["]"];
+    BrushAngleDown = "brush-angle-down", "Brush angle −15°", Brush, ["{"];
+    BrushAngleUp = "brush-angle-up", "Brush angle +15°", Brush, ["}"];
     ToggleFillShape = "toggle-fill-shape", "Fill mode (silhouette)", Brush, ["f"];
     ColorSwap = "color-swap", "Swap foreground / background colour", Brush, ["x"];
     ColorReset = "color-reset", "Reset colours to black & white", Brush, ["d"];
@@ -128,6 +130,8 @@ const SYMBOLS: &[(Key, &str)] = &[
     (Key::Period, "."),
     (Key::OpenBracket, "["),
     (Key::CloseBracket, "]"),
+    (Key::OpenCurlyBracket, "{"),
+    (Key::CloseCurlyBracket, "}"),
     (Key::Equals, "="),
     (Key::Minus, "-"),
     (Key::Plus, "+"),

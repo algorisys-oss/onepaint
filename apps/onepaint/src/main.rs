@@ -1329,6 +1329,17 @@ impl App {
                 let _ = self.session.execute(Command::SetBrushSize { size: (s / 1.15).floor().max(1.0) });
                 self.canvas.size_flash = 1.0;
             }
+            // Shift+[ / Shift+]: the tip angle ∓15° (brush-like tools only).
+            let angled = matches!(self.session.tool(), Tool::Brush | Tool::Eraser | Tool::Smudge | Tool::Mixer | Tool::Shape);
+            for (action, step) in [(Action::BrushAngleDown, -15.0), (Action::BrushAngleUp, 15.0)] {
+                if angled && on(action) {
+                    use onepaint_brush::studio::Param;
+                    let mut b = self.session.current_brush().clone();
+                    let deg = Param::Angle.get(&b) + step;
+                    Param::Angle.set(&mut b, deg);
+                    let _ = self.session.execute(Command::SetBrushPreset { preset: Box::new(b) });
+                }
+            }
             if on(Action::BrushSizeUp) {
                 let s = self.session.current_brush().size;
                 let _ = self.session.execute(Command::SetBrushSize { size: (s * 1.15).ceil() });
@@ -2008,6 +2019,25 @@ mod tests {
         key(&mut h, egui::Key::I, egui::Modifiers::NONE);
         click(&mut h, pos2(600.0, 400.0));
         assert_eq!(h.state().session.color().to_hex(), "#ff0000");
+    }
+
+    /// Shift+[ / Shift+] turn the brush tip 15° (wrapping), plain [ / ] still size it.
+    #[test]
+    fn shift_brackets_turn_the_brush() {
+        let mut h = harness();
+        h.run();
+        let angle = |h: &Harness<'_, App>| h.state().session.current_brush().tip_angle_deg;
+        let size = h.state().session.current_brush().size;
+        // Shift+[ and Shift+] arrive as { and } (US layout), as in happypaint.
+        key(&mut h, egui::Key::OpenCurlyBracket, egui::Modifiers::SHIFT);
+        assert_eq!(angle(&h), Some(345.0));
+        key(&mut h, egui::Key::CloseCurlyBracket, egui::Modifiers::SHIFT);
+        key(&mut h, egui::Key::CloseCurlyBracket, egui::Modifiers::SHIFT);
+        assert_eq!(angle(&h), Some(15.0));
+        assert_eq!(h.state().session.current_brush().size, size, "size untouched");
+        key(&mut h, egui::Key::CloseBracket, egui::Modifiers::NONE);
+        assert!(h.state().session.current_brush().size > size);
+        assert_eq!(angle(&h), Some(15.0));
     }
 
     /// Spec 58 C: with Wash on, the Fill tool lays a wet wash instead of a flat fill.
