@@ -128,7 +128,20 @@ fn regions(c: &mut Criterion) {
             })
         });
     }
+    // A click on a stroke: the region is one band, not the page.
+    g.bench_function("wand, contiguous, on a stroke", |b| {
+        b.iter(|| {
+            let cmd = Command::SelectByColor { x: 400, y: 323, tolerance: 0.2, mode: Mode::Replace, contiguous: true, sample_all: true };
+            s.execute(black_box(cmd)).unwrap();
+        })
+    });
     s.execute(Command::Deselect).unwrap();
+    g.bench_function("paint bucket on a stroke", |b| {
+        b.iter(|| {
+            s.execute(black_box(Command::Fill { x: 400, y: 323, tolerance: 0.2, grow: 0 })).unwrap();
+            s.execute(Command::Undo).unwrap();
+        })
+    });
     g.bench_function("paint bucket", |b| {
         b.iter(|| {
             s.execute(black_box(Command::Fill { x: 50, y: 50, tolerance: 0.2, grow: 0 })).unwrap();

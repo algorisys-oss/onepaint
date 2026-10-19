@@ -63,7 +63,23 @@ impl Session {
                 self.commit_selection(Some(m));
             }
             Command::SelectByColor { x, y, tolerance, mode, contiguous, sample_all } => {
-                let region = if sample_all {
+                let region = if sample_all && contiguous {
+                    // Composite only the tiles the region reaches, as `flatten` would.
+                    let doc = self.flatten_doc();
+                    let ov = self.overlay();
+                    let cols = w.div_ceil(TILE as u32);
+                    let tiles: Vec<std::sync::OnceLock<Vec<f32>>> =
+                        (0..cols * h.div_ceil(TILE as u32)).map(|_| std::sync::OnceLock::new()).collect();
+                    let t = TILE as u32;
+                    let get = |px: u32, py: u32| {
+                        let (tx, ty) = (px / t, py / t);
+                        let b = tiles[(ty * cols + tx) as usize]
+                            .get_or_init(|| onepaint_compose::composite_tile(&doc, tx as i32, ty as i32, ov.as_ref()));
+                        let i = (((py % t) * t + px % t) * 4) as usize;
+                        [b[i], b[i + 1], b[i + 2], b[i + 3]]
+                    };
+                    color_match(w, h, &get, x, y, tolerance, true, None)
+                } else if sample_all {
                     let flat = self.flatten();
                     let get = |px: u32, py: u32| {
                         let i = ((py * w + px) * 4) as usize;

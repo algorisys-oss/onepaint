@@ -365,6 +365,16 @@ pub fn color_match(
     }
     let seed = get(sx, sy);
     let tol = tol.clamp(0.0, 1.0) + 1e-6;
+    let test = |x: u32, y: u32| {
+        inside(x, y) && {
+            let p = get(x, y);
+            (0..4).all(|c| (p[c] - seed[c]).abs() <= tol)
+        }
+    };
+    if contiguous {
+        // Only the blocks the region reaches are ever tested.
+        return Some(flood(&mut LazyHits::new(w, h, &test), sx, sy));
+    }
     let mut hits = Mask::new(w, h);
     hits.data.par_chunks_mut(w as usize).enumerate().for_each(|(y, row)| {
         let y = y as u32;
@@ -378,18 +388,96 @@ pub fn color_match(
             }
         }
     });
-    if !contiguous {
-        return Some(hits);
-    }
-    Some(flood(&hits, sx, sy))
+    Some(hits)
 }
 
-/// The 4-connected region of `hits` holding (sx, sy): scanline spans, each
+/// Hit tests in 64² blocks, each run the first time the flood reads it;
+/// once a big share is needed (a region spanning much of the canvas), the
+/// rest run at once, in parallel.
+struct LazyHits<'a> {
+    w: usize,
+    h: usize,
+    cols: usize,
+    blocks: Vec<Option<Box<[bool]>>>,
+    made: usize,
+    test: &'a (dyn Fn(u32, u32) -> bool + Sync),
+    /// Every hit, row-major, once all blocks are in (read directly).
+    flat: Option<Vec<bool>>,
+}
+
+const BLOCK: usize = 64;
+
+impl<'a> LazyHits<'a> {
+    fn new(w: u32, h: u32, test: &'a (dyn Fn(u32, u32) -> bool + Sync)) -> Self {
+        let (w, h) = (w as usize, h as usize);
+        let cols = w.div_ceil(BLOCK);
+        Self { w, h, cols, blocks: vec![None; cols * h.div_ceil(BLOCK)], made: 0, test, flat: None }
+    }
+
+    fn block(&self, bx: usize, by: usize) -> Box<[bool]> {
+        let mut v = vec![false; BLOCK * BLOCK].into_boxed_slice();
+        for j in 0..BLOCK.min(self.h - by * BLOCK) {
+            for i in 0..BLOCK.min(self.w - bx * BLOCK) {
+                v[j * BLOCK + i] = (self.test)((bx * BLOCK + i) as u32, (by * BLOCK + j) as u32);
+            }
+        }
+        v
+    }
+
+    #[inline]
+    fn hit(&mut self, x: usize, y: usize) -> bool {
+        if let Some(f) = &self.flat {
+            return f[y * self.w + x];
+        }
+        let (bx, by) = (x / BLOCK, y / BLOCK);
+        let at = by * self.cols + bx;
+        if self.blocks[at].is_none() {
+            if self.made * 8 > self.blocks.len() {
+                self.fill_all();
+                return self.hit(x, y);
+            } else {
+                self.blocks[at] = Some(self.block(bx, by));
+                self.made += 1;
+            }
+        }
+        self.blocks[at].as_ref().is_some_and(|b| b[(y % BLOCK) * BLOCK + x % BLOCK])
+    }
+
+    /// Every block not yet tested, in parallel.
+    fn fill_all(&mut self) {
+        use rayon::prelude::*;
+        let cols = self.cols;
+        let made: Vec<(usize, Box<[bool]>)> = (0..self.blocks.len())
+            .into_par_iter()
+            .filter(|&i| self.blocks[i].is_none())
+            .map(|i| (i, self.block(i % cols, i / cols)))
+            .collect();
+        self.made += made.len();
+        for (i, b) in made {
+            self.blocks[i] = Some(b);
+        }
+        // All in: lay them out flat for the rest of the flood.
+        let (w, h) = (self.w, self.h);
+        let mut flat = vec![false; w * h];
+        for (i, b) in self.blocks.iter().enumerate() {
+            let Some(b) = b else { continue };
+            let (x0, y0) = ((i % cols) * BLOCK, (i / cols) * BLOCK);
+            let bw = BLOCK.min(w - x0);
+            for j in 0..BLOCK.min(h - y0) {
+                flat[(y0 + j) * w + x0..(y0 + j) * w + x0 + bw].copy_from_slice(&b[j * BLOCK..j * BLOCK + bw]);
+            }
+        }
+        self.blocks = Vec::new();
+        self.flat = Some(flat);
+    }
+}
+
+/// The 4-connected region of hits holding (sx, sy): scanline spans, each
 /// pixel visited once.
-fn flood(hits: &Mask, sx: u32, sy: u32) -> Mask {
-    let (w, h) = (hits.w as usize, hits.h as usize);
-    let hit = |x: usize, y: usize| hits.data[y * w + x] != 0;
-    let mut m = Mask::new(hits.w, hits.h);
+fn flood(hits: &mut LazyHits, sx: u32, sy: u32) -> Mask {
+    let (w, h) = (hits.w, hits.h);
+    let mut hit = |x: usize, y: usize| hits.hit(x, y);
+    let mut m = Mask::new(w as u32, h as u32);
     let mut stack = vec![(sx as usize, sy as usize)];
     while let Some((x, y)) = stack.pop() {
         if m.data[y * w + x] != 0 || !hit(x, y) {

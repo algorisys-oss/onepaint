@@ -691,13 +691,19 @@ impl Session {
     /// Flattened canvas as premultiplied f32 in the document's space
     /// (linear light, or sRGB values in 8-bit documents; spec 50).
     pub fn flatten(&self) -> Vec<f32> {
+        onepaint_compose::flatten(&self.flatten_doc(), self.overlay().as_ref())
+    }
+
+    /// The document [`Self::flatten`] composites: smart filters applied and
+    /// spatial adjustment layers rendered.
+    pub(crate) fn flatten_doc(&self) -> std::borrow::Cow<'_, onepaint_doc::Document> {
         if self.has_smart_filters() || Self::has_spatial_adjustments(&self.doc.root) {
             let mut d = self.doc.clone();
             self.apply_smart_filters(&mut d.root);
             self.render_spatial_adjustments(&mut d.root, true);
-            return onepaint_compose::flatten(&d, self.overlay().as_ref());
+            return std::borrow::Cow::Owned(d);
         }
-        onepaint_compose::flatten(&self.doc, self.overlay().as_ref())
+        std::borrow::Cow::Borrowed(&self.doc)
     }
 
     /// Eyedropper: the composite colour at a canvas pixel, or `None` outside the

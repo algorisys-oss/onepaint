@@ -139,7 +139,7 @@ fn grow_within_dilates_four_connected() {
 /// search, on random blobs with holes, spirals and U-turns.
 #[test]
 fn contiguous_wand_matches_a_plain_flood() {
-    let (w, h) = (97u32, 61u32);
+    let (w, h) = (150u32, 131u32);
     for seed in 0..40u64 {
         let mut s = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         let mut rnd = || {

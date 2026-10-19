@@ -213,7 +213,12 @@ an item changes there, change it here too.
       feather 30 px 0.64 → 0.25 s, grow 10 px 0.57 → 0.20 s. Next: the
       separable passes are memory-bound (64 MiB transposes); a band-wise
       vertical pass, and reading the wand's composite from the GPU instead
-      of flattening
+      of flattening. The contiguous wand and the bucket now test only the
+      64² blocks the region reaches (all at once, in parallel, past an
+      eighth of the page), and the sample-all wand composites only those
+      tiles: a click on a stroke 36 ms (wand) and 43 ms (bucket), from
+      ~470. Re-measure the whole-page cases on a quiet machine (the
+      2026-10-20 runs had a load average of 21)
 
 ### 2.3 Platforms
 - [x] Linux (X11 and Wayland)
