@@ -30,6 +30,12 @@ pub enum Command {
     MergeDown {
         id: NodeId,
     },
+    /// An opaque colour over the whole layer, relief and off-canvas pixels
+    /// gone (happypaint `fillLayerSolid`; Apply paper colour, spec 57).
+    FillLayerSolid {
+        id: NodeId,
+        rgba: Rgba,
+    },
     /// The layer's styles become its pixels (spec 56).
     BakeStyles {
         id: NodeId,

@@ -48,7 +48,7 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] All 118 presets, including Manga and the baked Procreate brushes, with identical parameters (all 124 load with verbatim parameters, tips and grains, and every preset field is painted: wet, impasto, settle, fluid, dual brush, colour tips, grain movement)
 - [x] Dynamics: pressure, tilt, twist and velocity mapped to size, opacity and flow (hardware pressure, tilt and twist arrive from the tablet backends, see Input)
 - [x] Velocity-synthesized pressure for devices without hardware pressure
-- [x] Document paper (spec 36): Smooth, Rough, Fine grain, Canvas, Linen with texture scale; dry brushes bite the tooth by their paper response, the canvas and exports show it, wet paint soaks and granulates into it
+- [x] Document paper (specs 36, 57): Smooth, the ten procedural papers in millimetres (Cold Press, Hot Press, Rough, Khadi, Washi, Laid, Canvas, Toned Sand, Kraft, Student) with their sheet colours, mottle and flecks, Linen, and the classic papers for older documents; texture scale; Apply paper colour to Background; dry brushes bite the tooth by their paper response, the canvas and exports show it, wet paint soaks and granulates into it
 - [x] Computed and sampled tips (happypaint's generators baked to PNG)
 - [x] Grain texture, with movement (spec 37)
 - [x] Fill shape mode (F): a brush stroke fills its outline, with symmetry

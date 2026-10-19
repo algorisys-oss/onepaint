@@ -54,8 +54,13 @@ Overnight (2026-10-18 → 19), all pushed, newest last:
   baking styles; PSD effects both ways (`psd_effects`, `psd_desc`). User presets
   (`style_presets.rs`, `styles.json`) and `.asl` import (`formats::asl`)
   and gradient-overlay stop editing (`ui_kit::gradient_stops`) done:
-  spec 56 is complete. Next: the remaining parity items (wet physics
-  v0.199, procedural papers, workspace UI).
+  spec 56 is complete.
+- Spec 57, procedural papers: done. `brush::paper_field` (matches
+  happypaint's tiles byte for byte, one texel aside), `paper-<kind>`
+  grains in mm through the DPI, mottle and flecks on CPU and GPU (the GPU
+  paper texture is RGBA32F), presets with legacy ids, Apply paper colour
+  (`FillLayerSolid`), `ONEPAINT_PAPER=khadi` for screenshots. Next: wet
+  physics v0.199, then the workspace UI.
 - `scripts/bench-gate/gate.sh save|check`: the perf-budget gate for
   AGENTS.md's 5% rule, on criterion's saved baselines (checked: the 9
   engine hot-path benches came out within 5% of themselves).

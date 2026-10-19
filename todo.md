@@ -233,7 +233,7 @@ See `docs/parity-delta-2026-10-10.md`.
       already round-trip untouched)
 - [ ] PSD codec parity (modes, 32-bit, round trip, live adjustments, fills, styles)
 - [ ] Wet physics v0.199 (paper absorbs, halo, wash fill, tip-shaped dabs)
-- [ ] Ten procedural papers, sheet colour, flecks and mottle
+- [x] Ten procedural papers, sheet colour, flecks and mottle (spec 57)
 - [ ] Workspace: menu bar, options row, left tool rail, side-slider extras,
       scrollbars, angle dial, in-app dialogs, manual, brush search
 - [x] Refresh stale divergences (1, 3, 6, 15, 41), spec 15, feature-parity.md

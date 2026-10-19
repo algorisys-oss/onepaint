@@ -443,8 +443,11 @@ impl App {
     pub fn new_document(&mut self, w: u32, h: u32) {
         let id = self.session.doc().id.clone();
         self.autosave.clear(&id);
-        let mut doc = onepaint_doc::Document::new_in(w, h, Some(Rgba::WHITE), self.new_depth);
-        doc.set_paper(onepaint_doc::PAPER_PRESETS.get(self.new_paper).and_then(|p| p.paper()));
+        // The Background takes the paper's sheet colour (spec 57).
+        let preset = onepaint_doc::PAPER_PRESETS.get(self.new_paper);
+        let bg = preset.and_then(|p| p.tint).and_then(Rgba::from_hex).unwrap_or(Rgba::WHITE);
+        let mut doc = onepaint_doc::Document::new_in(w, h, Some(bg), self.new_depth);
+        doc.set_paper(preset.and_then(|p| p.paper()));
         self.session.replace_document(doc);
         self.canvas.reset_for([w, h]);
         self.path = None;
@@ -1780,15 +1783,26 @@ mod tests {
         h.get_by_label("Rough").click();
         h.run();
         let p = h.state().session.doc().paper().unwrap();
-        assert_eq!(p.grain_id, "rough-tooth");
+        assert_eq!(p.grain_id, "paper-rough");
         assert!(h.query_by_role_and_label(egui::accesskit::Role::Slider, "Texture scale").is_some());
+        // Its sheet colour onto the Background, one undo step.
+        h.get_by_label("Apply paper colour to Background").click();
+        h.run();
+        let bg = h.state().session.background_layer_id().unwrap();
+        let want = h.state().session.doc().space().pixel(Rgba::from_hex("#f5f1e8").unwrap());
+        let got = h.state().session.doc().layer(&bg).unwrap().pixels.get(5, 5);
+        assert!((0..3).all(|c| (got[c] - want[c]).abs() < 1e-3), "{got:?}");
         h.get_by_label("Smooth").click();
         h.run();
         assert!(h.state().session.doc().paper().is_none());
         // New canvases take the dialog's paper.
-        h.state_mut().new_paper = 3;
+        h.state_mut().new_paper = onepaint_doc::PAPER_PRESETS.iter().position(|p| p.id == "kraft").unwrap();
         h.state_mut().new_document(640, 480);
-        assert_eq!(h.state().session.doc().paper().unwrap().grain_id, "canvas");
+        assert_eq!(h.state().session.doc().paper().unwrap().grain_id, "paper-kraft");
+        let bg = h.state().session.background_layer_id().unwrap();
+        let px = h.state().session.doc().layer(&bg).unwrap().pixels.get(0, 0);
+        let want = h.state().session.doc().space().pixel(Rgba::from_hex("#b99872").unwrap());
+        assert!((0..3).all(|c| (px[c] - want[c]).abs() < 1e-3), "a kraft sheet: {px:?}");
     }
 
     #[test]

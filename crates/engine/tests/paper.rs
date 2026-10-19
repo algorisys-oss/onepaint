@@ -6,8 +6,10 @@ use onepaint_doc::{PAPER_PRESETS, Paper};
 use onepaint_engine::*;
 use onepaint_stroke::StrokePoint;
 
+/// The classic rough tooth: fine enough that one line through a stroke
+/// crosses its valleys (the procedural Rough's hills are ~5 mm).
 fn rough() -> Option<Paper> {
-    PAPER_PRESETS.iter().find(|p| p.id == "rough").and_then(|p| p.paper())
+    PAPER_PRESETS.iter().find(|p| p.id == "rough-classic").and_then(|p| p.paper())
 }
 
 fn session(paper: Option<Paper>) -> Session {
@@ -97,4 +99,32 @@ fn wet_washes_granulate_on_textured_paper() {
     };
     let (flat, grainy) = (wash(None), wash(rough()));
     assert!(spread(&grainy) > spread(&flat) * 1.5 + 0.002, "granulation: {} vs {}", spread(&grainy), spread(&flat));
+}
+
+/// Spec 57: Apply paper colour fills the Background (the bottom plain paint
+/// layer) with the sheet colour as one undo step.
+#[test]
+fn the_paper_colour_fills_the_background() {
+    let mut s = Session::new(300, 120, Some(Rgba::WHITE));
+    s.execute(Command::AddLayer).unwrap();
+    let bg = s.background_layer_id().unwrap();
+    assert_eq!(bg, s.doc().layer_ids()[0]);
+    let kraft = Rgba::from_hex("#b99872").unwrap();
+    s.execute(Command::FillLayerSolid { id: bg.clone(), rgba: kraft }).unwrap();
+    let px = s.doc().layer(&bg).unwrap().pixels.get(299, 119);
+    let want = s.doc().space().pixel(kraft);
+    for c in 0..4 {
+        assert!((px[c] - want[c]).abs() < 1e-3, "{px:?} vs {want:?}");
+    }
+    // Nothing past the canvas.
+    assert_eq!(s.doc().layer(&bg).unwrap().pixels.get(300, 0)[3], 0.0);
+    s.execute(Command::Undo).unwrap();
+    assert_eq!(s.doc().layer(&bg).unwrap().pixels.get(10, 10), s.doc().space().pixel(Rgba::WHITE));
+    // A group at the bottom: no Background to fill.
+    let mut g = Session::new(64, 64, None);
+    let first = g.doc().layer_ids()[0].clone();
+    g.execute(Command::AddGroup).unwrap();
+    g.execute(Command::MoveLayer { id: first, parent: None, index: 1 }).unwrap();
+    assert!(matches!(g.doc().root.first(), Some(onepaint_doc::Node::Group(_))));
+    assert!(g.background_layer_id().is_none());
 }

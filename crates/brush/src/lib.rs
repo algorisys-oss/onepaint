@@ -17,7 +17,10 @@ pub mod tip_outline;
 mod tips;
 mod user;
 
-pub use tips::{ColorTip, GrainSampler, Mask as TipMask, Tip, color_tip_for, grain_for, grain_names, tip_for, tip_ids};
+pub use tips::{
+    ColorTip, GrainSampler, Mask as TipMask, PaperLook, Tip, color_tip_for, grain_for, grain_names, grain_unit_mm, paper_look, tip_for,
+    tip_ids,
+};
 pub use user::{
     CUSTOM_CATEGORY, CUSTOM_ID_PREFIX, IMPORTED_CATEGORY, USER_GRAIN_PREFIX, USER_TIP_PREFIX, UserGrain, UserLibrary, add_custom_brush,
     add_user_brushes, is_user_preset, remove_user_brush, rename_user_brush, set_user_library, update_user_brush, user_library,

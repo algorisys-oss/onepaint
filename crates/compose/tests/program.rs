@@ -119,7 +119,7 @@ fn sand_tone_and_imported_pattern_layers_stay_on_the_cpu() {
 
 fn papered(seed: u64) -> onepaint_doc::Document {
     let mut doc = with_adjustments(random_doc(seed, 300, 300, false), seed);
-    let grain = ["rough-tooth", "canvas", "linen"][seed as usize % 3];
+    let grain = ["rough-tooth", "canvas", "linen", "paper-khadi", "paper-kraft", "paper-washi"][seed as usize % 6];
     let scale = Some(0.5 + (seed % 4) as f64 * 0.4);
     doc.set_paper(Some(onepaint_doc::Paper { grain_id: grain.into(), scale, strength: 0.3 + (seed % 3) as f64 * 0.3 }));
     doc

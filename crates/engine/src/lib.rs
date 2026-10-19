@@ -20,6 +20,7 @@ mod liquify_ops;
 mod mask_ops;
 mod paint_ops;
 mod panel_ops;
+mod paper_ops;
 pub mod path_ops;
 pub mod recording;
 mod saved_selection_ops;
@@ -930,7 +931,13 @@ impl Session {
         // The tooth bites bare paper; paint and relief already on the layer fill it.
         let tooth = st.paper.as_ref().and_then(|(p, response)| {
             let layer = self.doc.layer(&st.layer);
-            onepaint_brush::paper::PaperTooth::new(p, *response, layer.map(|l| &l.pixels), layer.and_then(|l| l.height.as_ref()))
+            onepaint_brush::paper::PaperTooth::new(
+                p,
+                self.doc.dpi,
+                *response,
+                layer.map(|l| &l.pixels),
+                layer.and_then(|l| l.height.as_ref()),
+            )
         });
         let mut r = Rect::default();
         for d in &dabs {
@@ -1247,6 +1254,7 @@ impl Session {
             Command::SetLayerProps { id, props } => self.set_props(&id, props),
             Command::MergeDown { id } => self.merge_down(&id),
             Command::BakeStyles { id } => self.bake_styles(&id),
+            Command::FillLayerSolid { id, rgba } => self.fill_layer_solid(&id, rgba),
             Command::ApplyGlobalLight { angle, altitude } => self.apply_global_light(angle, altitude),
             Command::ClearLayer { id } => self.clear_layer(&id),
             Command::BevelFromAlpha { id, depth, softness } => {

@@ -380,9 +380,9 @@ fn new_doc(app: &mut App, ui: &mut Ui) {
     });
     ui.add_space(8.0);
     ui.label(RichText::new("Paper").color(t.fg_muted));
-    let labels: Vec<&str> = onepaint_doc::PAPER_PRESETS.iter().map(|p| p.label).collect();
-    if let Some(i) = segmented(ui, &labels, app.new_paper) {
-        app.new_paper = i;
+    let cur = onepaint_doc::PAPER_PRESETS.get(app.new_paper).map_or("smooth", |p| p.id);
+    if let Some(id) = paper_picker(ui, cur) {
+        app.new_paper = onepaint_doc::PAPER_PRESETS.iter().position(|p| p.id == id).unwrap_or(0);
     }
     ui.add_space(8.0);
     // happypaint's depths and hints (new-document-dialog.tsx DEPTHS).
@@ -2034,6 +2034,20 @@ fn bevel_controls(app: &mut App, ui: &mut Ui, active: &str) {
     }
 }
 
+/// The papers to choose from (happypaint `paper-picker.tsx`): each with its
+/// hint, a classic paper only while `current` is on it. The id picked.
+fn paper_picker(ui: &mut Ui, current: &str) -> Option<&'static str> {
+    let mut picked = None;
+    ui.horizontal_wrapped(|ui| {
+        for p in onepaint_doc::pickable_papers(current) {
+            if ui.selectable_label(p.id == current, p.label).on_hover_text(p.hint).clicked() {
+                picked = Some(p.id);
+            }
+        }
+    });
+    picked
+}
+
 /// The document paper (happypaint's document properties): a preset, and the
 /// texture scale for textured papers. Applies live; not an undo step.
 fn paper_dialog(app: &mut App, ui: &mut Ui) {
@@ -2044,10 +2058,25 @@ fn paper_dialog(app: &mut App, ui: &mut Ui) {
     ui.label(RichText::new("Dry brushes catch its tooth; wet paint soaks into it.").font(theme::medium(11.0)).color(t.fg_faint));
     ui.add_space(8.0);
     let paper = app.session.doc().paper();
-    let cur = PAPER_PRESETS.iter().position(|p| p.id == paper_preset_id(paper.as_ref())).unwrap_or(0);
-    let labels: Vec<&str> = PAPER_PRESETS.iter().map(|p| p.label).collect();
-    if let Some(i) = segmented(ui, &labels, cur) {
-        let _ = app.session.execute(Command::SetPaper { paper: PAPER_PRESETS[i].paper() });
+    let cur = paper_preset_id(paper.as_ref());
+    if let Some(id) = paper_picker(ui, cur)
+        && let Some(p) = PAPER_PRESETS.iter().find(|p| p.id == id)
+    {
+        let _ = app.session.execute(Command::SetPaper { paper: p.paper() });
+    }
+    // The sheet colour onto the Background (happypaint's Apply paper colour).
+    if let Some(tint) = PAPER_PRESETS.iter().find(|p| p.id == paper_preset_id(app.session.doc().paper().as_ref())).and_then(|p| p.tint) {
+        ui.add_space(6.0);
+        if widgets::secondary_button(ui, "Apply paper colour to Background", 260.0).clicked() {
+            let now = ui.input(|i| i.time);
+            match app.session.background_layer_id() {
+                Some(id) => {
+                    let rgba = onepaint_color::Rgba::from_hex(tint).unwrap_or(onepaint_color::Rgba::WHITE);
+                    let _ = app.session.execute(Command::FillLayerSolid { id, rgba });
+                }
+                None => app.notify("The bottom layer is not a plain paint layer, so there is no Background to fill.", now),
+            }
+        }
     }
     if let Some(p) = paper {
         ui.add_space(6.0);

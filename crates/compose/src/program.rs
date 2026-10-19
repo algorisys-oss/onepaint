@@ -725,7 +725,7 @@ fn plan(
     // The paper shades the finished composite (spec 43), after every unit.
     if let Some(paper) = doc.paper() {
         let amt = onepaint_brush::paper::visible_amount(paper.strength());
-        if let Some(tex) = onepaint_brush::paper::PaperTexture::new(&paper).filter(|_| amt > 0.0) {
+        if let Some(tex) = onepaint_brush::paper::PaperTexture::new(&paper, doc.dpi).filter(|_| amt > 0.0) {
             p.ops.push(Op::Paper { shade: Arc::new(PaperShade { tex, amt }), tx, ty });
         }
     }
@@ -1359,7 +1359,9 @@ fn exec(ops: &[Op], init: Px, i: usize, stack: &mut Vec<Px>, space: Space, at: [
                     let (lx, ly) = ((i % TILE as usize) as i32, (i / TILE as usize) as i32);
                     let (x, y) = ((tx * TILE + lx) as f64 + 0.5, (ty * TILE + ly) as f64 + 0.5);
                     let k = onepaint_brush::paper::shade_at(&shade.tex, shade.amt, x, y, space);
-                    top[..3].iter_mut().for_each(|v| *v *= k);
+                    for c in 0..3 {
+                        top[c] = (top[c] * k[c]).min(top[3]);
+                    }
                 }
             }
             Op::Pop { mode, opacity, clip, tint, blend_if } => {

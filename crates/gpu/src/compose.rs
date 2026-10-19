@@ -793,6 +793,11 @@ impl GpuCompositor {
             Op::Paper { shade, .. } => {
                 o[0] = OP_PAPER;
                 (o[4], o[5]) = ((shade.tex.tile_px() as f32).to_bits(), shade.amt.to_bits());
+                // A procedural paper's look (spec 57): mottle, a flag, the fleck colour.
+                if let Some(l) = shade.tex.look() {
+                    (o[6], o[7]) = (l.mottle.to_bits(), 1);
+                    (o[8], o[9], o[10]) = (l.fleck[0].to_bits(), l.fleck[1].to_bits(), l.fleck[2].to_bits());
+                }
             }
             Op::Adjust { adjust, mask, density, vmask, mode, opacity, blend_if } => {
                 self.encode_vmask(&mut o, vmask);
@@ -1371,20 +1376,28 @@ impl GpuCompositor {
         }
         let mask = arc.as_ref();
         let n = mask.size as u32;
+        // Height, and a procedural paper's mottle and fleck (0.5 = none).
+        let look = shade.tex.look();
+        let texels: Vec<[f32; 4]> = (0..mask.data.len())
+            .map(|i| match look {
+                Some(l) => [mask.data[i], l.mottle_tile.data[i], l.fleck_tile.data[i], 0.0],
+                None => [mask.data[i], 0.5, 0.5, 0.0],
+            })
+            .collect();
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("compose paper"),
             size: wgpu::Extent3d { width: n, height: n, depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R32Float,
+            format: wgpu::TextureFormat::Rgba32Float,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
         queue.write_texture(
             tex.as_image_copy(),
-            bytemuck::cast_slice(&mask.data),
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(n * 4), rows_per_image: Some(n) },
+            bytemuck::cast_slice(&texels),
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(n * 16), rows_per_image: Some(n) },
             wgpu::Extent3d { width: n, height: n, depth_or_array_layers: 1 },
         );
         self.paper = Some((arc.clone(), tex.create_view(&Default::default())));

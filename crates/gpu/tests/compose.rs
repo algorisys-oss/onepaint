@@ -495,7 +495,7 @@ fn paper_shading_matches_the_cpu_oracle() {
     for seed in 0..18 {
         let mut doc = with_adjustments(random_doc(seed, w, h, false), seed);
         // Grains of different sizes, so the paper texture is replaced between documents.
-        let grain = ["rough-tooth", "canvas", "linen"][seed as usize % 3];
+        let grain = ["rough-tooth", "canvas", "linen", "paper-khadi", "paper-kraft", "paper-washi"][seed as usize % 6];
         let scale = Some(0.5 + (seed % 4) as f64 * 0.4);
         doc.set_paper(Some(onepaint_doc::Paper { grain_id: grain.into(), scale, strength: 0.3 + (seed % 3) as f64 * 0.3 }));
         gc.run(&device, &queue, &programs(&doc, None), &view, [w, h]);

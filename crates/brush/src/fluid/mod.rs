@@ -188,8 +188,8 @@ impl FluidSim {
 
     /// Textured paper: absorption, flow resistance, granulation, and the
     /// dry-brush gate (`wet-renderer.ts` PAPER_*).
-    pub fn set_paper(&mut self, paper: Option<&onepaint_doc::Paper>) {
-        self.paper = paper.and_then(|p| Some((crate::paper::PaperTexture::new(p)?, p.strength() as f32))).filter(|(_, s)| *s > 0.0);
+    pub fn set_paper(&mut self, paper: Option<&onepaint_doc::Paper>, dpi: f64) {
+        self.paper = paper.and_then(|p| Some((crate::paper::PaperTexture::new(p, dpi)?, p.strength() as f32))).filter(|(_, s)| *s > 0.0);
     }
 
     /// Paper height at sim-local position (u, v), or 0.5 on smooth paper.

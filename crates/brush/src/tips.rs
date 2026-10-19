@@ -145,12 +145,65 @@ pub fn color_tip_for(id: &str) -> Option<Arc<ColorTip>> {
     Some(t)
 }
 
-/// A tileable grayscale paper grain, built in or from the user library.
+/// A generated mask, made once per key.
+fn generated(key: String, make: impl FnOnce() -> Mask) -> Option<Arc<Mask>> {
+    if let Some(m) = cache().lock().ok()?.get(&key) {
+        return Some(m.clone());
+    }
+    let m = Arc::new(make());
+    cache().lock().ok()?.insert(key, m.clone());
+    Some(m)
+}
+
+/// A tileable grayscale paper grain, built in, procedural (`paper-<kind>`,
+/// spec 57) or from the user library.
 pub fn grain_for(id: &str) -> Option<Arc<Mask>> {
     if id.starts_with(crate::USER_GRAIN_PREFIX) {
         return crate::user::user_grain(id);
     }
+    if let Some(g) = crate::paper_field::paper_grain(id) {
+        let n = crate::paper_field::TILE_UNITS;
+        return generated(format!("grain:{id}"), || Mask::from_u8(n, &crate::paper_field::paper_tile(g.kind, n)));
+    }
     cached(format!("grain:{id}"), || GRAINS.iter().find(|g| g.0 == id).map(|g| g.3))
+}
+
+/// A procedural paper's sheet look (spec 57): mottle and fleck tiles the
+/// size of its height tile, how strongly it mottles and its flecks' colour
+/// as a ratio of the sheet's.
+#[derive(Debug)]
+pub struct PaperLook {
+    pub mottle_tile: Mask,
+    pub fleck_tile: Mask,
+    pub mottle: f32,
+    pub fleck: [f32; 3],
+}
+
+/// The look of grain `id`, for procedural papers only.
+pub fn paper_look(id: &str) -> Option<Arc<PaperLook>> {
+    static C: OnceLock<Mutex<HashMap<String, Arc<PaperLook>>>> = OnceLock::new();
+    let g = crate::paper_field::paper_grain(id)?;
+    let cache = C.get_or_init(Default::default);
+    if let Some(l) = cache.lock().ok()?.get(id) {
+        return Some(l.clone());
+    }
+    let n = crate::paper_field::TILE_UNITS;
+    let rg = crate::paper_field::paper_look_tile(g.kind, n);
+    let (m, f): (Vec<u8>, Vec<u8>) = rg.chunks_exact(2).map(|p| (p[0], p[1])).unzip();
+    let l = Arc::new(PaperLook {
+        mottle_tile: Mask::from_u8(n, &m),
+        fleck_tile: Mask::from_u8(n, &f),
+        mottle: g.mottle,
+        fleck: g.fleck_ratio(),
+    });
+    cache.lock().ok()?.insert(id.to_string(), l.clone());
+    Some(l)
+}
+
+/// mm per texel of a physical grain (the procedural papers); `None` for a
+/// classic grain sized in doc px.
+pub fn grain_unit_mm(id: &str) -> Option<f64> {
+    crate::paper_field::paper_grain(id).map(|_| crate::paper_field::PAPER_UNIT_MM)
 }
 
 /// Built-in tip ids for the UI: the procedural tips, then the image tips.

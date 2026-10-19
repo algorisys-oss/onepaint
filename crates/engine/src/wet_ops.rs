@@ -77,7 +77,7 @@ impl Session {
     /// strokes and the live wet paint use it, and the canvas shows it.
     pub(crate) fn set_paper(&mut self, paper: Option<onepaint_doc::Paper>) {
         if let Some(s) = self.wet.as_mut() {
-            s.sim.set_paper(paper.as_ref());
+            s.sim.set_paper(paper.as_ref(), self.doc.dpi);
         }
         self.doc.set_paper(paper);
         self.doc.touch();
@@ -123,7 +123,7 @@ impl Session {
             let mut sim = FluidSim::new(doc, seed, fl.oil);
             sim.space = self.doc.space();
             sim.set_tilt(self.wet_tilt[0], self.wet_tilt[1]);
-            sim.set_paper(self.doc.paper().as_ref());
+            sim.set_paper(self.doc.paper().as_ref(), self.doc.dpi);
             let before = self.doc.layer(&self.active).map(|l| l.pixels.clone()).unwrap_or_default();
             self.wet = Some(WetSession {
                 layer: self.active.clone(),

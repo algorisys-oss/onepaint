@@ -83,7 +83,8 @@ struct Km {
 @group(0) @binding(14) var cache_out: texture_storage_2d_array<rgba16float, write>;
 // Colour adjustment params and LUTs (spec 42).
 @group(0) @binding(15) var<storage, read> adj: array<vec4<f32>>;
-// The document paper's grain (spec 43), R32Float, repeat-sampled by hand.
+// The document paper (spec 43): height, and a procedural paper's mottle
+// and fleck (spec 57), Rgba32Float, repeat-sampled by hand.
 @group(0) @binding(16) var paper_tex: texture_2d<f32>;
 // Spatial layers' filtered tiles (spec 52).
 @group(0) @binding(17) var filtered_tex: texture_2d_array<f32>;
@@ -753,12 +754,12 @@ fn adjust(op: Op, s: vec4<f32>, pos: vec2<i32>) -> vec4<f32> {
 
 // ── Paper tooth (spec 43; crates/brush paper.rs `shade_at`) ──
 
-fn paper_at(i: vec2<i32>, n: i32) -> f32 {
-    return textureLoad(paper_tex, vec2<i32>(i.x % n, i.y % n), 0).x;
+fn paper_at(i: vec2<i32>, n: i32) -> vec4<f32> {
+    return textureLoad(paper_tex, vec2<i32>(i.x % n, i.y % n), 0);
 }
 
-// `TipMask::sample_repeat` at doc position `d`.
-fn paper_h(d: vec2<f32>, tile_px: f32) -> f32 {
+// `TipMask::sample_repeat` at doc position `d`, every channel.
+fn paper_s(d: vec2<f32>, tile_px: f32) -> vec4<f32> {
     let n = i32(textureDimensions(paper_tex).x);
     let nf = f32(n);
     let t = d / tile_px * nf - 0.5;
@@ -770,16 +771,32 @@ fn paper_h(d: vec2<f32>, tile_px: f32) -> f32 {
     return mix(top, bottom, f.y);
 }
 
-fn paper_k(d: vec2<f32>, tile_px: f32, amt: f32) -> f32 {
+fn paper_h(d: vec2<f32>, tile_px: f32) -> f32 {
+    return paper_s(d, tile_px).x;
+}
+
+// `o`: the paper op (tile px, amount, mottle, look flag; fleck colour).
+fn paper_k(d: vec2<f32>, o: Op) -> vec3<f32> {
+    let tile_px = bitcast<f32>(o.b.x);
+    let amt = bitcast<f32>(o.b.y);
     var l = vec3<f32>(-0.45, -0.6, 0.66);
     l /= sqrt(dot(l, l));
     let nx = (paper_h(d - vec2<f32>(1.0, 0.0), tile_px) - paper_h(d + vec2<f32>(1.0, 0.0), tile_px)) * 2.0;
     let ny = (paper_h(d - vec2<f32>(0.0, 1.0), tile_px) - paper_h(d + vec2<f32>(0.0, 1.0), tile_px)) * 2.0;
     let lambert = clamp((nx * l.x + ny * l.y + l.z) / sqrt(nx * nx + ny * ny + 1.0), 0.0, 1.0);
-    let h = paper_h(d, tile_px);
-    let shade = 1.0 + (0.55 + 0.45 * (0.35 + 0.65 * lambert) * (0.4 + 0.6 * h) - 1.0) * amt;
+    let s = paper_s(d, tile_px);
+    let shade = 1.0 + (0.55 + 0.45 * (0.35 + 0.65 * lambert) * (0.4 + 0.6 * s.x) - 1.0) * amt;
+    var look = vec3<f32>(shade);
+    if (o.b.w != 0u) {
+        // The sheet's mottle and flecks, at the paper's strength (`amt / 0.42`).
+        let k = amt / 0.42;
+        look *= 1.0 + (s.y - 0.5) * bitcast<f32>(o.b.z) * 2.0 * k;
+        let fl = (s.z - 0.5) * 2.0 * k;
+        let fleck = vec3<f32>(bitcast<f32>(o.c.x), bitcast<f32>(o.c.y), bitcast<f32>(o.c.z));
+        look *= select(vec3<f32>(1.0 + 0.12 * fl), vec3<f32>(1.0) + (fleck - vec3<f32>(1.0)) * -fl, fl < 0.0);
+    }
     // 8-bit documents use the shade as it is (`u_paperLinear`, spec 50).
-    return select(pow(shade, 2.2), shade, prm.gamma != 0u);
+    return select(pow(look, vec3<f32>(2.2)), look, prm.gamma != 0u);
 }
 
 // ── Impasto relief (spec 45; crates/compose relief.rs `light_px`) ──
@@ -997,7 +1014,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if (any(top.xyz != vec3<f32>(0.0))) {
                     // The level's pixel centre in doc px (an approximation above level 0).
                     let d = (vec2<f32>(g) + 0.5) * f32(1u << prm.level);
-                    top = vec4<f32>(top.xyz * paper_k(d, bitcast<f32>(o.b.x), bitcast<f32>(o.b.y)), top.w);
+                    top = vec4<f32>(min(top.xyz * paper_k(d, o), vec3<f32>(top.w)), top.w);
                 }
             }
             default: {

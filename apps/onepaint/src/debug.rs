@@ -28,6 +28,7 @@
 //!   (after the demo; spec 52 runs a lone one live on the GPU).
 //! - `ONEPAINT_ADJUST=color-balance` adds an adjustment layer of that kind at its defaults
 //!   (Black & White with its tint on), shown in Properties (`ONEPAINT_DOCK=1` docks it).
+//! - `ONEPAINT_PAPER=khadi` starts on a new canvas of that paper, its Background the sheet colour (spec 57).
 //! - `ONEPAINT_STYLES=Gold` gives the active layer a built-in layer style (spec 56).
 //! - `ONEPAINT_EXIT=1` closes the app after the screenshot.
 
@@ -151,6 +152,14 @@ fn wave(app: &mut App, y: f64, amp: f64, color: Rgba, preset: &str, size: f64) {
 pub fn tick(app: &mut App, ctx: &egui::Context) {
     let frame = app.debug.frame;
     app.debug.frame += 1;
+    if frame == 1
+        && let Ok(id) = std::env::var("ONEPAINT_PAPER")
+        && let Some(i) = onepaint_doc::PAPER_PRESETS.iter().position(|p| p.id == id)
+    {
+        app.new_paper = i;
+        let (w, h) = (app.session.doc().width, app.session.doc().height);
+        app.new_document(w, h);
+    }
     if frame == 1
         && let Some((w, h, eight)) = app.debug.new
     {

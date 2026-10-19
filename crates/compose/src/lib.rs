@@ -606,7 +606,7 @@ pub fn composite_tile(doc: &Document, tx: i32, ty: i32, ov: Option<&StrokeOverla
     composite_root(&doc.root, tx, ty, &mut buf, ov, doc_frame(doc));
     // The paper's visible tooth shades the finished composite (C:214-233).
     if let Some(p) = doc.paper()
-        && let Some(tex) = onepaint_brush::paper::PaperTexture::new(&p)
+        && let Some(tex) = onepaint_brush::paper::PaperTexture::new(&p, doc.dpi)
     {
         onepaint_brush::paper::shade_tile(&mut buf, &tex, p.strength(), tx, ty, doc.space());
     }

@@ -352,10 +352,11 @@ mod tests {
     fn granulation_settles_pigment_in_the_paper_valleys() {
         // happypaint 0.195.3: dc ·= 1 + s·1.2·(1 − 2p), so low paper collects.
         let doc = Rect::new(0, 0, 200, 120);
-        let rough = onepaint_doc::PAPER_PRESETS.iter().find(|p| p.id == "rough").and_then(|p| p.paper()).unwrap();
-        let tex = crate::paper::PaperTexture::new(&rough).unwrap();
+        // The classic tooth: its valleys fit the 120×40 sim (the procedural Rough's hills are ~5 mm).
+        let rough = onepaint_doc::PAPER_PRESETS.iter().find(|p| p.id == "rough-classic").and_then(|p| p.paper()).unwrap();
+        let tex = crate::paper::PaperTexture::new(&rough, 300.0).unwrap();
         let mut sim = FluidSim::new(doc, Rect::new(40, 40, 120, 40), false);
-        sim.set_paper(Some(&rough));
+        sim.set_paper(Some(&rough), 300.0);
         let dabs: Vec<_> = (0..40)
             .map(|i| WetDab {
                 x: 60.0 + i as f64 * 2.0,

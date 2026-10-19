@@ -70,6 +70,54 @@ impl PaperKind {
     }
 }
 
+/// A procedural paper as a grain (happypaint `PAPER_GRAINS`): its kind,
+/// name, sheet tint, fleck colour and mottle (after the Watercolor
+/// Playground's paper list). Ids are `paper-<kind>`.
+pub struct PaperGrain {
+    pub kind: PaperKind,
+    pub name: &'static str,
+    pub tint: &'static str,
+    pub fleck: &'static str,
+    pub mottle: f32,
+}
+
+pub const PAPER_GRAINS: [PaperGrain; 10] = [
+    PaperGrain { kind: PaperKind::Cold, name: "Cold Press", tint: "#f6f3ec", fleck: "#8a8070", mottle: 0.05 },
+    PaperGrain { kind: PaperKind::Hot, name: "Hot Press", tint: "#f8f7f3", fleck: "#8a8478", mottle: 0.04 },
+    PaperGrain { kind: PaperKind::Rough, name: "Rough", tint: "#f5f1e8", fleck: "#857a68", mottle: 0.06 },
+    PaperGrain { kind: PaperKind::Khadi, name: "Khadi", tint: "#efe7d6", fleck: "#6d5f4a", mottle: 0.12 },
+    PaperGrain { kind: PaperKind::Washi, name: "Washi", tint: "#f1ece0", fleck: "#7a6a52", mottle: 0.14 },
+    PaperGrain { kind: PaperKind::Laid, name: "Laid", tint: "#f2ebdb", fleck: "#8a7c64", mottle: 0.05 },
+    PaperGrain { kind: PaperKind::Canvas, name: "Canvas", tint: "#f3efe6", fleck: "#8a8070", mottle: 0.04 },
+    PaperGrain { kind: PaperKind::Toned, name: "Toned Sand", tint: "#d9c8a6", fleck: "#6e5f45", mottle: 0.06 },
+    PaperGrain { kind: PaperKind::Kraft, name: "Kraft", tint: "#b99872", fleck: "#4e3b28", mottle: 0.12 },
+    PaperGrain { kind: PaperKind::Student, name: "Student", tint: "#f7f7f4", fleck: "#8a8a84", mottle: 0.03 },
+];
+
+/// The procedural paper a grain id names (`paper-<kind>`).
+pub fn paper_grain(id: &str) -> Option<&'static PaperGrain> {
+    let kind = PaperKind::parse(id.strip_prefix("paper-")?)?;
+    PAPER_GRAINS.iter().find(|g| g.kind == kind)
+}
+
+fn hex(h: &str) -> [f32; 3] {
+    let n = u32::from_str_radix(h.trim_start_matches('#'), 16).unwrap_or(0);
+    [(n >> 16) & 255, (n >> 8) & 255, n & 255].map(|c| c as f32 / 255.0)
+}
+
+impl PaperGrain {
+    /// The fleck colour as a ratio of the sheet colour (the composite multiplies).
+    pub fn fleck_ratio(&self) -> [f32; 3] {
+        let (f, t) = (hex(self.fleck), hex(self.tint));
+        std::array::from_fn(|k| (f[k] / t[k]).min(1.0))
+    }
+
+    /// The sheet colour, 0..1 sRGB.
+    pub fn tint_rgb(&self) -> [f32; 3] {
+        hex(self.tint)
+    }
+}
+
 // ── Hashing ──
 
 /// PCG-style integer hash (the original's `pcg`).

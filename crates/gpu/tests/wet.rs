@@ -17,7 +17,7 @@ const DOC: Rect = Rect::new(0, 0, 320, 200);
 fn scene(oil: bool, tilt: [f32; 2], paper: Option<onepaint_doc::Paper>) -> FluidSim {
     let mut s = FluidSim::new(DOC, Rect::new(60, 60, 200, 80), oil);
     s.set_tilt(tilt[0], tilt[1]);
-    s.set_paper(paper.as_ref());
+    s.set_paper(paper.as_ref(), 300.0);
     let dab = |x: f64, y: f64, c: [f32; 3], vx: f64| WetDab {
         x,
         y,
