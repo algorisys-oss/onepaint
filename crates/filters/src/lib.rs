@@ -10,6 +10,7 @@ mod colour;
 mod distort;
 pub mod gpu;
 pub mod gradient;
+pub mod gradient_model;
 mod kind;
 pub mod lightning;
 pub mod liquify;

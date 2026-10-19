@@ -3,6 +3,7 @@
 //! App code uses only these components and tokens, never raw egui visuals.
 //! See `docs/design-system.md`.
 
+pub mod gradient_editor;
 pub mod gradient_stops;
 pub mod icons;
 pub mod range_bar;

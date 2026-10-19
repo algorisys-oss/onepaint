@@ -22,6 +22,7 @@ mod debug;
 mod dock;
 mod gallery;
 mod gestures;
+mod gradient_ui;
 mod help;
 mod keymap;
 mod layout;
@@ -243,6 +244,9 @@ pub struct App {
     pub toast: Option<(String, f64)>,
     /// The open in-app question (`ask.rs`).
     pub ask: Option<ask::Ask>,
+    /// Where the Gradient tool's state persists, and its selected stop.
+    pub gradient_path: Option<PathBuf>,
+    pub gradient_sel: usize,
     /// Whether the canvas's GPU device was lost, and if that was handled.
     pub gpu_health: Option<onepaint_gpu::health::Health>,
     gpu_lost_handled: bool,
@@ -355,6 +359,8 @@ impl App {
             thumbs: thumbs::Thumbs::default(),
             toast: None,
             ask: None,
+            gradient_path: None,
+            gradient_sel: 0,
             gpu_health: cc.wgpu_render_state.as_ref().map(|rs| onepaint_gpu::health::Health::watch(&rs.device)),
             gpu_lost_handled: false,
             new_doc: [2048, 1536],
@@ -394,6 +400,11 @@ impl App {
         };
         app.press = press::restore(press::saved_path(app.settings.path.as_deref()).as_deref());
         app.canvas.set_press(app.press.clone());
+        // The Gradient tool's stops and presets (tests and scripted runs keep their own).
+        if !cfg!(test) && !app.debug.scripted() {
+            app.gradient_path = gradient_ui::default_path();
+            app.canvas.gradient = gradient_ui::load(app.gradient_path.as_ref());
+        }
         if let Some(p) = open {
             app.open_path(p);
         } else if !app.debug.scripted()
@@ -2031,6 +2042,43 @@ mod tests {
         key(&mut h, egui::Key::I, egui::Modifiers::NONE);
         click(&mut h, pos2(600.0, 400.0));
         assert_eq!(h.state().session.color().to_hex(), "#ff0000");
+    }
+
+    /// Spec 59: the Gradient tool's presets, its stop editor, and a gradient
+    /// fill layer edited through the same editor (one undo step per edit).
+    #[test]
+    fn the_gradient_editor_drives_the_tool_and_fill_layers() {
+        use onepaint_filters::gradient_model::StopSource;
+        let mut h = harness();
+        h.run();
+        h.state_mut().set_tool(Tool::Gradient);
+        h.state_mut().popover = Some(Popover::GradientOptions);
+        h.run();
+        assert_eq!(h.state().canvas.gradient.active_preset_id.as_deref(), Some("fg-transparent"));
+        h.get_by_label("Foreground to Background").click();
+        h.run();
+        let g = &h.state().canvas.gradient;
+        assert_eq!((g.active_preset_id.as_deref(), g.stops[1].source), (Some("fg-bg"), StopSource::Bg));
+        // A click on the bar adds a stop; the tool's stops are no preset now.
+        let bar = h.get_by_label("Gradient: 2 stops").rect();
+        click(&mut h, pos2(bar.left() + 7.0 + (bar.width() - 14.0) * 0.5, bar.top() + 20.0));
+        h.run();
+        let g = &h.state().canvas.gradient;
+        assert_eq!((g.stops.len(), g.active_preset_id.clone()), (3, None));
+        // A gradient fill layer: the editor edits the layer, one undo step.
+        let params = onepaint_filters::default_params(onepaint_filters::Kind::GradientFill);
+        h.state_mut().session.execute(Command::AddAdjustmentLayer { kind: "gradient-fill".into(), params }).unwrap();
+        h.run();
+        let undo = h.state().session.history_len();
+        h.get_by_label("Reverse").click();
+        h.run();
+        let rev = |h: &Harness<'_, App>| {
+            let l = h.state().session.doc().layer(h.state().session.active()).unwrap();
+            l.adjustment.as_ref().unwrap().params.grad_reverse
+        };
+        assert_eq!(rev(&h), Some(true));
+        assert_eq!(h.state().session.history_len(), undo + 1);
+        assert!(!h.state().canvas.options.gradient_reverse, "the tool's Reverse is untouched");
     }
 
     /// The brush library searches every brush by name or category, and the

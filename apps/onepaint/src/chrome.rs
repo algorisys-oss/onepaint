@@ -41,9 +41,9 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             Popover::AdjustLayer => popover_at(ctx, "adjust-layer", anchor, side, |ui| {
                 crate::dock::with_grip(app, ui, PanelId::Properties, crate::adjust::layer_panel)
             }),
-            Popover::GradientOptions => {
-                popover_at(ctx, "gradient", anchor, side, |ui| crate::dock::with_grip(app, ui, PanelId::ToolOptions, gradient_options))
-            }
+            Popover::GradientOptions => popover_at(ctx, "gradient", anchor, side, |ui| {
+                crate::dock::with_grip(app, ui, PanelId::ToolOptions, crate::gradient_ui::tool_panel)
+            }),
             Popover::ShapeOptions => {
                 popover_at(ctx, "shape", anchor, side, |ui| crate::dock::with_grip(app, ui, PanelId::ToolOptions, shape_options))
             }
@@ -1251,7 +1251,7 @@ fn tool_options(app: &mut App, ui: &mut Ui) {
         Some(Popover::MoveOptions) => move_options(app, ui),
         Some(Popover::Selection) => selection(app, ui),
         Some(Popover::Fill) => fill_options(app, ui),
-        Some(Popover::GradientOptions) => gradient_options(app, ui),
+        Some(Popover::GradientOptions) => crate::gradient_ui::tool_panel(app, ui),
         Some(Popover::ShapeOptions) => shape_options(app, ui),
         Some(Popover::PenOptions) => pen_options(app, ui),
         Some(Popover::PanelOptions) => crate::panel_ui::options(app, ui),
@@ -1576,33 +1576,6 @@ fn recover(app: &mut App, ui: &mut Ui) {
             app.popover = None;
         }
     });
-}
-
-fn gradient_options(app: &mut App, ui: &mut Ui) {
-    use onepaint_filters::gradient::Shape as G;
-    let t = Tokens::get(ui.ctx());
-    crate::dock::fit_width(ui, 330.0);
-    widgets::section_label(ui, "Gradient");
-    let shapes = G::ALL;
-    let cur = shapes.iter().position(|s| *s == app.canvas.options.gradient_shape).unwrap_or(0);
-    let labels: Vec<&str> = shapes.iter().map(|s| s.label()).collect();
-    if let Some(i) = segmented(ui, &labels, cur) {
-        app.canvas.options.gradient_shape = shapes[i];
-    }
-    ui.add_space(4.0);
-    if let Some(i) = segmented(ui, &["Colour → clear", "Colour → BG"], app.canvas.options.gradient_to_bg as usize) {
-        app.canvas.options.gradient_to_bg = i == 1;
-    }
-    ui.horizontal(|ui| {
-        widgets::toggle(ui, &mut app.canvas.options.gradient_reverse, "Reverse");
-        widgets::toggle(ui, &mut app.canvas.options.gradient_layer, "As a gradient fill layer (editable)");
-        ui.label(RichText::new("BG").color(t.fg_muted));
-        let bg = app.canvas.options.background;
-        if widgets::swatch(ui, bg, 26.0, false).on_hover_text("Click to use the current colour as the background").clicked() {
-            app.canvas.options.background = app.session.color();
-        }
-    });
-    ui.label(RichText::new("Drag on the canvas; uses the brush opacity and the selection.").font(theme::medium(10.5)).color(t.fg_faint));
 }
 
 fn shape_options(app: &mut App, ui: &mut Ui) {

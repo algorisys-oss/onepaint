@@ -7,7 +7,7 @@ use egui::{Color32, CursorIcon, Event, Key, PointerButton, Pos2, Rect, Sense, St
 use onepaint_engine::transform::{Handle, TransformParams};
 use onepaint_engine::view::View;
 use onepaint_engine::{Command, SelectMode, Session, TileProgram, Tool};
-use onepaint_filters::gradient::{GradStop, Shape as GShape, fg_bg, fg_transparent, reverse_stops};
+use onepaint_filters::gradient::{GradStop, Shape as GShape, reverse_stops};
 use onepaint_gpu::{CanvasGpu, ViewParams};
 use onepaint_input::{PointerKind, PressureProvider};
 use onepaint_raster::Tile;
@@ -203,9 +203,6 @@ pub struct ToolOptions {
     /// Fill as a watercolour wash (spec 58 C).
     pub fill_wash: bool,
     pub wash: WashSettings,
-    pub gradient_shape: GShape,
-    /// Foreground → transparent (false) or foreground → background (true).
-    pub gradient_to_bg: bool,
     pub gradient_reverse: bool,
     pub shape_kind: ShapeKind,
     pub shape_sides: u32,
@@ -232,8 +229,6 @@ impl Default for ToolOptions {
             fill_grow: 1,
             fill_wash: false,
             wash: WashSettings::default(),
-            gradient_shape: GShape::Linear,
-            gradient_to_bg: false,
             gradient_reverse: false,
             shape_kind: ShapeKind::Line,
             shape_sides: 6,
@@ -437,6 +432,8 @@ pub struct Canvas {
     pub swallow_press: bool,
     /// Show scrollbars when the document runs past the view.
     pub scrollbars: bool,
+    /// The Gradient tool's shape, stops and presets (spec 59).
+    pub gradient: onepaint_filters::gradient_model::GradientState,
     /// Where the canvas sat on screen last frame.
     pub screen_rect: Rect,
     /// A scrollbar thumb being dragged: the axis (0 x, 1 y), the bar when
@@ -490,6 +487,7 @@ impl Canvas {
             panel_options: Default::default(),
             swallow_press: false,
             scrollbars: true,
+            gradient: Default::default(),
             screen_rect: Rect::NOTHING,
             scroll_drag: None,
         }
@@ -826,7 +824,7 @@ impl Canvas {
             Tool::Gradient => {
                 session.gradient_begin();
                 let stops = self.gradient_stops(session);
-                session.gradient_update(d, d, self.options.gradient_shape, &stops);
+                session.gradient_update(d, d, self.gradient.shape, &stops);
                 Drag::Gradient { start: d }
             }
             Tool::Shape => Drag::ShapeTool { start: d, shape: None },
@@ -894,11 +892,16 @@ impl Canvas {
         }
     }
 
+    /// The tool's stops at the current swatches, unreversed.
+    fn gradient_resolved(&self, session: &Session) -> Vec<GradStop> {
+        let (c, b) = (session.color(), self.options.background);
+        let rgb = |c: onepaint_color::Rgba| [c.r as f64, c.g as f64, c.b as f64];
+        onepaint_filters::gradient_model::resolve_stops(&self.gradient.stops, rgb(c), rgb(b))
+    }
+
+    /// The tool's stops as painted (Reverse applied).
     fn gradient_stops(&self, session: &Session) -> Vec<GradStop> {
-        let c = session.color();
-        let fg = [c.r as f64, c.g as f64, c.b as f64];
-        let b = self.options.background;
-        let stops = if self.options.gradient_to_bg { fg_bg(fg, [b.r as f64, b.g as f64, b.b as f64]) } else { fg_transparent(fg) };
+        let stops = self.gradient_resolved(session);
         if self.options.gradient_reverse { reverse_stops(&stops) } else { stops }
     }
 
@@ -1200,7 +1203,7 @@ impl Canvas {
                         Drag::Gradient { start } => {
                             let start = *start;
                             let stops = self.gradient_stops(session);
-                            session.gradient_update(start, d, self.options.gradient_shape, &stops);
+                            session.gradient_update(start, d, self.gradient.shape, &stops);
                         }
                         Drag::TextMove { grab, start } => {
                             let (grab, start) = (*grab, start.clone());
@@ -1303,8 +1306,10 @@ impl Canvas {
                         Drag::Gradient { start } if self.options.gradient_layer => {
                             session.stroke_cancel();
                             let end = self.last_pos.map(|p| self.doc_pt(p)).unwrap_or(start);
-                            let stops = self.gradient_stops(session);
-                            let params = gradient_fill_params(start, end, self.options.gradient_shape, &stops, self.doc_size);
+                            // Stored unreversed with the Reverse flag, as happypaint's fill layers.
+                            let stops = self.gradient_resolved(session);
+                            let params =
+                                gradient_fill_params(start, end, self.gradient.shape, &stops, self.options.gradient_reverse, self.doc_size);
                             let _ = session.execute(Command::AddAdjustmentLayer { kind: "gradient-fill".into(), params });
                         }
                         Drag::Gradient { .. } => session.gradient_end(),
@@ -2078,10 +2083,17 @@ fn gradient_fill_params(
     b: Pt,
     shape: GShape,
     stops: &[onepaint_filters::gradient::GradStop],
+    reverse: bool,
     doc: [u32; 2],
 ) -> onepaint_filters::Params {
     use onepaint_filters::gradient::Shape;
     let (w, h) = (doc[0] as f64, doc[1] as f64);
+    // A click (no ramp to speak of) runs the gradient across the canvas.
+    let ends = if (b[0] - a[0]).hypot(b[1] - a[1]) < onepaint_filters::gradient_model::MIN_RAMP_PX {
+        onepaint_filters::gradient_model::default_ends(shape)
+    } else {
+        [(a[0] / w) as f32, (a[1] / h) as f32, (b[0] / w) as f32, (b[1] / h) as f32]
+    };
     let name = match shape {
         Shape::Linear => "linear",
         Shape::Radial => "radial",
@@ -2102,11 +2114,11 @@ fn gradient_fill_params(
                 })
                 .collect(),
         ),
-        grad_ax: Some((a[0] / w) as f32),
-        grad_ay: Some((a[1] / h) as f32),
-        grad_bx: Some((b[0] / w) as f32),
-        grad_by: Some((b[1] / h) as f32),
-        grad_reverse: Some(false),
+        grad_ax: Some(ends[0]),
+        grad_ay: Some(ends[1]),
+        grad_bx: Some(ends[2]),
+        grad_by: Some(ends[3]),
+        grad_reverse: Some(reverse),
         ..Default::default()
     }
 }

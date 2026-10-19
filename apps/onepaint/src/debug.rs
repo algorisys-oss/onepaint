@@ -105,6 +105,7 @@ impl Debug {
                 "mixer" => Some(Popover::MixerOptions),
                 "liquify" => Some(Popover::LiquifyOptions),
                 "studio" => Some(Popover::BrushStudio),
+                "gradient" => Some(Popover::GradientOptions),
                 _ => None,
             }),
             exit: var("ONEPAINT_EXIT").is_some(),
@@ -462,6 +463,18 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
     }
     if frame == 3 && app.debug.popover.is_some() {
         app.popover = app.debug.popover;
+        if app.popover == Some(Popover::GradientOptions) {
+            app.set_tool(onepaint_engine::Tool::Gradient);
+            // Something to look at: three stops, one with a midpoint.
+            use onepaint_filters::gradient_model::{ColorStop, StopSource};
+            let mut mid = ColorStop::new(0.0, StopSource::Fg, [0.0; 3], 1.0);
+            mid.mid = Some(0.3);
+            app.canvas.gradient.stops = vec![
+                mid,
+                ColorStop::new(0.6, StopSource::Fixed, [0.95, 0.75, 0.2], 1.0),
+                ColorStop::new(1.0, StopSource::Bg, [1.0; 3], 0.0),
+            ];
+        }
         // `mix` shows the Colour panel's Mix grid (in memory; not saved).
         if std::env::var("ONEPAINT_POPOVER").as_deref() == Ok("mix") {
             app.settings.color_mix_mode = true;

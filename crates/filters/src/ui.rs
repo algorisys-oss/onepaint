@@ -43,6 +43,20 @@ pub enum Control {
     },
 }
 
+impl Control {
+    /// The param a control edits (none for a heading).
+    pub fn key(&self) -> &'static str {
+        match *self {
+            Control::Slider { key, .. }
+            | Control::Toggle { key, .. }
+            | Control::Choice { key, .. }
+            | Control::Color { key, .. }
+            | Control::Seed { key, .. } => key,
+            Control::Heading { .. } => "",
+        }
+    }
+}
+
 const fn pct(key: &'static str, label: &'static str, default: f32) -> Control {
     Control::Slider { key, label, min: 0.0, max: 100.0, scale: 0.01, unit: "%", default }
 }

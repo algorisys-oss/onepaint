@@ -293,11 +293,16 @@ fn cmyk_ranges(ui: &mut Ui, p: &mut Params, range: &mut usize) -> bool {
 
 /// Controls built from `onepaint_filters::ui::controls`, edited through the params' JSON form.
 fn generic(ui: &mut Ui, kind: Kind, p: &mut Params, colour: onepaint_color::Rgba) -> bool {
+    generic_except(ui, kind, p, colour, &[])
+}
+
+/// [`generic`] without the controls keyed in `skip` (drawn elsewhere).
+fn generic_except(ui: &mut Ui, kind: Kind, p: &mut Params, colour: onepaint_color::Rgba, skip: &[&str]) -> bool {
     let t = Tokens::get(ui.ctx());
     let mut m = p.to_json();
     let mut ch = false;
     for c in onepaint_filters::ui::controls(kind) {
-        if !onepaint_filters::ui::visible(kind, c, p) {
+        if !onepaint_filters::ui::visible(kind, c, p) || skip.contains(&c.key()) {
             continue;
         }
         match *c {
@@ -670,6 +675,15 @@ pub fn layer_panel(app: &mut App, ui: &mut Ui) {
     ui.add_space(6.0);
     let mut p = adj.params.clone();
     let colour = app.session.color();
+    // A Gradient fill's gradient has the full editor (spec 59); its ends stay sliders.
+    if kind == Kind::GradientFill {
+        crate::gradient_ui::layer_editor(app, ui, &id, &adj.params);
+        widgets::section_label(ui, "Position");
+        if generic_except(ui, kind, &mut p, colour, &["gradShape", "gradReverse"]) {
+            let _ = app.session.execute(Command::SetAdjustment { id, params: p });
+        }
+        return;
+    }
     if params_ui(ui, kind, &mut p, &mut app.curve_tab, colour) {
         let _ = app.session.execute(Command::SetAdjustment { id, params: p });
     }
