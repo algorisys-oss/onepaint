@@ -21,7 +21,7 @@ mod tex;
 pub mod ui;
 
 pub use colour::{MAX_COLOR_SAMPLES, fill_stops, rgb01_to_hsv, selective_color_rgb};
-pub use kind::{Kind, SECTIONS, channel_mixer_rows, default_params, field_blur_max, is_identity};
+pub use kind::{BW_DEFAULT_TINT, BW_DEFAULT_WEIGHTS, Kind, SECTIONS, channel_mixer_rows, default_params, field_blur_max, is_identity};
 pub use params::{BlurPin, ColorSample, FillStop, Params, Stop};
 pub use tex::Frame;
 
@@ -181,11 +181,7 @@ impl Prepared {
                 h[2] = c01(h[2] * (1.0 + p.brightness.unwrap_or(0.0)));
                 hsv2rgb(h)
             }
-            Kind::BlackWhite => {
-                let l = luma(w);
-                let t = p.amount.unwrap_or(1.0);
-                w.map(|v| v + (l - v) * t)
-            }
+            Kind::BlackWhite => colour::black_white(w.map(c01), p),
             Kind::Invert => w.map(|v| c01(1.0 - v)),
             Kind::Threshold => {
                 let l = luma(w);
@@ -208,12 +204,7 @@ impl Prepared {
                 let lut = self.lut.as_deref().map_or_else(|| build_curves_lut(p), |l| *l);
                 [0, 1, 2].map(|i| lut_sample(&lut, c01(w[i]), i))
             }
-            Kind::ColorBalance => {
-                let l = luma(w);
-                let k = 1.0 - (2.0 * l - 1.0).abs();
-                let d = [p.cyan_red.unwrap_or(0.0), p.magenta_green.unwrap_or(0.0), p.yellow_blue.unwrap_or(0.0)];
-                [0, 1, 2].map(|i| c01(w[i] + d[i] * 0.5 * k))
-            }
+            Kind::ColorBalance => colour::color_balance(w.map(c01), p),
             Kind::Exposure => {
                 // In linear light, like a camera (EXPOSURE_SRC).
                 let gain = 2f32.powf(p.exposure.unwrap_or(0.0));

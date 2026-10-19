@@ -221,8 +221,10 @@ See `docs/parity-delta-2026-10-10.md`.
 - [x] 8 blend modes + Pass Through groups (2026-10-18)
 - [ ] Layer styles (v0.196.x)
 - [~] New adjustments: Exposure, Vibrance, Photo Filter, Channel Mixer done
-      (CPU, GPU, PSD expA/vibA/phfl/mixr, panels; 2026-10-18). Left: CMYK
-      Selective Color, Color Lookup; B&W hue weights + tint; Color Balance ranges
+      (CPU, GPU, PSD expA/vibA/phfl/mixr, panels; 2026-10-18); B&W hue
+      weights + tint and Color Balance ranges + Preserve Luminosity
+      (v0.201.3 formulas, CPU, GPU, PSD blwh/blnc both ways, panels;
+      2026-10-19). Left: CMYK Selective Color, Color Lookup
 - [ ] PSD codec parity (modes, 32-bit, round trip, live adjustments, fills, styles)
 - [ ] Wet physics v0.199 (paper absorbs, halo, wash fill, tip-shaped dabs)
 - [ ] Ten procedural papers, sheet colour, flecks and mottle

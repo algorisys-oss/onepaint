@@ -156,13 +156,11 @@ fn every_new_kind_has_a_panel() {
             k,
             Kind::BrightnessContrast
                 | Kind::HueSaturation
-                | Kind::BlackWhite
                 | Kind::Invert
                 | Kind::Threshold
                 | Kind::Posterize
                 | Kind::Levels
                 | Kind::Curves
-                | Kind::ColorBalance
                 | Kind::GradientMap
                 | Kind::Noise
                 | Kind::GaussianBlur
@@ -172,6 +170,15 @@ fn every_new_kind_has_a_panel() {
         );
         assert_eq!(ui::controls(k).is_empty(), spec10, "{k:?}");
     }
+}
+
+#[test]
+fn black_white_shows_its_tint_colour_while_tint_is_on() {
+    let cs = ui::controls(Kind::BlackWhite);
+    let shown = |p: &Params| cs.iter().filter(|c| ui::visible(Kind::BlackWhite, c, p)).count();
+    let p = default_params(Kind::BlackWhite);
+    assert_eq!(shown(&p), 6 + 1 + 1);
+    assert_eq!(shown(&Params { bw_tint: Some(true), ..p }), 6 + 1 + 1 + 1);
 }
 
 #[test]

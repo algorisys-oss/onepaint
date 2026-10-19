@@ -280,7 +280,14 @@ pub fn random_adjustment(r: &mut Rng) -> onepaint_doc::Adjustment {
     let v = match kind {
         "brightness-contrast" => json!({"brightness": c()[0] - 0.5, "contrast": c()[1] - 0.5}),
         "hue-saturation" => json!({"hue": (c()[0] - 0.5) * 360.0, "saturation": c()[1] * 2.0 - 1.0, "brightness": c()[2] - 0.5}),
-        "black-white" => json!({"amount": c()[0]}),
+        "black-white" => {
+            let (a, b, t) = (c(), c(), c());
+            json!({
+                "amount": a[0], "bwReds": a[1] * 5.0 - 2.0, "bwYellows": a[2] * 5.0 - 2.0,
+                "bwGreens": b[0] * 5.0 - 2.0, "bwCyans": b[1] * 5.0 - 2.0, "bwBlues": b[2] * 5.0 - 2.0,
+                "bwMagentas": t[0] * 5.0 - 2.0, "bwTint": t[1] > 0.5, "bwTintColor": c()
+            })
+        }
         "threshold" => json!({"threshold": c()[0]}),
         "posterize" => json!({"levels": 2.0 + (c()[0] * 10.0).floor()}),
         "levels" => {
@@ -295,7 +302,13 @@ pub fn random_adjustment(r: &mut Rng) -> onepaint_doc::Adjustment {
         }
         "color-balance" => {
             let k = c();
-            json!({"cyanRed": k[0] * 2.0 - 1.0, "magentaGreen": k[1] * 2.0 - 1.0, "yellowBlue": k[2] * 2.0 - 1.0})
+            let (sh, hi, keep) = (c(), c(), c()[0] > 0.3);
+            json!({
+                "cyanRed": k[0] * 2.0 - 1.0, "magentaGreen": k[1] * 2.0 - 1.0, "yellowBlue": k[2] * 2.0 - 1.0,
+                "cbShadowCR": sh[0] * 2.0 - 1.0, "cbShadowMG": sh[1] * 2.0 - 1.0, "cbShadowYB": sh[2] * 2.0 - 1.0,
+                "cbHighCR": hi[0] * 2.0 - 1.0, "cbHighMG": hi[1] * 2.0 - 1.0, "cbHighYB": hi[2] * 2.0 - 1.0,
+                "preserveLum": keep
+            })
         }
         "gradient-map" => json!({"gradientStops": [{"pos": 0.0, "color": c()}, {"pos": 0.5, "color": c()}, {"pos": 1.0, "color": c()}]}),
         "color-to-alpha" => json!({"target": c(), "threshold": c()[0] * 0.5}),

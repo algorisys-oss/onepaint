@@ -32,6 +32,11 @@ Overnight (2026-10-18 → 19), all pushed, newest last:
 - Spec 55 (2026-10-19, after "continue"): ghost groups out of their pegs
   composite on the GPU, as a spatial source resampling the group's content
   through the peg's inverse (`SpatialSrc::of_peg`, `blur_out` mode 6).
+- Black & White (hue weights, tint) and Color Balance (shadows,
+  midtones, highlights, Preserve Luminosity) on happypaint v0.201.3's
+  formulas: files from happypaint now look the same here. CPU, GPU, PSD
+  both ways, data-driven panels (`filters::ui`, with a `Heading`
+  control); `ONEPAINT_ADJUST=<kind>` shows a kind's Properties panel.
 - `scripts/bench-gate/gate.sh save|check`: the perf-budget gate for
   AGENTS.md's 5% rule, on criterion's saved baselines (checked: the 9
   engine hot-path benches came out within 5% of themselves).

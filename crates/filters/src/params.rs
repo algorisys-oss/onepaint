@@ -104,6 +104,30 @@ params! {
     filter_color: [f32; 3],
     filter_density: f32,
     preserve_lum: bool,
+    // black-white (happypaint v0.201.3): hue weights (−2..3) and an
+    // optional tint, a straight sRGB colour
+    bw_reds: f32,
+    bw_yellows: f32,
+    bw_greens: f32,
+    bw_cyans: f32,
+    bw_blues: f32,
+    bw_magentas: f32,
+    bw_tint: bool,
+    bw_tint_color: [f32; 3],
+    // color-balance shadows and highlights (−1..1); the midtones are
+    // cyan_red, magenta_green, yellow_blue
+    #[serde(rename = "cbShadowCR")]
+    cb_shadow_cr: f32,
+    #[serde(rename = "cbShadowMG")]
+    cb_shadow_mg: f32,
+    #[serde(rename = "cbShadowYB")]
+    cb_shadow_yb: f32,
+    #[serde(rename = "cbHighCR")]
+    cb_high_cr: f32,
+    #[serde(rename = "cbHighMG")]
+    cb_high_mg: f32,
+    #[serde(rename = "cbHighYB")]
+    cb_high_yb: f32,
     // channel-mixer: rows R, G, B and the grey (K) row; C is the constant (−2..2)
     #[serde(rename = "mixRR")]
     mix_rr: f32,

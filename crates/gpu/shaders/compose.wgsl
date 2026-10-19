@@ -677,6 +677,7 @@ fn adjust(op: Op, s: vec4<f32>, pos: vec2<i32>) -> vec4<f32> {
     let w = to_work(select(s.xyz, s.xyz / a, a > 0.0));
     let p0 = adj[base];
     let p1 = adj[base + 1u];
+    let p2 = adj[base + 2u];
     var o = w;
     switch op.b.z {
         case 1u: {
@@ -691,7 +692,31 @@ fn adjust(op: Op, s: vec4<f32>, pos: vec2<i32>) -> vec4<f32> {
             o = hsv2rgb(h);
         }
         case 3u: {
-            o = w + (luma(w) - w) * p0.x;
+            // Black & White (filters colour.rs `black_white`): p0 amount and
+            // the reds, greens, blues weights; p1 yellows, cyans, magentas
+            // and the tint flag; p2 the tint colour.
+            let rgb = c01(w);
+            let mn = min(rgb.x, min(rgb.y, rgb.z));
+            let mx = max(rgb.x, max(rgb.y, rgb.z));
+            let md = rgb.x + rgb.y + rgb.z - mn - mx;
+            var wp: f32;
+            var ws: f32;
+            if (rgb.x >= rgb.y && rgb.x >= rgb.z) {
+                wp = p0.y;
+                ws = select(p1.z, p1.x, rgb.y >= rgb.z);
+            } else if (rgb.y >= rgb.z) {
+                wp = p0.z;
+                ws = select(p1.y, p1.x, rgb.x >= rgb.z);
+            } else {
+                wp = p0.w;
+                ws = select(p1.y, p1.z, rgb.x >= rgb.y);
+            }
+            let grey = clamp(mn + (md - mn) * ws + (mx - md) * wp, 0.0, 1.0);
+            var t = vec3<f32>(grey);
+            if (p1.w > 0.5) {
+                t = c01(set_lum_w3c(p2.xyz, grey));
+            }
+            o = rgb + (t - rgb) * p0.x;
         }
         case 4u: {
             o = c01(1.0 - w);
@@ -711,8 +736,17 @@ fn adjust(op: Op, s: vec4<f32>, pos: vec2<i32>) -> vec4<f32> {
             o = lut3(lut, c01(w));
         }
         case 9u: {
-            let l = luma(w);
-            o = c01(w + p0.xyz * 0.5 * (1.0 - abs(2.0 * l - 1.0)));
+            // Color Balance (filters colour.rs `color_balance`): p0 the
+            // shadows and Preserve Luminosity, p1 the midtones, p2 the highlights.
+            let rgb = c01(w);
+            let l = (max(rgb.x, max(rgb.y, rgb.z)) + min(rgb.x, min(rgb.y, rgb.z))) * 0.5;
+            let ws = clamp((l - 0.333) / -0.25 + 0.5, 0.0, 1.0) * 0.7;
+            let wm = clamp((l - 0.333) / 0.25 + 0.5, 0.0, 1.0) * clamp((l + 0.333 - 1.0) / -0.25 + 0.5, 0.0, 1.0) * 0.7;
+            let wh = clamp((l + 0.333 - 1.0) / 0.25 + 0.5, 0.0, 1.0) * 0.7;
+            o = c01(rgb + p0.xyz * ws + p1.xyz * wm + p2.xyz * wh);
+            if (p0.w > 0.5) {
+                o = c01(set_lum_w3c(o, lum_w3c(rgb)));
+            }
         }
         case 10u: {
             o = lut3(lut, vec3<f32>(luma(w)));

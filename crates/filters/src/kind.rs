@@ -169,7 +169,13 @@ pub fn default_params(k: Kind) -> Params {
     match k {
         Kind::BrightnessContrast => (p.brightness, p.contrast) = (Some(0.0), Some(0.0)),
         Kind::HueSaturation => (p.hue, p.saturation, p.brightness) = (Some(0.0), Some(0.0), Some(0.0)),
-        Kind::BlackWhite => p.amount = Some(1.0),
+        Kind::BlackWhite => {
+            p.amount = Some(1.0);
+            let [r, y, g, c, b, m] = BW_DEFAULT_WEIGHTS;
+            (p.bw_reds, p.bw_yellows, p.bw_greens, p.bw_cyans, p.bw_blues, p.bw_magentas) =
+                (Some(r), Some(y), Some(g), Some(c), Some(b), Some(m));
+            (p.bw_tint, p.bw_tint_color) = (Some(false), Some(BW_DEFAULT_TINT));
+        }
         Kind::Invert => {}
         Kind::Threshold => p.threshold = Some(0.5),
         Kind::Posterize => p.levels = Some(4.0),
@@ -180,7 +186,10 @@ pub fn default_params(k: Kind) -> Params {
             p.curve = Some(vec![CurvePoint::new(0.0, 0.0), CurvePoint::new(1.0, 1.0)]);
             p.curve_mode = Some("smooth".into());
         }
-        Kind::ColorBalance => (p.cyan_red, p.magenta_green, p.yellow_blue) = (Some(0.0), Some(0.0), Some(0.0)),
+        Kind::ColorBalance => {
+            (p.cyan_red, p.magenta_green, p.yellow_blue) = (Some(0.0), Some(0.0), Some(0.0));
+            p.preserve_lum = Some(true);
+        }
         Kind::Exposure => (p.exposure, p.exp_offset, p.exp_gamma) = (Some(0.0), Some(0.0), Some(1.0)),
         Kind::Vibrance => (p.vibrance, p.vib_saturation) = (Some(0.0), Some(0.0)),
         // Photoshop's default: Warming Filter (85), 25% density, luminosity kept.
@@ -327,6 +336,14 @@ fn curve_is_identity(c: &Option<Vec<CurvePoint>>) -> bool {
 }
 
 /// Field Blur's strongest pin (AR `fieldBlurMax`).
+/// Black & White's default hue weights, Photoshop's "Default" preset
+/// (happypaint `BW_DEFAULT_WEIGHTS`): reds, yellows, greens, cyans, blues,
+/// magentas. A missing weight reads as its default.
+pub const BW_DEFAULT_WEIGHTS: [f32; 6] = [0.4, 0.6, 0.4, 0.6, 0.2, 0.8];
+
+/// Black & White's default tint, a warm sepia (straight sRGB).
+pub const BW_DEFAULT_TINT: [f32; 3] = [225.0 / 255.0, 211.0 / 255.0, 179.0 / 255.0];
+
 pub fn field_blur_max(p: &Params) -> f32 {
     p.pins.as_deref().unwrap_or(&[]).iter().take(crate::MAX_BLUR_PINS).map(|q| q.blur).fold(0.0, f32::max)
 }
@@ -347,7 +364,19 @@ pub fn is_identity(k: Kind, p: &Params) -> bool {
                 && p.out_white.unwrap_or(1.0) == 1.0
         }
         Kind::Curves => [&p.curve, &p.curve_r, &p.curve_g, &p.curve_b].into_iter().all(curve_is_identity),
-        Kind::ColorBalance => z(p.cyan_red) && z(p.magenta_green) && z(p.yellow_blue),
+        Kind::ColorBalance => [
+            p.cyan_red,
+            p.magenta_green,
+            p.yellow_blue,
+            p.cb_shadow_cr,
+            p.cb_shadow_mg,
+            p.cb_shadow_yb,
+            p.cb_high_cr,
+            p.cb_high_mg,
+            p.cb_high_yb,
+        ]
+        .into_iter()
+        .all(z),
         Kind::Exposure => z(p.exposure) && z(p.exp_offset) && p.exp_gamma.unwrap_or(1.0) == 1.0,
         Kind::Vibrance => z(p.vibrance) && z(p.vib_saturation),
         Kind::PhotoFilter => le0(p.filter_density),

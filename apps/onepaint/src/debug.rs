@@ -26,6 +26,8 @@
 //!   (`float` lays them horizontally; in memory, not saved).
 //! - `ONEPAINT_BLUR=12` adds a Gaussian blur adjustment layer of that radius on top
 //!   (after the demo; spec 52 runs a lone one live on the GPU).
+//! - `ONEPAINT_ADJUST=color-balance` adds an adjustment layer of that kind at its defaults
+//!   (Black & White with its tint on), shown in Properties (`ONEPAINT_DOCK=1` docks it).
 //! - `ONEPAINT_EXIT=1` closes the app after the screenshot.
 
 use crate::{App, Popover};
@@ -274,6 +276,15 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
     {
         let params = onepaint_filters::Params { radius: Some(r), ..Default::default() };
         let _ = app.session.execute(Command::AddAdjustmentLayer { kind: "gaussian-blur".into(), params });
+    }
+    if frame == 3
+        && let Some(kind) = std::env::var("ONEPAINT_ADJUST").ok().and_then(|k| onepaint_filters::Kind::parse(&k))
+    {
+        let mut params = onepaint_filters::default_params(kind);
+        if kind == onepaint_filters::Kind::BlackWhite {
+            params.bw_tint = Some(true);
+        }
+        let _ = app.session.execute(Command::AddAdjustmentLayer { kind: kind.as_str().into(), params });
     }
     if frame == 3 && app.debug.impasto {
         let (w, h) = (app.session.doc().width as f64, app.session.doc().height as f64);

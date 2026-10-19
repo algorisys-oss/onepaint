@@ -57,9 +57,10 @@ fn simple_colour_kinds() {
     assert!(near(srgb(p)[0], 1.0, 1e-5));
     let l = run(Kind::Levels, Params { gamma: Some(2.0), ..Default::default() }, grey(0.25));
     assert!(near(srgb(l)[0], 0.5, 1e-4));
+    // Photoshop's default weights: pure red reads its Reds weight.
     let bw = run(Kind::BlackWhite, Params::default(), red);
     let s = srgb(bw);
-    assert!(near(s[0], 0.299, 1e-4) && near(s[1], 0.299, 1e-4));
+    assert!(near(s[0], 0.4, 1e-4) && near(s[1], 0.4, 1e-4), "{s:?}");
     // Half-transparent pixels keep alpha and stay premultiplied.
     let half = [0.5, 0.0, 0.0, 0.5];
     let o = run(Kind::Invert, Params::default(), half);
@@ -79,13 +80,39 @@ fn hue_saturation() {
     assert!(near(d[0], d[1], 1e-5) && near(d[1], d[2], 1e-5));
 }
 
+/// happypaint v0.201.3 Black & White: the primary hue's weight over
+/// max − mid, the secondary's over mid − min; the tint at the grey's
+/// luminosity; Amount mixes.
 #[test]
-fn color_balance_weight_vanishes_at_extremes() {
-    let p = Params { cyan_red: Some(1.0), ..Default::default() };
-    let black = run(Kind::ColorBalance, p.clone(), grey(0.0));
-    assert!(near(black[0], 0.0, 1e-6));
-    let mid = run(Kind::ColorBalance, p, grey(0.5));
-    assert!(near(srgb(mid)[0], 1.0, 1e-4), "0.5 + 1*0.5*1");
+fn black_white_weighs_hues_and_tints() {
+    // (0.8, 0.5, 0.2) in sRGB: red primary, yellow secondary.
+    let c = [srgb_to_linear(0.8), srgb_to_linear(0.5), srgb_to_linear(0.2), 1.0];
+    let p = Params { bw_reds: Some(1.0), bw_yellows: Some(0.5), ..Default::default() };
+    let grey = 0.2 + (0.5 - 0.2) * 0.5 + (0.8 - 0.5) * 1.0;
+    assert!(near(srgb(run(Kind::BlackWhite, p.clone(), c))[1], grey, 1e-4));
+    let half = srgb(run(Kind::BlackWhite, Params { amount: Some(0.5), ..p.clone() }, c));
+    assert!(near(half[0], 0.8 + (grey - 0.8) * 0.5, 1e-4), "{half:?}");
+    // A tint keeps the grey's luminosity (0.3, 0.59, 0.11).
+    let t = srgb(run(Kind::BlackWhite, Params { bw_tint: Some(true), bw_tint_color: Some([0.9, 0.6, 0.3]), ..p }, c));
+    assert!(near(0.3 * t[0] + 0.59 * t[1] + 0.11 * t[2], grey, 1e-3) && t[0] > t[2], "{t:?}");
+}
+
+/// happypaint v0.201.3 Color Balance: shifts per tone range, weighted by
+/// HSL lightness; Preserve Luminosity (on by default) puts the luminosity
+/// back, so mid-grey + red 100 is (217, 89, 89).
+#[test]
+fn color_balance_shifts_by_range_and_keeps_luminosity() {
+    let mid = srgb(run(Kind::ColorBalance, Params { cyan_red: Some(1.0), ..Default::default() }, grey(0.5)));
+    assert!(near(mid[0], 0.85, 1e-3) && near(mid[1], 0.35, 1e-3), "{mid:?}");
+    let raw = Params { cyan_red: Some(1.0), preserve_lum: Some(false), ..Default::default() };
+    assert!(near(srgb(run(Kind::ColorBalance, raw, grey(0.5)))[0], 1.0, 1e-4));
+    // Shadows reach black; highlights reach white; each leaves the others.
+    let sh = Params { cb_shadow_cr: Some(1.0), preserve_lum: Some(false), ..Default::default() };
+    assert!(near(srgb(run(Kind::ColorBalance, sh.clone(), grey(0.0)))[0], 0.7, 1e-4));
+    assert!(near(srgb(run(Kind::ColorBalance, sh, grey(1.0)))[1], 1.0, 1e-4));
+    let hi = Params { cb_high_yb: Some(-1.0), preserve_lum: Some(false), ..Default::default() };
+    assert!(near(srgb(run(Kind::ColorBalance, hi.clone(), grey(1.0)))[2], 0.3, 1e-4));
+    assert!(near(srgb(run(Kind::ColorBalance, hi, grey(0.0)))[2], 0.0, 1e-6));
 }
 
 #[test]

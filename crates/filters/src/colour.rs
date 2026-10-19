@@ -361,6 +361,70 @@ pub(crate) fn px(kind: crate::Kind, p: &Params, e: &Extra, s: Px, x: i32, y: i32
     })
 }
 
+/// The hue weights in shader order: primaries (reds, greens, blues) and
+/// secondaries (yellows, cyans, magentas).
+pub(crate) fn bw_weights(p: &Params) -> ([f32; 3], [f32; 3]) {
+    let [r, y, g, c, b, m] = crate::BW_DEFAULT_WEIGHTS;
+    let w = |v: Option<f32>, d: f32| v.unwrap_or(d);
+    ([w(p.bw_reds, r), w(p.bw_greens, g), w(p.bw_blues, b)], [w(p.bw_yellows, y), w(p.bw_cyans, c), w(p.bw_magentas, m)])
+}
+
+/// BLACK_WHITE_SRC (happypaint v0.201.3, AR:1012): grey = min + (mid − min)
+/// · w(secondary hue) + (max − mid) · w(primary hue), the primary being the
+/// largest channel's hue and the secondary the two largest's; the tint
+/// colours the grey at its own luminosity (Color blend); Amount mixes.
+/// `rgb` is straight work values in 0..1.
+pub(crate) fn black_white(rgb: [f32; 3], p: &Params) -> [f32; 3] {
+    let (prim, sec) = bw_weights(p);
+    let [r, g, b] = rgb;
+    let (mn, mx) = (r.min(g).min(b), r.max(g).max(b));
+    let md = r + g + b - mn - mx;
+    let (wp, ws) = if r >= g && r >= b {
+        (prim[0], if g >= b { sec[0] } else { sec[2] })
+    } else if g >= b {
+        (prim[1], if r >= b { sec[0] } else { sec[1] })
+    } else {
+        (prim[2], if r >= g { sec[2] } else { sec[1] })
+    };
+    let grey = (mn + (md - mn) * ws + (mx - md) * wp).clamp(0.0, 1.0);
+    let o = if p.bw_tint.unwrap_or(false) {
+        set_lum(p.bw_tint_color.unwrap_or(crate::BW_DEFAULT_TINT), grey).map(|v| v.clamp(0.0, 1.0))
+    } else {
+        [grey; 3]
+    };
+    let t = p.amount.unwrap_or(1.0);
+    [0, 1, 2].map(|i| rgb[i] + (o[i] - rgb[i]) * t)
+}
+
+/// Color Balance's tone-range weights at HSL lightness `l` (GIMP's
+/// published masks, as happypaint uses): shadows, midtones, highlights.
+pub(crate) fn balance_weights(l: f32) -> [f32; 3] {
+    const A: f32 = 0.25;
+    const B: f32 = 0.333;
+    const SCALE: f32 = 0.7;
+    let c = |v: f32| v.clamp(0.0, 1.0);
+    [c((l - B) / -A + 0.5) * SCALE, c((l - B) / A + 0.5) * c((l + B - 1.0) / -A + 0.5) * SCALE, c((l + B - 1.0) / A + 0.5) * SCALE]
+}
+
+/// COLOR_BALANCE_SRC (happypaint v0.201.3, AR:846): a (cyan–red,
+/// magenta–green, yellow–blue) shift per tone range, weighted by the
+/// pixel's HSL lightness; Preserve Luminosity (on unless false) puts the
+/// original luminosity back, the Luminosity blend's. `rgb` is straight
+/// work values in 0..1.
+pub(crate) fn color_balance(rgb: [f32; 3], p: &Params) -> [f32; 3] {
+    let v = |x: Option<f32>| x.unwrap_or(0.0);
+    let sh = [v(p.cb_shadow_cr), v(p.cb_shadow_mg), v(p.cb_shadow_yb)];
+    let mid = [v(p.cyan_red), v(p.magenta_green), v(p.yellow_blue)];
+    let hi = [v(p.cb_high_cr), v(p.cb_high_mg), v(p.cb_high_yb)];
+    let l = (rgb[0].max(rgb[1]).max(rgb[2]) + rgb[0].min(rgb[1]).min(rgb[2])) * 0.5;
+    let [ws, wm, wh] = balance_weights(l);
+    let o = [0, 1, 2].map(|i| (rgb[i] + sh[i] * ws + mid[i] * wm + hi[i] * wh).clamp(0.0, 1.0));
+    if p.preserve_lum == Some(false) {
+        return o;
+    }
+    set_lum(o, lum_w3c(rgb)).map(|v| v.clamp(0.0, 1.0))
+}
+
 /// The W3C / PDF blend luminosity (0.3, 0.59, 0.11).
 pub(crate) fn lum_w3c(c: [f32; 3]) -> f32 {
     0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2]

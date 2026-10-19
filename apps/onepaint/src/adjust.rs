@@ -146,7 +146,6 @@ pub fn params_ui(ui: &mut Ui, kind: Kind, p: &mut Params, curve_tab: &mut usize,
             ch |= slider(ui, "Saturation", &mut p.saturation, 0.0, -100.0..=100.0, 0.01, "");
             ch |= slider(ui, "Value", &mut p.brightness, 0.0, -100.0..=100.0, 0.01, "");
         }
-        Kind::BlackWhite => ch |= slider(ui, "Amount", &mut p.amount, 1.0, 0.0..=100.0, 0.01, "%"),
         Kind::Invert => {
             ui.label(RichText::new("No settings.").color(t.fg_muted));
         }
@@ -158,11 +157,6 @@ pub fn params_ui(ui: &mut Ui, kind: Kind, p: &mut Params, curve_tab: &mut usize,
             ch |= slider(ui, "Gamma ×100", &mut p.gamma, 1.0, 10.0..=300.0, 0.01, "");
             ch |= slider(ui, "Out black", &mut p.out_black, 0.0, 0.0..=100.0, 0.01, "");
             ch |= slider(ui, "Out white", &mut p.out_white, 1.0, 0.0..=100.0, 0.01, "");
-        }
-        Kind::ColorBalance => {
-            ch |= slider(ui, "Cyan – Red", &mut p.cyan_red, 0.0, -100.0..=100.0, 0.01, "");
-            ch |= slider(ui, "Magenta – Green", &mut p.magenta_green, 0.0, -100.0..=100.0, 0.01, "");
-            ch |= slider(ui, "Yellow – Blue", &mut p.yellow_blue, 0.0, -100.0..=100.0, 0.01, "");
         }
         Kind::Curves => {
             let names = ["RGB", "Red", "Green", "Blue"];
@@ -291,6 +285,7 @@ fn generic(ui: &mut Ui, kind: Kind, p: &mut Params, colour: onepaint_color::Rgba
                     ch = true;
                 }
             }
+            Control::Heading { label } => widgets::section_label(ui, label),
             Control::Seed { key, label } => {
                 if widgets::secondary_button(ui, label, 90.0).clicked() {
                     let s = m.get(key).and_then(Value::as_f64).unwrap_or(1.0);
@@ -519,7 +514,7 @@ pub fn filter_panel(app: &mut App, ui: &mut Ui) {
         app.popover = None;
         return;
     };
-    ui.set_width(280.0);
+    crate::dock::fit_width(ui, 280.0);
     ui.label(RichText::new(kind.label()).font(theme::semibold(15.0)).color(t.fg));
     ui.add_space(6.0);
     let mut p = params;
@@ -563,7 +558,7 @@ pub fn layer_panel(app: &mut App, ui: &mut Ui) {
         app.popover = None;
         return;
     };
-    ui.set_width(280.0);
+    crate::dock::fit_width(ui, 280.0);
     let Some(kind) = Kind::parse(&adj.kind) else {
         ui.label(RichText::new(format!("“{}” layers can't be edited yet.", adj.kind)).color(t.fg_muted));
         return;

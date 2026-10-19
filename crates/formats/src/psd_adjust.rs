@@ -86,23 +86,31 @@ fn photo_filter(d: &[u8]) -> Option<Params> {
     Some(Params { filter_color: Some(color), filter_density: Some(density), preserve_lum: Some(keep), ..Default::default() })
 }
 
-/// The `long` and `doub` items of a flat action descriptor (version 16), by key.
+/// The `long`, `doub` and `bool` (0 or 1) items of an action descriptor
+/// (version 16), by key; an object's items are keyed `object.item`.
 fn descriptor_numbers(d: &[u8]) -> Option<Vec<(String, f64)>> {
     if be32(d, 0)? != 16 {
         return None;
     }
-    let mut at = 4;
+    let mut out = Vec::new();
+    // A stop part-way keeps what was read before it.
+    let _ = descriptor_items(d, 4, "", &mut out);
+    Some(out)
+}
+
+/// One descriptor's name, class id and items from `at`, into `out`; where
+/// it ends. An unknown item type ends the read: nothing past it is needed.
+fn descriptor_items(d: &[u8], mut at: usize, prefix: &str, out: &mut Vec<(String, f64)>) -> Option<usize> {
     // The name (UTF-16 with a length), then the class id.
     at += 4 + be32(d, at)? as usize * 2;
     let id_len = be32(d, at)? as usize;
     at += 4 + if id_len == 0 { 4 } else { id_len };
     let n = be32(d, at)?;
     at += 4;
-    let mut out = Vec::new();
     for _ in 0..n {
         let kl = be32(d, at)? as usize;
         let kl = if kl == 0 { 4 } else { kl };
-        let key = String::from_utf8_lossy(d.get(at + 4..at + 4 + kl)?).into_owned();
+        let key = format!("{prefix}{}", String::from_utf8_lossy(d.get(at + 4..at + 4 + kl)?));
         at += 4 + kl;
         let ty = d.get(at..at + 4)?;
         at += 4;
@@ -115,12 +123,40 @@ fn descriptor_numbers(d: &[u8]) -> Option<Vec<(String, f64)>> {
                 out.push((key, f64::from_bits(u64::from(be32(d, at)?) << 32 | u64::from(be32(d, at + 4)?))));
                 at += 8;
             }
-            b"bool" => at += 1,
-            // Anything else ends the read: nothing past it is needed here.
-            _ => break,
+            b"bool" => {
+                out.push((key, f64::from(*d.get(at)?)));
+                at += 1;
+            }
+            b"Objc" => at = descriptor_items(d, at, &format!("{key}."), out)?,
+            _ => return None,
         }
     }
-    Some(out)
+    Some(at)
+}
+
+/// Black & White (`blwh`): the six weights in percent, the tint flag and
+/// colour (happypaint `psd-map.ts`, at full strength: Amount is 1).
+fn black_white(d: &[u8]) -> Option<Params> {
+    let items = descriptor_numbers(d).unwrap_or_default();
+    let get = |k: &str| items.iter().find(|(key, _)| key == k).map(|i| i.1 as f32);
+    let [r, y, g, c, b, m] = onepaint_filters::BW_DEFAULT_WEIGHTS;
+    let w = |k: &str, d: f32| Some(get(k).map_or(d, |v| v / 100.0));
+    let tint = match (get("tintColor.Rd  "), get("tintColor.Grn "), get("tintColor.Bl  ")) {
+        (Some(r), Some(g), Some(b)) => [r, g, b].map(|v| (v / 255.0).clamp(0.0, 1.0)),
+        _ => onepaint_filters::BW_DEFAULT_TINT,
+    };
+    Some(Params {
+        amount: Some(1.0),
+        bw_reds: w("Rd  ", r),
+        bw_yellows: w("Yllw", y),
+        bw_greens: w("Grn ", g),
+        bw_cyans: w("Cyn ", c),
+        bw_blues: w("Bl  ", b),
+        bw_magentas: w("Mgnt", m),
+        bw_tint: Some(get("useTint").is_some_and(|v| v != 0.0)),
+        bw_tint_color: Some(tint),
+        ..Default::default()
+    })
 }
 
 fn mixr(d: &[u8]) -> Option<Params> {
@@ -186,7 +222,7 @@ pub fn read(key: &[u8; 4], d: &[u8]) -> Option<Adjustment> {
         b"hue2" => ("hue-saturation", hue_sat(d)?),
         b"blnc" => ("color-balance", color_balance(d)?),
         // Photoshop's colour weights and tint aren't kept yet (`todo.md`).
-        b"blwh" => ("black-white", Params { amount: Some(1.0), ..Default::default() }),
+        b"blwh" => ("black-white", black_white(d)?),
         b"grdm" => ("gradient-map", gradient_map(d)?),
         _ => return None,
     };
@@ -334,16 +370,25 @@ pub fn write(a: &Adjustment) -> Option<([u8; 4], Vec<u8>)> {
         }
         "color-balance" => {
             let pc = |v: Option<f32>| ((v.unwrap_or(0.0).clamp(-1.0, 1.0) * 100.0).round() as i16).to_be_bytes();
-            o.extend([0u8; 6]);
-            for v in [p.cyan_red, p.magenta_green, p.yellow_blue] {
+            let ranges = [
+                p.cb_shadow_cr,
+                p.cb_shadow_mg,
+                p.cb_shadow_yb,
+                p.cyan_red,
+                p.magenta_green,
+                p.yellow_blue,
+                p.cb_high_cr,
+                p.cb_high_mg,
+                p.cb_high_yb,
+            ];
+            for v in ranges {
                 o.extend(pc(v));
             }
-            o.extend([0u8; 6]);
-            o.extend([1, 0]);
+            o.extend([u8::from(p.preserve_lum != Some(false)), 0]);
             *b"blnc"
         }
         "black-white" => {
-            o.extend(write_black_white());
+            o.extend(write_black_white(p));
             *b"blwh"
         }
         "gradient-map" => {
@@ -417,9 +462,23 @@ fn hue_sat(d: &[u8]) -> Option<Params> {
 }
 
 /// The midtones; onepaint's Color Balance has no shadow or highlight range yet.
+/// Color Balance (`blnc`): shadows, midtones and highlights, each (cyan–red,
+/// magenta–green, yellow–blue) in percent, then Preserve Luminosity.
 fn color_balance(d: &[u8]) -> Option<Params> {
     let v = |i: usize| be16(d, i * 2).map(|x| x as i16 as f32 / 100.0);
-    Some(Params { cyan_red: Some(v(3)?), magenta_green: Some(v(4)?), yellow_blue: Some(v(5)?), ..Default::default() })
+    Some(Params {
+        cb_shadow_cr: Some(v(0)?),
+        cb_shadow_mg: Some(v(1)?),
+        cb_shadow_yb: Some(v(2)?),
+        cyan_red: Some(v(3)?),
+        magenta_green: Some(v(4)?),
+        yellow_blue: Some(v(5)?),
+        cb_high_cr: Some(v(6)?),
+        cb_high_mg: Some(v(7)?),
+        cb_high_yb: Some(v(8)?),
+        preserve_lum: Some(d.get(18).is_none_or(|b| *b != 0)),
+        ..Default::default()
+    })
 }
 
 fn unicode(o: &mut Vec<u8>, s: &str) {
@@ -440,28 +499,40 @@ fn desc_key(o: &mut Vec<u8>, k: &str) {
     o.extend(k.as_bytes());
 }
 
-/// Black & White at Photoshop's default weights, no tint (happypaint writes
-/// the layer at full strength; its opacity fades it).
-fn write_black_white() -> Vec<u8> {
+/// Black & White: the weights in percent and the tint. Photoshop has no
+/// Amount (happypaint writes the layer at full strength; its opacity fades it).
+fn write_black_white(p: &Params) -> Vec<u8> {
+    let (prim, sec) = ([p.bw_reds, p.bw_greens, p.bw_blues], [p.bw_yellows, p.bw_cyans, p.bw_magentas]);
+    let [dr, dy, dg, dc, db, dm] = onepaint_filters::BW_DEFAULT_WEIGHTS;
+    let pct = |v: Option<f32>, d: f32| (v.unwrap_or(d).clamp(-2.0, 3.0) * 100.0).round() as i32;
+    let weights = [
+        ("Rd  ", pct(prim[0], dr)),
+        ("Yllw", pct(sec[0], dy)),
+        ("Grn ", pct(prim[1], dg)),
+        ("Cyn ", pct(sec[1], dc)),
+        ("Bl  ", pct(prim[2], db)),
+        ("Mgnt", pct(sec[2], dm)),
+    ];
+    let tint = p.bw_tint_color.unwrap_or(onepaint_filters::BW_DEFAULT_TINT).map(|v| f64::from(v.clamp(0.0, 1.0)) * 255.0);
     let mut o = Vec::new();
     o.extend(16u32.to_be_bytes());
     unicode(&mut o, "");
     desc_key(&mut o, "null");
     o.extend(8u32.to_be_bytes());
-    for (k, v) in [("Rd  ", 40i32), ("Yllw", 60), ("Grn ", 40), ("Cyn ", 60), ("Bl  ", 20), ("Mgnt", 80)] {
+    for (k, v) in weights {
         desc_key(&mut o, k);
         o.extend(*b"long");
         o.extend(v.to_be_bytes());
     }
     desc_key(&mut o, "useTint");
     o.extend(*b"bool");
-    o.push(0);
+    o.push(u8::from(p.bw_tint.unwrap_or(false)));
     desc_key(&mut o, "tintColor");
     o.extend(*b"Objc");
     unicode(&mut o, "");
     desc_key(&mut o, "RGBC");
     o.extend(3u32.to_be_bytes());
-    for (k, v) in [("Rd  ", 225.0f64), ("Grn ", 211.0), ("Bl  ", 179.0)] {
+    for (k, v) in [("Rd  ", tint[0]), ("Grn ", tint[1]), ("Bl  ", tint[2])] {
         desc_key(&mut o, k);
         o.extend(*b"doub");
         o.extend(v.to_bits().to_be_bytes());
@@ -646,7 +717,30 @@ mod tests {
         assert_eq!(c2.curve_mode.as_deref(), Some("smooth"));
         let b = rt("color-balance", Params { yellow_blue: Some(0.45), magenta_green: Some(-0.3), ..Default::default() }).params;
         assert_eq!((b.cyan_red, b.magenta_green, b.yellow_blue), (Some(0.0), Some(-0.3), Some(0.45)));
+        // happypaint psd-map.test.ts: all three ranges and Preserve Luminosity.
+        let cb = Params {
+            cb_shadow_cr: Some(-0.3),
+            yellow_blue: Some(0.45),
+            cb_high_mg: Some(1.0),
+            preserve_lum: Some(false),
+            ..Default::default()
+        };
+        let b = rt("color-balance", cb).params;
+        assert_eq!((b.cb_shadow_cr, b.yellow_blue, b.cb_high_mg, b.preserve_lum), (Some(-0.3), Some(0.45), Some(1.0), Some(false)));
+        assert_eq!(rt("color-balance", Params::default()).params.preserve_lum, Some(true), "on unless off");
         assert_eq!(rt("black-white", Params { amount: Some(0.5), ..Default::default() }).kind, "black-white");
+        // happypaint psd-map.test.ts: weights in percent and the tint.
+        let bw = Params {
+            bw_reds: Some(-0.5),
+            bw_magentas: Some(2.5),
+            bw_tint: Some(true),
+            bw_tint_color: Some([1.0, 0.8, 0.6]),
+            ..Default::default()
+        };
+        let w = rt("black-white", bw).params;
+        assert_eq!((w.bw_reds, w.bw_yellows, w.bw_magentas, w.bw_tint), (Some(-0.5), Some(0.6), Some(2.5), Some(true)));
+        assert!((w.bw_tint_color.unwrap()[1] - 0.8).abs() < 1e-3);
+        assert_eq!(w.amount, Some(1.0), "Photoshop has no amount");
         let stops = vec![
             onepaint_filters::Stop { pos: 0.0, color: [0.0, 0.0, 0.2] },
             onepaint_filters::Stop { pos: 0.6, color: [1.0, 0.5, 0.0] },
@@ -659,6 +753,9 @@ mod tests {
         // The black & white descriptor reads back as Photoshop's weights.
         let (_, bw) = write(&Adjustment { kind: "black-white".into(), params: Params::default() }).unwrap();
         let items = descriptor_numbers(&bw).unwrap();
-        assert_eq!(items.iter().map(|i| i.1).collect::<Vec<_>>(), vec![40.0, 60.0, 40.0, 60.0, 20.0, 80.0]);
+        assert_eq!(items.iter().take(6).map(|i| i.1).collect::<Vec<_>>(), vec![40.0, 60.0, 40.0, 60.0, 20.0, 80.0]);
+        let d = black_white(&bw).unwrap();
+        let def = onepaint_filters::default_params(onepaint_filters::Kind::BlackWhite);
+        assert_eq!((d.bw_reds, d.bw_magentas, d.bw_tint), (def.bw_reds, def.bw_magentas, Some(false)));
     }
 }

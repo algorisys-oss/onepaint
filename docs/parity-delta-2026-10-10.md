@@ -44,9 +44,12 @@ modes landed (2026-10-18); only names onepaint doesn't know are kept now.
 - Exposure, Vibrance, Photo Filter, Channel Mixer.
 - CMYK Selective Color.
 - Color Lookup (`.cube`/`.3dl`).
-- Black & White hue weights and tint, and Color Balance tone ranges.
+- ~~Black & White hue weights and tint, and Color Balance tone ranges.
   happypaint re-renders existing layers of both kinds with the new
-  formulas, so the same file now looks different in onepaint.
+  formulas, so the same file now looks different in onepaint.~~ Done
+  2026-10-19: the v0.201.3 formulas on the CPU and GPU, old files read
+  with happypaint's defaults (Photoshop's weights; Preserve Luminosity
+  on), PSD `blwh` and `blnc` with every field.
 
 ### PSD (happypaint's own codec, v0.201.0)
 - Colour modes: CMYK, Lab, Indexed, Duotone. Depth: 32-bit.

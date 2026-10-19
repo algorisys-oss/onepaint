@@ -37,6 +37,10 @@ pub enum Control {
         key: &'static str,
         label: &'static str,
     },
+    /// A section heading (Color Balance's tone ranges).
+    Heading {
+        label: &'static str,
+    },
 }
 
 const fn pct(key: &'static str, label: &'static str, default: f32) -> Control {
@@ -66,6 +70,39 @@ const fn colour(key: &'static str, label: &'static str, default: [f32; 3]) -> Co
 const fn toggle(key: &'static str, label: &'static str, default: bool) -> Control {
     Control::Toggle { key, label, default }
 }
+
+/// A Black & White hue weight: −200..300 %.
+const fn weight(key: &'static str, label: &'static str, default: f32) -> Control {
+    Control::Slider { key, label, min: -200.0, max: 300.0, scale: 0.01, unit: "%", default }
+}
+
+const BLACK_WHITE: &[Control] = &[
+    weight("bwReds", "Reds", 0.4),
+    weight("bwYellows", "Yellows", 0.6),
+    weight("bwGreens", "Greens", 0.4),
+    weight("bwCyans", "Cyans", 0.6),
+    weight("bwBlues", "Blues", 0.2),
+    weight("bwMagentas", "Magentas", 0.8),
+    toggle("bwTint", "Tint", false),
+    colour("bwTintColor", "Tint colour", crate::BW_DEFAULT_TINT),
+    pct("amount", "Amount", 1.0),
+];
+
+const COLOR_BALANCE: &[Control] = &[
+    Control::Heading { label: "Shadows" },
+    spct("cbShadowCR", "Cyan – Red", 0.0),
+    spct("cbShadowMG", "Magenta – Green", 0.0),
+    spct("cbShadowYB", "Yellow – Blue", 0.0),
+    Control::Heading { label: "Midtones" },
+    spct("cyanRed", "Cyan – Red", 0.0),
+    spct("magentaGreen", "Magenta – Green", 0.0),
+    spct("yellowBlue", "Yellow – Blue", 0.0),
+    Control::Heading { label: "Highlights" },
+    spct("cbHighCR", "Cyan – Red", 0.0),
+    spct("cbHighMG", "Magenta – Green", 0.0),
+    spct("cbHighYB", "Yellow – Blue", 0.0),
+    toggle("preserveLum", "Preserve luminosity", true),
+];
 
 const CX: Control = pct("centerX", "Centre X", 0.5);
 const CY: Control = pct("centerY", "Centre Y", 0.5);
@@ -117,13 +154,14 @@ const MIXER: &[Control] = &[
 ];
 
 /// Whether `c` shows for these params: the Channel Mixer shows its colour
-/// rows, or only the grey row when Monochrome is on.
+/// rows, or only the grey row when Monochrome is on; Black & White shows
+/// its tint colour while Tint is on.
 pub fn visible(kind: Kind, c: &Control, p: &crate::Params) -> bool {
-    let Control::Slider { key, .. } = c else { return true };
-    if kind != Kind::ChannelMixer {
-        return true;
+    match (kind, c) {
+        (Kind::ChannelMixer, Control::Slider { key, .. }) => key.starts_with("mixK") == p.mix_mono.unwrap_or(false),
+        (Kind::BlackWhite, Control::Color { key: "bwTintColor", .. }) => p.bw_tint.unwrap_or(false),
+        _ => true,
     }
-    key.starts_with("mixK") == p.mix_mono.unwrap_or(false)
 }
 
 /// The panel for a spec-18 kind. Empty for spec-10 kinds (the app has bespoke
@@ -151,6 +189,8 @@ pub fn controls(kind: Kind) -> &'static [Control] {
             }
         }
         Kind::ChannelMixer => MIXER,
+        Kind::BlackWhite => BLACK_WHITE,
+        Kind::ColorBalance => COLOR_BALANCE,
         Kind::ColorToAlpha => const { &[colour("target", "Colour", [1.0; 3]), pct("threshold", "Threshold", 0.0)] },
         Kind::ReplaceColor => {
             const { &[colour("target", "Find", [1.0; 3]), colour("replace", "Replace with", [0.2, 0.45, 1.0]), pct("threshold", "Range", 0.3)] }

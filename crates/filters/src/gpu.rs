@@ -42,7 +42,10 @@ pub fn gpu_adjust(kind: Kind, p: &Params, frame: Frame) -> Option<GpuAdjust> {
             2
         }
         Kind::BlackWhite => {
-            put(0, &[p.amount.unwrap_or(1.0)]);
+            let (prim, sec) = crate::colour::bw_weights(p);
+            put(0, &[p.amount.unwrap_or(1.0), prim[0], prim[1], prim[2]]);
+            put(4, &[sec[0], sec[1], sec[2], if p.bw_tint.unwrap_or(false) { 1.0 } else { 0.0 }]);
+            put(8, &p.bw_tint_color.unwrap_or(crate::BW_DEFAULT_TINT));
             3
         }
         Kind::Invert => 4,
@@ -65,7 +68,11 @@ pub fn gpu_adjust(kind: Kind, p: &Params, frame: Frame) -> Option<GpuAdjust> {
             8
         }
         Kind::ColorBalance => {
-            put(0, &[p.cyan_red.unwrap_or(0.0), p.magenta_green.unwrap_or(0.0), p.yellow_blue.unwrap_or(0.0)]);
+            let v = |x: Option<f32>| x.unwrap_or(0.0);
+            let keep = if p.preserve_lum == Some(false) { 0.0 } else { 1.0 };
+            put(0, &[v(p.cb_shadow_cr), v(p.cb_shadow_mg), v(p.cb_shadow_yb), keep]);
+            put(4, &[v(p.cyan_red), v(p.magenta_green), v(p.yellow_blue)]);
+            put(8, &[v(p.cb_high_cr), v(p.cb_high_mg), v(p.cb_high_yb)]);
             9
         }
         Kind::GradientMap => {
