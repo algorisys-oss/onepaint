@@ -576,3 +576,49 @@ pub fn with_whole_spatial(mut doc: Document, seed: u64) -> Document {
     doc.root.insert(at, Node::Layer(l));
     doc
 }
+
+/// Layer styles (spec 56): every effect in its default mode over something
+/// half see-through, on a layer, and a styled group over a background.
+pub fn styled_docs() -> Vec<Document> {
+    use onepaint_doc::styles::{EffectKind, LayerStyles, default_effect};
+    let square = |name: &str, x0: i32, y0: i32, size: i32, c: [f32; 4]| {
+        let mut l = Layer::new(name);
+        for y in y0..y0 + size {
+            for x in x0..x0 + size {
+                l.pixels.set(x, y, c);
+            }
+        }
+        l
+    };
+    let fx = |k: EffectKind, f: &dyn Fn(&mut onepaint_doc::styles::Effect)| {
+        let mut e = default_effect(k);
+        f(&mut e);
+        e
+    };
+    let all = |k: EffectKind| default_effect(k);
+    let mut docs = Vec::new();
+    for effects in [
+        vec![all(EffectKind::DropShadow), all(EffectKind::Stroke)],
+        vec![all(EffectKind::InnerShadow), all(EffectKind::InnerGlow), all(EffectKind::OuterGlow)],
+        vec![all(EffectKind::Bevel), all(EffectKind::Satin)],
+        vec![all(EffectKind::GradientOverlay), all(EffectKind::PatternOverlay), all(EffectKind::ColorOverlay)],
+        vec![fx(EffectKind::Stroke, &|e| e.position = "center".into()), fx(EffectKind::Stroke, &|e| e.position = "inside".into())],
+    ] {
+        let mut l = square("a", 180, 100, 60, [0.3, 0.6, 0.2, 1.0]);
+        l.set_styles(Some(LayerStyles { fill_opacity: 0.7, effects }));
+        let mut d = Document::new(300, 300, None);
+        d.root = vec![Node::Layer(square("under", 150, 80, 120, [0.4, 0.1, 0.3, 0.6])), Node::Layer(l)];
+        docs.push(d);
+    }
+    let mut g = onepaint_doc::Group::new("g");
+    g.children =
+        vec![Node::Layer(square("a", 200, 100, 30, [1.0, 0.0, 0.0, 1.0])), Node::Layer(square("b", 230, 120, 30, [0.0, 0.0, 1.0, 1.0]))];
+    g.set_styles(Some(LayerStyles {
+        fill_opacity: 1.0,
+        effects: vec![fx(EffectKind::OuterGlow, &|e| e.size = 14.0), fx(EffectKind::Stroke, &|e| e.size = 4.0)],
+    }));
+    let mut d = Document::new(300, 300, Some(onepaint_color::Rgba::WHITE));
+    d.root.push(Node::Group(g));
+    docs.push(d);
+    docs
+}

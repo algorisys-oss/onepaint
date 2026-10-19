@@ -142,43 +142,10 @@ fn a_group_strokes_its_children_together() {
     assert!(near(px(&d, 161, 110), [0.0, 1.0, 0.0, 1.0], 1e-6));
 }
 
-/// Every effect in its default mode over a backdrop, on a layer and on a
-/// group: the planned programs, run on the CPU, match the tree compositor
-/// (their content goes through f16, as on the GPU). Families and wide
-/// margins stay on the CPU.
-fn styled_docs() -> Vec<Document> {
-    let all = |k: EffectKind| effect(k, |_| {});
-    let mut docs = Vec::new();
-    for effects in [
-        vec![all(EffectKind::DropShadow), all(EffectKind::Stroke)],
-        vec![all(EffectKind::InnerShadow), all(EffectKind::InnerGlow), all(EffectKind::OuterGlow)],
-        vec![all(EffectKind::Bevel), all(EffectKind::Satin)],
-        vec![all(EffectKind::GradientOverlay), all(EffectKind::PatternOverlay), all(EffectKind::ColorOverlay)],
-        vec![effect(EffectKind::Stroke, |e| e.position = "center".into()), effect(EffectKind::Stroke, |e| e.position = "inside".into())],
-    ] {
-        let mut l = square("a", 180, 100, 60, [0.3, 0.6, 0.2, 1.0]);
-        l.set_styles(Some(LayerStyles { fill_opacity: 0.7, effects }));
-        let mut d = doc_with(l);
-        // Something under it, half see-through, for the modes to blend with.
-        d.root.insert(0, Node::Layer(square("under", 150, 80, 120, [0.4, 0.1, 0.3, 0.6])));
-        docs.push(d);
-    }
-    let mut g = Group::new("g");
-    g.children = vec![Node::Layer(square("a", 200, 100, 30, RED)), Node::Layer(square("b", 230, 120, 30, [0.0, 0.0, 1.0, 1.0]))];
-    g.set_styles(Some(LayerStyles {
-        fill_opacity: 1.0,
-        effects: vec![effect(EffectKind::OuterGlow, |e| e.size = 14.0), effect(EffectKind::Stroke, |e| e.size = 4.0)],
-    }));
-    let mut d = Document::new(300, 300, Some(onepaint_color::Rgba::WHITE));
-    d.root.push(Node::Group(g));
-    docs.push(d);
-    docs
-}
-
 #[test]
 fn styled_programs_match_the_tree_compositor() {
     use onepaint_compose::program::{plan_tile, run};
-    for (n, d) in styled_docs().iter().enumerate() {
+    for (n, d) in onepaint_compose::testdocs::styled_docs().iter().enumerate() {
         for (tx, ty) in d.bounds().tiles() {
             let prog = plan_tile(d, tx, ty, None).unwrap_or_else(|| panic!("doc {n} tile {tx},{ty} plans"));
             let (got, want) = (run(&prog), composite_tile(d, tx, ty, None));

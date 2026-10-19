@@ -4,8 +4,11 @@
 Phases 1 and 2 built (2026-10-19): `doc::styles` (the model, sanitizer,
 contours, reach, Global Light, with happypaint's model tests) and
 `compose::styles`, the oracle: styled layers and groups render in the tree
-compositor; tiles with styles stay on the CPU (the planner refuses them)
-until phase 3. Divergence 51. Phase 4 in part: `LayerProps::styles`
+compositor. Phase 3 built: the planner makes styled sources and the GPU
+runs them (`gpu::styles`, `styles.wgsl`; blend modes shared with the
+compositor in `blend.wgsl`), matching the oracle within 4e-3 on the
+styled test documents, with shader mutations caught. Riders, inherit
+alpha, knockout and reach over 124 px stay on the CPU. Divergence 51. Phase 4 in part: `LayerProps::styles`
 (one undo step per drag or click; dirty rects grow by the reach), the
 built-in styles, and the Layer Style editor in Properties for pixel, text
 and path layers and groups; `ApplyGlobalLight` (linked effects across the

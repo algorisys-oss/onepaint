@@ -74,6 +74,8 @@ pub struct Job<'a> {
     pub src: &'a SpatialSrc,
     pub out: u32,
     pub grid: Vec<u32>,
+    /// A styled source's backdrop slot (spec 56), else `NONE`.
+    pub under: u32,
 }
 
 pub struct SpatialPass {

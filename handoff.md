@@ -46,12 +46,13 @@ Overnight (2026-10-18 → 19), all pushed, newest last:
   LUT… panel. PSD `clrL` is still raw-only.
 - Spec 56, layer styles: phases 1–2 built: the model (`doc::styles`) and
   the CPU renderer (`compose::styles`, happypaint's `STYLE_SRC` per tile
-  over the tile ± twice the reach, exact distance field). Styled tiles
-  render on the CPU. Phase 4 in part: `LayerProps::styles`, built-in
+  over the tile ± twice the reach, exact distance field). Phase 3: styled
+  tiles run on the GPU (`gpu::styles`, `styles.wgsl`, `blend.wgsl` shared
+  with compose; `layer_styles_match_the_tree_compositor`). Phase 4 in part: `LayerProps::styles`, built-in
   styles, the editor in Properties (`styles_ui.rs`; `ONEPAINT_STYLES=Gold`
   for screenshots), Global Light across the document, Bake, Merge Down
   baking styles; PSD effects both ways (`psd_effects`, `psd_desc`). Next:
-  phase 3 (GPU), then user presets with `.asl` import, gradient stops.
+  user presets with `.asl` import, gradient stops.
 - `scripts/bench-gate/gate.sh save|check`: the perf-budget gate for
   AGENTS.md's 5% rule, on criterion's saved baselines (checked: the 9
   engine hot-path benches came out within 5% of themselves).

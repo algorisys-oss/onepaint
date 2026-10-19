@@ -13,6 +13,7 @@ pub mod health;
 pub mod mip;
 pub mod sheets;
 pub mod spatial;
+pub mod styles;
 pub mod wet;
 pub mod whole;
 

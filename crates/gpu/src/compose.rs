@@ -23,6 +23,8 @@ use std::sync::{Arc, Weak};
 use wgpu::util::DeviceExt;
 
 pub const COMPOSE_WGSL: &str = include_str!("../shaders/compose.wgsl");
+/// Blend modes and the sRGB transfer, shared with the layer-style pass.
+pub const BLEND_WGSL: &str = include_str!("../shaders/blend.wgsl");
 
 /// Atlas textures the shader binds.
 const ATLASES: usize = 8;
@@ -314,6 +316,8 @@ pub struct GpuCompositor {
     /// Spatial adjustment layers' filter (spec 52), and where this batch's
     /// filtered tiles are, by their source's key.
     spatial: crate::spatial::SpatialPass,
+    /// Layer styles' pass (spec 56).
+    styles: crate::styles::StylesPass,
     /// The live whole-canvas layer's filtered image (spec 53).
     whole: crate::whole::WholePass,
     /// A stroke is in progress (see [`GpuCompositor::set_interactive`]).
@@ -358,7 +362,7 @@ impl GpuCompositor {
 
     /// As [`GpuCompositor::new`], with `cache_budget` bytes for segment images.
     pub fn with_cache(device: &wgpu::Device, budget: u64, cache_budget: u64) -> Self {
-        let source = format!("{COMPOSE_WGSL}\n{}", crate::wet::PIGMENT_WGSL);
+        let source = format!("{BLEND_WGSL}\n{COMPOSE_WGSL}\n{}", crate::wet::PIGMENT_WGSL);
         let module = device
             .create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("compose"), source: wgpu::ShaderSource::Wgsl(source.into()) });
         let cs = wgpu::ShaderStages::COMPUTE;
@@ -561,6 +565,7 @@ impl GpuCompositor {
                 .create_view(&Default::default()),
             fills: 0,
             spatial: crate::spatial::SpatialPass::new(device),
+            styles: crate::styles::StylesPass::new(device),
             whole: crate::whole::WholePass::new(device),
             interactive: false,
             failed: Vec::new(),
@@ -907,7 +912,12 @@ impl GpuCompositor {
                 (0, 0),
                 |(c, f), s| {
                     let (bc, bf) = s.backdrop.iter().map(|(_, p)| spatial_need(&p.ops)).fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
-                    (c + s.backdrop.len() + bc, f + 1 + bf)
+                    // A styled source's backdrop takes a slot too (spec 56).
+                    let (uc, uf) = s.styled.as_ref().map_or((0, 0), |st| {
+                        let (c, f) = spatial_need(&st.under.ops);
+                        (c + 1, f)
+                    });
+                    (c + s.backdrop.len() + bc + uc, f + 1 + bf + uf)
                 },
             )
         }
@@ -1059,7 +1069,9 @@ impl GpuCompositor {
                 let d = match depth.get(&s.key) {
                     Some(&d) => d,
                     None => {
-                        let d = 1 + s.backdrop.iter().map(|(_, p)| walk(&p.ops, depth, out)).max().unwrap_or(0);
+                        // A styled source also waits for what's under it (spec 56).
+                        let under = s.styled.as_ref().map_or(0, |st| walk(&st.under.ops, depth, out));
+                        let d = 1 + s.backdrop.iter().map(|(_, p)| walk(&p.ops, depth, out)).max().unwrap_or(0).max(under);
                         depth.insert(s.key, d);
                         out.push(s);
                         d
@@ -1109,7 +1121,26 @@ impl GpuCompositor {
                 }
                 grid[(*y - gy) as usize * cols + (*x - gx) as usize] = slot;
             }
-            jobs.push(crate::spatial::Job { src: s, out: idx, grid });
+            // A styled source's backdrop: the layers under it on this tile.
+            let mut under = crate::spatial::NONE;
+            if let Some(st) = &s.styled
+                && !st.under.ops.is_empty()
+            {
+                let key = onepaint_compose::program::segment_key(&st.under.ops, st.under.origin());
+                if let Some((slot, fresh)) = self.cache_slot_key(key, &st.under.ops) {
+                    if fresh {
+                        fills.push(Work {
+                            origin: [s.tx as u32 * edge, s.ty as u32 * edge],
+                            ops: st.under.ops.iter().collect(),
+                            over: None,
+                            init: NONE,
+                            dest: slot,
+                        });
+                    }
+                    under = slot;
+                }
+            }
+            jobs.push(crate::spatial::Job { src: s, out: idx, grid, under });
         }
         out
     }
@@ -1314,7 +1345,13 @@ impl GpuCompositor {
             self.dispatch(device, queue, &mut enc, fills, sheets, Some(target), true);
             if let (Some((_, read, _)), Some((_, _, write))) = (&self.cache, &self.filtered) {
                 for job in jobs {
-                    self.spatial.record(device, &mut enc, job, self.level, read, &write[self.level as usize]);
+                    match job.src.styled.as_deref() {
+                        Some(styled) => {
+                            let j = crate::styles::Job { src: job.src, styled, out: job.out, grid: job.grid.clone(), under: job.under };
+                            self.styles.record(device, &mut enc, &j, self.level, read, &write[self.level as usize]);
+                        }
+                        None => self.spatial.record(device, &mut enc, job, self.level, read, &write[self.level as usize]),
+                    }
                 }
                 self.filters += jobs.len() as u64;
             }

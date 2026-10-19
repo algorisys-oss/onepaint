@@ -1088,3 +1088,25 @@ fn pegged_ghosts_match_the_tree_compositor() {
         assert!(over as f64 <= (1e-3 * (w * h) as f64).ceil(), "seed {seed}: {over} px over, worst {e} at {at:?}");
     }
 }
+
+/// Spec 56: styled layers and groups run their style pass on the GPU (the
+/// exact distance field and every effect) and match the tree compositor.
+#[test]
+fn layer_styles_match_the_tree_compositor() {
+    use onepaint_compose::testdocs::styled_docs;
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let (w, h) = (300, 300);
+    let tex = target(&device, w, h);
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
+    for (n, doc) in styled_docs().iter().enumerate() {
+        let mut gc = GpuCompositor::new(&device, 64 << 20);
+        gc.run(&device, &queue, &programs(doc, None), &view, [w, h]);
+        let gpu = read(&device, &queue, &tex);
+        let over = over_tolerance(doc, None, &gpu, 4e-3);
+        let (e, at) = max_error(doc, None, &gpu);
+        assert!(over as f64 <= (1e-3 * (w * h) as f64).ceil(), "doc {n}: {over} px over, worst {e} at {at:?}");
+    }
+}

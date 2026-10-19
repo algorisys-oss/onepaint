@@ -228,7 +228,7 @@ fn grad_shape(s: &str) -> onepaint_filters::gradient::Shape {
     }
 }
 
-fn ramp_of(e: &Effect, space: onepaint_color::Space) -> onepaint_filters::gradient::Ramp {
+pub fn ramp_of(e: &Effect, space: onepaint_color::Space) -> onepaint_filters::gradient::Ramp {
     use onepaint_filters::gradient::{GradStop, Ramp};
     let mut stops: Vec<GradStop> = e
         .stops
