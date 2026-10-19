@@ -693,7 +693,14 @@ fn palette_section(app: &mut App, ui: &mut Ui) {
                 ui.close();
             }
             if ui.button("Delete").clicked() {
-                app.palettes.delete(&active.id);
+                let title = format!("Delete palette \"{}\"?", active.name);
+                app.ask = Some(crate::ask::Ask::confirm(
+                    title,
+                    "This can't be undone.",
+                    "Delete",
+                    true,
+                    crate::ask::AskFor::DeletePalette(active.id.clone()),
+                ));
                 ui.close();
             }
             ui.separator();
@@ -1376,10 +1383,7 @@ fn saved_selections(app: &mut App, ui: &mut Ui, has: bool) {
     ui.add_enabled_ui(has, |ui| {
         if widgets::menu_item(ui, Some("check"), "Save selection", "").clicked() {
             let name = format!("Selection {}", app.session.saved_selections().len() + 1);
-            if let Err(e) = app.session.execute(Command::SaveSelection { name }) {
-                let now = ui.input(|i| i.time);
-                app.notify(e.to_string(), now);
-            }
+            app.ask = Some(crate::ask::Ask::text("Save selection as", name, "Save", crate::ask::AskFor::SaveSelection));
         }
     });
     let list: Vec<(String, String)> = app.session.saved_selections().iter().map(|s| (s.id.clone(), s.name.clone())).collect();

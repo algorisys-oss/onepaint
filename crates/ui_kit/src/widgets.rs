@@ -342,6 +342,12 @@ pub fn secondary_button(ui: &mut Ui, label: &str, min_width: f32) -> Response {
     button_impl(ui, label, min_width, t.field, t.fg, false)
 }
 
+/// A primary button for an action that can't be undone (delete).
+pub fn danger_button(ui: &mut Ui, label: &str, min_width: f32) -> Response {
+    let t = Tokens::get(ui.ctx());
+    button_impl(ui, label, min_width, t.danger, t.on_accent, true)
+}
+
 fn button_impl(ui: &mut Ui, label: &str, min_width: f32, bg: Color32, fg: Color32, primary: bool) -> Response {
     let t = Tokens::get(ui.ctx());
     let galley = ui.painter().layout_no_wrap(label.to_owned(), theme::medium(13.0), fg);

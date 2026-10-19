@@ -11,6 +11,7 @@ pub enum AnimFormat {
     Mp4,
     PngZip,
 }
+mod ask;
 mod autosave;
 mod brush_library;
 mod brush_studio;
@@ -240,6 +241,8 @@ pub struct App {
     pub palette_rename: Option<String>,
     pub thumbs: thumbs::Thumbs,
     pub toast: Option<(String, f64)>,
+    /// The open in-app question (`ask.rs`).
+    pub ask: Option<ask::Ask>,
     /// Whether the canvas's GPU device was lost, and if that was handled.
     pub gpu_health: Option<onepaint_gpu::health::Health>,
     gpu_lost_handled: bool,
@@ -351,6 +354,7 @@ impl App {
             palette_rename: None,
             thumbs: thumbs::Thumbs::default(),
             toast: None,
+            ask: None,
             gpu_health: cc.wgpu_render_state.as_ref().map(|rs| onepaint_gpu::health::Health::watch(&rs.device)),
             gpu_lost_handled: false,
             new_doc: [2048, 1536],
@@ -1514,6 +1518,7 @@ impl eframe::App for App {
             chrome::show(self, &ctx);
         }
         text_ui::show(self, &ctx);
+        ask::show(self, &ctx);
         loading::show(self, &ctx);
         let title = format!("{}{} — onepaint", if self.dirty() { "• " } else { "" }, self.session.doc().name);
         if title != self.title {
@@ -2663,13 +2668,48 @@ mod tests {
         h.run_steps(4);
         h.get_by_label("Save selection").click();
         h.run_steps(4);
+        // It asks for a name, offering the next "Selection N".
+        assert_eq!(h.state().ask.as_ref().and_then(|a| a.text.clone()).as_deref(), Some("Selection 1"));
+        h.state_mut().ask.as_mut().unwrap().text = Some("  Face  ".into());
+        h.get_by_label("Save").click();
+        h.run_steps(4);
         assert_eq!(h.state().session.saved_selections().len(), 1);
+        assert_eq!(h.state().session.saved_selections()[0].name, "Face");
+        assert!(h.state().toast.as_ref().is_some_and(|t| t.0 == "Saved “Face”"));
         let _ = h.state_mut().session.execute(Command::Deselect);
         h.run_steps(4);
         assert!(h.state().session.selection().is_none());
+        h.state_mut().popover = Some(Popover::Selection);
+        h.run_steps(4);
         h.get_by_label("Load (replace)").click();
         h.run_steps(4);
         assert!(h.state().session.selection().is_some_and(|m| m.coverage(200, 200) > 0.5));
+    }
+
+    /// Deleting a palette asks first (it can't be undone); Cancel keeps it.
+    #[test]
+    fn deleting_a_palette_asks_first() {
+        let mut h = harness();
+        h.run();
+        let id = h.state().palettes.active().id.clone();
+        let name = h.state().palettes.active().name.clone();
+        let ask = ask::Ask::confirm(
+            format!("Delete palette \"{name}\"?"),
+            "This can't be undone.",
+            "Delete",
+            true,
+            ask::AskFor::DeletePalette(id.clone()),
+        );
+        h.state_mut().ask = Some(ask.clone());
+        h.run();
+        h.get_by_label("Cancel").click();
+        h.run();
+        assert!(h.state().ask.is_none() && h.state().palettes.palettes.iter().any(|p| p.id == id), "kept");
+        h.state_mut().ask = Some(ask);
+        h.run();
+        h.get_by_label("Delete").click();
+        h.run();
+        assert!(!h.state().palettes.palettes.iter().any(|p| p.id == id), "deleted");
     }
 
     #[test]
