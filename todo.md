@@ -234,7 +234,10 @@ See `docs/parity-delta-2026-10-10.md`.
 - [ ] PSD codec parity (modes, 32-bit, round trip, live adjustments, fills, styles)
 - [x] Wet physics v0.199 (spec 58): paper absorbs, the halo, tip-shaped dabs, wash fill
 - [x] Ten procedural papers, sheet colour, flecks and mottle (spec 57)
-- [ ] Workspace: menu bar, options row, left tool rail, side-slider extras,
-      scrollbars, angle dial, in-app dialogs, manual, brush search
+- [~] Workspace: scrollbars, angle dial, in-app dialogs, brush search,
+      gradient editor and filter handles done (2026-10-19). Left: the menu
+      bar, options row and left tool rail (wait for the owner's layout
+      decision), side-slider extras, and Help ▸ Manual (an onepaint manual
+      to write, not a port: happypaint's documents its own UI)
 - [x] Refresh stale divergences (1, 3, 6, 15, 41), spec 15, feature-parity.md
 
