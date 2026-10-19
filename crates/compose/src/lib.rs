@@ -8,12 +8,14 @@ pub mod feather;
 pub mod program;
 pub mod relief;
 pub mod spatial;
+pub mod styles;
 #[doc(hidden)]
 pub mod testdocs;
 pub mod vmask;
 
 use blend::{blend_px_alpha_lock_at, blend_px_alpha_lock_in, blend_px_at, blend_px_if, blend_px_in, clip_over};
 use onepaint_color::Space;
+use onepaint_doc::styles::LayerStyles;
 use onepaint_doc::{BlendIf, BlendMode, Document, Layer, Node, mask_k};
 use onepaint_filters::Frame;
 use onepaint_panel::coverage::{TileCoverage, tile_coverage};
@@ -310,14 +312,22 @@ fn composite_nodes(nodes: &[Node], tx: i32, ty: i32, target: &mut Buf, ov: Optio
                         pass_through(&g.children, g.opacity, tx, ty, target, ov, frame);
                     }
                 } else if g.visible && g.opacity > 0.0 && !g.children.is_empty() && clip != Some(TileCoverage::Empty) {
-                    let mut buf = match ghost_peg(g) {
-                        Some(peg) => pegged(&g.children, peg, tx, ty, ov, frame),
+                    let group_tile = |x: i32, y: i32| match ghost_peg(g) {
+                        Some(peg) => pegged(&g.children, peg, x, y, ov, frame),
                         None => {
                             let mut buf = zeros();
-                            composite_nodes(&g.children, tx, ty, &mut buf, ov, frame, None);
+                            composite_nodes(&g.children, x, y, &mut buf, ov, frame, None);
                             buf
                         }
                     };
+                    let mut buf = group_tile(tx, ty);
+                    // Layer styles (spec 56) on the group's composite; riders clip to the result.
+                    if let Some(st) = g.styles().filter(LayerStyles::is_active) {
+                        let riders = nodes[i + 1..j].iter().any(|r| r.visible() && r.opacity() > 0.0);
+                        let under = (!riders).then(|| target.clone());
+                        let content = |x: i32, y: i32| Some(group_tile(x, y));
+                        buf = crate::styles::styled_tile(&st, (tx, ty), frame, &content, Some(&buf), under.as_ref());
+                    }
                     // A panel's frame clips the group before its riders go on (C:1540-1548).
                     if let Some(TileCoverage::Partial(cov)) = &clip {
                         for (p, k) in buf.chunks_exact_mut(4).zip(cov) {
@@ -336,10 +346,21 @@ fn composite_nodes(nodes: &[Node], tx: i32, ty: i32, target: &mut Buf, ov: Optio
                         knockout(target, l, reveal, tx, ty, ov, frame);
                     }
                     let family = &nodes[i + 1..j];
+                    // Layer styles (spec 56): the layer with its effects, drawn as its pixels.
+                    let styled = |backdrop: Option<&Buf>| {
+                        let st = l.styles().filter(LayerStyles::is_active)?;
+                        let content = |x: i32, y: i32| layer_content(l, x, y, ov, frame);
+                        Some(crate::styles::styled_tile(&st, (tx, ty), frame, &content, None, backdrop))
+                    };
                     if family.is_empty() {
-                        draw_layer(target, l, tx, ty, ov, frame);
+                        // Effects blend against what's under the layer, unless it clips to it.
+                        let under = (!l.inherit_alpha).then(|| target.clone());
+                        match styled(under.as_ref()) {
+                            Some(c) => draw_styled(target, l, c, tx, ty, frame),
+                            None => draw_layer(target, l, tx, ty, ov, frame),
+                        }
                     } else {
-                        let mut fam = layer_content(l, tx, ty, ov, frame).unwrap_or_else(zeros);
+                        let mut fam = styled(None).or_else(|| layer_content(l, tx, ty, ov, frame)).unwrap_or_else(zeros);
                         draw_clipped(&mut fam, family, tx, ty, ov, frame);
                         if l.inherit_alpha {
                             clip_into(target, &fam, l.opacity);
@@ -362,6 +383,8 @@ fn composite_nodes(nodes: &[Node], tx: i32, ty: i32, target: &mut Buf, ov: Optio
 pub(crate) fn passes_through(g: &onepaint_doc::Group, riders: &[Node]) -> bool {
     g.blend_mode == BlendMode::PassThrough
         && !g.extra.contains_key("panel")
+        // A styled group draws its effects round one picture.
+        && !g.styles().is_some_and(|s| s.is_active())
         && !g.extra.contains_key(GHOST_PEG_KEY)
         && !g.extra.contains_key(GHOST_TINT_KEY)
         && !riders.iter().any(|r| r.visible() && r.opacity() > 0.0)
@@ -537,6 +560,20 @@ fn draw_adjustment(target: &mut Buf, l: &Layer, adj: &onepaint_doc::Adjustment, 
     }
     let bif = if l.clipped { None } else { l.blend_if() };
     blend_into_if(target, &out, l.blend_mode, l.opacity, frame.space, (tx, ty), bif.as_ref());
+}
+
+/// A styled layer's pixels (spec 56), as `draw_layer` draws a layer's own.
+fn draw_styled(target: &mut Buf, l: &Layer, mut c: Buf, tx: i32, ty: i32, frame: Frame) {
+    if l.inherit_alpha {
+        for i in (0..c.len()).step_by(4) {
+            let a = target[i + 3];
+            for k in 0..4 {
+                c[i + k] *= a;
+            }
+        }
+    }
+    let bif = if l.inherit_alpha { None } else { l.blend_if() };
+    blend_into_if(target, &c, l.blend_mode, l.opacity, frame.space, (tx, ty), bif.as_ref());
 }
 
 fn draw_layer(target: &mut Buf, l: &Layer, tx: i32, ty: i32, ov: Option<&StrokeOverlay>, frame: Frame) {

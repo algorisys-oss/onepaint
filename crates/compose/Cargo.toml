@@ -17,3 +17,4 @@ onepaint-doc = { workspace = true }
 onepaint-panel = { workspace = true }
 onepaint-brush = { workspace = true }
 rayon = { workspace = true }
+half = { workspace = true }

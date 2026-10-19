@@ -1044,6 +1044,10 @@ impl Planner<'_> {
                 Node::Group(g) => {
                     let clip = self.panel_clip(g);
                     if g.visible && g.opacity > 0.0 && !g.children.is_empty() && !matches!(clip, Some(Clip::Empty)) {
+                        // Layer styles (spec 56) render on the CPU until phase 3.
+                        if g.styles().is_some_and(|s| s.is_active()) {
+                            return Err(Unsupported);
+                        }
                         if g.extra.contains_key(GHOST_PEG_KEY) {
                             // Spec 55: the group's content through its peg, as a register.
                             match self.pegged_content(g)? {
@@ -1067,6 +1071,9 @@ impl Planner<'_> {
                 }
                 Node::Layer(l) => {
                     if l.visible && l.opacity > 0.0 {
+                        if l.adjustment.is_none() && l.styles().is_some_and(|s| s.is_active()) {
+                            return Err(Unsupported);
+                        }
                         let family = &nodes[i + 1..j];
                         let content = match crate::spatial::spatial_kind(l) {
                             Some(kind) => self.spatial_content(l, kind, &nodes[..i])?,

@@ -1,9 +1,11 @@
 # 56: Layer styles
 
 ## Status
-Phase 1 built (2026-10-19): `doc::styles`, the model, sanitizer,
-contours, reach and Global Light, with happypaint's model tests. Nothing
-renders styles yet. happypaint v0.196.0–0.196.8; the source of truth is
+Phases 1 and 2 built (2026-10-19): `doc::styles` (the model, sanitizer,
+contours, reach, Global Light, with happypaint's model tests) and
+`compose::styles`, the oracle: styled layers and groups render in the tree
+compositor; tiles with styles stay on the CPU (the planner refuses them)
+until phase 3. Divergence 51. happypaint v0.196.0–0.196.8; the source of truth is
 `engine/styles/layer-styles.ts` (model) and `style-renderer.ts` (WebGL),
 with `docs/layer-styles-spec.md` in happypaint.
 
