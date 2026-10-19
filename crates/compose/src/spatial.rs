@@ -134,6 +134,7 @@ pub fn whole_supported(kind: Kind, _p: &Params) -> bool {
             | Kind::ChromaticAberration
             | Kind::RadialBlur
             | Kind::SpinBlur
+            | Kind::LightRays
             | Kind::TiltShift
             | Kind::IrisBlur
             | Kind::FieldBlur

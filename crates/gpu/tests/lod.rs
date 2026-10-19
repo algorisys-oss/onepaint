@@ -366,6 +366,7 @@ fn whole_canvas_layers_preview_within_the_bound() {
         ("chromatic-aberration", json!({"amount": 1.5})),
         ("radial-blur", json!({"centerX": 0.4, "centerY": 0.5, "radialMode": "zoom", "amount": 0.6})),
         ("spin-blur", json!({"centerX": 0.5, "centerY": 0.5, "extent": 0.7, "aspect": 0.6, "focus": 0.3, "spin": 60.0})),
+        ("light-rays", json!({"centerX": 0.3, "centerY": 0.2, "extent": 0.7, "threshold": 0.4, "amount": 0.8})),
         ("tilt-shift", json!({"centerX": 0.5, "centerY": 0.45, "angle": 20.0, "focusSize": 0.1, "falloffSize": 0.2, "radius": 18.0})),
         ("iris-blur", json!({"centerX": 0.4, "centerY": 0.5, "extent": 0.6, "aspect": 0.7, "focus": 0.4, "radius": 20.0, "bokeh": 0.6})),
         ("field-blur", json!({"pins": [{"x": 0.2, "y": 0.8, "blur": 0.0}, {"x": 0.7, "y": 0.2, "blur": 25.0}]})),

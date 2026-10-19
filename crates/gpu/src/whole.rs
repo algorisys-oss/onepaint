@@ -100,6 +100,8 @@ pub fn reads_per_px(kind: Kind, p: &onepaint_filters::Params) -> u64 {
         Kind::Twirl | Kind::Pinch | Kind::PolarCoordinates => 4,
         Kind::ChromaticAberration => 9,
         Kind::RadialBlur => 96 * 4,
+        // 96 taps of four bright texels at a quarter of the pixels, then the combine.
+        Kind::LightRays => 96 * 4 * 4 / 4 + 4,
         Kind::SpinBlur => 64 * 4,
         // Three levels of two 65-tap passes at a quarter of the pixels, the
         // bokeh disc's 64 taps if on, and the blend's 13.
@@ -134,6 +136,12 @@ fn kind_params(kind: Kind, p: &onepaint_filters::Params) -> (u32, [f32; 4], [f32
             let zoom = if p.radial_mode.as_deref() != Some("spin") { 1.0 } else { 0.0 };
             (5, [c[0], c[1], p.amount.unwrap_or(0.0).clamp(0.0, 1.0), zoom])
         }
+        Kind::LightRays => {
+            let c = [p.center_x.unwrap_or(0.5), p.center_y.unwrap_or(0.3)];
+            let tint = p.tint.unwrap_or([1.0; 3]);
+            let k1 = [tint[0], tint[1], tint[2], p.amount.unwrap_or(0.6).max(0.0)];
+            return (7, [c[0], c[1], p.extent.unwrap_or(0.5).clamp(0.0, 1.0), p.threshold.unwrap_or(0.6)], k1);
+        }
         _ => (0, [0.0; 4]),
     };
     (code, k0, [0.0; 4])
@@ -141,6 +149,8 @@ fn kind_params(kind: Kind, p: &onepaint_filters::Params) -> (u32, [f32; 4], [f32
 
 pub struct WholePass {
     filter: wgpu::ComputePipeline,
+    rays: wgpu::ComputePipeline,
+    rays_final: wgpu::ComputePipeline,
     blur_src: wgpu::ComputePipeline,
     blur: wgpu::ComputePipeline,
     bokeh: wgpu::ComputePipeline,
@@ -242,6 +252,8 @@ impl WholePass {
         let storage = wgpu::TextureUsages::STORAGE_BINDING;
         Self {
             filter: pipeline("whole_filter"),
+            rays: pipeline("rays_half"),
+            rays_final: pipeline("rays_final"),
             blur_src: pipeline("gallery_blur_src"),
             blur: pipeline("gallery_blur"),
             bokeh: pipeline("gallery_bokeh"),
@@ -368,12 +380,14 @@ impl WholePass {
                 cp.dispatch_workgroups(n[0].div_ceil(8), n[1].div_ceil(8), 1);
             };
         let (di, dout) = (&self.dummy_in, &self.dummy_out);
-        let Some(geo) = geometry else {
+        let rays = kind == 7;
+        let Some(geo) = geometry.filter(|_| !rays).or(rays.then(|| gallery(Kind::TiltShift, &Default::default(), [1.0; 2], 1.0)).flatten())
+        else {
             let gal = gallery(Kind::TiltShift, &Default::default(), [1.0; 2], 1.0).expect("tilt-shift is a gallery kind");
             pass(enc, &self.filter, &gal, [di, dout, di, di, di], size);
             return;
         };
-        // Three half-resolution blur levels at R/4, R/2 and R, then the blend.
+        // Half-resolution images: the Blur Gallery's levels, or the rays.
         let hs = [size[0].div_ceil(2).max(1), size[1].div_ceil(2).max(1)];
         if self.half.as_ref().is_none_or(|(_, s)| *s != hs) {
             let usage = wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING;
@@ -381,6 +395,14 @@ impl WholePass {
             self.half = Some(([v(), v(), v(), v(), v()], hs));
         }
         let Some(([ta, tb, l1, l2, l3], _)) = &self.half else { return };
+        if rays {
+            // Light rays: the rays at half size, then screened over the backdrop.
+            let g = Gallery { half: [hs[0] as i32, hs[1] as i32], ..geo };
+            pass(enc, &self.rays, &g, [di, ta, di, di, di], hs);
+            pass(enc, &self.rays_final, &g, [ta, dout, di, di, di], size);
+            return;
+        }
+        // Three half-resolution blur levels at R/4, R/2 and R, then the blend.
         let half_per = [hs[0] as f32 / size[0] as f32, hs[1] as f32 / size[1] as f32];
         let mut gal = geo;
         gal.half = [hs[0] as i32, hs[1] as i32];

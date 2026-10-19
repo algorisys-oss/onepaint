@@ -415,3 +415,78 @@ fn gallery_final(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     textureStore(dst, l, o);
 }
+
+// ── Light rays (filters render.rs `light_rays`) ──
+// k0: the source (fractions of the document), the rays' length, the
+// threshold; k1: the tint and the amount.
+
+// `bloom_bright` of one backdrop texel.
+fn bright_at(x: i32, y: i32) -> vec3<f32> {
+    let s = texel_at(x, y);
+    let rgb = clamp(unpremul(s), vec3<f32>(0.0), vec3<f32>(1.0));
+    let thr = prm.k0.w;
+    let k = smoothstep_cpu(thr, min(thr + 0.25, 1.0), dot(rgb, LUMA)) * select(1.0, 0.0, s.w < 0.0001);
+    return rgb * k;
+}
+
+// `Tex::texel` over the bright-pass image: bilinear of bright texels.
+fn bright_texel(xi: f32, yi: f32) -> vec3<f32> {
+    let x = clamp(xi, 0.0, f32(prm.size.x - 1));
+    let y = clamp(yi, 0.0, f32(prm.size.y - 1));
+    let x0 = i32(floor(x));
+    let y0 = i32(floor(y));
+    let x1 = min(x0 + 1, prm.size.x - 1);
+    let y1 = min(y0 + 1, prm.size.y - 1);
+    let fx = x - f32(x0);
+    let fy = y - f32(y0);
+    let top = bright_at(x0, y0) + (bright_at(x1, y0) - bright_at(x0, y0)) * fx;
+    let bot = bright_at(x0, y1) + (bright_at(x1, y1) - bright_at(x0, y1)) * fx;
+    return top + (bot - top) * fy;
+}
+
+// The rays at half resolution: 96 jittered taps toward the source,
+// weighted 1 − t, tinted ×3.
+@compute @workgroup_size(8, 8, 1)
+fn rays_half(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let l = vec2<i32>(gid.xy);
+    if (any(l >= gal.half)) {
+        return;
+    }
+    let uv = (vec2<f32>(l) + 0.5) / vec2<f32>(gal.half);
+    let p = uv * vec2<f32>(prm.size);
+    let to_c = prm.k0.xy * prm.doc - p;
+    let jit = ign(vec2<f32>(l) + 0.5);
+    var sum = vec3<f32>(0.0);
+    var wsum = 0.0;
+    for (var k = 0; k < 96; k++) {
+        let t = (f32(k) + jit) / 96.0;
+        let wt = 1.0 - t;
+        let q = p + to_c * t * prm.k0.z;
+        sum += bright_texel(q.x - 0.5, q.y - 0.5) * wt;
+        wsum += wt;
+    }
+    textureStore(g_out, l, vec4<f32>(sum / wsum * prm.k1.xyz * 3.0, 1.0));
+}
+
+// `to_work` of a straight colour.
+fn to_work3(c: vec3<f32>) -> vec3<f32> {
+    if (prm.gamma != 0u) {
+        return c;
+    }
+    return vec3<f32>(lin2srgb(c.x), lin2srgb(c.y), lin2srgb(c.z));
+}
+
+// `bloom_combine`: screen the rays over the backdrop in the work space.
+@compute @workgroup_size(8, 8, 1)
+fn rays_final(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let l = vec2<i32>(gid.xy);
+    if (any(l >= prm.size)) {
+        return;
+    }
+    let s = texel_at(l.x, l.y);
+    let uv = (vec2<f32>(l) + 0.5) / vec2<f32>(prm.size);
+    let g = g_uv(g_in, uv);
+    let base = work(s);
+    let gl = to_work3(clamp(g.xyz, vec3<f32>(0.0), vec3<f32>(1.0))) * prm.k1.w;
+    textureStore(dst, l, repremul(1.0 - (1.0 - base) * (1.0 - gl), s.w));
+}

@@ -942,6 +942,8 @@ fn whole_canvas_kinds_over_stripes_match_the_oracle() {
         ("radial-blur", json!({"centerX": 0.4, "centerY": 0.5, "radialMode": "zoom", "amount": 0.6})),
         ("radial-blur", json!({"centerX": 0.6, "centerY": 0.45, "radialMode": "spin", "amount": 0.8})),
         ("spin-blur", json!({"centerX": 0.5, "centerY": 0.5, "angle": 30.0, "extent": 0.7, "aspect": 0.6, "focus": 0.3, "spin": 60.0})),
+        ("light-rays", json!({"centerX": 0.3, "centerY": 0.2, "extent": 0.7, "threshold": 0.4, "amount": 0.8, "tint": [1.0, 0.8, 0.5]})),
+        ("light-rays", json!({"centerX": 0.7, "centerY": 0.9, "extent": 0.3, "threshold": 0.1, "amount": 1.5})),
         ("tilt-shift", json!({"centerX": 0.5, "centerY": 0.45, "angle": 20.0, "focusSize": 0.1, "falloffSize": 0.2, "radius": 18.0})),
         ("tilt-shift", json!({"centerX": 0.5, "centerY": 0.5, "angle": 0.0, "focusSize": 0.05, "radius": 24.0, "bokeh": 0.8})),
         ("iris-blur", json!({"centerX": 0.4, "centerY": 0.5, "extent": 0.6, "aspect": 0.7, "angle": 30.0, "focus": 0.4, "radius": 20.0})),

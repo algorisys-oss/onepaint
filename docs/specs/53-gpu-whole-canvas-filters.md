@@ -63,8 +63,11 @@ filtered image** that every tile's composite reads.
   then the Blur Gallery: tilt-shift, iris and field blur (three half-res
   blur levels, optional bokeh disc, a per-pixel blend). Sampling ports
   `filters::tex` exactly: bilinear by hand with clamp-to-edge, no sampler.
-  Glitch (`sin` hashes, divergence 17), light rays and lightning stay on the
-  CPU.
+  Light rays (2026-10-19): a half-resolution pass of 96 jittered taps
+  toward the source, each a bilinear of four bright-passed backdrop texels
+  (so it equals the CPU's bilinear over its bright image), then Bloom's
+  screen combine at full size. Glitch (`sin` hashes, divergence 17) and
+  lightning stay on the CPU.
 - **Levels:** above level 0 the image is the level's size, rounded down as
   the mips and the target are (rounding up let clamped taps read an edge
   texel half off the document: polar's corners at level 3); positions are
