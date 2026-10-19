@@ -776,6 +776,46 @@ impl Planner<'_> {
         self.content_with(l, Some(Arc::new(src)))
     }
 
+    /// A ghost group's content through its peg (spec 55): the group's
+    /// children planned on the tiles the inverse transform reaches, which
+    /// the filter resamples. The GPU assembles them in a 3 × 3-tile image,
+    /// so a peg that shrinks past that stays on the CPU.
+    /// `None`: nothing over the document reaches the tile.
+    fn pegged_content(&self, g: &onepaint_doc::Group) -> Result<Option<Content>, Unsupported> {
+        let peg = crate::ghost_peg(g).ok_or(Unsupported)?;
+        let (xs, ys) = crate::peg_span(self.frame, peg, self.tx, self.ty);
+        if xs.is_empty() || ys.is_empty() {
+            return Ok(None);
+        }
+        let (cols, rows) = (xs.end() - xs.start() + 1, ys.end() - ys.start() + 1);
+        if cols > 3 || rows > 3 {
+            return Err(Unsupported);
+        }
+        let mut sub = self.doc.clone_shallow();
+        sub.root = g.children.clone();
+        sub.source = None;
+        sub.set_paper(None);
+        let backdrop = ys
+            .clone()
+            .flat_map(|y| xs.clone().map(move |x| (x, y)))
+            .map(|(x, y)| plan(&sub, x, y, self.ov, None, self.cache, &Wholes::default()).map(|p| ((x, y), Arc::new(p))).ok_or(Unsupported))
+            .collect::<Result<Vec<_>, _>>()?;
+        // The content tiles whole, beyond the document's edge too, as the oracle reads them.
+        let region = onepaint_raster::Rect::new(xs.start() * TILE, ys.start() * TILE, cols * TILE, rows * TILE);
+        self.spatial.set(true);
+        let spatial = Some(Arc::new(crate::spatial::SpatialSrc::of_peg(peg, (self.tx, self.ty), region, self.frame, backdrop)));
+        Ok(Some(Content {
+            base: None,
+            stroke: None,
+            mask: MaskSrc::None,
+            mask_stroke: None,
+            relief: None,
+            density: 1.0,
+            vmask: None,
+            spatial,
+        }))
+    }
+
     fn content_with(&self, l: &Layer, spatial: Option<Arc<crate::spatial::SpatialSrc>>) -> Result<Option<Content>, Unsupported> {
         let (tx, ty) = (self.tx, self.ty);
         let on_layer = self.ov.filter(|o| o.layer_id == l.id);
@@ -1005,12 +1045,17 @@ impl Planner<'_> {
                     let clip = self.panel_clip(g);
                     if g.visible && g.opacity > 0.0 && !g.children.is_empty() && !matches!(clip, Some(Clip::Empty)) {
                         if g.extra.contains_key(GHOST_PEG_KEY) {
-                            return Err(Unsupported);
+                            // Spec 55: the group's content through its peg, as a register.
+                            match self.pegged_content(g)? {
+                                Some(content) => self.push(Op::PushContent(content))?,
+                                None => self.push(Op::PushZero)?,
+                            }
+                        } else {
+                            self.push(Op::PushZero)?;
+                            let outer = std::mem::replace(&mut self.reveal, Reveal::Clear);
+                            self.nodes(&g.children)?;
+                            self.reveal = outer;
                         }
-                        self.push(Op::PushZero)?;
-                        let outer = std::mem::replace(&mut self.reveal, Reveal::Clear);
-                        self.nodes(&g.children)?;
-                        self.reveal = outer;
                         // A panel's frame clips the group before its riders go on.
                         if let Some(Clip::Partial(c)) = clip {
                             self.ops.push(Op::Coverage(c));

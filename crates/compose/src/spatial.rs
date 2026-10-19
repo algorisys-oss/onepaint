@@ -215,6 +215,10 @@ pub struct SpatialSrc {
     /// A whole-canvas layer's shared filter (spec 53); `backdrop` is then
     /// empty, as the whole backdrop is `whole`'s.
     pub whole: Option<Arc<Whole>>,
+    /// A ghost group seen through its peg (spec 55): `[dx, dy, rot, scale]`.
+    /// The backdrop is the group's content on the tiles the inverse
+    /// transform reaches, and the filter resamples it; `kind` is unused.
+    pub peg: Option<[f32; 4]>,
     filtered: std::sync::OnceLock<Vec<f32>>,
 }
 
@@ -234,7 +238,38 @@ impl SpatialSrc {
             (x, y, crate::program::segment_key(&p.ops, p.origin())).hash(&mut h);
         }
         let reach = reach(kind, &params);
-        Self { kind, params, reach, tx, ty, region, frame, backdrop, key: h.finish(), whole: None, filtered: Default::default() }
+        Self { kind, params, reach, tx, ty, region, frame, backdrop, key: h.finish(), whole: None, peg: None, filtered: Default::default() }
+    }
+
+    /// Tile `(tx, ty)` of a ghost group through `peg`, reading `backdrop`
+    /// (the group's content) over `region`.
+    pub(crate) fn of_peg(
+        peg: [f32; 4],
+        (tx, ty): (i32, i32),
+        region: Rect,
+        frame: Frame,
+        backdrop: Vec<((i32, i32), Arc<crate::program::TileProgram>)>,
+    ) -> Self {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        ("peg", peg.map(f32::to_bits), tx, ty, frame.doc_w, frame.doc_h).hash(&mut h);
+        for ((x, y), p) in &backdrop {
+            (x, y, crate::program::segment_key(&p.ops, p.origin())).hash(&mut h);
+        }
+        Self {
+            kind: Kind::GaussianBlur,
+            params: Params::default(),
+            reach: 0,
+            tx,
+            ty,
+            region,
+            frame,
+            backdrop,
+            key: h.finish(),
+            whole: None,
+            peg: Some(peg),
+            filtered: Default::default(),
+        }
     }
 
     /// Tile `(tx, ty)` of a whole-canvas layer.
@@ -254,8 +289,42 @@ impl SpatialSrc {
             backdrop: Vec::new(),
             key: h.finish(),
             whole: Some(whole),
+            peg: None,
             filtered: Default::default(),
         }
+    }
+
+    /// A ghost group's tile through its peg, as `compose::pegged` draws it:
+    /// each pixel samples the content through the inverse transform,
+    /// bilinear, transparent outside the tiles composited.
+    fn pegged(&self, [dx, dy, rot, scale]: [f32; 4]) -> Vec<f32> {
+        use onepaint_raster::TILE_PX;
+        let tiles: std::collections::HashMap<(i32, i32), Vec<f32>> =
+            self.backdrop.iter().map(|(at, p)| (*at, Tile::from_f32(&crate::program::run(p)).to_f32())).collect();
+        let at = |x: i32, y: i32| -> [f32; 4] {
+            let Some(t) = tiles.get(&(x.div_euclid(TILE), y.div_euclid(TILE))) else { return [0.0; 4] };
+            let o = (y.rem_euclid(TILE) * TILE + x.rem_euclid(TILE)) as usize * 4;
+            [t[o], t[o + 1], t[o + 2], t[o + 3]]
+        };
+        let inv = crate::peg_inverse(self.frame, [dx, dy, rot, scale]);
+        let (x0, y0) = ((self.tx * TILE) as f32, (self.ty * TILE) as f32);
+        let mut out = vec![0.0; TILE_PX * 4];
+        for py in 0..TILE {
+            for pxl in 0..TILE {
+                let (sx, sy) = inv(x0 + pxl as f32 + 0.5, y0 + py as f32 + 0.5);
+                let (fx, fy) = (sx - 0.5, sy - 0.5);
+                let (ix, iy) = (fx.floor() as i32, fy.floor() as i32);
+                let (wx, wy) = (fx - ix as f32, fy - iy as f32);
+                let (a, b, c, d) = (at(ix, iy), at(ix + 1, iy), at(ix, iy + 1), at(ix + 1, iy + 1));
+                let o = ((py * TILE + pxl) * 4) as usize;
+                for ch in 0..4 {
+                    let top = a[ch] + (b[ch] - a[ch]) * wx;
+                    let bot = c[ch] + (d[ch] - c[ch]) * wx;
+                    out[o + ch] = top + (bot - top) * wy;
+                }
+            }
+        }
+        out
     }
 
     /// The filtered tile (premultiplied, `TILE × TILE` RGBA), as the oracle
@@ -264,6 +333,9 @@ impl SpatialSrc {
         self.filtered.get_or_init(|| {
             if let Some(w) = &self.whole {
                 return w.filtered().tile(self.tx, self.ty).map_or_else(|| vec![0.0; onepaint_raster::TILE_PX * 4], |t| t.to_f32());
+            }
+            if let Some(peg) = self.peg {
+                return self.pegged(peg);
             }
             let r = self.region;
             let mut src = Surface::new();

@@ -16,7 +16,9 @@ struct Prm {
     // The backdrop grid: first tile column and row, columns.
     grid: vec3<i32>,
     // 0 blur, 1 sharpen (combine with `orig`), 2 copy, 3 a per-pixel kind,
-    // 4 bloom (screen the blurred glow over `orig`), 5 XDoG line art.
+    // 4 bloom (screen the blurred glow over `orig`), 5 XDoG line art, 6 a
+    // ghost group through its peg (k0.xy the offset, k1.xy cos and sin
+    // over the scale).
     mode: u32,
     dir: vec2<f32>,
     radius: f32,
@@ -308,10 +310,43 @@ fn kind_px(l: vec2<i32>, q: vec2<f32>) -> vec4<f32> {
     }
 }
 
+// A ghost group's content texel, transparent outside the tiles assembled.
+fn peg_tap(x: i32, y: i32) -> vec4<f32> {
+    if (x < 0 || y < 0 || x >= prm.region.z || y >= prm.region.w) {
+        return vec4<f32>(0.0);
+    }
+    return textureLoad(src, vec2<i32>(x, y), 0);
+}
+
+// compose `pegged` (spec 55): sample the unmoved content through the
+// peg's inverse, bilinear.
+fn peg_px(p: vec2<i32>) -> vec4<f32> {
+    let q = (vec2<f32>(prm.tile + p) + 0.5) * prm.scale;
+    let c = prm.doc * 0.5;
+    let d = q - c - prm.k0.xy;
+    let s = vec2<f32>(c.x + prm.k1.x * d.x + prm.k1.y * d.y, c.y - prm.k1.y * d.x + prm.k1.x * d.y);
+    let f = s / prm.scale - 0.5 - vec2<f32>(prm.region.xy);
+    let fl = floor(f);
+    let i = vec2<i32>(fl);
+    let w = f - fl;
+    let a = peg_tap(i.x, i.y);
+    let b = peg_tap(i.x + 1, i.y);
+    let cc = peg_tap(i.x, i.y + 1);
+    let e = peg_tap(i.x + 1, i.y + 1);
+    let top = a + (b - a) * w.x;
+    let bot = cc + (e - cc) * w.x;
+    return top + (bot - top) * w.y;
+}
+
 @compute @workgroup_size(8, 8, 1)
 fn blur_out(@builtin(global_invocation_id) gid: vec3<u32>) {
     let p = vec2<i32>(gid.xy);
     if (any(p >= vec2<i32>(prm.edge))) {
+        return;
+    }
+    if (prm.mode == 6u) {
+        // The content may lie anywhere: the output tile need not be in it.
+        textureStore(out, p, i32(prm.out_slot), peg_px(p));
         return;
     }
     let l = prm.tile - prm.region.xy + p;

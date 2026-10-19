@@ -1036,3 +1036,38 @@ fn tiles_that_dont_fit_are_left_for_the_cpu() {
     assert_eq!(at(10, 10), vec![0.0; 4], "the one that doesn't is left alone");
     assert!(gc.take_failed().is_empty(), "taken once");
 }
+
+/// Spec 55: ghost groups through their pegs, resampled on the GPU from their
+/// content's cache images, match the tree compositor.
+#[test]
+fn pegged_ghosts_match_the_tree_compositor() {
+    use onepaint_compose::testdocs::Rng;
+    use onepaint_compose::{GHOST_PEG_KEY, GHOST_TINT_KEY};
+    use onepaint_doc::Group;
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let mut gc = GpuCompositor::new(&device, 64 << 20);
+    let (w, h) = (600, 400);
+    let tex = target(&device, w, h);
+    let view = onepaint_gpu::mip::level_view(&tex, 0);
+    for seed in 0..8u64 {
+        let mut doc = random_doc(seed, w, h, seed % 2 == 0);
+        let mut r = Rng::new(seed ^ 0x9e9);
+        let mut g = Group::new("ghost");
+        g.children = std::mem::take(&mut doc.root);
+        let peg = [r.f() * 80.0 - 40.0, r.f() * 80.0 - 40.0, r.f() * 0.6 - 0.3, 0.8 + r.f() * 0.5];
+        g.extra.insert(GHOST_PEG_KEY.into(), serde_json::json!(peg));
+        if r.chance(0.5) {
+            g.extra.insert(GHOST_TINT_KEY.into(), serde_json::json!([r.f(), r.f(), r.f()]));
+        }
+        g.opacity = 0.4 + r.f() * 0.6;
+        doc.root = vec![Node::Group(g)];
+        gc.run(&device, &queue, &programs(&doc, None), &view, [w, h]);
+        let gpu = read(&device, &queue, &tex);
+        let over = over_tolerance(&doc, None, &gpu, TOL);
+        let (e, at) = max_error(&doc, None, &gpu);
+        assert!(over as f64 <= (1e-3 * (w * h) as f64).ceil(), "seed {seed}: {over} px over, worst {e} at {at:?}");
+    }
+}

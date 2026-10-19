@@ -140,7 +140,8 @@ an item changes there, change it here too.
   - [x] Relief lighting (impasto height) (spec 45)
   - [x] Paper shading (spec 43)
   - [x] Partial panel clips (spec 44)
-  - [ ] Ghost pegs (out-of-pegs onion offsets)
+  - [x] Ghost pegs (out-of-pegs onion offsets) (spec 55; pegs that shrink
+        past 3 × 3 tiles stay on the CPU)
   - [x] Present-only view modes (spec 48)
 - [x] Opacity-drag bench (`cargo bench -p onepaint-gpu --bench opacity_drag`)
 - [ ] Opacity drag at 60 fps on 8k × 100 layers. Baseline on Iris Xe
@@ -180,7 +181,8 @@ an item changes there, change it here too.
   - [x] Bounded submits and GPU device-loss handling (spec 54: save at
         once and ask for a restart; eframe can't make a new device)
   - [x] Open files in the background with progress and cancel (spec 41)
-  - [ ] Perf budgets with a baseline and a regression gate (`perf/budgets.toml`)
+  - [x] Perf budgets with a baseline and a regression gate
+        (`scripts/bench-gate/gate.sh`, criterion baselines; 2026-10-19)
   - [x] Skip layers under fully opaque tiles when planning (spec 47)
 - [ ] Decide the GPU memory budget on integrated GPUs (cache now 384 MiB; spec 38)
 - [ ] Decide whether to drop the CPU tile copy once GPU-resident
@@ -216,7 +218,7 @@ See `docs/parity-delta-2026-10-10.md`.
 - [x] Bugs: new blend modes lost on save (kept by name until implemented);
       untouched transform fades a soft selection; fill layers export to PSD
       empty; damp veil 0.12 in 8-bit; granulation sign
-- [ ] 8 blend modes + Pass Through groups
+- [x] 8 blend modes + Pass Through groups (2026-10-18)
 - [ ] Layer styles (v0.196.x)
 - [~] New adjustments: Exposure, Vibrance, Photo Filter, Channel Mixer done
       (CPU, GPU, PSD expA/vibA/phfl/mixr, panels; 2026-10-18). Left: CMYK

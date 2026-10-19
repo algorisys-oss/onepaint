@@ -398,3 +398,36 @@ fn whole_canvas_layers_preview_within_the_bound() {
         }
     }
 }
+
+/// Spec 55 above level 0: a ghost group through its peg previews like the
+/// level-0 composite box-averaged.
+#[test]
+fn pegged_ghosts_preview_within_the_bound() {
+    use onepaint_compose::GHOST_PEG_KEY;
+    use onepaint_doc::Group;
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let sheets = Sheets::single([600, 400]);
+    let tex = target(&device, &sheets);
+    let mut gc = GpuCompositor::new(&device, 64 << 20);
+    for (seed, peg) in [(1u64, [30.0f32, -20.0, 0.2, 1.1]), (2, [-15.0, 40.0, -0.3, 0.9])] {
+        let mut doc = random_doc(seed, 600, 400, false);
+        unthreshold(&mut doc.root);
+        let mut g = Group::new("ghost");
+        g.children = std::mem::take(&mut doc.root);
+        g.extra.insert(GHOST_PEG_KEY.into(), serde_json::json!(peg));
+        doc.root = vec![Node::Group(g)];
+        let progs = programs(&doc, None, None);
+        for l in 1..=3 {
+            let (want, _) = oracle(&doc, None, l);
+            let got = run_at(&mut gc, &device, &queue, &tex, &sheets, &progs, l);
+            let mut errs: Vec<f32> = want.iter().zip(&got).map(|(a, b)| (a - b).abs()).collect();
+            errs.sort_by(f32::total_cmp);
+            let mean = errs.iter().sum::<f32>() / errs.len() as f32;
+            let p99 = errs[(errs.len() - 1) * 99 / 100];
+            assert!(mean <= 0.015 && p99 <= 0.15, "seed {seed} level {l}: mean {mean}, p99 {p99}");
+        }
+    }
+}

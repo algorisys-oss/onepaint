@@ -29,6 +29,9 @@ Overnight (2026-10-18 → 19), all pushed, newest last:
   (`take_failed`) instead of drawing with layers missing; a lost GPU device
   writes the autosave at once and asks for a restart (eframe can't make a
   new device).
+- Spec 55 (2026-10-19, after "continue"): ghost groups out of their pegs
+  composite on the GPU, as a spatial source resampling the group's content
+  through the peg's inverse (`SpatialSrc::of_peg`, `blur_out` mode 6).
 - `scripts/bench-gate/gate.sh save|check`: the perf-budget gate for
   AGENTS.md's 5% rule, on criterion's saved baselines (checked: the 9
   engine hot-path benches came out within 5% of themselves).
@@ -38,8 +41,7 @@ more adjustment kinds, live PSD adjustments and byte-for-byte round trips
 (spec 51), 8-bit GPU atlases (spec 49), spec 52 phases 1–3a.
 
 Next, unless you redirect:
-1. Ghost pegs on the GPU (`todo.md` §2.1, the last big CPU fallback), or
-   imported pattern fills and sand screentone.
+1. Imported pattern fills and sand screentone on the GPU (`todo.md` §2.1).
 2. Oil paint on the GPU would need a different quadrant rule (divergence),
    so it waits for your call.
 

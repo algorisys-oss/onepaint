@@ -401,34 +401,48 @@ pub const GHOST_TINT_KEY: &str = "onepaint:ghostTint";
 /// `[dx, dy, rot, scale]` (doc px, radians about the document centre).
 pub const GHOST_PEG_KEY: &str = "onepaint:ghostPeg";
 
-fn ghost_peg(g: &onepaint_doc::Group) -> Option<[f32; 4]> {
+pub(crate) fn ghost_peg(g: &onepaint_doc::Group) -> Option<[f32; 4]> {
     g.extra.get(GHOST_PEG_KEY).and_then(|v| serde_json::from_value(v.clone()).ok())
 }
 
 /// The group's content seen through its peg (`compositor.ts` `pegMatrix`):
 /// each pixel samples the unmoved content through the inverse transform,
 /// bilinear. The source tiles it reaches are composited once each.
-fn pegged(children: &[Node], [dx, dy, rot, scale]: [f32; 4], tx: i32, ty: i32, ov: Option<&StrokeOverlay>, frame: Frame) -> Buf {
-    use onepaint_raster::TILE;
+/// A peg's inverse (`compositor.ts` `pegMatrix`): where a doc-px position
+/// reads the unmoved content.
+pub(crate) fn peg_inverse(frame: Frame, [dx, dy, rot, scale]: [f32; 4]) -> impl Fn(f32, f32) -> (f32, f32) {
     let (cx, cy) = (frame.doc_w as f32 / 2.0, frame.doc_h as f32 / 2.0);
     let k = 1.0 / scale.clamp(0.1, 4.0);
     let (c, s) = (rot.cos() * k, rot.sin() * k);
-    let inv = |x: f32, y: f32| {
+    move |x: f32, y: f32| {
         let (qx, qy) = (x - cx - dx, y - cy - dy);
         (cx + c * qx + s * qy, cy - s * qx + c * qy)
-    };
+    }
+}
+
+/// The content tiles tile `(tx, ty)` reads through a peg: columns and rows,
+/// inside the document (only content over it is shown); empty if none.
+pub(crate) fn peg_span(frame: Frame, peg: [f32; 4], tx: i32, ty: i32) -> (std::ops::RangeInclusive<i32>, std::ops::RangeInclusive<i32>) {
+    use onepaint_raster::TILE;
+    let inv = peg_inverse(frame, peg);
     let (x0, y0) = ((tx * TILE) as f32, (ty * TILE) as f32);
     let t = TILE as f32;
     let corners = [inv(x0, y0), inv(x0 + t, y0), inv(x0, y0 + t), inv(x0 + t, y0 + t)];
     let fold = |f: fn(f32, f32) -> f32, pick: fn(&(f32, f32)) -> f32, init: f32| corners.iter().map(pick).fold(init, f);
     let (min_x, max_x) = (fold(f32::min, |p| p.0, f32::MAX), fold(f32::max, |p| p.0, f32::MIN));
     let (min_y, max_y) = (fold(f32::min, |p| p.1, f32::MAX), fold(f32::max, |p| p.1, f32::MIN));
-    // Only content over the document is shown.
     let (dtx, dty) = ((frame.doc_w as i32 - 1).div_euclid(TILE), (frame.doc_h as i32 - 1).div_euclid(TILE));
     let tile_span = |lo: f32, hi: f32, max: i32| {
         ((lo - 1.0).floor() as i32).div_euclid(TILE).max(0)..=((hi + 1.0).ceil() as i32).div_euclid(TILE).min(max)
     };
-    let (xs, ys) = (tile_span(min_x, max_x, dtx), tile_span(min_y, max_y, dty));
+    (tile_span(min_x, max_x, dtx), tile_span(min_y, max_y, dty))
+}
+
+fn pegged(children: &[Node], peg: [f32; 4], tx: i32, ty: i32, ov: Option<&StrokeOverlay>, frame: Frame) -> Buf {
+    use onepaint_raster::TILE;
+    let inv = peg_inverse(frame, peg);
+    let (x0, y0) = ((tx * TILE) as f32, (ty * TILE) as f32);
+    let (xs, ys) = peg_span(frame, peg, tx, ty);
     let mut out = zeros();
     if xs.is_empty() || ys.is_empty() {
         return out;

@@ -32,14 +32,46 @@ fn programs_match_with_a_stroke_in_progress() {
     }
 }
 
+/// A ghost peg that shrinks its content reads more than the 3 × 3 tiles the
+/// GPU assembles: that tile stays on the CPU (spec 55).
 #[test]
-fn unsupported_features_stay_on_the_cpu() {
-    let mut doc = random_doc(3, 300, 300, false);
+fn a_peg_reaching_past_three_tiles_stays_on_the_cpu() {
+    let mut doc = random_doc(3, 1200, 1200, false);
     let mut g = Group::new("ghost");
     g.children = std::mem::take(&mut doc.root);
-    g.extra.insert(GHOST_PEG_KEY.into(), serde_json::json!([4.0, 0.0, 0.0, 1.0]));
+    g.extra.insert(GHOST_PEG_KEY.into(), serde_json::json!([4.0, 0.0, 0.0, 0.2]));
     doc.root = vec![Node::Group(g)];
-    assert!(plan_tile(&doc, 0, 0, None).is_none());
+    assert!(plan_tile(&doc, 2, 2, None).is_none());
+}
+
+/// Spec 55: ghost groups through their pegs plan, and their programs match
+/// the tree compositor (the content goes through f16 tiles, as on the GPU).
+#[test]
+fn pegged_ghosts_plan_and_match_the_tree_compositor() {
+    use onepaint_compose::GHOST_TINT_KEY;
+    use onepaint_compose::program::op_contents;
+    let mut planned = 0;
+    for seed in 0..10u64 {
+        let mut doc = random_doc(seed, 600, 400, seed % 2 == 0);
+        let mut r = onepaint_compose::testdocs::Rng::new(seed ^ 0x9e9);
+        let mut g = Group::new("ghost");
+        g.children = std::mem::take(&mut doc.root);
+        let peg = [r.f() * 80.0 - 40.0, r.f() * 80.0 - 40.0, r.f() * 0.6 - 0.3, 0.8 + r.f() * 0.5];
+        g.extra.insert(GHOST_PEG_KEY.into(), serde_json::json!(peg));
+        if r.chance(0.5) {
+            g.extra.insert(GHOST_TINT_KEY.into(), serde_json::json!([r.f(), r.f(), r.f()]));
+        }
+        g.opacity = 0.4 + r.f() * 0.6;
+        doc.root = vec![Node::Group(g)];
+        for (tx, ty) in doc.bounds().tiles() {
+            let prog = plan_tile(&doc, tx, ty, None).unwrap();
+            planned += usize::from(op_contents(&prog.ops).any(|c| c.spatial.as_ref().is_some_and(|s| s.peg.is_some())));
+            let (got, want) = (run(&prog), composite_tile(&doc, tx, ty, None));
+            let worst = got.iter().zip(&want).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+            assert!(worst <= 2e-3, "seed {seed} tile {tx},{ty}: {worst}");
+        }
+    }
+    assert!(planned >= 40, "{planned}");
 }
 
 #[test]

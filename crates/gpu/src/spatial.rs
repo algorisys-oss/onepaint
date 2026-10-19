@@ -301,6 +301,13 @@ impl SpatialPass {
         let size = [region[2], region[3]];
         // The region from the backdrop slots into A.
         pass(&self.assemble, prm([0.0; 2], 0.0, 0), [cache, &self.b.1, &self.a.0, &self.dummy_out, &self.b.1], size);
+        if let Some([dx, dy, rot, scale]) = s.peg {
+            // A ghost group through its peg (spec 55), resampled from A.
+            let k = 1.0 / scale.clamp(0.1, 4.0);
+            let peg = Prm { k0: [dx, dy, 0.0, 0.0], k1: [rot.cos() * k, rot.sin() * k, 0.0, 0.0], ..prm([0.0; 2], 0.0, 6) };
+            pass(&self.blur_out, peg, [&self.dummy_array, &self.a.1, &self.dummy_store, cache_out, &self.a.1], [edge; 2]);
+            return;
+        }
         if !identity && s.kind == Kind::LineArt && kind == 0 {
             // XDoG: the luminance map (B), blurred across at σ (C) and 1.6σ
             // (D), then down both and thresholded.

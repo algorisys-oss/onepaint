@@ -143,3 +143,19 @@ fn pegs_move_ghosts_only_and_round_trip() {
     t.open_happypaint(&bytes).unwrap();
     assert_eq!(t.anim_settings().out_of_pegs["a"].dx, 7.0);
 }
+
+/// Spec 55: an onion ghost out of its pegs plans on the GPU path.
+#[test]
+fn pegged_onion_ghosts_plan_on_the_gpu_path() {
+    use onepaint_compose::program::op_contents;
+    let mut s = abc();
+    s.execute(Command::SetAnimSlot { slot: 1 }).unwrap();
+    let mut a = s.anim_settings().clone();
+    a.onion_enabled = true;
+    a.out_of_pegs.insert("a".into(), Peg { dx: 3.0, rot: 0.1, scale: 1.2, ..Default::default() });
+    s.execute(Command::SetAnimation { settings: Box::new(a) }).unwrap();
+    let keys: Vec<_> = s.doc().bounds().tiles().collect();
+    let (progs, cpu) = s.plan(&keys);
+    assert!(cpu.is_empty(), "{cpu:?}");
+    assert!(progs.iter().any(|p| op_contents(&p.ops).any(|c| c.spatial.as_ref().is_some_and(|s| s.peg.is_some()))));
+}
