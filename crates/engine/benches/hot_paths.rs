@@ -55,6 +55,20 @@ fn stroke(c: &mut Criterion) {
             s.stroke_end();
         })
     });
+    // A wet preset paints through the smudge path (pickup, reservoir, pigment mix).
+    c.bench_function("oil-paint 24px stroke, 100 events + end", |b| {
+        let oil = onepaint_brush::preset("oil-paint").expect("built-in preset");
+        b.iter(|| {
+            let mut s = Session::new(1024, 1024, Some(Rgba::WHITE));
+            let _ = s.execute(Command::SetBrushPreset { preset: Box::new(oil.clone()) });
+            let _ = s.execute(Command::SetBrushSize { size: 24.0 });
+            s.stroke_begin(StrokePoint::at(10.0, 500.0, 0.5, 0.0));
+            for i in 1..=100 {
+                s.stroke_extend(&[StrokePoint::at(10.0 + i as f64 * 9.0, 500.0, 0.8, i as f64 * 8.0)]);
+            }
+            s.stroke_end();
+        })
+    });
     // Impasto: the same stroke also stamps and records the height field.
     c.bench_function("thick-paint 24px stroke, 100 events + end", |b| {
         let thick = onepaint_brush::preset("thick-paint").expect("built-in preset");

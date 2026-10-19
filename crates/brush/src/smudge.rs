@@ -68,6 +68,25 @@ pub struct Smudge {
     space: Space,
 }
 
+/// A hasher for the pigment memo's packed keys (SipHash per pixel was most
+/// of a wet dab's cost): one multiply, high bits.
+#[derive(Default)]
+struct KeyHash(u64);
+
+impl std::hash::Hasher for KeyHash {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.write_u64(u64::from(*b) ^ self.0.rotate_left(8));
+        }
+    }
+    fn write_u64(&mut self, k: u64) {
+        self.0 = k.wrapping_mul(0x9E37_79B9_7F4A_7C15).rotate_left(29);
+    }
+}
+
 fn smoothstep(e0: f64, e1: f64, x: f64) -> f64 {
     let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
@@ -234,14 +253,26 @@ impl Smudge {
         );
         let Some(bounds) = bounds.intersect(&self.doc) else { return Rect::default() };
         // Pigment mixes for 8-bit keys of (pickup, reservoir, weight).
-        let mut memo: HashMap<u64, [f32; 3]> = HashMap::new();
+        let mut memo: HashMap<u64, [f32; 3], std::hash::BuildHasherDefault<KeyHash>> = HashMap::default();
         let pigment = self.p.wet.is_some_and(|w| w.pigment);
+        let mut row = Vec::new();
         for (tx, ty) in bounds.tiles() {
             let Some(ix) = bounds.intersect(&Rect::from_tile(tx, ty)) else { continue };
             let tile = layer.tile_mut(tx, ty);
             for y in ix.y..ix.bottom() {
                 let ly = (y as f64 + 0.5 - to.1) / radius;
-                for x in ix.x..ix.right() {
+                if ly.abs() >= 1.0 {
+                    continue;
+                }
+                // The row's span inside the dab, padded a pixel, as f32 in one batch.
+                let half = (1.0 - ly * ly).sqrt() * radius;
+                let (x0, x1) = (ix.x.max((to.0 - half - 0.5).floor() as i32 - 1), ix.right().min((to.0 + half - 0.5).ceil() as i32 + 2));
+                if x0 >= x1 {
+                    continue;
+                }
+                let (l0, lyi) = ((x0 - tx * TILE) as usize, (y - ty * TILE) as usize);
+                tile.read_row(lyi, l0, (x1 - tx * TILE) as usize, &mut row);
+                for x in x0..x1 {
                     let lx = (x as f64 + 0.5 - to.0) / radius;
                     let d = (lx * lx + ly * ly).sqrt();
                     if d >= 1.0 {
@@ -284,16 +315,17 @@ impl Smudge {
                     let al = p[3] * wet as f32 + (1.0 - p[3] * wet as f32) * res_w;
                     let k = al * cov;
                     let src = [col[0] * k, col[1] * k, col[2] * k, k];
-                    let (lxi, lyi) = ((x - tx * TILE) as usize, (y - ty * TILE) as usize);
-                    let dst = tile.get(lxi, lyi);
+                    let at = (x - x0) as usize * 4;
+                    let dst = [row[at], row[at + 1], row[at + 2], row[at + 3]];
                     let out = if self.alpha_lock {
                         let da = dst[3];
                         [src[0] * da + dst[0] * (1.0 - k), src[1] * da + dst[1] * (1.0 - k), src[2] * da + dst[2] * (1.0 - k), da]
                     } else {
                         std::array::from_fn(|i| src[i] + dst[i] * (1.0 - k))
                     };
-                    tile.set(lxi, lyi, out);
+                    row[at..at + 4].copy_from_slice(&out);
                 }
+                tile.write_row(lyi, l0, &row);
             }
         }
         bounds

@@ -71,22 +71,35 @@ pub fn stamp(field: &mut Surface, dabs: &[HeightDab], doc: Rect) -> Rect {
         }
         let Some(r) = dab_rect(d, doc) else { continue };
         let rad = d.radius.max(0.5);
+        let mut row = Vec::new();
         for (tx, ty) in r.tiles() {
             let Some(ix) = r.intersect(&Rect::from_tile(tx, ty)) else { continue };
             let t = field.tile_mut(tx, ty);
             for y in ix.y..ix.bottom() {
                 let ly = (y as f64 + 0.5 - d.y) / rad;
-                for x in ix.x..ix.right() {
+                if ly.abs() >= 1.0 {
+                    continue;
+                }
+                // The row's span inside the dome, padded a pixel; the rest is untouched.
+                let half = (1.0 - ly * ly).sqrt() * rad;
+                let (x0, x1) = (ix.x.max((d.x - half - 0.5).floor() as i32 - 1), ix.right().min((d.x + half - 0.5).ceil() as i32 + 2));
+                if x0 >= x1 {
+                    continue;
+                }
+                let (l0, lyi) = ((x0 - tx * TILE) as usize, (y - ty * TILE) as usize);
+                t.read_row(lyi, l0, (x1 - tx * TILE) as usize, &mut row);
+                for x in x0..x1 {
                     let lx = (x as f64 + 0.5 - d.x) / rad;
                     let dist = (lx * lx + ly * ly).sqrt();
                     if dist >= 1.0 {
                         continue;
                     }
                     let cov = ((1.0 - smoothstep(0.5, 1.0, dist)) * d.amount) as f32;
-                    let (lx, ly) = ((x - tx * TILE) as usize, (y - ty * TILE) as usize);
-                    let h = t.get(lx, ly)[0] + cov;
-                    t.set(lx, ly, [h; 4]);
+                    let k = (x - x0) as usize * 4;
+                    let h = row[k] + cov;
+                    row[k..k + 4].fill(h);
                 }
+                t.write_row(lyi, l0, &row);
             }
         }
         dirty = dirty.union(&r);
