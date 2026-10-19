@@ -15,6 +15,10 @@ struct Params {
     paper_size: u32,      // paper tile texels per side
     blocks_w: u32,        // active-block grid width (16-px blocks)
     gamma: f32,           // 1: colours are sRGB values (8-bit documents, spec 50)
+    wall_on: u32,         // 1: the session has a wash (spec 58 C)
+    wall_base: u32,       // where the walls start in `live_blocks`
+    _p1: u32,
+    _p2: u32,
 }
 
 fn to_work3(c: vec3<f32>) -> vec3<f32> {
@@ -36,6 +40,19 @@ fn from_work3(c: vec3<f32>) -> vec3<f32> {
 // 1 where a 16-px block may hold state during this batch (the CPU's
 // occupancy, widened by the batch's spread); elsewhere everything is zero.
 @group(0) @binding(9) var<storage, read> live_blocks: array<u32>;
+
+// Wash walls per pixel follow the blocks in `live_blocks` (from
+// `wall_base`): id in the low byte, the guard band in bit 8.
+// The wall entry of the pixel holding sim-local (u, v), clamped to the allocation.
+fn wall_at(u: f32, v: f32) -> u32 {
+    let x = clamp(i32(floor(u)), 0, i32(p.size.x) - 1);
+    let y = clamp(i32(floor(v)), 0, i32(p.size.y) - 1);
+    return live_blocks[p.wall_base + u32(y) * p.size.x + u32(x)];
+}
+
+fn wall_id(u: f32, v: f32) -> u32 {
+    return wall_at(u, v) & 0xffu;
+}
 
 fn is_active(x: u32, y: u32) -> bool {
     return live_blocks[(y / 16u) * p.blocks_w + x / 16u] != 0u;
@@ -204,6 +221,11 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let u = f32(x) + 0.5;
     let v = f32(y) + 0.5;
+    // Wash walls: only the guard band takes the careful path (spec 58 C).
+    let walled = p.wall_on != 0u;
+    let wi = select(0u, wall_at(u, v), walled);
+    let wall_self = wi & 0xffu;
+    let guard = walled && (wi & 0x100u) != 0u;
     // Advect along the velocity, adopting the fastest wet neighbour heading here.
     let here = src_sim[i];
     var trace = here.zw;
@@ -221,8 +243,17 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>) {
     let downhill = dot(trace, p.tilt) / max(length(p.tilt), 1e-4);
     let accept = max(sstep(0.3, 1.0, here.x), sstep(0.15, 0.6, downhill));
     trace *= mix(0.05, 1.0, accept);
-    let ou = u - trace.x;
-    let ov = v - trace.y;
+    var ou = u - trace.x;
+    var ov = v - trace.y;
+    // Never advect from across a wall: all four blended texels on this side.
+    if (guard) {
+        let cx = floor(ou - 0.5) + 0.5;
+        let cy = floor(ov - 0.5) + 0.5;
+        if (wall_id(cx, cy) != wall_self || wall_id(cx + 1.0, cy) != wall_self || wall_id(cx, cy + 1.0) != wall_self || wall_id(cx + 1.0, cy + 1.0) != wall_self) {
+            ou = u;
+            ov = v;
+        }
+    }
     let sim = sample_sim(ou, ov);
     let col = sample_col(ou, ov);
     let w = sim.x;
@@ -236,10 +267,18 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>) {
     var n1: array<vec4<f32>, 4>;
     var c = to_work3(select(vec3<f32>(1.0), col.xyz / col.w, col.w > 0.0005));
     var mass = col.w;
+    // With walls the taps sit on this pixel's grid; across a wall a
+    // neighbour reads as this pixel.
+    let bu = select(ou, u, guard);
+    let bv = select(ov, v, guard);
     for (var k = 0; k < 8; k++) {
-        let snb = sample_sim(ou + offs[k].x, ov + offs[k].y);
+        var snb = sample_sim(bu + offs[k].x, bv + offs[k].y);
+        var cn = sample_col(bu + offs[k].x, bv + offs[k].y);
+        if (guard && wall_id(bu + offs[k].x, bv + offs[k].y) != wall_self) {
+            snb = sim;
+            cn = col;
+        }
         let wn = snb.x;
-        let cn = sample_col(ou + offs[k].x, ov + offs[k].y);
         w_flux += sstep(0.3, 1.0, min(w, wn)) * (wn - w);
         if (k < 4) {
             n1[k] = snb;
@@ -280,7 +319,7 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>) {
     let fg = finger[i];
     let finger_eff = fg + (1.0 - fg) * p.oil;
     let wet = sstep(0.1, 0.8, w);
-    var vel = sim.zw + (p.tilt * G_TILT * thick - grad * G_SLOPE * 4.0 * (1.0 - p.oil)) * (wet * finger_eff) + f_vort * wet;
+    var vel = sim.zw + (p.tilt * G_TILT * thick - grad * G_SLOPE * select(4.0, 3.0, walled && wall_self > 0u) * (1.0 - p.oil)) * (wet * finger_eff) + f_vort * wet;
     let damp = (DAMP + (0.84 - DAMP) * p.oil) * sstep(0.005, 0.04, w_new);
     vel = clamp(vel * damp, vec2<f32>(-V_MAX), vec2<f32>(V_MAX));
     dst_sim[i] = vec4<f32>(w_new, curl, vel);

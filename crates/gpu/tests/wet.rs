@@ -42,13 +42,29 @@ fn max_diff(a: &Surface, b: &Surface, r: Rect) -> f32 {
     a.read_rect(r).iter().zip(b.read_rect(r)).map(|(x, y)| (x - y).abs()).fold(0.0, f32::max)
 }
 
+/// A wash's wall down x = 170, through the scene (spec 58 C).
+fn wall(s: &mut FluidSim) {
+    use onepaint_brush::fluid::wash::{WashOpts, wash_field};
+    let (w, h) = (DOC.w as usize, DOC.h as usize);
+    let mask: Vec<bool> = (0..w * h).map(|i| i % w < 170).collect();
+    s.add_wall(&wash_field(&mask, w, h, 100, 100, &WashOpts::default()).unwrap());
+}
+
 fn compare(oil: bool, tilt: [f32; 2], paper: Option<onepaint_doc::Paper>, steps: usize) {
+    compare_with(oil, tilt, paper, steps, false);
+}
+
+fn compare_with(oil: bool, tilt: [f32; 2], paper: Option<onepaint_doc::Paper>, steps: usize, walled: bool) {
     let Some((device, queue)) = device() else {
         eprintln!("skipping: no GPU adapter");
         return;
     };
     let mut gpu = WetGpu::new(&device, &queue);
     let (mut cpu_sim, mut gpu_sim) = (scene(oil, tilt, paper.clone()), scene(oil, tilt, paper));
+    if walled {
+        wall(&mut cpu_sim);
+        wall(&mut gpu_sim);
+    }
     let (mut cpu_layer, mut gpu_layer) = (Surface::new(), Surface::new());
     for _ in 0..steps {
         let r = cpu_sim.rect();
@@ -72,6 +88,11 @@ fn a_wash_matches_the_cpu() {
 fn tilt_and_paper_match_the_cpu() {
     let rough = onepaint_doc::PAPER_PRESETS.iter().find(|p| p.id == "rough").and_then(|p| p.paper());
     compare(false, [0.3, 0.8], rough, 24);
+}
+
+#[test]
+fn wash_walls_match_the_cpu() {
+    compare_with(false, [0.6, 0.2], None, 24, true);
 }
 
 #[test]

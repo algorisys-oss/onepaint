@@ -25,6 +25,9 @@ pub struct StepJob<'a> {
     /// The grain's handle (a backend may keep it to cache the upload), doc
     /// px per tile, and strength.
     pub paper: Option<(&'a std::sync::Arc<TipMask>, f64, f32)>,
+    /// Wash walls per pixel (id in the low byte, guard band in bit 8), once
+    /// the session has a wash (spec 58 C).
+    pub walls: Option<&'a [u16]>,
     pub steps: usize,
     /// The state's generation: a backend still holding this generation from
     /// its last run may skip the upload.
@@ -61,6 +64,7 @@ impl FluidSim {
             space: self.space,
             tilt,
             paper,
+            walls: self.walls.as_deref(),
             steps,
             generation: self.generation,
             next_generation: next,

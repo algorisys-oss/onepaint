@@ -58,6 +58,11 @@ struct Params {
     blocks_w: u32,
     /// 1 when colours are sRGB values (8-bit documents, spec 50).
     gamma: f32,
+    /// 1 once the session has a wash: `walls` holds its walls (spec 58 C).
+    wall_on: u32,
+    /// Where the walls start in the active-blocks buffer.
+    wall_base: u32,
+    _pad: [u32; 2],
 }
 
 /// Buffers for one allocation size.
@@ -207,7 +212,7 @@ impl StepBackend for WetGpu {
             None => None,
         }
         .unwrap_or_else(|| self.blank_paper.clone());
-        let params = Params {
+        let mut params = Params {
             size: [w as u32, h as u32],
             origin: [job.rect.x as f32, job.rect.y as f32],
             tilt: job.tilt,
@@ -217,11 +222,19 @@ impl StepBackend for WetGpu {
             paper_size: job.paper.map_or(1, |p| p.0.size as u32),
             blocks_w: (w as u32).div_ceil(BLOCK),
             gamma: if job.space == onepaint_color::Space::Gamma { 1.0 } else { 0.0 },
+            wall_on: u32::from(job.walls.is_some()),
+            wall_base: 0,
+            _pad: [0; 2],
         };
         let active = active_blocks(&job, BLOCK);
+        // The wash walls ride behind the blocks (one buffer: the stage's
+        // storage-buffer limit is 8).
+        params.wall_base = active.len() as u32;
+        let mut aux = active.clone();
+        aux.extend(job.walls.into_iter().flatten().map(|v| u32::from(*v)));
         let active_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("active blocks"),
-            contents: bytemuck::cast_slice(&active),
+            label: Some("active blocks and walls"),
+            contents: bytemuck::cast_slice(&aux),
             usage: wgpu::BufferUsages::STORAGE,
         });
         self.queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&params));

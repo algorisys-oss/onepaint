@@ -30,8 +30,31 @@ const GRAN_SWING: f32 = 1.2;
 const WET_RAMP: (f32, f32) = (0.3, 1.0);
 const DRY_ACCEPT: f32 = 0.05;
 const WET_BLOOM: f32 = 0.8;
-/// The slope push on open paper (inside a wash's walls it is 3, spec 58).
+/// The slope push on open paper, and inside a wash's walls (spec 58).
 const OPEN_FLOW: f32 = 4.0;
+const WASH_FLOW: f32 = 3.0;
+
+/// Wash walls over the allocation (`FluidSim::walls`): reads clamp to it.
+#[derive(Clone, Copy)]
+pub(crate) struct Walls<'a> {
+    pub data: &'a [u16],
+    pub w: i32,
+    pub h: i32,
+}
+
+impl Walls<'_> {
+    /// The wall entry of the pixel holding sim-local position (u, v).
+    #[inline]
+    fn at(&self, u: f32, v: f32) -> u16 {
+        let (x, y) = ((u.floor() as i32).clamp(0, self.w - 1), (v.floor() as i32).clamp(0, self.h - 1));
+        self.data[(y * self.w + x) as usize]
+    }
+
+    #[inline]
+    fn id(&self, u: f32, v: f32) -> u16 {
+        self.at(u, v) & super::walls::WALL_ID
+    }
+}
 
 /// Settle rate and wet-front strength at (u, v) (sim px). The settle and
 /// update passes must agree, or mass would not be conserved.
@@ -195,6 +218,7 @@ impl FluidSim {
         let (fs, fc) = self.field();
         let finger = &self.finger;
         let paper = (PaperTap { sim: self }, self.paper_strength());
+        let walls = self.walls.as_deref().map(|data| Walls { data, w, h: self.rect.h });
         // One task per pixel row (a wash may span only a few block rows).
         let row_flags: Vec<Vec<bool>> = sim_next
             .par_chunks_mut(w as usize)
@@ -210,7 +234,7 @@ impl FluidSim {
                     if active[b] {
                         for x in x0..x1 {
                             let f = finger[(y * w + x) as usize];
-                            let (sv, cv) = update_px(&fs, &fc, x, y, oil, tilt, f, paper, space);
+                            let (sv, cv) = update_px(&fs, &fc, x, y, oil, tilt, f, paper, space, walls);
                             *flag |= sv[0] != 0.0 || sv[2] != 0.0 || sv[3] != 0.0 || cv[3] != 0.0;
                             srow[x as usize] = sv;
                             crow[x as usize] = cv;
@@ -260,8 +284,14 @@ fn update_px(
     finger: f32,
     paper: (PaperTap, f32),
     sp: onepaint_color::Space,
+    walls: Option<Walls>,
 ) -> ([f32; 4], [f32; 4]) {
     let (u, v) = (x as f32 + 0.5, y as f32 + 0.5);
+    // Wash walls: only pixels in the guard band take the careful path, so
+    // paint flows freely inside a wash and stops at its edge.
+    let wi = walls.map_or(0, |wl| wl.at(u, v));
+    let wall_self = wi & super::walls::WALL_ID;
+    let guard = walls.filter(|_| wi & super::walls::WALL_BAND != 0);
     // Advect along the velocity, adopting the fastest wet neighbour heading here.
     let here = fs.texel(x, y);
     let mut trace = [here[2], here[3]];
@@ -280,7 +310,15 @@ fn update_px(
     let accept = smoothstep(WET_RAMP.0, WET_RAMP.1, here[0]).max(smoothstep(0.15, 0.6, downhill));
     let k = DRY_ACCEPT + (1.0 - DRY_ACCEPT) * accept;
     trace = [trace[0] * k, trace[1] * k];
-    let (ou, ov) = (u - trace[0], v - trace[1]);
+    let (mut ou, mut ov) = (u - trace[0], v - trace[1]);
+    // Never advect from across a wall: all four texels the sample blends
+    // must be on this side.
+    if let Some(wl) = guard {
+        let (cx, cy) = ((ou - 0.5).floor() + 0.5, (ov - 0.5).floor() + 0.5);
+        if [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)].iter().any(|(dx, dy)| wl.id(cx + dx, cy + dy) != wall_self) {
+            (ou, ov) = (u, v);
+        }
+    }
     let sim = fs.sample(ou, ov);
     let col = fc.sample(ou, ov);
     let w = sim[0];
@@ -293,10 +331,15 @@ fn update_px(
     let mut n1 = [[0.0f32; 4]; 4];
     let mut c = if col[3] > 0.0005 { [col[0] / col[3], col[1] / col[3], col[2] / col[3]] } else { [1.0; 3] }.map(|v| sp.to_work(v));
     let mut mass = col[3];
+    // With walls the taps sit on this pixel's own grid, where the wall test
+    // is exact; a neighbour across a wall reads as this pixel.
+    let (bu, bv) = if guard.is_some() { (u, v) } else { (ou, ov) };
     for (i, (ox, oy)) in OFFS.iter().enumerate() {
-        let snb = fs.sample(ou + ox, ov + oy);
+        let (mut snb, mut cn) = (fs.sample(bu + ox, bv + oy), fc.sample(bu + ox, bv + oy));
+        if guard.is_some_and(|wl| wl.id(bu + ox, bv + oy) != wall_self) {
+            (snb, cn) = (sim, col);
+        }
         let wn = snb[0];
-        let cn = fc.sample(ou + ox, ov + oy);
         w_flux += smoothstep(WET_RAMP.0, WET_RAMP.1, w.min(wn)) * (wn - w);
         if i < 4 {
             n1[i] = snb;
@@ -346,11 +389,12 @@ fn update_px(
     let n_hat = [gw[0] / gwl, gw[1] / gwl];
     let f_vort = [VORT_EPS * n_hat[1] * sim[1], -VORT_EPS * n_hat[0] * sim[1]];
     let thick = 1.0 + (0.15 - 1.0) * oil;
+    let flow = if walls.is_some() && wall_self > 0 { WASH_FLOW } else { OPEN_FLOW };
     let finger_eff = finger + (1.0 - finger) * oil;
     let wet = smoothstep(0.1, 0.8, w);
     let mut vel = [sim[2], sim[3]];
     for k in 0..2 {
-        vel[k] += (tilt[k] * G_TILT * thick - grad[k] * G_SLOPE * OPEN_FLOW * (1.0 - oil)) * (wet * finger_eff) + f_vort[k] * wet;
+        vel[k] += (tilt[k] * G_TILT * thick - grad[k] * G_SLOPE * flow * (1.0 - oil)) * (wet * finger_eff) + f_vort[k] * wet;
     }
     let damp = (DAMP + (0.84 - DAMP) * oil) * smoothstep(0.005, 0.04, w_new);
     let vel = vel.map(|v| (v * damp).clamp(-V_MAX, V_MAX));

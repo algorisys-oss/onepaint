@@ -226,3 +226,59 @@ fn the_tip_a_live_brush_paints_with() {
     b.tip_id = "bristle".into();
     assert!(WetTip::of(&b).unwrap().0.mask.is_some());
 }
+
+/// Spec 58 C (happypaint v0.198): a wash's wall keeps paint inside the
+/// region it filled; without it the same paint runs past.
+#[test]
+fn a_wash_wall_stops_the_paint_at_the_region_edge() {
+    use onepaint_brush::fluid::wash::{WashOpts, wash_field};
+    let (w, h) = (400usize, 300usize);
+    // The region: everything left of x = 200.
+    let mask: Vec<bool> = (0..w * h).map(|i| i % w < 200).collect();
+    let field = wash_field(&mask, w, h, 100, 150, &WashOpts { wobble: 0.0, ..Default::default() }).unwrap();
+    let past = |walled: bool| {
+        let mut sim = FluidSim::new(DOC, Rect::new(150, 120, 100, 60), false);
+        if walled {
+            sim.add_wall(&field);
+        }
+        sim.deposit(&[dab(176.0, 150.0, 2.5, 0.8, [0.1, 0.2, 0.8])], None, None);
+        let mut layer = Surface::new();
+        steps(&mut sim, &mut layer, 60);
+        // Suspended and settled pigment right of the edge.
+        (200..260).map(|x| sim.at(x, 150).1 + layer.get(x, 150)[3]).sum::<f32>()
+    };
+    let (open, walled) = (past(false), past(true));
+    assert!(open > 0.05, "without a wall the paint runs on: {open}");
+    assert!(walled < 1e-4, "the wall holds it: {walled}");
+}
+
+/// A wash lays water ahead of its pigment, band by band from the tap.
+#[test]
+fn a_wash_spreads_from_the_tap() {
+    use onepaint_brush::fluid::WashBand;
+    use onepaint_brush::fluid::wash::{WashOpts, wash_field};
+    let (w, h) = (400usize, 300usize);
+    let field = wash_field(&vec![true; w * h], w, h, 200, 150, &WashOpts { wobble: 0.0, ..Default::default() }).unwrap();
+    let mut sim = FluidSim::new(DOC, Rect::new(150, 120, 100, 60), false);
+    let band = WashBand {
+        level: 1.5,
+        pigment: 0.7,
+        soft: 0.0,
+        grade: 0.0,
+        max_dist: field.max_dist,
+        color: [0.8, 0.2, 0.1],
+        from: -32.0,
+        to: 40.0,
+    };
+    sim.ensure_rect(Rect::new(0, 0, 400, 300));
+    sim.deposit_wash(&field, &band);
+    let at = |x| sim.at(x, 150);
+    // Full at the tap, the water's lead past the pigment's front, dry beyond.
+    assert!(at(200).0 > 1.4 && at(200).1 > 0.6, "{:?}", at(200));
+    assert!(at(245).0 > 0.0 && at(245).1 == 0.0, "water leads: {:?}", at(245));
+    assert_eq!(at(280), (0.0, 0.0));
+    // Water only: no pigment at all.
+    let mut dry = FluidSim::new(DOC, Rect::new(0, 0, 400, 300), false);
+    dry.deposit_wash(&field, &WashBand { pigment: 0.0, ..band });
+    assert!(dry.at(200, 150).0 > 1.4 && dry.suspended_mass() == 0.0);
+}

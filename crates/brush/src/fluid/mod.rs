@@ -15,6 +15,9 @@
 mod backend;
 pub mod dab;
 mod step;
+mod walls;
+pub mod wash;
+pub use walls::WashBand;
 
 pub use backend::{StepBackend, StepJob};
 pub use dab::{
@@ -209,6 +212,11 @@ pub struct FluidSim {
     pub(crate) generation: u64,
     /// The document's space: pigment mixing runs on sRGB values (spec 50).
     pub space: onepaint_color::Space,
+    /// Wash walls per allocation pixel (id in the low byte, the guard band
+    /// in bit 8), once the session has a wash (spec 58 C).
+    pub(crate) walls: Option<Vec<u16>>,
+    /// The next wash's wall id (1..=255, cycling).
+    pub(crate) wall_next: u8,
 }
 
 /// Fresh state generations, unique across every sim (backends are shared).
@@ -238,6 +246,8 @@ impl FluidSim {
             paper: None,
             generation: next_generation(),
             space: onepaint_color::Space::Linear,
+            walls: None,
+            wall_next: 1,
         }
     }
 
@@ -319,6 +329,15 @@ impl FluidSim {
             let dst = ((y + dy) * nr.w + dx) as usize;
             sim[dst..dst + r.w as usize].copy_from_slice(&self.sim[src..src + r.w as usize]);
             col[dst..dst + r.w as usize].copy_from_slice(&self.col[src..src + r.w as usize]);
+        }
+        if let Some(old) = self.walls.take() {
+            let mut walls = vec![0u16; len];
+            for y in 0..r.h {
+                let src = (y * r.w) as usize;
+                let dst = ((y + dy) * nr.w + dx) as usize;
+                walls[dst..dst + r.w as usize].copy_from_slice(&old[src..src + r.w as usize]);
+            }
+            self.walls = Some(walls);
         }
         let (obw, _) = blocks(r);
         let old_occ = std::mem::take(&mut self.occ);
