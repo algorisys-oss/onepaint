@@ -100,10 +100,13 @@ impl Session {
         let paints = params.wet.is_some();
         let lin = self.doc.space().pixel(self.color);
         let color = paints.then_some([lin[0], lin[1], lin[2]]);
-        let key = mixer.then(|| self.color.to_hex());
+        // The brush loads from a patch when one is loaded, else the colour;
+        // Keep colour holds the reservoir while that source stays the same.
+        let patch = self.mixer_patch.as_ref().filter(|_| mixer);
+        let key = mixer.then(|| patch.map_or_else(|| self.color.to_hex(), |(g, _)| format!("patch:{g}")));
         let held = match (&self.mixer_held, mixer && m.keep) {
-            (Some((k, r)), true) if Some(k) == key.as_ref() => Some(*r),
-            _ => None,
+            (Some((k, r)), true) if Some(k) == key.as_ref() => Some(r.clone()),
+            _ => patch.map(|(_, r)| r.clone()),
         };
         let target = if to_mask { layer.mask.clone().unwrap_or_default() } else { layer.pixels.clone() };
         let alpha_lock = layer.alpha_lock && !to_mask;
@@ -143,7 +146,7 @@ impl Session {
     pub(crate) fn smudge_end(&mut self) {
         let Some(sm) = self.smudge.take() else { return };
         if self.tool == Tool::Mixer && self.paint.mixer.keep {
-            self.mixer_held = sm.key.clone().map(|k| (k, sm.engine.reservoir()));
+            self.mixer_held = sm.key.clone().map(|k| (k, sm.engine.reservoir().clone()));
         } else {
             self.mixer_held = None;
         }
@@ -166,13 +169,48 @@ impl Session {
         }
     }
 
-    /// Mixer "Clean": the next stroke loads fresh paint.
+    /// Mixer "Clean": the next stroke loads fresh paint (and no patch).
     pub(crate) fn clean_mixer(&mut self) {
         self.mixer_held = None;
+        self.mixer_patch = None;
     }
 
-    /// What a kept Mixer brush still holds (straight linear colour + amount).
-    pub fn mixer_reservoir(&self) -> Option<Reservoir> {
-        self.mixer_held.as_ref().map(|h| h.1)
+    /// What a kept Mixer brush still holds (straight colour in the
+    /// document's space, and amount).
+    pub fn mixer_reservoir(&self) -> Option<&Reservoir> {
+        self.mixer_held.as_ref().map(|h| &h.1)
+    }
+
+    /// The patch the Mixer will load from, if one is loaded.
+    pub fn mixer_patch(&self) -> Option<&Reservoir> {
+        self.mixer_patch.as_ref().map(|p| &p.1)
+    }
+
+    /// Load the Mixer from the composite under a brush-wide square
+    /// (`loadMixerPatch`, PE:2960-2972).
+    pub(crate) fn load_mixer_patch(&mut self, x: f64, y: f64, size: f64) -> Result<(), EngineError> {
+        if self.is_stroking() {
+            return Err(EngineError::Invalid("can't load the brush mid-stroke".into()));
+        }
+        let r = (size / 2.0).max(1.0);
+        let square = Rect::covering((x - r - 1.0) as f32, (y - r - 1.0) as f32, (x + r + 1.0) as f32, (y + r + 1.0) as f32);
+        let none = || EngineError::Invalid("Nothing under the brush to load".into());
+        let rect = square.intersect(&self.doc.bounds()).ok_or_else(none)?;
+        let doc = self.display_doc();
+        let mut buf = vec![0.0f32; (rect.w * rect.h * 4) as usize];
+        for (tx, ty) in rect.tiles() {
+            let Some(ix) = rect.intersect(&Rect::from_tile(tx, ty)) else { continue };
+            let t = composite_tile(&doc, tx, ty, None);
+            for yy in ix.y..ix.bottom() {
+                let src = (((yy - ty * TILE) * TILE + (ix.x - tx * TILE)) * 4) as usize;
+                let dst = (((yy - rect.y) * rect.w + (ix.x - rect.x)) * 4) as usize;
+                let n = (ix.w * 4) as usize;
+                buf[dst..dst + n].copy_from_slice(&t[src..src + n]);
+            }
+        }
+        let patch = Reservoir::from_canvas(&buf, rect, x, y, r).ok_or_else(none)?;
+        self.mixer_patch_gen += 1;
+        self.mixer_patch = Some((self.mixer_patch_gen, patch));
+        Ok(())
     }
 }

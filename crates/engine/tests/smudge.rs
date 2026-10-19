@@ -147,3 +147,34 @@ fn wet_presets_paint_through_the_mixer() {
     let px = active_px(&s, 120, 50);
     assert!(px[3] > 0.3 && px[2] > 0.3 && px[0] < 1e-3, "blue wash: {px:?}");
 }
+
+#[test]
+fn mixer_loads_a_patch_from_the_composite() {
+    let mut s = session();
+    // An empty layer on top is active: the patch still comes from what shows.
+    s.execute(Command::AddLayer).unwrap();
+    s.execute(Command::SetTool { tool: Tool::Mixer }).unwrap();
+    s.execute(Command::SetBrushSize { size: 20.0 }).unwrap();
+    s.execute(Command::SetColor { rgba: Rgba::new(0.0, 0.0, 1.0, 1.0) }).unwrap();
+    s.execute(Command::SetMixer { mixer: MixerSettings { wet: 0.0, load: 1.0, mix: 0.0, keep: false } }).unwrap();
+    s.execute(Command::LoadMixerPatch { x: 30.0, y: 50.0, size: 20.0 }).unwrap();
+    assert!(s.mixer_patch().is_some());
+    drag(&mut s, 100.0, 160.0, 50.0);
+    let px = active_px(&s, 130, 50);
+    assert!(px[3] > 0.5 && px[0] > 0.5 * px[3] && px[2] < 1e-3, "paints the red patch, not blue: {px:?}");
+    // Every stroke reloads the patch while Keep colour is off.
+    drag(&mut s, 100.0, 160.0, 80.0);
+    assert!(active_px(&s, 130, 80)[0] > 0.5);
+    // A new colour drops it; so does Clean.
+    s.execute(Command::SetColor { rgba: Rgba::new(0.0, 1.0, 0.0, 1.0) }).unwrap();
+    assert!(s.mixer_patch().is_none());
+    drag(&mut s, 100.0, 160.0, 20.0);
+    let px = active_px(&s, 130, 20);
+    assert!(px[1] > 0.5 && px[0] < 1e-3, "the flat colour again: {px:?}");
+    s.execute(Command::LoadMixerPatch { x: 30.0, y: 50.0, size: 20.0 }).unwrap();
+    s.execute(Command::CleanMixer).unwrap();
+    assert!(s.mixer_patch().is_none());
+    // Nothing under the brush: an error, and no patch.
+    assert!(s.execute(Command::LoadMixerPatch { x: 192.0, y: 95.0, size: 10.0 }).is_err());
+    assert!(s.mixer_patch().is_none());
+}

@@ -445,6 +445,9 @@ pub struct Session {
     wet_backend: Option<Box<dyn onepaint_brush::fluid::StepBackend>>,
     /// The Mixer's kept reservoir, keyed by the colour it was loaded with.
     mixer_held: Option<(String, onepaint_brush::smudge::Reservoir)>,
+    /// The Mixer's loaded patch and its generation (the reservoir key).
+    mixer_patch: Option<(u64, onepaint_brush::smudge::Reservoir)>,
+    mixer_patch_gen: u64,
 }
 
 fn tile_bytes(t: &Option<Arc<Tile>>) -> usize {
@@ -524,6 +527,8 @@ impl Session {
             wet_tilt: [0.0; 2],
             wet_backend: None,
             mixer_held: None,
+            mixer_patch: None,
+            mixer_patch_gen: 0,
             plan_cache: Default::default(),
             happy_ids: Default::default(),
         };
@@ -1111,6 +1116,7 @@ impl Session {
                     | Command::SetGuides { .. }
                     | Command::SetSmudgeStrength { .. }
                     | Command::SetMixer { .. }
+                    | Command::ClearMixerPatch
                     | Command::SetLiquify { .. }
                     | Command::SetWetTilt { .. }
                     | Command::SetPaper { .. }
@@ -1152,6 +1158,7 @@ impl Session {
                 | Command::SetSmudgeStrength { .. }
                 | Command::SetMixer { .. }
                 | Command::CleanMixer
+                | Command::ClearMixerPatch
                 | Command::SetLiquify { .. } => {}
                 // Undo abandons a pending transform; an untouched box (the
                 // Move tool keeps one open) steps aside and the undo goes ahead.
@@ -1365,6 +1372,11 @@ impl Session {
                 self.clean_mixer();
                 Ok(())
             }
+            Command::LoadMixerPatch { x, y, size } => self.load_mixer_patch(x, y, size),
+            Command::ClearMixerPatch => {
+                self.mixer_patch = None;
+                Ok(())
+            }
             Command::SetLiquify { mode, strength } => {
                 self.paint.liquify_mode = mode;
                 self.paint.liquify_strength = strength.clamp(0.0, 1.0);
@@ -1411,6 +1423,10 @@ impl Session {
                 Ok(())
             }
             Command::SetColor { rgba } => {
+                // A new colour drops a loaded patch (paint-canvas.tsx:2559).
+                if rgba.to_hex() != self.color.to_hex() {
+                    self.mixer_patch = None;
+                }
                 self.color = rgba;
                 Ok(())
             }

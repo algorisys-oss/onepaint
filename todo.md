@@ -13,8 +13,7 @@ an item changes there, change it here too.
 - [x] Move/transform (scale, rotate, warp, quad homography), pan, liquify
 - [x] Text, pen (path layers), shape, panel
 - [x] Selection tools: rect, ellipse, lasso, polygon, wand
-- [ ] Mixer: Alt-click to load the reservoir from a patch (needs a per-pixel
-      reservoir in `brush::smudge`; it holds one colour today)
+- [x] Mixer: Alt-click loads the reservoir from a patch (spec 63)
 - [x] Pan tool button on the toolbar
 - [x] Tool reachability test: every `Tool` has a button or a written exemption
 

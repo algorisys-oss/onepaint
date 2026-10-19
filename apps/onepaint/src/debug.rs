@@ -6,7 +6,8 @@
 //! - `ONEPAINT_THEME=light` starts in the light theme.
 //! - `ONEPAINT_TRANSFORM=1` starts a rotated move on the active layer.
 //! - `ONEPAINT_TEXT=1` adds a text object and opens its editor.
-//! - `ONEPAINT_SMUDGE=1` smudges and mixes across the demo, plus a radial-symmetry stroke.
+//! - `ONEPAINT_SMUDGE=1` smudges and mixes across the demo (the last Mixer
+//!   stroke from a patch loaded off the smears), plus a radial-symmetry stroke.
 //! - `ONEPAINT_GUIDES=1` turns on the grid, 2-point perspective and H/V snap.
 //! - `ONEPAINT_PEN=1` adds a curved, filled path layer and selects the pen.
 //! - `ONEPAINT_ANIM=1` turns the demo layers into frames (background role) with onion skins;
@@ -254,6 +255,9 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
         for k in 0..4 {
             drag(app, w * (0.55 + k as f64 * 0.06), h * 0.2, h * 0.9);
         }
+        // Load the brush from the smears and paint with the patch.
+        let _ = app.session.execute(Command::LoadMixerPatch { x: w * 0.3, y: h * 0.75, size: 70.0 });
+        drag(app, w * 0.88, h * 0.2, h * 0.9);
         let _ = app.session.execute(Command::SetSymmetry {
             symmetry: Symmetry { mode: SymmetryMode::Radial, radial_count: 8, cx: 0.5, cy: 0.5, angle: 0.0 },
         });
@@ -275,6 +279,8 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
             }
         }
         app.session.stroke_end();
+        // Leave a patch loaded across the yellow and white, for the Mixer's swatch.
+        let _ = app.session.execute(Command::LoadMixerPatch { x: w * 0.6, y: h * 0.5, size: 160.0 });
     }
     if frame == 3 && app.debug.wet {
         let h = app.session.doc().height as f64;

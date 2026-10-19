@@ -28,7 +28,7 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] move/transform (scale, rotate, warp, quad homography)
 - [x] pan (the Pan button, H, space-drag, middle-drag, two-finger scroll)
 - [x] smudge
-- [x] mixer (Wet/Load/Mix, the 12 Photoshop combinations, Keep colour, Clean; no Alt-click patch load yet)
+- [x] mixer (Wet/Load/Mix, the 12 Photoshop combinations, Keep colour, Clean, Alt-click loads a patch from the canvas; spec 63)
 - [x] gradient, with output to pixels or a fill layer (5 shapes, colour→clear or →BG, reverse, selection-aware)
 - [x] liquify (push, twirl left/right, pinch, expand, reconstruct)
 - [x] text (create, edit, move, style, wrap, outline, background, rasterise)

@@ -9,6 +9,7 @@ pub mod height;
 pub mod paper;
 pub mod paper_field;
 mod preset;
+pub mod reservoir;
 pub mod settle;
 pub mod smudge;
 pub mod studio;

@@ -412,6 +412,26 @@ pub fn swatch(ui: &mut Ui, color: Rgba, size: f32, selected: bool) -> Response {
     resp
 }
 
+/// A paint patch: `n`×`n` cells (straight colour, alpha as amount) over a
+/// checker, rounded like a swatch (the Mixer's loaded brush).
+pub fn patch_swatch(ui: &mut Ui, cells: &[Rgba], n: usize, size: f32, label: &str) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    let inner = rect.shrink(2.0);
+    let painter = ui.painter().with_clip_rect(inner);
+    checker(&painter, inner, 4.0);
+    let cell = inner.width() / n.max(1) as f32;
+    for (k, c) in cells.iter().enumerate().take(n * n) {
+        let (i, j) = ((k % n) as f32, (k / n) as f32);
+        let r = Rect::from_min_size(inner.min + Vec2::new(i * cell, j * cell), Vec2::splat(cell + 0.5));
+        painter.rect_filled(r, 0.0, to_color32(*c));
+    }
+    let stroke = if resp.hovered() { Stroke::new(1.0, t.fg) } else { Stroke::new(1.0, Color32::from_white_alpha(40)) };
+    ui.painter().rect_stroke(inner, 3.0, stroke, StrokeKind::Outside);
+    resp
+}
+
 /// A square colour cell for colour grids (the Mix grid): an accent outline
 /// when it is the current colour, a quiet one on hover.
 pub fn color_cell(ui: &mut Ui, color: Rgba, size: Vec2, current: bool, label: &str) -> Response {

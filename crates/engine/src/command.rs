@@ -210,6 +210,15 @@ pub enum Command {
         mixer: MixerSettings,
     },
     CleanMixer,
+    /// Mixer Alt-click: load the brush from the canvas, the square `size`
+    /// wide around (x, y) (document px) of the composite (`loadMixerPatch`).
+    LoadMixerPatch {
+        x: f64,
+        y: f64,
+        size: f64,
+    },
+    /// Drop a loaded patch: the next stroke loads the flat colour.
+    ClearMixerPatch,
     SetLiquify {
         mode: onepaint_filters::liquify::LiquifyMode,
         strength: f64,

@@ -1677,9 +1677,35 @@ fn mixer_options(app: &mut App, ui: &mut Ui) {
         if widgets::secondary_button(ui, "Clean brush", 120.0).clicked() {
             let _ = app.session.execute(Command::CleanMixer);
         }
-        if let Some(r) = app.session.mixer_reservoir() {
-            let c = app.session.doc().space().color([r[0], r[1], r[2], 1.0]);
-            widgets::swatch(ui, c, 22.0, false).on_hover_text("The colour the brush holds");
+        let armed = app.canvas.mixer_load_armed;
+        let load = widgets::secondary_button(ui, if armed { "Tap the canvas…" } else { "Load from canvas" }, 130.0);
+        if load.on_hover_text("Load the brush from what's under it (or Alt-click the canvas)").clicked() {
+            app.canvas.mixer_load_armed = !armed;
+        }
+        // What the brush holds: a kept reservoir, else the loaded patch.
+        let space = app.session.doc().space();
+        let shown = app
+            .session
+            .mixer_reservoir()
+            .map(|r| (r, "What the brush holds"))
+            .or(app.session.mixer_patch().map(|r| (r, "The loaded patch")));
+        match shown {
+            Some((onepaint_brush::smudge::Reservoir::Flat(r), tip)) => {
+                widgets::swatch(ui, space.color([r[0], r[1], r[2], 1.0]), 22.0, false).on_hover_text(tip);
+            }
+            Some((r, tip)) => {
+                let cells: Vec<_> = r
+                    .swatch(8)
+                    .into_iter()
+                    .map(|c| {
+                        let mut col = space.color([c[0], c[1], c[2], 1.0]);
+                        col.a = c[3];
+                        col
+                    })
+                    .collect();
+                widgets::patch_swatch(ui, &cells, 8, 26.0, tip).on_hover_text(tip);
+            }
+            None => {}
         }
     });
     ui.label(

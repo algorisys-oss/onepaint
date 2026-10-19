@@ -158,3 +158,41 @@ fn radial_smudge_smears_every_copy() {
     drag(&mut sm, &mut s, 20.0, 50.0, 50.0);
     assert!(s.get(35, 50)[0] < 0.5 && s.get(164, 49)[0] < 0.5, "both copies darkened");
 }
+
+#[test]
+fn a_loaded_patch_paints_its_layout() {
+    // A patch red over the left half, blue over the right, down a vertical stroke.
+    let mut src = Vec::new();
+    for _ in 0..40 {
+        for x in 0..40 {
+            src.extend(if x < 20 { [1.0, 0.0, 0.0, 1.0] } else { [0.0, 0.0, 1.0, 1.0] });
+        }
+    }
+    let patch = onepaint_brush::smudge::Reservoir::from_canvas(&src, Rect::new(0, 0, 40, 40), 20.0, 20.0, 20.0).unwrap();
+    let wet = WetParams { mix: 0.0, load: 1.0, wetness: 0.0, pigment: true };
+    let mut s = Surface::new();
+    let mut sm = Smudge::new(params(0.9, Some(wet)), Some([0.0, 1.0, 0.0]), Some(patch), Vec::new(), DOC, false, pt(105.0, 30.0));
+    for y in 0..20 {
+        sm.add(&mut s, pt(105.0, 30.0 + 2.0 * y as f64), None);
+    }
+    let (l, r) = (s.get(100, 50), s.get(110, 50));
+    assert!(l[3] > 0.5 && l[0] > 0.9 * l[3] && l[2] < 0.05, "left of the dab is red: {l:?}");
+    assert!(r[3] > 0.5 && r[2] > 0.9 * r[3] && r[0] < 0.05, "right is blue: {r:?}");
+    assert!(l[1] < 1e-3 && r[1] < 1e-3, "the flat colour isn't used");
+
+    // A patch half over transparency: the empty half only smears.
+    let mut half = Vec::new();
+    for _ in 0..40 {
+        for x in 0..40 {
+            half.extend(if x < 20 { [1.0, 0.0, 0.0, 1.0] } else { [0.0; 4] });
+        }
+    }
+    let patch = onepaint_brush::smudge::Reservoir::from_canvas(&half, Rect::new(0, 0, 40, 40), 20.0, 20.0, 20.0).unwrap();
+    let mut s = Surface::new();
+    let mut sm = Smudge::new(params(0.9, Some(wet)), Some([0.0, 1.0, 0.0]), Some(patch), Vec::new(), DOC, false, pt(105.0, 30.0));
+    for y in 0..20 {
+        sm.add(&mut s, pt(105.0, 30.0 + 2.0 * y as f64), None);
+    }
+    assert!(s.get(100, 50)[3] > 0.5);
+    assert!(s.get(110, 50)[3] < 1e-3, "no paint where the patch is empty: {:?}", s.get(110, 50));
+}

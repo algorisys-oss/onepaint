@@ -10,6 +10,9 @@ use onepaint_selection::Mask;
 use onepaint_stroke::{Sampler, Smoother, StrokePoint};
 use std::collections::HashMap;
 
+use crate::reservoir::bilinear;
+pub use crate::reservoir::{RESERVOIR_SIZE, Reservoir};
+
 pub const SMUDGE_STRENGTH: f64 = 0.4;
 const LOAD_CAPACITY: f64 = 120.0;
 const LOAD_FADE: f64 = 24.0;
@@ -43,9 +46,6 @@ pub struct SmudgeParams {
     pub blend: f64,
 }
 
-/// Straight linear reservoir colour plus how much paint it carries.
-pub type Reservoir = [f32; 4];
-
 pub struct Smudge {
     p: SmudgeParams,
     reservoir: Reservoir,
@@ -77,35 +77,14 @@ fn depth(amount: f64, pressure: f64) -> f64 {
     (1.0 - amount + amount * pressure.clamp(0.0, 1.0)).max(0.05)
 }
 
-/// Bilinear premultiplied sample at document position (x, y) from a region
-/// read out of the layer; outside the region (and the document) is clear.
-fn bilinear(buf: &[f32], r: Rect, x: f64, y: f64) -> [f32; 4] {
-    let (u, v) = (x - 0.5 - r.x as f64, y - 0.5 - r.y as f64);
-    let (x0, y0) = (u.floor(), v.floor());
-    let (fx, fy) = ((u - x0) as f32, (v - y0) as f32);
-    let (x0, y0) = (x0 as i32, y0 as i32);
-    let px = |xi: i32, yi: i32| -> [f32; 4] {
-        if xi < 0 || yi < 0 || xi >= r.w || yi >= r.h {
-            return [0.0; 4];
-        }
-        let i = ((yi * r.w + xi) * 4) as usize;
-        [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
-    };
-    let (a, b, c, d) = (px(x0, y0), px(x0 + 1, y0), px(x0, y0 + 1), px(x0 + 1, y0 + 1));
-    std::array::from_fn(|k| {
-        let top = a[k] + (b[k] - a[k]) * fx;
-        let bot = c[k] + (d[k] - c[k]) * fx;
-        top + (bot - top) * fy
-    })
-}
-
 fn mix3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
     std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t)
 }
 
 impl Smudge {
-    /// Start a stroke. `color` is the reservoir paint (straight linear), or
-    /// `None` for the pure smudge tool; `held` carries a kept reservoir over.
+    /// Start a stroke. `color` is the reservoir paint (straight, in the
+    /// document's space), or `None` for the pure smudge tool; `held` starts
+    /// from a kept reservoir or a loaded patch instead.
     pub fn new(
         p: SmudgeParams,
         color: Option<[f32; 3]>,
@@ -121,10 +100,7 @@ impl Smudge {
         let mut sampler = Sampler::new();
         let first = smoother.next(first);
         sampler.add(first, &mut |_, _| gap);
-        let reservoir = held.unwrap_or_else(|| {
-            let c = color.unwrap_or([0.0; 3]);
-            [c[0], c[1], c[2], 1.0]
-        });
+        let reservoir = held.unwrap_or_else(|| Reservoir::flat(color.unwrap_or([0.0; 3])));
         let (budget, contam) = match p.wet {
             Some(w) => (w.load * LOAD_CAPACITY, CONTAM_RATE * w.wetness.clamp(0.0, 1.0) * w.mix),
             None => (0.0, 0.0),
@@ -155,8 +131,8 @@ impl Smudge {
         self.space = space;
     }
 
-    pub fn reservoir(&self) -> Reservoir {
-        self.reservoir
+    pub fn reservoir(&self) -> &Reservoir {
+        &self.reservoir
     }
 
     /// Feed one input point; smears into `layer` and returns the touched rect.
@@ -211,10 +187,6 @@ impl Smudge {
         self.p.blend * crate::height::BLEND_FLATTEN
     }
 
-    fn mixer(&self, a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
-        if self.p.wet.is_some_and(|w| w.pigment) && t > 0.0 { pigment_mix(a, b, t) } else { mix3(a, b, t) }
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn smear(
         &mut self,
@@ -247,10 +219,12 @@ impl Smudge {
         let h = hard.min(1.0 - aa);
         let strength = strength.min(0.98);
         let (wet, mix) = self.p.wet.map_or((1.0, 1.0), |w| (w.wetness.clamp(0.0, 1.0), w.mix));
-        let res_w = ((1.0 - mix) * deposit * self.reservoir[3] as f64) as f32;
-        let rc = [self.reservoir[0], self.reservoir[1], self.reservoir[2]];
+        let res_k = ((1.0 - mix) * deposit) as f32;
+        let flat = match &self.reservoir {
+            Reservoir::Flat(c) => Some(*c),
+            Reservoir::Patch(_) => None,
+        };
         let sp = self.space;
-        let rc_w = rc.map(|v| sp.to_work(v));
         let (tc, ts) = (self.tip_angle.cos(), self.tip_angle.sin());
         let bounds = Rect::covering(
             (to.0 - radius - 1.0) as f32,
@@ -259,8 +233,9 @@ impl Smudge {
             (to.1 + radius + 1.0) as f32,
         );
         let Some(bounds) = bounds.intersect(&self.doc) else { return Rect::default() };
-        let mut memo: HashMap<u32, [f32; 3]> = HashMap::new();
-        let pigment = self.p.wet.is_some_and(|w| w.pigment) && res_w > 0.0;
+        // Pigment mixes for 8-bit keys of (pickup, reservoir, weight).
+        let mut memo: HashMap<u64, [f32; 3]> = HashMap::new();
+        let pigment = self.p.wet.is_some_and(|w| w.pigment);
         for (tx, ty) in bounds.tiles() {
             let Some(ix) = bounds.intersect(&Rect::from_tile(tx, ty)) else { continue };
             let tile = layer.tile_mut(tx, ty);
@@ -284,6 +259,10 @@ impl Smudge {
                     if cov <= 0.0 {
                         continue;
                     }
+                    // The reservoir texel over this part of the dab (unrotated).
+                    let rv = flat.unwrap_or_else(|| self.reservoir.sample((lx + 1.0) * 0.5, (ly + 1.0) * 0.5));
+                    let res_w = res_k * rv[3];
+                    let rc = [rv[0], rv[1], rv[2]];
                     let p = pick.as_ref().map_or([0.0; 4], |(r, b)| bilinear(b, *r, x as f64 + 0.5 - dx, y as f64 + 0.5 - dy));
                     let pconf = smoothstep(0.002, 0.05, p[3] as f64) as f32;
                     let pa = p[3].max(0.002);
@@ -292,8 +271,10 @@ impl Smudge {
                         pc
                     } else {
                         let pc_w = pc.map(|v| sp.to_work(v));
+                        let rc_w = rc.map(|v| sp.to_work(v));
                         let w = if pigment {
-                            let key = pc_w.iter().fold(0u32, |k, v| (k << 8) | (v.clamp(0.0, 1.0) * 255.0).round() as u32);
+                            let q = |v: f32| u64::from((v.clamp(0.0, 1.0) * 255.0).round() as u8);
+                            let key = pc_w.iter().chain(&rc_w).chain(&[res_w]).fold(0u64, |k, v| (k << 8) | q(*v));
                             *memo.entry(key).or_insert_with(|| pigment_mix(pc_w, rc_w, res_w))
                         } else {
                             mix3(pc_w, rc_w, res_w)
@@ -332,15 +313,13 @@ impl Smudge {
                 }
             }
         }
-        let rate = self.contam.min(1.0);
-        let pv = self.reservoir;
-        let prev = [pv[0], pv[1], pv[2]];
-        let got = pa[3] > 0.001;
-        let avg = if got { [pa[0] / pa[3], pa[1] / pa[3], pa[2] / pa[3]] } else { prev };
-        let rate = (1.0 + (rate - 1.0) * smoothstep(0.0, 0.05, pv[3] as f64)) as f32;
-        let sp = self.space;
-        let col = self.mixer(prev.map(|v| sp.to_work(v)), avg.map(|v| sp.to_work(v)), rate).map(|v| sp.from_work(v));
-        let a = if got { pv[3] + (1.0 - pv[3]) * (self.contam as f32 * pa[3].min(1.0)) } else { pv[3] };
-        self.reservoir = [col[0], col[1], col[2], a];
+        let rate = self.contam.min(1.0) as f32;
+        let (sp, pigment) = (self.space, self.p.wet.is_some_and(|w| w.pigment));
+        let mixer = move |a: [f32; 3], b: [f32; 3], t: f32| -> [f32; 3] {
+            let (a, b) = (a.map(|v| sp.to_work(v)), b.map(|v| sp.to_work(v)));
+            let m = if pigment && t > 0.0 { pigment_mix(a, b, t) } else { mix3(a, b, t) };
+            m.map(|v| sp.from_work(v))
+        };
+        self.reservoir.contaminate(pa, rate, &mixer);
     }
 }

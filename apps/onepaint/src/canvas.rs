@@ -420,6 +420,11 @@ pub struct Canvas {
     pub sym_editing: bool,
     /// Out of pegs: the ghost a canvas drag slides (set by the timeline).
     pub peg_target: Option<String>,
+    /// Mixer: the next tap loads the brush from the canvas (the swatch
+    /// button arms it for pens without Alt).
+    pub mixer_load_armed: bool,
+    /// A message for the app's toast, taken after [`Canvas::show`].
+    pub notice: Option<String>,
     /// Edit guides: drags move, draw and swing guide lines.
     pub lines_editing: bool,
     /// Measure: drags report length and angle.
@@ -482,6 +487,8 @@ impl Canvas {
             persp_editing: false,
             sym_editing: false,
             peg_target: None,
+            mixer_load_armed: false,
+            notice: None,
             lines_editing: false,
             measuring: false,
             measure: None,
@@ -805,6 +812,17 @@ impl Canvas {
             return Drag::Peg { start: self.doc_pt(p), from };
         }
         let selecting = matches!(tool, Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectPoly | Tool::SelectWand);
+        // Mixer Alt-click loads the brush from the canvas instead of picking
+        // a colour (paint-canvas.tsx:5561-5565).
+        if tool == Tool::Mixer && (m.alt || self.mixer_load_armed) {
+            self.mixer_load_armed = false;
+            let d = self.doc_pt(p);
+            let size = session.current_brush().size;
+            if let Err(e) = session.execute(Command::LoadMixerPatch { x: d[0], y: d[1], size }) {
+                self.notice = Some(e.to_string());
+            }
+            return Drag::None;
+        }
         if (m.alt && !selecting) || tool == Tool::Eyedropper {
             self.pick(session, p);
             return Drag::Pick;
@@ -1021,6 +1039,8 @@ impl Canvas {
     ) {
         let t = Tokens::get(ui.ctx());
         let ppp = ui.ctx().pixels_per_point();
+        // Leaving the Mixer disarms "tap to load" (paint-canvas.tsx:2565).
+        self.mixer_load_armed &= session.tool() == Tool::Mixer;
         // Overlays (handles, guides, cursors) stay on the stage, off the docks and status bar.
         ui.set_clip_rect(rect);
         self.screen_rect = rect;

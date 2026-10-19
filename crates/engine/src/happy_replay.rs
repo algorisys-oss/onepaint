@@ -204,6 +204,11 @@ impl Session {
                 }
             }
             "cleanMixer" => self.run(Command::CleanMixer),
+            "loadMixerPatch" => {
+                let Some(p) = a.get("point").and_then(xy) else { return false };
+                self.run(Command::LoadMixerPatch { x: p[0], y: p[1], size: num(a, "size").unwrap_or(20.0) });
+            }
+            "clearMixerPatch" => self.run(Command::ClearMixerPatch),
             // ── Fills ──
             "floodFill" => {
                 let Some(p) = a.get("point").and_then(xy) else { return false };
@@ -549,6 +554,8 @@ const HANDLED: &[&str] = &[
     "continueLiquify",
     "endLiquify",
     "cleanMixer",
+    "loadMixerPatch",
+    "clearMixerPatch",
     "floodFill",
     "fillShape",
     "gradient",

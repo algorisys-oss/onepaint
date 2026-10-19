@@ -73,3 +73,4 @@ The happypaint references are relative to `../happypaint/frontend/src/`.
 | 60 | [On-canvas filter handles](60-filter-handles.md) | filters, app |
 | 61 | [PSD colour modes and depths on read](61-psd-colour-modes.md) | color, formats |
 | 62 | [Replaying happypaint recordings](62-happypaint-recordings.md) | formats, engine, app |
+| 63 | [Loading the Mixer from the canvas](63-mixer-patch.md) | brush, engine, ui_kit, app |

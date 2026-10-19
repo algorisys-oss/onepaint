@@ -77,6 +77,10 @@ Overnight (2026-10-18 → 19), all pushed, newest last:
 - happypaint recordings replay (spec 62; `RecEvent::Happy`, id map in
   `Session::happy_ids`).
 - PSD fill layers live both ways (`formats::psd_fill`: SoCo, GdFl).
+- View bench (`gpu/benches/view.rs`): pan and rotate 2–2.5 ms on 8k × 100
+  layers; the GPU frame budget now counts program ops (spec 39).
+- Mixer patch load (spec 63): `brush::reservoir`, `Command::LoadMixerPatch`
+  and `ClearMixerPatch`, Alt-click and "Load from canvas" in the app.
 - Next: PSD writing in the file's mode and depth (happypaint keeps a
   CMYK/16-bit/PSB file's shell), PSB export; Help ▸ Manual waits (an
   onepaint manual to write). The menu-bar workspace waits for the owner. Was: the workspace UI catch-up (menu bar, options

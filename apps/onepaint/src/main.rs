@@ -1484,6 +1484,9 @@ impl eframe::App for App {
         self.canvas.swallow_press = self.side.entry_open();
         self.canvas.scrollbars = self.settings.scrollbars && !self.hide_ui;
         self.canvas.show(ui, rect, &mut self.session, space, r, self.gpu_ok, self.gpu_compose);
+        if let Some(msg) = self.canvas.notice.take() {
+            self.notify(msg, ui.input(|i| i.time));
+        }
         // Keep a short history of pen samples (the canvas may use a move a frame late).
         let excess = self.canvas.pen_queue.len().saturating_sub(512);
         self.canvas.pen_queue.drain(..excess);
@@ -1601,6 +1604,24 @@ mod tests {
             h.step();
         }
         press(h, to, false);
+    }
+
+    #[test]
+    fn mixer_alt_click_loads_the_brush_and_keeps_the_colour() {
+        let mut h = harness();
+        h.run();
+        h.state_mut().session.execute(Command::SetTool { tool: Tool::Mixer }).unwrap();
+        let before = h.state().session.color();
+        let at = pos2(640.0, 420.0);
+        h.event(Event::PointerMoved(at));
+        h.step();
+        for pressed in [true, false] {
+            h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: egui::Modifiers::ALT });
+            h.step();
+        }
+        assert!(h.state().session.mixer_patch().is_some(), "the white page loaded");
+        assert_eq!(h.state().session.color(), before, "Alt-click with the Mixer isn't the eyedropper");
+        assert_eq!(h.state().session.history_len(), 0, "and paints nothing");
     }
 
     #[test]
