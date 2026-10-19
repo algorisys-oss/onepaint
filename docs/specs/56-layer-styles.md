@@ -12,7 +12,12 @@ and path layers and groups; `ApplyGlobalLight` (linked effects across the
 document, a drag one undo step), `BakeStyles` (from the unmasked pixels,
 effects drawn Normal, the mask kept, as happypaint), and Merge Down bakes
 both layers' styles as far as they reach. Still to come in phase 4: user
-presets and gradient-stop editing. happypaint v0.196.0–0.196.8; the source of truth is
+presets and gradient-stop editing. Phase 5 in part: PSD effects
+(`formats::psd_effects` on a general descriptor reader, `psd_desc`):
+`lfx2`/`lmfx` both ways in ag-psd's byte order, `iOpa`, Global Light in
+resources 1037/1049, contours by name or nearest curve, happypaint's
+psd-effects tests. Pattern overlays and bevel textures aren't written (as
+happypaint). `.asl` import waits for user presets. happypaint v0.196.0–0.196.8; the source of truth is
 `engine/styles/layer-styles.ts` (model) and `style-renderer.ts` (WebGL),
 with `docs/layer-styles-spec.md` in happypaint.
 

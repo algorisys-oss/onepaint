@@ -290,6 +290,7 @@ fn layer_record(l: &Layer, doc: Rect, frame: onepaint_filters::Frame) -> Record 
     if let Some(k) = l.knockout() {
         extra.push((*b"knko", vec![if k == onepaint_doc::Knockout::Deep { 2 } else { 1 }, 0, 0, 0]));
     }
+    extra.extend(style_blocks(l.styles()));
     let ranges = l.blend_if().map_or_else(Vec::new, |b| b.0.iter().flat_map(|c| c.src.into_iter().chain(c.dst)).collect());
     if let Some(v) = l.vector_mask().filter(|v| !v.paths.is_empty()) {
         extra.push((*b"vmsk", write_vmsk(&v, doc.w as f64, doc.h as f64)));
@@ -309,6 +310,41 @@ fn layer_record(l: &Layer, doc: Rect, frame: onepaint_filters::Frame) -> Record 
         extra,
         raw: None,
     }
+}
+
+/// The document's Global Light for resources 1037/1049 (spec 56): the
+/// first linked effect's, or the default; `None` when nothing has styles.
+fn global_light(nodes: &[Node]) -> Option<(f32, f32)> {
+    fn styled(nodes: &[Node], out: &mut Vec<onepaint_doc::styles::LayerStyles>) {
+        for n in nodes {
+            match n {
+                Node::Layer(l) => out.extend(l.styles().filter(|s| !s.effects.is_empty())),
+                Node::Group(g) => {
+                    out.extend(g.styles().filter(|s| !s.effects.is_empty()));
+                    styled(&g.children, out);
+                }
+            }
+        }
+    }
+    let mut all = Vec::new();
+    styled(nodes, &mut all);
+    if all.is_empty() {
+        return None;
+    }
+    let linked = |s: &&onepaint_doc::styles::LayerStyles| s.effects.iter().any(|e| e.use_global_light);
+    Some(all.iter().find(linked).map_or(crate::psd_effects::DEFAULT_LIGHT, |s| s.global_light()))
+}
+
+/// A node's layer styles as blocks (spec 56): its effects (`lfx2` or
+/// `lmfx`) and, below 100%, its Fill opacity (`iOpa`, truncated as
+/// happypaint's `setUint8`).
+fn style_blocks(styles: Option<onepaint_doc::styles::LayerStyles>) -> Vec<([u8; 4], Vec<u8>)> {
+    let Some(s) = styles else { return Vec::new() };
+    let mut out: Vec<([u8; 4], Vec<u8>)> = crate::psd_effects::write(&s).into_iter().collect();
+    if s.fill_opacity < 1.0 {
+        out.push((*b"iOpa", vec![(s.fill_opacity.clamp(0.0, 1.0) * 255.0) as u8, 0, 0, 0]));
+    }
+    out
 }
 
 fn empty_record(name: &str, key: [u8; 4], opacity: u8, flags: u8, lsct: Vec<u8>) -> Record {
@@ -348,7 +384,9 @@ fn flatten(nodes: &[Node], doc: Rect, frame: onepaint_filters::Frame, src: Optio
                 lsct.extend_from_slice(&0u32.to_be_bytes());
                 let flags = 0x08 | 0x10 | if g.visible { 0 } else { 2 };
                 // Photoshop writes a pass-through group's own record as Normal.
-                out.push(empty_record(&g.name, *key_of(g.blend_mode), (g.opacity.clamp(0.0, 1.0) * 255.0).round() as u8, flags, lsct));
+                let mut rec = empty_record(&g.name, *key_of(g.blend_mode), (g.opacity.clamp(0.0, 1.0) * 255.0).round() as u8, flags, lsct);
+                rec.extra.extend(style_blocks(g.styles()));
+                out.push(rec);
             }
         }
     }
@@ -398,10 +436,21 @@ pub fn write_psd(doc: &Document, composite: &[f32]) -> Result<Vec<u8>, FormatErr
     // Image resources: the original ones (guides, slices, ICC…) while the
     // resolution is unchanged, else 1005 resolution info.
     let resources = src.filter(|s| s.same_dpi(doc)).map(|s| &s.bytes[s.resources.clone()]);
+    let light = global_light(&doc.root);
     o.section(1, false, |r| {
         if let Some(b) = resources {
             r.bytes(b);
             return;
+        }
+        // Global Light, when some layer's styles take it (spec 56).
+        if let Some((angle, altitude)) = light {
+            for (id, v) in [(1037u16, angle.round() as i32 as u32), (1049, altitude.round() as u32)] {
+                r.bytes(b"8BIM");
+                r.u16(id);
+                r.u16(0);
+                r.u32(4);
+                r.u32(v);
+            }
         }
         r.bytes(b"8BIM");
         r.u16(1005);
@@ -588,6 +637,9 @@ struct RRec {
     mask_look: (f32, f32),
     blend_if: Option<onepaint_doc::BlendIf>,
     vector_mask: Option<onepaint_doc::VectorMask>,
+    /// Layer styles (spec 56): the last effects block's data, and Fill opacity.
+    effects: Option<Vec<u8>>,
+    fill: Option<f32>,
     /// Where the record and its channel data sit in the file.
     raw: crate::psd_source::RawRecord,
 }
@@ -770,6 +822,7 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
     doc.root.clear();
     doc.name = "Imported PSD".into();
     let ir = c.u32()? as usize;
+    let mut light = crate::psd_effects::DEFAULT_LIGHT;
     let ir_start = c.p;
     let ir_end = c.p + ir;
     while c.p + 12 <= ir_end {
@@ -783,6 +836,13 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
         let start = c.p;
         if id == 1005 && sz >= 16 {
             doc.dpi = (c.u32()? as f64 / 65536.0).round();
+        }
+        // Global Light for layer styles (spec 56): angle, then altitude.
+        if id == 1037 && sz >= 4 {
+            light.0 = c.u32()? as i32 as f32;
+        }
+        if id == 1049 && sz >= 4 {
+            light.1 = c.u32()? as f32;
         }
         c.p = start + sz + sz % 2;
     }
@@ -859,6 +919,8 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                 let mut lsct = None;
                 let mut adjustment = None;
                 let mut knockout = 0;
+                let mut effects = None;
+                let mut fill = None;
                 let mut vector_mask = None;
                 let mut vector_fill = false;
                 while c.p + 12 <= ex_end {
@@ -908,6 +970,9 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                             lsct = Some((t, blend));
                         }
                         b"knko" => knockout = d.u8()?,
+                        // The last effects block wins, as ag-psd reads them.
+                        b"lfx2" | b"lmfx" => effects = Some(data.to_vec()),
+                        b"iOpa" => fill = Some(d.u8()? as f32 / 255.0),
                         b"vmsk" | b"vsms" => vector_mask = vector_mask.or_else(|| read_vmsk(data, w as f64, h as f64)),
                         // A shape layer: its pixels are already cut to the path.
                         b"SoCo" | b"GdFl" | b"PtFl" | b"vscg" => vector_fill = true,
@@ -958,6 +1023,8 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                     mask_look,
                     blend_if,
                     vector_mask: vector_mask.filter(|_| !vector_fill),
+                    effects,
+                    fill,
                     raw: crate::psd_source::RawRecord { record: rec_start..ex_end, channels: Vec::new() },
                 });
             }
@@ -1018,6 +1085,10 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                         g.visible = rec.flags & 2 == 0;
                         g.opacity = rec.opacity as f32 / 255.0;
                         g.blend_mode = group_mode_of(&rec.lsct.and_then(|l| l.1).unwrap_or(rec.key));
+                        g.set_styles(crate::psd_effects::styles_of(
+                            rec.effects.as_deref().and_then(|d| crate::psd_effects::read_block(d, light)),
+                            rec.fill,
+                        ));
                         if let Some(s) = src.as_mut() {
                             s.node(&g.id, rec.raw.clone());
                         }
@@ -1047,6 +1118,12 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                             2 => Some(onepaint_doc::Knockout::Deep),
                             _ => None,
                         });
+                        if l.adjustment.is_none() {
+                            l.set_styles(crate::psd_effects::styles_of(
+                                rec.effects.as_deref().and_then(|d| crate::psd_effects::read_block(d, light)),
+                                rec.fill,
+                            ));
+                        }
                         if let Some(s) = src.as_mut() {
                             s.node(&l.id, rec.raw.clone());
                         }

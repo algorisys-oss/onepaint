@@ -249,3 +249,41 @@ fn edits_rewrite_only_the_changed_layers() {
     // A document not from a PSD writes as before (no source).
     assert!(Document::new(8, 8, None).source.is_none());
 }
+
+/// Spec 56: layer styles cross a PSD with their effects (`lfx2`/`lmfx`),
+/// Fill opacity (`iOpa`) and Global Light (resources 1037/1049), on a layer
+/// and on a group.
+#[test]
+fn layer_styles_cross_a_psd() {
+    use onepaint_doc::styles::{EffectKind, LayerStyles, default_effect};
+    let mut d = Document::new(64, 64, None);
+    let mut l = Layer::new("Styled");
+    l.pixels.set(10, 10, [1.0, 0.0, 0.0, 1.0]);
+    let mut shadow = default_effect(EffectKind::DropShadow);
+    (shadow.angle, shadow.distance) = (60.0, 12.0);
+    let mut stroke2 = default_effect(EffectKind::Stroke);
+    stroke2.size = 9.0;
+    l.set_styles(Some(LayerStyles {
+        fill_opacity: 0.6,
+        effects: vec![default_effect(EffectKind::Stroke), stroke2, shadow, default_effect(EffectKind::Bevel)],
+    }));
+    let mut g = onepaint_doc::Group::new("Group");
+    let mut inner = Layer::new("In");
+    inner.pixels.set(20, 20, [0.0, 0.0, 1.0, 1.0]);
+    g.children = vec![onepaint_doc::Node::Layer(inner)];
+    let mut gs = default_effect(EffectKind::Stroke);
+    gs.size = 7.0;
+    g.set_styles(Some(LayerStyles { fill_opacity: 1.0, effects: vec![gs] }));
+    d.root = vec![onepaint_doc::Node::Layer(l), onepaint_doc::Node::Group(g)];
+    let bytes = write_psd(&d, &vec![0.0f32; 64 * 64 * 4]).unwrap();
+    let r = read_psd(&bytes).unwrap();
+    let back = r.root[0].as_layer().unwrap().styles().unwrap();
+    assert!((back.fill_opacity - 0.6).abs() < 0.005, "{}", back.fill_opacity);
+    let sizes: Vec<_> = back.effects.iter().filter(|e| e.kind == EffectKind::Stroke).map(|e| e.size).collect();
+    assert_eq!(sizes, vec![3.0, 9.0], "both strokes, in order");
+    let ds = back.effects.iter().find(|e| e.kind == EffectKind::DropShadow).unwrap();
+    assert_eq!((ds.angle, ds.distance, ds.use_global_light), (60.0, 12.0, true), "linked to the file's light");
+    assert!(back.effects.iter().any(|e| e.kind == EffectKind::Bevel));
+    let onepaint_doc::Node::Group(g) = &r.root[1] else { panic!("a group") };
+    assert_eq!(g.styles().unwrap().effects[0].size, 7.0);
+}
