@@ -68,3 +68,4 @@ The happypaint references are relative to `../happypaint/frontend/src/`.
 | 55 | [Ghost pegs on the GPU](55-gpu-ghost-pegs.md) | compose, gpu |
 | 56 | [Layer styles](56-layer-styles.md) | doc, compose, gpu, engine, formats, app |
 | 57 | [Procedural papers](57-procedural-papers.md) | brush, doc, compose, gpu, engine, app |
+| 58 | [Wet physics, v0.195.3–v0.199](58-wet-physics-v0199.md) | brush, gpu, engine, app |

@@ -448,6 +448,7 @@ impl App {
         let bg = preset.and_then(|p| p.tint).and_then(Rgba::from_hex).unwrap_or(Rgba::WHITE);
         let mut doc = onepaint_doc::Document::new_in(w, h, Some(bg), self.new_depth);
         doc.set_paper(preset.and_then(|p| p.paper()));
+        doc.extra.insert("wetModel".into(), onepaint_brush::fluid::CURRENT_WET_MODEL.into());
         self.session.replace_document(doc);
         self.canvas.reset_for([w, h]);
         self.path = None;

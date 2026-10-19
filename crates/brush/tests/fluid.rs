@@ -6,7 +6,7 @@ use onepaint_raster::{Rect, Surface};
 const DOC: Rect = Rect::new(0, 0, 400, 300);
 
 fn dab(x: f64, y: f64, water: f64, pigment: f64, color: [f32; 3]) -> WetDab {
-    WetDab { x, y, radius: 20.0, water, pigment, color, vx: 0.0, vy: 0.0, rewet: 0.0, dry: 0.0, grain_thr: 0.0 }
+    WetDab { x, y, radius: 20.0, water, pigment, color, vx: 0.0, vy: 0.0, rewet: 0.0, dry: 0.0, grain_thr: 0.0, halo: 1.0 }
 }
 
 fn stroke(sim: &mut FluidSim, y: f64, water: f64, pigment: f64, color: [f32; 3]) {
@@ -139,4 +139,45 @@ fn the_simulation_is_deterministic_and_drags_with_the_brush() {
         (layer.read_rect(DOC), sim.preview().read_rect(sim.rect()))
     };
     assert!(run() == run());
+}
+
+/// Spec 58 (happypaint v0.199.2): a halo wets the paper out to
+/// `radius · halo`; the pigment stays within the radius.
+#[test]
+fn a_halo_wets_past_the_pigment() {
+    let mut sim = FluidSim::new(DOC, Rect::new(150, 120, 100, 60), false);
+    sim.deposit(&[WetDab { halo: 1.5, ..dab(200.0, 150.0, 2.0, 0.6, [0.1, 0.2, 0.8]) }], None);
+    // 25 px out: past the 20 px radius, inside the 30 px halo.
+    let (w, a) = sim.at(225, 150);
+    assert!(w > 0.5 && a == 0.0, "water {w}, pigment {a}");
+    let (w, _) = sim.at(233, 150);
+    assert_eq!(w, 0.0);
+    // No halo: no water past the radius.
+    let mut plain = FluidSim::new(DOC, Rect::new(150, 120, 100, 60), false);
+    plain.deposit(&[dab(200.0, 150.0, 2.0, 0.6, [0.1, 0.2, 0.8])], None);
+    assert_eq!(plain.at(225, 150).0, 0.0);
+    // The preset's field: absent = 1, clamped to 1..3.
+    let f: Fluid = serde_json::from_str(r#"{"water":1.6,"pigment":0.65}"#).unwrap();
+    assert_eq!(f.halo(), 1.0);
+    assert_eq!(Fluid { halo: 9.0, ..f }.halo(), 3.0);
+    assert_eq!(onepaint_brush::preset("watercolor-live-wet").unwrap().fluid().unwrap().halo(), 1.5);
+}
+
+/// Spec 58 (happypaint v0.199.1, paper absorbs): water only moves between
+/// wet pixels, so a damp patch doesn't creep into the dry paper around it,
+/// and a soaking one spreads into it only slowly.
+#[test]
+fn damp_paint_stays_put_and_soaking_paint_spreads() {
+    // Water 3 px past the dab's 20 px radius after a second.
+    let past_edge = |water: f64| {
+        let mut sim = FluidSim::new(DOC, Rect::new(150, 120, 100, 60), false);
+        sim.deposit(&[dab(200.0, 150.0, water, 0.5, [0.1, 0.2, 0.8])], None);
+        let mut layer = Surface::new();
+        steps(&mut sim, &mut layer, 60);
+        sim.at(223, 150).0
+    };
+    let (damp, soaking) = (past_edge(0.2), past_edge(2.0));
+    assert!(damp < 1e-3, "a damp patch stays inside its dab: {damp}");
+    // Dry paper drinks the front: before v0.199 this reached ~1.5.
+    assert!(soaking > 0.05 && soaking < 0.5, "a soaking one spreads, slowly: {soaking}");
 }

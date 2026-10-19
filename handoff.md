@@ -61,6 +61,11 @@ Overnight (2026-10-18 → 19), all pushed, newest last:
   paper texture is RGBA32F), presets with legacy ids, Apply paper colour
   (`FillLayerSolid`), `ONEPAINT_PAPER=khadi` for screenshots. Next: wet
   physics v0.199, then the workspace UI.
+- Spec 58, wet physics v0.195.3–v0.199: phase A done (paper absorbs:
+  advection acceptance, wet-only water exchange, bloom, ×4 slope; the
+  `fluid.halo`; `wetModel` 2 on new drawings), CPU and GPU, mutations
+  caught. Next: B, tip-shaped dabs (`wetDabRotation`), then C, wash fill
+  (`wash-field.ts`, walls with a guard band, Fill tool options).
 - `scripts/bench-gate/gate.sh save|check`: the perf-budget gate for
   AGENTS.md's 5% rule, on criterion's saved baselines (checked: the 9
   engine hot-path benches came out within 5% of themselves).

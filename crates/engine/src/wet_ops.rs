@@ -230,11 +230,12 @@ impl Session {
                     rewet: a.rewet,
                     dry,
                     grain_thr,
+                    halo: ws.fluid.halo(),
                 });
                 if ws.impasto > 0.0 {
                     relief.push(HeightDab { x, y, radius, amount: ws.impasto * 0.12 * (0.4 + 0.6 * pressure) });
                 }
-                s.grow(x, y, radius);
+                s.grow(x, y, radius * ws.fluid.halo());
             };
             if ws.transforms.is_empty() {
                 push(p.x, p.y, vx, vy);

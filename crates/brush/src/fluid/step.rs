@@ -24,6 +24,14 @@ const VORT_EPS: f32 = 0.5;
 const PAPER_ABSORB: f32 = 1.6;
 const PAPER_RESIST: f32 = 0.5;
 const GRAN_SWING: f32 = 1.2;
+// Paper absorbs (happypaint v0.199.1, `wet-renderer.ts:181-184`): water
+// moves only between wet pixels, dry paper barely takes advected paint
+// unless it runs downhill, and wet pixels bloom and flow harder.
+const WET_RAMP: (f32, f32) = (0.3, 1.0);
+const DRY_ACCEPT: f32 = 0.05;
+const WET_BLOOM: f32 = 0.8;
+/// The slope push on open paper (inside a wash's walls it is 3, spec 58).
+const OPEN_FLOW: f32 = 4.0;
 
 /// Settle rate and wet-front strength at (u, v) (sim px). The settle and
 /// update passes must agree, or mass would not be conserved.
@@ -266,6 +274,12 @@ fn update_px(
             trace = [sn[2], sn[3]];
         }
     }
+    // Dry paper refuses advected water, unless it runs downhill.
+    let tl = tilt[0].hypot(tilt[1]).max(1e-4);
+    let downhill = (trace[0] * tilt[0] + trace[1] * tilt[1]) / tl;
+    let accept = smoothstep(WET_RAMP.0, WET_RAMP.1, here[0]).max(smoothstep(0.15, 0.6, downhill));
+    let k = DRY_ACCEPT + (1.0 - DRY_ACCEPT) * accept;
+    trace = [trace[0] * k, trace[1] * k];
     let (ou, ov) = (u - trace[0], v - trace[1]);
     let sim = fs.sample(ou, ov);
     let col = fc.sample(ou, ov);
@@ -274,7 +288,7 @@ fn update_px(
     // 8 taps (1 px ring + 2 px ring): water relaxes, pigment blooms through
     // water, its colour folding in neighbour by neighbour through KM.
     const OFFS: [(f32, f32); 8] = [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-2.0, 0.0), (2.0, 0.0), (0.0, -2.0), (0.0, 2.0)];
-    let mut w_avg = 0.0;
+    let mut w_flux = 0.0;
     let mut a_new = col[3];
     let mut n1 = [[0.0f32; 4]; 4];
     let mut c = if col[3] > 0.0005 { [col[0] / col[3], col[1] / col[3], col[2] / col[3]] } else { [1.0; 3] }.map(|v| sp.to_work(v));
@@ -283,11 +297,12 @@ fn update_px(
         let snb = fs.sample(ou + ox, ov + oy);
         let wn = snb[0];
         let cn = fc.sample(ou + ox, ov + oy);
-        w_avg += wn;
+        w_flux += smoothstep(WET_RAMP.0, WET_RAMP.1, w.min(wn)) * (wn - w);
         if i < 4 {
             n1[i] = snb;
         }
-        let lam = DIFF_P * 0.125 * smoothstep(0.0, 0.04, w.min(wn)) * (1.0 - oil);
+        let mut lam = DIFF_P * 0.125 * smoothstep(0.0, 0.04, w.min(wn)) * (1.0 - oil);
+        lam *= 1.0 + WET_BLOOM * smoothstep(0.2, 1.5, w.min(wn));
         a_new += lam * (cn[3] - col[3]);
         if cn[3] > 0.0005 {
             let inc = lam * cn[3];
@@ -300,14 +315,13 @@ fn update_px(
             mass += inc;
         }
     }
-    w_avg *= 0.125;
 
     // Textured paper drinks water (uneven drying) and resists its flow.
     let ph = if paper.1 > 0.0 { paper.0.at(u, v) } else { 0.5 };
     let soak = 1.0 + paper.1 * PAPER_ABSORB * ph;
     let resist = 1.0 - paper.1 * PAPER_RESIST * ph;
     let w_new =
-        (w + DIFF_W * resist * (1.0 + (0.06 - 1.0) * oil) * (w_avg - w) - EVAP as f32 * soak * (1.0 - oil)).clamp(0.0, WATER_MAX as f32);
+        (w + DIFF_W * resist * (1.0 + (0.06 - 1.0) * oil) * w_flux * 0.125 - EVAP as f32 * soak * (1.0 - oil)).clamp(0.0, WATER_MAX as f32);
     let mut col_new = if a_new <= 0.0005 {
         [0.0; 4]
     } else {
@@ -336,7 +350,7 @@ fn update_px(
     let wet = smoothstep(0.1, 0.8, w);
     let mut vel = [sim[2], sim[3]];
     for k in 0..2 {
-        vel[k] += (tilt[k] * G_TILT * thick - grad[k] * G_SLOPE * (1.0 - oil)) * (wet * finger_eff) + f_vort[k] * wet;
+        vel[k] += (tilt[k] * G_TILT * thick - grad[k] * G_SLOPE * OPEN_FLOW * (1.0 - oil)) * (wet * finger_eff) + f_vort[k] * wet;
     }
     let damp = (DAMP + (0.84 - DAMP) * oil) * smoothstep(0.005, 0.04, w_new);
     let vel = vel.map(|v| (v * damp).clamp(-V_MAX, V_MAX));
@@ -370,6 +384,7 @@ mod tests {
                 rewet: 0.0,
                 dry: 0.0,
                 grain_thr: 0.0,
+                halo: 1.0,
             })
             .collect();
         sim.deposit(&dabs, None);

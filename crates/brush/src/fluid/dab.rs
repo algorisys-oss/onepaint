@@ -34,9 +34,22 @@ pub struct Fluid {
     pub blow: f64,
     /// Live oils: viscous, non-drying, no blooms.
     pub oil: bool,
+    /// Water reaches this many radii (1..3; absent = 1): a wet halo
+    /// around the pigment (happypaint v0.199.2).
+    #[serde(skip_serializing_if = "is_no_halo")]
+    pub halo: f64,
+}
+
+fn is_no_halo(h: &f64) -> bool {
+    *h <= 1.0
 }
 
 impl Fluid {
+    /// The halo's reach in radii, 1..3 (`clamp(halo ?? 1, 1, 3)`).
+    pub fn halo(&self) -> f64 {
+        if self.halo.is_finite() { self.halo.clamp(1.0, 3.0) } else { 1.0 }
+    }
+
     /// Blow alone carries nothing: it only pushes paint that is already wet.
     pub fn pure_blow(&self) -> bool {
         self.blow > 0.0 && self.water <= 0.0 && self.pigment <= 0.0 && self.rewet <= 0.0

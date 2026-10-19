@@ -217,6 +217,10 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>) {
             trace = sn.zw;
         }
     }
+    // Dry paper refuses advected water, unless it runs downhill (spec 58).
+    let downhill = dot(trace, p.tilt) / max(length(p.tilt), 1e-4);
+    let accept = max(sstep(0.3, 1.0, here.x), sstep(0.15, 0.6, downhill));
+    trace *= mix(0.05, 1.0, accept);
     let ou = u - trace.x;
     let ov = v - trace.y;
     let sim = sample_sim(ou, ov);
@@ -227,7 +231,7 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>) {
         vec2<f32>(-1.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(0.0, -1.0), vec2<f32>(0.0, 1.0),
         vec2<f32>(-2.0, 0.0), vec2<f32>(2.0, 0.0), vec2<f32>(0.0, -2.0), vec2<f32>(0.0, 2.0),
     );
-    var w_avg = 0.0;
+    var w_flux = 0.0;
     var a_new = col.w;
     var n1: array<vec4<f32>, 4>;
     var c = to_work3(select(vec3<f32>(1.0), col.xyz / col.w, col.w > 0.0005));
@@ -236,11 +240,11 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>) {
         let snb = sample_sim(ou + offs[k].x, ov + offs[k].y);
         let wn = snb.x;
         let cn = sample_col(ou + offs[k].x, ov + offs[k].y);
-        w_avg += wn;
+        w_flux += sstep(0.3, 1.0, min(w, wn)) * (wn - w);
         if (k < 4) {
             n1[k] = snb;
         }
-        let lam = DIFF_P * 0.125 * sstep(0.0, 0.04, min(w, wn)) * (1.0 - p.oil);
+        let lam = DIFF_P * 0.125 * sstep(0.0, 0.04, min(w, wn)) * (1.0 - p.oil) * (1.0 + 0.8 * sstep(0.2, 1.5, min(w, wn)));
         a_new += lam * (cn.w - col.w);
         if (cn.w > 0.0005) {
             let inc = lam * cn.w;
@@ -253,12 +257,11 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>) {
             mass += inc;
         }
     }
-    w_avg *= 0.125;
 
     let ph = select(0.5, paper_at(u, v), p.paper_strength > 0.0);
     let soak = 1.0 + p.paper_strength * PAPER_ABSORB * ph;
     let resist = 1.0 - p.paper_strength * PAPER_RESIST * ph;
-    let w_new = clamp(w + DIFF_W * resist * (1.0 + (0.06 - 1.0) * p.oil) * (w_avg - w) - EVAP * soak * (1.0 - p.oil), 0.0, WATER_MAX);
+    let w_new = clamp(w + DIFF_W * resist * (1.0 + (0.06 - 1.0) * p.oil) * w_flux * 0.125 - EVAP * soak * (1.0 - p.oil), 0.0, WATER_MAX);
     var col_new = vec4<f32>(0.0);
     if (a_new > 0.0005) {
         col_new = vec4<f32>(from_work3(c) * a_new, a_new);
@@ -277,7 +280,7 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>) {
     let fg = finger[i];
     let finger_eff = fg + (1.0 - fg) * p.oil;
     let wet = sstep(0.1, 0.8, w);
-    var vel = sim.zw + (p.tilt * G_TILT * thick - grad * G_SLOPE * (1.0 - p.oil)) * (wet * finger_eff) + f_vort * wet;
+    var vel = sim.zw + (p.tilt * G_TILT * thick - grad * G_SLOPE * 4.0 * (1.0 - p.oil)) * (wet * finger_eff) + f_vort * wet;
     let damp = (DAMP + (0.84 - DAMP) * p.oil) * sstep(0.005, 0.04, w_new);
     vel = clamp(vel * damp, vec2<f32>(-V_MAX), vec2<f32>(V_MAX));
     dst_sim[i] = vec4<f32>(w_new, curl, vel);

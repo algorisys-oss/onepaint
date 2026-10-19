@@ -33,6 +33,12 @@ const IMPULSE_K: f32 = 0.5;
 const RECT_PAD: i32 = 96;
 const RECT_QUANTUM: i32 = 64;
 
+/// The wet physics a new drawing is stamped with (`doc.wetModel`; happypaint
+/// `CURRENT_WET_MODEL`): 2 is "paper absorbs" (v0.199). Every drawing runs
+/// the current physics; the stamp is kept for a change that would have to
+/// leave old paintings alone.
+pub const CURRENT_WET_MODEL: u32 = 2;
+
 /// One fluid dab (doc px; straight linear colour).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WetDab {
@@ -50,6 +56,8 @@ pub struct WetDab {
     /// Dry-brush strength (0 = off) and the paper height it must reach.
     pub dry: f64,
     pub grain_thr: f64,
+    /// Water reaches `radius · halo` (≥ 1; spec 58).
+    pub halo: f64,
 }
 
 /// Colours this close mix to themselves within 8-bit precision: skip KM.
@@ -303,7 +311,7 @@ impl FluidSim {
         let mut bb = Rect::default();
         let mut reach: f64 = 0.0;
         for d in dabs {
-            let r = d.radius + 2.0;
+            let r = d.radius * d.halo.max(1.0) + 2.0;
             bb = bb.union(&Rect::covering((d.x - r) as f32, (d.y - r) as f32, (d.x + r) as f32, (d.y + r) as f32));
             reach = reach.max(d.vx.abs()).max(d.vy.abs());
         }
@@ -313,7 +321,7 @@ impl FluidSim {
         let local_bb = Rect::new(bb.x - self.rect.x, bb.y - self.rect.y, bb.w, bb.h);
         let local = |d: &WetDab, s: &Self| (d.x - s.rect.x as f64, d.y - s.rect.y as f64);
         for d in dabs {
-            if let Some((x0, y0, x1, y1)) = self.quad(d.x, d.y, d.radius) {
+            if let Some((x0, y0, x1, y1)) = self.quad(d.x, d.y, d.radius * d.halo.max(1.0)) {
                 self.occupy(x0, y0, x1, y1);
             }
         }
@@ -381,13 +389,14 @@ impl FluidSim {
             }
         }
 
-        // 3. Water sets the paper to its level (MAX).
+        // 3. Water sets the paper to its level (MAX), out to the halo.
         for d in dabs {
-            let Some((x0, y0, x1, y1)) = self.quad(d.x, d.y, d.radius) else { continue };
+            let r = d.radius * d.halo.max(1.0);
+            let Some((x0, y0, x1, y1)) = self.quad(d.x, d.y, r) else { continue };
             let (cx, cy) = local(d, self);
             for y in y0..y1 {
                 for x in x0..x1 {
-                    let (lx, ly) = ((x as f64 + 0.5 - cx) / d.radius, (y as f64 + 0.5 - cy) / d.radius);
+                    let (lx, ly) = ((x as f64 + 0.5 - cx) / r, (y as f64 + 0.5 - cy) / r);
                     let cov = (1.0 - smoothstep(0.55, 1.0, lx.hypot(ly) as f32)) * d.water as f32 * self.dry_gate(x, y, d);
                     let s = &mut self.sim[(y * w + x) as usize];
                     s[0] = s[0].max(cov);
@@ -501,6 +510,16 @@ impl FluidSim {
     /// The wettest pixel's water.
     pub fn peak_water(&self) -> f32 {
         self.sim.iter().map(|s| s[0]).fold(0.0, f32::max)
+    }
+
+    /// Water and suspended alpha at doc pixel (x, y); zeros outside the sim.
+    pub fn at(&self, x: i32, y: i32) -> (f32, f32) {
+        let (lx, ly) = (x - self.rect.x, y - self.rect.y);
+        if lx < 0 || ly < 0 || lx >= self.rect.w || ly >= self.rect.h {
+            return (0.0, 0.0);
+        }
+        let i = (ly * self.rect.w + lx) as usize;
+        (self.sim[i][0], self.col[i][3])
     }
 }
 
