@@ -60,6 +60,12 @@ impl Session {
                 Ok(())
             });
         }
+        self.add_text_layer(spec)
+    }
+
+    /// A new text layer of `spec` above the active one, whatever that is.
+    pub(crate) fn add_text_layer(&mut self, spec: TextSpec) -> Result<(), EngineError> {
+        let (w, h, space) = (self.doc.width, self.doc.height, self.doc.space());
         let mut l = Layer::new("Text");
         write_texts(&mut l, &[spec], w, h, space);
         self.insert_above_active(Node::Layer(l))

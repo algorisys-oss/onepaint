@@ -425,6 +425,75 @@ impl Session {
                 let (Some(w), Some(h)) = (num(a, "newWidth"), num(a, "newHeight")) else { return false };
                 self.run(Command::ScaleImage { width: w as u32, height: h as u32 });
             }
+            // ── Text and paths (their specs are happypaint's JSON) ──
+            "createTextLayer" => {
+                let Some(spec) = a.get("spec").and_then(|v| serde_json::from_value(v.clone()).ok()) else { return false };
+                let _ = self.add_text_layer(spec);
+                self.adopt(a, "id");
+            }
+            "addTextObject" => {
+                let (Some(id), Some(spec)) = (self.hid_of(a, "id"), a.get("spec").and_then(|v| serde_json::from_value(v.clone()).ok()))
+                else {
+                    return false;
+                };
+                self.run(Command::SetActiveLayer { id });
+                self.run(Command::AddText { spec });
+            }
+            "updateTextObject" => {
+                let (Some(id), Some(spec)) = (self.hid_of(a, "id"), a.get("spec").and_then(|v| serde_json::from_value(v.clone()).ok()))
+                else {
+                    return false;
+                };
+                self.run(Command::UpdateText { id, index: num(a, "index").unwrap_or(0.0) as usize, spec });
+                self.run(Command::SealHistory);
+            }
+            "moveTextObject" => {
+                let Some(id) = self.hid_of(a, "id") else { return false };
+                let index = num(a, "index").unwrap_or(0.0) as usize;
+                let Some(mut spec) = self.texts(&id).get(index).cloned() else { return false };
+                spec.x += num(a, "dx").unwrap_or(0.0);
+                spec.y += num(a, "dy").unwrap_or(0.0);
+                self.run(Command::UpdateText { id, index, spec });
+                self.run(Command::SealHistory);
+            }
+            "removeTextObject" => {
+                let Some(id) = self.hid_of(a, "id") else { return false };
+                self.run(Command::DeleteText { id, index: num(a, "index").unwrap_or(0.0) as usize });
+            }
+            "rasterizeTextLayer" => {
+                if let Some(id) = self.hid_of(a, "id") {
+                    self.run(Command::RasterizeText { id });
+                }
+            }
+            "createPathLayer" => {
+                let Some(spec) = a.get("spec").and_then(|v| serde_json::from_value(v.clone()).ok()) else { return false };
+                self.run(Command::CreatePathLayer { spec: Box::new(spec) });
+                self.adopt(a, "id");
+                let name = str_of(a, "name").unwrap_or("Path").to_string();
+                let id = self.active.clone();
+                self.run(Command::SetLayerProps { id, props: LayerProps { name: Some(name), ..Default::default() } });
+            }
+            "addPathObject" => {
+                let (Some(id), Some(spec)) = (self.hid_of(a, "id"), a.get("spec").and_then(|v| serde_json::from_value(v.clone()).ok()))
+                else {
+                    return false;
+                };
+                self.run(Command::AddPathObject { id, spec: Box::new(spec) });
+            }
+            "updatePathObject" | "removePathObject" => {
+                let Some(id) = self.hid_of(a, "id") else { return false };
+                let spec = a.get("spec").and_then(|v| serde_json::from_value(v.clone()).ok()).map(Box::new);
+                if op == "updatePathObject" && spec.is_none() {
+                    return false;
+                }
+                self.run(Command::UpdatePathObject { id, index: num(a, "index").unwrap_or(0.0) as usize, spec });
+                self.run(Command::SealHistory);
+            }
+            "rasterizePathLayer" => {
+                if let Some(id) = self.hid_of(a, "id") {
+                    self.run(Command::RasterizePath { id });
+                }
+            }
             // ── History ──
             "undo" => self.run(Command::Undo),
             "redo" => self.run(Command::Redo),
@@ -516,4 +585,15 @@ const HANDLED: &[&str] = &[
     "undo",
     "redo",
     "wetModel",
+    "createTextLayer",
+    "addTextObject",
+    "updateTextObject",
+    "moveTextObject",
+    "removeTextObject",
+    "rasterizeTextLayer",
+    "createPathLayer",
+    "addPathObject",
+    "updatePathObject",
+    "removePathObject",
+    "rasterizePathLayer",
 ];

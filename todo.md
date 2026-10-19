@@ -76,7 +76,7 @@ an item changes there, change it here too.
 - [x] Undo and redo with copy-on-write tile snapshots
 - [x] Record and replay sessions (`.onepaint-rec`)
 - [x] Timelapse export (MP4, GIF)
-- [x] Read happypaint recordings (`.happypaint-rec`, spec 62): replay and timelapse; text, paths, panels, styles and image inserts are skipped
+- [x] Read happypaint recordings (`.happypaint-rec`, spec 62): replay and timelapse; panels, styles and image inserts are skipped
 
 ### 1.10 Animation
 - [x] Animation Assist: frames, holds, onion skins, playback, timeline,

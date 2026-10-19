@@ -78,3 +78,24 @@ fn wet_strokes_replay_through_their_ticks() {
     let p = r.session.doc().layer("a").unwrap().pixels.get(100, 60);
     assert!(p[3] > 0.2 && p[2] > p[0], "blue paint settled: {p:?}");
 }
+
+/// Text and path objects: created under happypaint's ids, then edited
+/// through them.
+#[test]
+fn text_and_paths_replay() {
+    let text = json!({"text": "Hello", "x": 20, "y": 30, "fontSizePx": 24, "color": "#112233"});
+    let path = serde_json::to_value(onepaint_stroke::bezier::PathSpec::default()).unwrap();
+    let bytes = rec(json!([
+        {"t": 0, "op": "createTextLayer", "args": {"id": "t1", "spec": text}},
+        {"t": 5, "op": "moveTextObject", "args": {"id": "t1", "index": 0, "dx": 10, "dy": -5}},
+        {"t": 10, "op": "createPathLayer", "args": {"id": "p1", "name": "Outline", "spec": path}},
+    ]));
+    let (mut r, skipped) = Replay::from_happypaint(&bytes).unwrap();
+    assert!(skipped.is_empty(), "{skipped:?}");
+    r.step(r.len());
+    let s = &r.session;
+    let t = s.doc().root.iter().filter_map(|n| n.as_layer()).find(|l| s.is_text_layer(&l.id)).expect("a text layer");
+    let spec = &s.texts(&t.id)[0];
+    assert_eq!((spec.text.as_str(), spec.x, spec.y), ("Hello", 30.0, 25.0));
+    assert!(s.doc().root.iter().any(|n| n.name() == "Outline" && s.is_path_layer(n.id())));
+}

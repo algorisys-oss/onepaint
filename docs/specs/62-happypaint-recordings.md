@@ -26,8 +26,10 @@ the layers it creates (happypaint injects ids; onepaint makes its own).
   `{color, color2}` ones too), Background fills, layer add / delete /
   clear / select / duplicate / move / merge / props / label / clip and
   alpha lock, masks, adjustment layers and destructive filters,
-  selections, transforms, canvas resize and scale, undo and redo.
-- Skipped (named in a notice): text and path objects, panels, layer
+  selections, transforms, canvas resize and scale, text and path layers
+  and their objects (created, edited, moved, removed, rasterized), undo
+  and redo.
+- Skipped (named in a notice): panels, layer
   styles and smart filters, mixer patches, airbrush ticks, image inserts,
   and anything newer. Per-stroke symmetry transforms and dab seeds aren't
   carried: onepaint's own symmetry and RNG apply (happypaint itself aims
