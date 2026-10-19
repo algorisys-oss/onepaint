@@ -3,7 +3,7 @@
 //! renders them this way for the CPU compositor, and the GPU path is checked
 //! against it.
 
-use onepaint_doc::{Document, Layer, Node};
+use onepaint_doc::{Document, Group, Layer, Node};
 use onepaint_filters::{Frame, GLOBAL_REACH, Kind, Params, apply_spatial_in, is_identity, prepare_in, reach};
 use onepaint_raster::{Rect, Surface, TILE, Tile};
 use rayon::prelude::*;
@@ -79,19 +79,58 @@ pub fn render_layer(doc: &Document, below: &[Node], kind: Kind, params: &Params)
     apply(&backdrop(doc, below), doc.bounds(), crate::doc_frame(doc), kind, params)
 }
 
+/// The open Pass Through groups around a node, outermost first: each one's
+/// container nodes below it, and the group (its children left out).
+pub type Through = Vec<(Vec<Node>, Group)>;
+
+/// The ancestors group `i` of `nodes` gives its children: one more when it
+/// passes through, none when it isolates them.
+pub fn enter(through: &[(Vec<Node>, Group)], nodes: &[Node], i: usize) -> Through {
+    let Node::Group(g) = &nodes[i] else { return through.to_vec() };
+    if !crate::passes_through(g, &nodes[i + 1..crate::riders(nodes, i)]) {
+        return Vec::new();
+    }
+    let mut shell = g.clone();
+    shell.children = Vec::new();
+    let mut t = through.to_vec();
+    t.push((nodes[..i].to_vec(), shell));
+    t
+}
+
+/// What a spatial layer filters (happypaint `applyAdjustmentLayer` copies
+/// the render target): its container's nodes `below` it, inside each open
+/// Pass Through ancestor over what lies below that, at full strength (the
+/// group fades only once it ends). An isolated group's layer sees its own
+/// children only.
+pub fn backdrop_nodes(below: &[Node], through: &[(Vec<Node>, Group)]) -> Vec<Node> {
+    let mut v = below.to_vec();
+    for (prefix, g) in through.iter().rev() {
+        let mut g = g.clone();
+        g.children = v;
+        g.opacity = 1.0;
+        let mut out = prefix.clone();
+        out.push(Node::Group(g));
+        v = out;
+    }
+    v
+}
+
 /// `doc` with every live spatial adjustment layer replaced by its rendered
-/// pixels (in groups too, against the group's own content).
+/// pixels: the filter over what lies below it, as [`backdrop_nodes`].
 pub fn rendered(doc: &Document) -> Document {
-    fn walk(doc: &Document, nodes: &mut [Node]) {
+    fn walk(doc: &Document, nodes: &mut [Node], through: &[(Vec<Node>, Group)]) {
         for i in 0..nodes.len() {
-            if let Node::Group(g) = &mut nodes[i] {
-                walk(doc, &mut g.children);
+            if matches!(nodes[i], Node::Group(_)) {
+                let inner = enter(through, nodes, i);
+                if let Node::Group(g) = &mut nodes[i] {
+                    walk(doc, &mut g.children, &inner);
+                }
                 continue;
             }
             let Node::Layer(l) = &nodes[i] else { continue };
             let Some(kind) = spatial_kind(l) else { continue };
             let params = l.adjustment.as_ref().map(|a| a.params.clone()).unwrap_or_default();
-            let pixels = render_layer(doc, &nodes[..i], kind, &params);
+            let pixels = render_layer(doc, &backdrop_nodes(&nodes[..i], through), kind, &params);
             if let Node::Layer(l) = &mut nodes[i] {
                 l.adjustment = None;
                 l.pixels = pixels;
@@ -99,7 +138,7 @@ pub fn rendered(doc: &Document) -> Document {
         }
     }
     let mut out = doc.clone();
-    walk(doc, &mut out.root);
+    walk(doc, &mut out.root, &[]);
     out
 }
 

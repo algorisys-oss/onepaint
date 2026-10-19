@@ -93,3 +93,30 @@ fn blur_adjustment_layers_render_live() {
     s.execute(Command::SetLayerProps { id, props: LayerProps { visible: Some(false), ..Default::default() } }).unwrap();
     assert_eq!(s.composite(&[(0, 0)])[0].1.get(34, 20)[3], 0.0);
 }
+
+/// A blur layer in a Pass Through group blurs what lies below the group too
+/// (happypaint `passThroughGroup` draws onto the outer target).
+#[test]
+fn a_blur_in_a_pass_through_group_blurs_the_layers_below_it() {
+    use onepaint_doc::{Adjustment, BlendMode, Document, Group, Layer, Node};
+    let mut doc = Document::new(64, 64, None);
+    let mut paint = Layer::new("paint");
+    for y in 0..64 {
+        for x in 0..32 {
+            paint.pixels.set(x, y, [1.0, 0.0, 0.0, 1.0]);
+        }
+    }
+    let mut p = default_params(Kind::GaussianBlur);
+    p.radius = Some(6.0);
+    let mut blur = Layer::new("blur");
+    blur.adjustment = Some(Box::new(Adjustment { kind: "gaussian-blur".into(), params: p }));
+    let mut g = Group::new("g");
+    g.blend_mode = BlendMode::PassThrough;
+    g.children = vec![Node::Layer(blur)];
+    doc.root = vec![Node::Layer(paint), Node::Group(g)];
+    let mut s = Session::new(4, 4, None);
+    s.replace_document(doc);
+    let edge = s.composite(&[(0, 0)])[0].1.get(34, 20);
+    assert!(edge[3] > 0.05 && edge[3] < 0.95, "the edge is blurred: {edge:?}");
+    assert!((s.flatten()[(20 * 64 + 34) * 4 + 3] - edge[3]).abs() < 1e-3, "exports match the display");
+}

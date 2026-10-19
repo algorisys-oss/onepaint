@@ -81,6 +81,9 @@ Overnight (2026-10-18 → 19), all pushed, newest last:
   layers; the GPU frame budget now counts program ops (spec 39).
 - Mixer patch load (spec 63): `brush::reservoir`, `Command::LoadMixerPatch`
   and `ClearMixerPatch`, Alt-click and "Load from canvas" in the app.
+- Light rays on the GPU (spec 53); imported pattern fills on the GPU
+  (spec 46). Spatial layers in Pass Through groups now filter what lies
+  below the group too, as happypaint (spec 52; still CPU-rendered).
 - PSD saves in the file's own mode and depth, PSB past 30000 px, layers
   in `Lr16`/`Lr32` read and written (spec 64; `psd_enc.rs`, writer split
   into `psd_write.rs`). Don't share `target/` with a git worktree: it left

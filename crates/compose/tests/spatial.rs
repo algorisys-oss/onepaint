@@ -106,3 +106,35 @@ fn whole_canvas_layers_plan_and_match() {
     }
     assert!(planned >= 16, "{planned}");
 }
+
+/// happypaint `applyAdjustmentLayer` filters the render target: in a Pass
+/// Through group that holds everything below the group too (at the group's
+/// full strength); an isolated group's layer sees its own children only.
+#[test]
+fn a_spatial_layer_in_a_pass_through_group_filters_what_lies_below_it() {
+    use onepaint_doc::{Adjustment, BlendMode, Document, Group, Layer, Node};
+    let blurred = |mode: BlendMode, opacity: f32| {
+        let mut doc = Document::new(64, 64, None);
+        let mut paint = Layer::new("paint");
+        for y in 0..64 {
+            for x in 0..32 {
+                paint.pixels.set(x, y, [0.9, 0.1, 0.1, 1.0]);
+            }
+        }
+        let mut blur = Layer::new("blur");
+        blur.adjustment = Some(Box::new(Adjustment {
+            kind: "gaussian-blur".into(),
+            params: serde_json::from_value(serde_json::json!({"radius": 8.0})).unwrap(),
+        }));
+        let mut g = Group::new("g");
+        (g.blend_mode, g.opacity) = (mode, opacity);
+        g.children = vec![Node::Layer(blur)];
+        doc.root = vec![Node::Layer(paint), Node::Group(g)];
+        let r = rendered(&doc);
+        let g = r.root[1].as_group().unwrap();
+        g.children[0].as_layer().unwrap().pixels.get(34, 30)
+    };
+    let through = blurred(BlendMode::PassThrough, 0.5);
+    assert!(through[3] > 0.1 && through[0] > 0.05, "the red below the group bleeds past its edge: {through:?}");
+    assert_eq!(blurred(BlendMode::Normal, 1.0)[3], 0.0, "an isolated group's blur has nothing to blur");
+}

@@ -263,10 +263,19 @@ impl Session {
 
     /// [`Self::render_spatial_adjustments`], leaving `live` for the GPU.
     pub(crate) fn render_spatial_except(&self, nodes: &mut [Node], fresh: bool, live: &[NodeId]) {
+        self.render_spatial_in(nodes, fresh, live, &[]);
+    }
+
+    /// The same inside the open Pass Through groups `through` (a layer in one
+    /// filters everything below it, outside the group too).
+    fn render_spatial_in(&self, nodes: &mut [Node], fresh: bool, live: &[NodeId], through: &[(Vec<Node>, onepaint_doc::Group)]) {
         let (w, h) = (self.doc.width, self.doc.height);
         for i in 0..nodes.len() {
-            if let Node::Group(g) = &mut nodes[i] {
-                self.render_spatial_except(&mut g.children, fresh, live);
+            if matches!(nodes[i], Node::Group(_)) {
+                let inner = onepaint_compose::spatial::enter(through, nodes, i);
+                if let Node::Group(g) = &mut nodes[i] {
+                    self.render_spatial_in(&mut g.children, fresh, live, &inner);
+                }
                 continue;
             }
             let Node::Layer(l) = &nodes[i] else { continue };
@@ -278,8 +287,10 @@ impl Session {
                 continue;
             }
             let params = l.adjustment.as_ref().map(|a| a.params.clone()).unwrap_or_default();
+            let below = onepaint_compose::spatial::backdrop_nodes(&nodes[..i], through);
             let mut hs = std::collections::hash_map::DefaultHasher::new();
-            hash_nodes(&nodes[..=i], &mut hs);
+            hash_nodes(&below, &mut hs);
+            hash_nodes(&nodes[i..=i], &mut hs);
             (w, h).hash(&mut hs);
             let key = hs.finish();
             let id = l.id.clone();
@@ -287,8 +298,7 @@ impl Session {
             let out = match cache.get(&id) {
                 Some((k, s)) if *k == key || !fresh => s.clone(),
                 _ => {
-                    // The backdrop is everything below inside this (isolated) container.
-                    let s = onepaint_compose::spatial::render_layer(&self.doc, &nodes[..i], kind, &params);
+                    let s = onepaint_compose::spatial::render_layer(&self.doc, &below, kind, &params);
                     cache.insert(id.clone(), (key, s.clone()));
                     s
                 }

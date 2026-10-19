@@ -79,6 +79,13 @@ backdrop.
      group's children below it, planned the same way. In a Pass Through
      group the backdrop reaches outside the group; those tiles stay on the
      CPU.
+   - Pass Through semantics (fixed 2026-10-19): happypaint's
+     `applyAdjustmentLayer` filters the render target, and a Pass Through
+     group draws onto the outer one, so its spatial layer filters
+     everything below the group too, with the group's children so far at
+     full strength. The oracle had filtered the group's children only.
+     `spatial::backdrop_nodes` builds that backdrop (`enter` tracks the
+     open Pass Through ancestors), for `rendered` and the engine alike.
    - 3b ✓ stacked spatial layers. Filtered tiles live in a texture array
      of their own (`cache_layers / 2` slots, binding 17), so a fill can
      read a lower layer's filtered tiles while it writes an upper layer's
