@@ -287,3 +287,62 @@ fn layer_styles_cross_a_psd() {
     let onepaint_doc::Node::Group(g) = &r.root[1] else { panic!("a group") };
     assert_eq!(g.styles().unwrap().effects[0].size, 7.0);
 }
+
+/// Locks (`lspf`), colour labels (`lclr`) and guides (resource 1032) both
+/// ways (happypaint v0.201.0's codec).
+#[test]
+fn locks_labels_and_guides_round_trip() {
+    let mut d = Document::new(64, 48, Some(Rgba::WHITE));
+    let mut locked = Layer::new("Locked");
+    locked.locked = true;
+    locked.extra.insert("colorLabel".into(), serde_json::json!("green"));
+    let mut alpha = Layer::new("Alpha");
+    alpha.alpha_lock = true;
+    let mut g = Group::new("Folder");
+    g.extra.insert("colorLabel".into(), serde_json::json!("violet"));
+    g.children.push(Node::Layer(Layer::new("Inside")));
+    d.root.extend([Node::Layer(locked), Node::Layer(alpha), Node::Group(g)]);
+    let pi = std::f64::consts::PI;
+    d.extra.insert(
+        "guides".into(),
+        serde_json::json!({"lines": [
+            {"id": "a", "x": 0.0, "y": 12.5, "angle": 0.0},
+            {"id": "b", "x": 30.0, "y": 0.0, "angle": pi / 2.0},
+            {"id": "c", "x": 5.0, "y": 5.0, "angle": 0.7},
+        ]}),
+    );
+    let bytes = write_psd(&d, &vec![1.0f32; 64 * 48 * 4]).unwrap();
+    let r = read_psd(&bytes).unwrap();
+    let layer = |name: &str| r.root.iter().find(|n| n.name() == name).and_then(|n| n.as_layer()).unwrap();
+    assert!(layer("Locked").locked && !layer("Locked").alpha_lock);
+    assert!(layer("Alpha").alpha_lock && !layer("Alpha").locked);
+    assert_eq!(layer("Locked").extra.get("colorLabel"), Some(&serde_json::json!("green")));
+    let Some(Node::Group(g)) = r.root.iter().find(|n| n.name() == "Folder") else { panic!() };
+    assert_eq!(g.extra.get("colorLabel"), Some(&serde_json::json!("violet")));
+    assert!(layer("Alpha").extra.get("colorLabel").is_none());
+    // Only the horizontal and the vertical guide: Photoshop has no others.
+    let lines = r.extra["guides"]["lines"].as_array().unwrap().clone();
+    assert_eq!(lines.len(), 2);
+    assert_eq!((lines[0]["y"].as_f64(), lines[0]["angle"].as_f64()), (Some(12.5), Some(0.0)));
+    assert_eq!((lines[1]["x"].as_f64(), lines[1]["angle"].as_f64()), (Some(30.0), Some(pi / 2.0)));
+}
+
+/// An untouched file saves back byte for byte until its guides change;
+/// then only the guides resource is new.
+#[test]
+fn moving_a_guide_rewrites_just_the_guides() {
+    let mut d = Document::new(40, 30, Some(Rgba::WHITE));
+    d.extra.insert("guides".into(), serde_json::json!({"lines": [{"id": "a", "x": 0.0, "y": 10.0, "angle": 0.0}]}));
+    let first = write_psd(&d, &vec![1.0f32; 40 * 30 * 4]).unwrap();
+    let mut doc = read_psd(&first).unwrap();
+    let flat = vec![1.0f32; 40 * 30 * 4];
+    assert!(write_psd(&doc, &flat).unwrap() == first, "untouched: the same bytes");
+    doc.extra.insert("guides".into(), serde_json::json!({"lines": [{"id": "a", "x": 0.0, "y": 20.0, "angle": 0.0}]}));
+    let moved = write_psd(&doc, &flat).unwrap();
+    assert!(moved != first);
+    let back = read_psd(&moved).unwrap();
+    assert_eq!(back.extra["guides"]["lines"][0]["y"].as_f64(), Some(20.0));
+    // The layers' records came through unchanged.
+    let src = onepaint_formats::psd_source::PsdSource::of(&doc).unwrap();
+    assert!(find(&moved, src.record_bytes(&doc.root[0]).unwrap()));
+}

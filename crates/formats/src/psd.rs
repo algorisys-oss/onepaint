@@ -291,6 +291,8 @@ fn layer_record(l: &Layer, doc: Rect, frame: onepaint_filters::Frame) -> Record 
         extra.push((*b"knko", vec![if k == onepaint_doc::Knockout::Deep { 2 } else { 1 }, 0, 0, 0]));
     }
     extra.extend(style_blocks(l.styles()));
+    extra.push(lock_block(l));
+    extra.extend(label_block(&l.extra));
     let ranges = l.blend_if().map_or_else(Vec::new, |b| b.0.iter().flat_map(|c| c.src.into_iter().chain(c.dst)).collect());
     if let Some(v) = l.vector_mask().filter(|v| !v.paths.is_empty()) {
         extra.push((*b"vmsk", write_vmsk(&v, doc.w as f64, doc.h as f64)));
@@ -347,6 +349,126 @@ fn style_blocks(styles: Option<onepaint_doc::styles::LayerStyles>) -> Vec<([u8; 
     out
 }
 
+/// A node's colour label from an `lclr` index (0 = none).
+fn set_label(extra: &mut onepaint_doc::Extra, i: u16) {
+    if let Some(l) = LABELS.get(i as usize).filter(|_| i > 0) {
+        extra.insert("colorLabel".into(), serde_json::Value::String((*l).into()));
+    }
+}
+
+/// Photoshop's layer colours (`lclr`), by index.
+const LABELS: [&str; 8] = ["none", "red", "orange", "yellow", "green", "blue", "violet", "gray"];
+
+/// A node's colour label as an `lclr` block (none written for none).
+fn label_block(extra: &onepaint_doc::Extra) -> Option<([u8; 4], Vec<u8>)> {
+    let label = extra.get("colorLabel")?.as_str()?;
+    let i = LABELS.iter().position(|l| *l == label).filter(|i| *i > 0)? as u16;
+    Some((*b"lclr", [i.to_be_bytes().to_vec(), vec![0; 6]].concat()))
+}
+
+/// A layer's locks as `lspf` flags (transparency 1, composite 2, position
+/// 4): a locked layer locks all three, alpha lock the transparency.
+fn lock_block(l: &Layer) -> ([u8; 4], Vec<u8>) {
+    let flags: u32 = if l.locked {
+        7
+    } else if l.alpha_lock {
+        1
+    } else {
+        0
+    };
+    (*b"lspf", flags.to_be_bytes().to_vec())
+}
+
+/// Guides in the document (`extra.guides.lines`) as Photoshop's: horizontal
+/// and vertical lines only, (horizontal, location px).
+fn psd_guides(doc: &Document) -> Vec<(bool, f64)> {
+    let lines = doc.extra.get("guides").and_then(|g| g.get("lines")).and_then(|l| l.as_array()).cloned().unwrap_or_default();
+    let mut out = Vec::new();
+    for g in lines {
+        let num = |k: &str| g.get(k).and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+        let pi = std::f64::consts::PI;
+        let a = num("angle").rem_euclid(pi);
+        if a.abs() < 1e-6 || (a - pi).abs() < 1e-6 {
+            out.push((true, num("y")));
+        } else if (a - pi / 2.0).abs() < 1e-6 {
+            out.push((false, num("x")));
+        }
+    }
+    out
+}
+
+/// Guides from resource 1032: version, grid, count, then per guide its
+/// location ×32 and direction (1 horizontal).
+fn read_guides(d: &[u8]) -> Option<Vec<(bool, f64)>> {
+    let mut c = Cur { b: d, p: 0 };
+    c.take(12).ok()?;
+    let n = c.u32().ok()? as usize;
+    let mut out = Vec::with_capacity(n.min(4096));
+    for _ in 0..n {
+        let at = f64::from(c.u32().ok()? as i32) / 32.0;
+        out.push((c.u8().ok()? != 0, at));
+    }
+    Some(out)
+}
+
+/// The image resources in `res`: (id, the whole block, its data).
+fn resource_blocks(res: &[u8]) -> Vec<(u16, &[u8], &[u8])> {
+    let mut out = Vec::new();
+    let mut p = 0;
+    while p + 12 <= res.len() && &res[p..p + 4] == b"8BIM" {
+        let id = u16::from_be_bytes([res[p + 4], res[p + 5]]);
+        let nl = res[p + 6] as usize;
+        let q = p + 6 + nl + 1 + (nl + 1) % 2;
+        let Some(sz) = res.get(q..q + 4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize) else { break };
+        let end = (q + 4 + sz + sz % 2).min(res.len());
+        out.push((id, &res[p..end], &res[(q + 4).min(end)..(q + 4 + sz).min(end)]));
+        p = end;
+    }
+    out
+}
+
+/// The guides and grid an opened file's resources hold.
+fn source_guides(res: &[u8]) -> (Vec<(bool, f64)>, (u32, u32)) {
+    let Some((_, _, d)) = resource_blocks(res).into_iter().find(|b| b.0 == 1032) else { return (Vec::new(), (576, 576)) };
+    let grid = (d.len() >= 12).then(|| (u32::from_be_bytes([d[4], d[5], d[6], d[7]]), u32::from_be_bytes([d[8], d[9], d[10], d[11]])));
+    (read_guides(d).unwrap_or_default(), grid.unwrap_or((576, 576)))
+}
+
+fn put_resource(r: &mut W, id: u16, data: &[u8]) {
+    r.bytes(b"8BIM");
+    r.u16(id);
+    r.u16(0);
+    r.u32(data.len() as u32);
+    r.bytes(data);
+    if data.len() % 2 == 1 {
+        r.u8(0);
+    }
+}
+
+/// Resource 1032 for `guides`, Photoshop's grid as the file had it.
+fn guides_resource(guides: &[(bool, f64)], grid: (u32, u32)) -> Vec<u8> {
+    let mut w = W(Vec::new());
+    w.u32(1);
+    w.u32(grid.0);
+    w.u32(grid.1);
+    w.u32(guides.len() as u32);
+    for (h, at) in guides {
+        w.u32((at * 32.0).round() as i32 as u32);
+        w.u8(u8::from(*h));
+    }
+    w.0
+}
+
+/// The same guides, in any order, at Photoshop's 1/32 px.
+fn same_guides(a: &[(bool, f64)], b: &[(bool, f64)]) -> bool {
+    let key = |g: &[(bool, f64)]| {
+        let mut k: Vec<(bool, i64)> = g.iter().map(|(h, at)| (*h, (at * 32.0).round() as i64)).collect();
+        k.sort();
+        k
+    };
+    key(a) == key(b)
+}
+
 fn empty_record(name: &str, key: [u8; 4], opacity: u8, flags: u8, lsct: Vec<u8>) -> Record {
     Record {
         rect: Rect::default(),
@@ -386,6 +508,7 @@ fn flatten(nodes: &[Node], doc: Rect, frame: onepaint_filters::Frame, src: Optio
                 // Photoshop writes a pass-through group's own record as Normal.
                 let mut rec = empty_record(&g.name, *key_of(g.blend_mode), (g.opacity.clamp(0.0, 1.0) * 255.0).round() as u8, flags, lsct);
                 rec.extra.extend(style_blocks(g.styles()));
+                rec.extra.extend(label_block(&g.extra));
                 out.push(rec);
             }
         }
@@ -411,7 +534,11 @@ pub fn write_psd(doc: &Document, composite: &[f32]) -> Result<Vec<u8>, FormatErr
     }
     // Opened from a PSD and not changed at all: the file as it was.
     let src = crate::psd_source::PsdSource::of(doc);
+    let guides = psd_guides(doc);
+    let (src_guides, grid) = src.map_or((Vec::new(), (576, 576)), |s| source_guides(&s.bytes[s.resources.clone()]));
+    let guides_kept = same_guides(&guides, &src_guides);
     if let Some(s) = src
+        && guides_kept
         && s.untouched(doc)
     {
         return Ok(s.bytes.to_vec());
@@ -439,8 +566,21 @@ pub fn write_psd(doc: &Document, composite: &[f32]) -> Result<Vec<u8>, FormatErr
     let light = global_light(&doc.root);
     o.section(1, false, |r| {
         if let Some(b) = resources {
-            r.bytes(b);
+            if guides_kept {
+                r.bytes(b);
+            } else {
+                // Every resource as it was but the guides.
+                for (_, block, _) in resource_blocks(b).into_iter().filter(|b| b.0 != 1032) {
+                    r.bytes(block);
+                }
+                if !guides.is_empty() {
+                    put_resource(r, 1032, &guides_resource(&guides, grid));
+                }
+            }
             return;
+        }
+        if !guides.is_empty() {
+            put_resource(r, 1032, &guides_resource(&guides, grid));
         }
         // Global Light, when some layer's styles take it (spec 56).
         if let Some((angle, altitude)) = light {
@@ -640,6 +780,9 @@ struct RRec {
     /// Layer styles (spec 56): the last effects block's data, and Fill opacity.
     effects: Option<Vec<u8>>,
     fill: Option<f32>,
+    /// `lspf` flags and the `lclr` colour index.
+    locks: u32,
+    label: u16,
     /// Where the record and its channel data sit in the file.
     raw: crate::psd_source::RawRecord,
 }
@@ -838,6 +981,19 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
             doc.dpi = (c.u32()? as f64 / 65536.0).round();
         }
         // Global Light for layer styles (spec 56): angle, then altitude.
+        // Guides: horizontal at angle 0, vertical at a quarter turn.
+        if id == 1032
+            && let Some(g) = c.b.get(start..start + sz).and_then(read_guides).filter(|g| !g.is_empty())
+        {
+            let lines: Vec<serde_json::Value> = g
+                .iter()
+                .map(|(h, at)| {
+                    let (x, y, angle) = if *h { (0.0, *at, 0.0) } else { (*at, 0.0, std::f64::consts::FRAC_PI_2) };
+                    serde_json::json!({"id": onepaint_doc::new_id(), "x": x, "y": y, "angle": angle})
+                })
+                .collect();
+            doc.extra.insert("guides".into(), serde_json::json!({ "lines": lines }));
+        }
         if id == 1037 && sz >= 4 {
             light.0 = c.u32()? as i32 as f32;
         }
@@ -921,6 +1077,7 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                 let mut knockout = 0;
                 let mut effects = None;
                 let mut fill = None;
+                let (mut locks, mut label) = (0u32, 0u16);
                 let mut vector_mask = None;
                 let mut vector_fill = false;
                 while c.p + 12 <= ex_end {
@@ -970,6 +1127,8 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                             lsct = Some((t, blend));
                         }
                         b"knko" => knockout = d.u8()?,
+                        b"lspf" => locks = d.u32()?,
+                        b"lclr" => label = d.u16()?,
                         // The last effects block wins, as ag-psd reads them.
                         b"lfx2" | b"lmfx" => effects = Some(data.to_vec()),
                         b"iOpa" => fill = Some(d.u8()? as f32 / 255.0),
@@ -1025,6 +1184,8 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                     vector_mask: vector_mask.filter(|_| !vector_fill),
                     effects,
                     fill,
+                    locks,
+                    label,
                     raw: crate::psd_source::RawRecord { record: rec_start..ex_end, channels: Vec::new() },
                 });
             }
@@ -1089,6 +1250,7 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                             rec.effects.as_deref().and_then(|d| crate::psd_effects::read_block(d, light)),
                             rec.fill,
                         ));
+                        set_label(&mut g.extra, rec.label);
                         if let Some(s) = src.as_mut() {
                             s.node(&g.id, rec.raw.clone());
                         }
@@ -1124,6 +1286,13 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                                 rec.fill,
                             ));
                         }
+                        // Locked: composite, or position and transparency (as
+                        // Photoshop's Background has it); else transparency alone
+                        // is the alpha lock.
+                        let (transparency, composite, position) = (rec.locks & 1 != 0, rec.locks & 2 != 0, rec.locks & 4 != 0);
+                        l.locked = composite || (position && transparency);
+                        l.alpha_lock = !l.locked && transparency;
+                        set_label(&mut l.extra, rec.label);
                         if let Some(s) = src.as_mut() {
                             s.node(&l.id, rec.raw.clone());
                         }
