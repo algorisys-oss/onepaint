@@ -50,7 +50,7 @@ backdrop.
   it every frame. Tiles that fall back to the CPU, and every other spatial
   layers, use the rendered document as before. Dirty rects grow by a
   spatial layer's reach, as for feathered masks.
-- **Limits:** spatial layers in Pass Through groups render on the CPU; a program with a spatial layer runs unsplit (the fill pass
+- **Limits:** a program with a spatial layer runs unsplit (the fill pass
   can't read filtered tiles); reduced levels scale the radius and round the
   region to level pixels.
 - `ONEPAINT_BLUR=12` adds a blur layer for screenshots.
@@ -77,8 +77,7 @@ backdrop.
 3. Groups and stacking.
    - 3a ✓ a spatial layer in an isolated group: its backdrop is the
      group's children below it, planned the same way. In a Pass Through
-     group the backdrop reaches outside the group; those tiles stay on the
-     CPU.
+     group the backdrop reaches outside the group (below).
    - Pass Through semantics (fixed 2026-10-19): happypaint's
      `applyAdjustmentLayer` filters the render target, and a Pass Through
      group draws onto the outer one, so its spatial layer filters

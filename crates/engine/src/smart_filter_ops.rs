@@ -214,45 +214,40 @@ impl Session {
     }
 
     /// The spatial layers the GPU filters live (spec 52): every spatial
-    /// adjustment layer, when each is at the top level or in isolated groups,
-    /// of a kind with a GPU pass and a reach within a tile, and at most
+    /// adjustment layer, when each is of a kind with a GPU pass and a reach within a tile, and at most
     /// [`MAX_LIVE_SPATIAL`] of them; or a whole-canvas layer (spec 53) that
     /// is the document's only spatial layer, in a document of at most
     /// [`MAX_WHOLE_PX`]. Otherwise none, so a stroke never shows a live layer
     /// over a stale one.
     pub(crate) fn live_spatial(doc: &onepaint_doc::Document) -> Vec<NodeId> {
-        let nodes = &doc.root[..];
-        // Each spatial layer, and whether every group around it is isolated.
-        fn all<'a>(nodes: &'a [Node], isolated: bool, out: &mut Vec<(&'a onepaint_doc::Layer, bool)>) {
+        // Every spatial layer, in isolated and Pass Through groups alike.
+        fn all<'a>(nodes: &'a [Node], out: &mut Vec<&'a onepaint_doc::Layer>) {
             for n in nodes {
                 match n {
-                    Node::Layer(l) if onepaint_compose::spatial::spatial_kind(l).is_some() => out.push((l, isolated)),
+                    Node::Layer(l) if onepaint_compose::spatial::spatial_kind(l).is_some() => out.push(l),
                     Node::Layer(_) => {}
-                    Node::Group(g) => all(&g.children, isolated && g.blend_mode != onepaint_doc::BlendMode::PassThrough, out),
+                    Node::Group(g) => all(&g.children, out),
                 }
             }
         }
         let mut found = Vec::new();
-        all(nodes, true, &mut found);
+        all(&doc.root, &mut found);
         let px = u64::from(doc.width) * u64::from(doc.height);
         let whole_ok = found.len() == 1 && px <= MAX_WHOLE_PX;
-        let live = |(l, isolated): &(&onepaint_doc::Layer, bool)| {
+        let live = |l: &&onepaint_doc::Layer| {
             let Some(kind) = onepaint_compose::spatial::spatial_kind(l) else { return false };
             let params = l.adjustment.as_ref().map(|a| a.params.clone()).unwrap_or_default();
             let r = onepaint_filters::reach(kind, &params);
             if r >= onepaint_filters::GLOBAL_REACH {
                 let gallery = matches!(kind, Kind::TiltShift | Kind::IrisBlur | Kind::FieldBlur);
-                return *isolated
-                    && whole_ok
-                    && (!gallery || px <= MAX_GALLERY_PX)
-                    && onepaint_compose::spatial::whole_supported(kind, &params);
+                return whole_ok && (!gallery || px <= MAX_GALLERY_PX) && onepaint_compose::spatial::whole_supported(kind, &params);
             }
-            *isolated && onepaint_compose::spatial::gpu_supported(kind, &params) && r <= onepaint_raster::TILE
+            onepaint_compose::spatial::gpu_supported(kind, &params) && r <= onepaint_raster::TILE
         };
         if found.len() > MAX_LIVE_SPATIAL || !found.iter().all(live) {
             return Vec::new();
         }
-        found.into_iter().map(|(l, _)| l.id.clone()).collect()
+        found.into_iter().map(|l| l.id.clone()).collect()
     }
 
     /// Replace spatial adjustment layers in `nodes` (and nested groups) with

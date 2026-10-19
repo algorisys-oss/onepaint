@@ -29,9 +29,9 @@ fn spatial_programs_match_the_rendered_document() {
 }
 
 #[test]
-fn spatial_layers_in_isolated_groups_plan_and_pass_through_ones_stay_on_the_cpu() {
+fn spatial_layers_in_groups_plan_and_match_isolated_or_passing_through() {
     use onepaint_doc::{Adjustment, BlendMode, Group, Layer, Node};
-    for (mode, gpu) in [(BlendMode::Normal, true), (BlendMode::PassThrough, false)] {
+    for (mode, opacity) in [(BlendMode::Normal, 1.0), (BlendMode::PassThrough, 1.0), (BlendMode::PassThrough, 0.6)] {
         let mut doc = random_doc(3, 300, 300, false);
         let mut paint = Layer::new("paint");
         for y in 60..200 {
@@ -45,18 +45,15 @@ fn spatial_layers_in_isolated_groups_plan_and_pass_through_ones_stay_on_the_cpu(
             params: serde_json::from_value(serde_json::json!({"radius": 6.0})).unwrap(),
         }));
         let mut g = Group::new("g");
-        g.blend_mode = mode;
+        (g.blend_mode, g.opacity) = (mode, opacity);
         g.children = vec![Node::Layer(paint), Node::Layer(blur)];
         doc.root.push(Node::Group(g));
         let want_doc = rendered(&doc);
         for (tx, ty) in doc.bounds().tiles() {
-            let prog = plan_tile(&doc, tx, ty, None);
-            assert_eq!(prog.is_some(), gpu, "{mode:?} tile {tx},{ty}");
-            if let Some(prog) = prog {
-                let (got, want) = (run(&prog), composite_tile(&want_doc, tx, ty, None));
-                let worst = got.iter().zip(&want).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
-                assert!(worst <= 2e-3, "tile {tx},{ty}: {worst}");
-            }
+            let prog = plan_tile(&doc, tx, ty, None).unwrap_or_else(|| panic!("{mode:?} tile {tx},{ty} plans"));
+            let (got, want) = (run(&prog), composite_tile(&want_doc, tx, ty, None));
+            let worst = got.iter().zip(&want).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+            assert!(worst <= 2e-3, "{mode:?} {opacity} tile {tx},{ty}: {worst}");
         }
     }
 }

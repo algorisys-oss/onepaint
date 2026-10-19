@@ -785,11 +785,13 @@ fn bloom_and_line_art_layers_match_the_rendered_document() {
     }
 }
 
-/// A spatial layer in an isolated group filters the group's own content.
+/// A spatial layer in an isolated group filters the group's own content; in
+/// a Pass Through group, what lies below the group too. A whole-canvas one
+/// in a Pass Through group as well.
 #[test]
 fn a_spatial_layer_in_a_group_matches_the_rendered_document() {
     use onepaint_compose::spatial::rendered;
-    use onepaint_doc::{Adjustment, Group};
+    use onepaint_doc::{Adjustment, BlendMode, Group};
     let Some((device, queue)) = device() else {
         eprintln!("skipping: no GPU adapter");
         return;
@@ -798,25 +800,39 @@ fn a_spatial_layer_in_a_group_matches_the_rendered_document() {
     let (w, h) = (300, 300);
     let tex = target(&device, w, h);
     let view = onepaint_gpu::mip::level_view(&tex, 0);
-    let mut doc = random_doc(3, w, h, false);
-    let mut paint = Layer::new("paint");
-    for y in 60..200 {
-        for x in 40..220 {
-            paint.pixels.set(x, y, [0.2, 0.5, 0.9, 1.0]);
+    let cases = [
+        (BlendMode::Normal, "gaussian-blur", serde_json::json!({"radius": 9.0})),
+        (BlendMode::PassThrough, "gaussian-blur", serde_json::json!({"radius": 9.0})),
+        (BlendMode::PassThrough, "twirl", serde_json::json!({"centerX": 0.4, "centerY": 0.5, "angle": 120.0, "extent": 0.9})),
+    ];
+    for (mode, kind, params) in cases {
+        let mut doc = random_doc(3, w, h, false);
+        let mut paint = Layer::new("paint");
+        for y in 60..200 {
+            for x in 40..220 {
+                paint.pixels.set(x, y, [0.2, 0.5, 0.9, 1.0]);
+            }
+        }
+        let mut blur = Layer::new("blur");
+        blur.adjustment = Some(Box::new(Adjustment { kind: kind.into(), params: serde_json::from_value(params).unwrap() }));
+        let mut g = Group::new("g");
+        (g.blend_mode, g.opacity) = (mode, 0.8);
+        g.children = vec![Node::Layer(paint), Node::Layer(blur)];
+        doc.root.push(Node::Group(g));
+        let keys: Vec<_> = doc.bounds().tiles().collect();
+        let (progs, cpu) = onepaint_compose::program::plan_tiles_cached(&doc, &keys, None, None, None);
+        assert!(cpu.is_empty(), "{mode:?} {kind} plans on the GPU");
+        gc.run(&device, &queue, &progs, &view, [w, h]);
+        let got = read(&device, &queue, &tex);
+        if kind == "twirl" {
+            // Whole-canvas taps, as in `whole_canvas_kinds_over_stripes_match_the_oracle`.
+            let over = over_tolerance(&rendered(&doc), None, &got, TOL);
+            assert!(over as f64 <= (1.5e-3 * (w * h) as f64).ceil(), "{mode:?} {kind}: {over} px over");
+        } else {
+            let (e, at) = max_error(&rendered(&doc), None, &got);
+            assert!(e <= TOL, "{mode:?} {kind}: error {e} at {at:?}");
         }
     }
-    let mut blur = Layer::new("blur");
-    blur.adjustment = Some(Box::new(Adjustment {
-        kind: "gaussian-blur".into(),
-        params: serde_json::from_value(serde_json::json!({"radius": 9.0})).unwrap(),
-    }));
-    let mut g = Group::new("g");
-    g.opacity = 0.8;
-    g.children = vec![Node::Layer(paint), Node::Layer(blur)];
-    doc.root.push(Node::Group(g));
-    gc.run(&device, &queue, &programs(&doc, None), &view, [w, h]);
-    let (e, at) = max_error(&rendered(&doc), None, &read(&device, &queue, &tex));
-    assert!(e <= TOL, "error {e} at {at:?}");
 }
 
 /// Stacked spatial layers: the upper one's backdrop reads the lower one's

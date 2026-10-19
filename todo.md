@@ -140,8 +140,8 @@ an item changes there, change it here too.
         in isolated groups; a lone twirl, pinch, polar, chromatic
         aberration, radial, spin, tilt-shift, iris or field blur layer too
         (spec 53; heavy ones wait mid-stroke in large documents), light rays
-        too. Oil paint, wind, glitch, lightning and ones in Pass Through
-        groups still render on the CPU
+        too, in Pass Through groups as well. Oil paint, wind, glitch and
+        lightning still render on the CPU
   - [x] Relief lighting (impasto height) (spec 45)
   - [x] Paper shading (spec 43)
   - [x] Partial panel clips (spec 44)

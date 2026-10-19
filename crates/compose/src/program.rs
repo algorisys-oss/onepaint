@@ -572,6 +572,9 @@ struct Planner<'a> {
     spatial: std::cell::Cell<bool>,
     /// This call's whole-canvas layers (spec 53).
     wholes: &'a Wholes,
+    /// The open Pass Through groups around the nodes being planned: a
+    /// spatial layer in one filters what lies below them too.
+    through: crate::spatial::Through,
 }
 
 /// A top-level node (with its clip family) and the ops it produced.
@@ -653,29 +656,29 @@ pub(crate) struct Wholes(std::collections::HashMap<String, Option<Arc<crate::spa
 /// backdrops can't hold spatial layers of their own (no stacking yet).
 fn plan_wholes(doc: &Document, ov: Option<&StrokeOverlay>, cache: Option<&PlanCache>) -> Wholes {
     use rayon::prelude::*;
-    fn walk<'a>(nodes: &'a [Node], out: &mut Vec<(&'a Layer, &'a [Node])>) {
+    fn walk<'a>(nodes: &'a [Node], through: &[(Vec<Node>, onepaint_doc::Group)], out: &mut Vec<(&'a Layer, Vec<Node>)>) {
         for (i, n) in nodes.iter().enumerate() {
             match n {
-                Node::Group(g) => walk(&g.children, out),
+                Node::Group(g) => walk(&g.children, &crate::spatial::enter(through, nodes, i), out),
                 Node::Layer(l) => {
                     if let Some(kind) = crate::spatial::spatial_kind(l)
                         && onepaint_filters::reach(kind, &Default::default()) >= onepaint_filters::GLOBAL_REACH
                     {
-                        out.push((l, &nodes[..i]));
+                        out.push((l, crate::spatial::backdrop_nodes(&nodes[..i], through)));
                     }
                 }
             }
         }
     }
     let mut found = Vec::new();
-    walk(&doc.root, &mut found);
+    walk(&doc.root, &[], &mut found);
     let mut out = Wholes::default();
     for (l, below) in found {
         let kind = crate::spatial::spatial_kind(l).expect("walk keeps spatial layers");
         let params = l.adjustment.as_ref().map(|a| a.params.clone()).unwrap_or_default();
         let whole = crate::spatial::whole_supported(kind, &params).then(|| {
             let mut sub = doc.clone_shallow();
-            sub.root = below.to_vec();
+            sub.root = below;
             sub.source = None;
             sub.set_paper(None);
             let keys: Vec<_> = doc.bounds().tiles().collect();
@@ -720,6 +723,7 @@ fn plan(
         snapshot: false,
         spatial: Default::default(),
         wholes,
+        through: Vec::new(),
     };
     p.nodes(&doc.root).ok()?;
     // The paper shades the finished composite (spec 43), after every unit.
@@ -742,21 +746,20 @@ impl Planner<'_> {
         self.content_with(l, None)
     }
 
-    /// A spatial adjustment layer's content (spec 52): its filter over the
-    /// layers `below` it in its container, planned on every tile within its
-    /// reach. At the top level or in an isolated group that is its whole
-    /// backdrop; in a Pass Through group the backdrop reaches outside, so
-    /// the tile stays on the CPU.
+    /// A spatial adjustment layer's content (spec 52): its filter over what
+    /// lies below it, planned on every tile within its reach: the layers
+    /// `below` it in its container, inside any open Pass Through groups
+    /// (`spatial::backdrop_nodes`).
     fn spatial_content(&self, l: &Layer, kind: onepaint_filters::Kind, below: &[Node]) -> Result<Option<Content>, Unsupported> {
         let params = l.adjustment.as_ref().map(|a| a.params.clone()).unwrap_or_default();
         let r = onepaint_filters::reach(kind, &params);
-        if r >= onepaint_filters::GLOBAL_REACH && self.reveal != Reveal::Below {
+        if r >= onepaint_filters::GLOBAL_REACH {
             // A whole-canvas layer (spec 53): its backdrop was planned before the tiles.
             let whole = self.wholes.0.get(&l.id).cloned().flatten().ok_or(Unsupported)?;
             self.spatial.set(true);
             return self.content_with(l, Some(Arc::new(crate::spatial::SpatialSrc::of_whole(whole, (self.tx, self.ty)))));
         }
-        if self.reveal == Reveal::Below || !crate::spatial::gpu_supported(kind, &params) || r > TILE {
+        if !crate::spatial::gpu_supported(kind, &params) || r > TILE {
             return Err(Unsupported);
         }
         let (tx, ty) = (self.tx, self.ty);
@@ -764,7 +767,7 @@ impl Planner<'_> {
         let t = onepaint_raster::Rect::from_tile(tx, ty);
         let region = onepaint_raster::Rect::new(t.x - r, t.y - r, t.w + 2 * r, t.h + 2 * r).intersect(&bounds).ok_or(Unsupported)?;
         let mut sub = self.doc.clone_shallow();
-        sub.root = below.to_vec();
+        sub.root = crate::spatial::backdrop_nodes(below, &self.through);
         sub.source = None;
         sub.set_paper(None);
         let backdrop = region
@@ -1075,7 +1078,10 @@ impl Planner<'_> {
                     if g.visible && g.opacity > 0.0 && !g.children.is_empty() {
                         self.push(Op::PushCopy)?;
                         let outer = std::mem::replace(&mut self.reveal, Reveal::Below);
+                        let inner = crate::spatial::enter(&self.through, nodes, i);
+                        let around = std::mem::replace(&mut self.through, inner);
                         self.nodes(&g.children)?;
+                        self.through = around;
                         self.reveal = outer;
                         self.depth -= 1;
                         self.regs.pop();
@@ -1104,7 +1110,9 @@ impl Planner<'_> {
                         } else {
                             self.push(Op::PushZero)?;
                             let outer = std::mem::replace(&mut self.reveal, Reveal::Clear);
+                            let around = std::mem::take(&mut self.through);
                             self.nodes(&g.children)?;
+                            self.through = around;
                             self.reveal = outer;
                         }
                         // A panel's frame clips the group before its riders go on.
