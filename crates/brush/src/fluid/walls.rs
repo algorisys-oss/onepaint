@@ -50,7 +50,7 @@ impl FluidSim {
         let (r, doc) = (self.rect, self.doc);
         let walls = self.walls.get_or_insert_with(|| vec![0; (r.w * r.h) as usize]);
         let id = self.wall_next;
-        self.wall_next = if self.wall_next >= 255 { 1 } else { self.wall_next + 1 };
+        self.wall_next = self.wall_next % 255 + 1;
         let li = |x: i32, y: i32| ((y - r.y) * r.w + x - r.x) as usize;
         for y in fr.y..fr.bottom() {
             for x in fr.x..fr.right() {
