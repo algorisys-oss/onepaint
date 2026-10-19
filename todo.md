@@ -132,7 +132,8 @@ an item changes there, change it here too.
   - [x] Noise, solid and gradient fill layers (spec 46)
   - [x] Screentone (not the sand shape) (spec 46)
   - [x] Built-in pattern fill layers (spec 46)
-  - [ ] Imported pattern fills and sand screentone
+  - [x] Imported pattern fills (2026-10-19)
+  - [ ] Sand screentone (its `sin` hash differs on the GPU: needs a divergence)
   - [~] Spatial adjustment layers (spec 52): Gaussian blur, motion blur,
         sharpen, emboss, mosaic, ripple, halftone, crystallize, bloom and
         line art layers run live on the GPU, stacked too, at the top level or

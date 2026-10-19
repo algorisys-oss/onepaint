@@ -91,7 +91,7 @@ The modes are, in the layer menu's order (`layer-panel/blend-modes.ts`):
 - pigment (brush only)
 
 - [x] The CPU oracle, `.happypaint` and PSD keys for all 29; Pass Through groups composite their children onto the backdrop and fade with it below 100%, and stay isolated (as Normal) when a panel frame, ghost or clipped layer needs them as one picture (happypaint v0.200.1)
-- [~] All of them on the GPU, matching the CPU oracle (all 28 modes, Pass Through groups, groups, clip families, masks, inherit alpha, ghost tints and strokes in progress composite on the GPU, as do colour adjustment, noise, screentone and fill layers, relief, paper and panel clips (specs 42–46); view modes run in the present pass (spec 48). Tiles with sand screentone, imported pattern images or ghost pegs still use the CPU compositor; spatial adjustment layers are rendered on the CPU, reused mid-stroke, and composite on the GPU as pixels)
+- [~] All of them on the GPU, matching the CPU oracle (all 28 modes, Pass Through groups, groups, clip families, masks, inherit alpha, ghost tints and strokes in progress composite on the GPU, as do colour adjustment, noise, screentone and fill layers, relief, paper and panel clips (specs 42–46); view modes run in the present pass (spec 48). Tiles with sand screentone or ghost pegs that shrink past 3 × 3 tiles still use the CPU compositor; spatial adjustment layers are rendered on the CPU, reused mid-stroke, and composite on the GPU as pixels)
 - [x] Knockout None / Shallow / Deep on layers: punches to the group's base, or to the Background at the top level; on the GPU, in PSD (`knko`) and in Properties (happypaint v0.202.2)
 
 ## Adjustments and filters (52 kinds)

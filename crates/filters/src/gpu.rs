@@ -186,12 +186,19 @@ pub fn gpu_adjust(kind: Kind, p: &Params, frame: Frame) -> Option<GpuAdjust> {
             17
         }
         Kind::PatternFill => {
-            // Imported images can be 512² and stay on the CPU (divergence 15).
-            if p.pattern_image.as_deref().is_some_and(|u| !u.is_empty()) {
-                return None;
-            }
-            let id = p.pattern_id.as_deref().unwrap_or("checker");
-            let tile = crate::pattern::pattern_pixels(id, p.pattern_color_a.unwrap_or([0.0; 3]), p.pattern_color_b.unwrap_or([1.0; 3]));
+            // An imported image (up to 512², 4 MiB of table) goes in the table as
+            // the built-ins do; one that doesn't decode stays on the CPU (empty).
+            let tile = match p.pattern_image.as_deref().filter(|u| !u.is_empty()) {
+                Some(url) => crate::pattern::imported_tile(url)?,
+                None => {
+                    let id = p.pattern_id.as_deref().unwrap_or("checker");
+                    std::sync::Arc::new(crate::pattern::pattern_pixels(
+                        id,
+                        p.pattern_color_a.unwrap_or([0.0; 3]),
+                        p.pattern_color_b.unwrap_or([1.0; 3]),
+                    ))
+                }
+            };
             let [w, h] = frame.size();
             let scale = p.pattern_scale.unwrap_or(1.0).max(0.05);
             let a = p.pattern_angle.unwrap_or(0.0).to_radians();
@@ -222,8 +229,11 @@ mod tests {
         let sand = Params { tone_shape: Some("sand".into()), ..crate::default_params(Kind::Tone) };
         assert!(gpu_adjust(Kind::Tone, &sand, f).is_none());
         assert_eq!(gpu_adjust(Kind::GradientFill, &crate::default_params(Kind::GradientFill), f).unwrap().table.unwrap().len(), 1024);
-        let imported = Params { pattern_image: Some("data:image/png;base64,AAAA".into()), ..crate::default_params(Kind::PatternFill) };
-        assert!(gpu_adjust(Kind::PatternFill, &imported, f).is_none());
+        let broken = Params { pattern_image: Some("data:image/png;base64,AAAA".into()), ..crate::default_params(Kind::PatternFill) };
+        assert!(gpu_adjust(Kind::PatternFill, &broken, f).is_none(), "an image that doesn't decode stays on the CPU");
+        let url = crate::pattern::png_data_url(&[9u8; 3 * 2 * 4], 3, 2);
+        let imported = Params { pattern_image: url, ..crate::default_params(Kind::PatternFill) };
+        assert_eq!(gpu_adjust(Kind::PatternFill, &imported, f).unwrap().table.unwrap().len(), 6, "an imported image packs");
         let curves = gpu_adjust(Kind::Curves, &crate::default_params(Kind::Curves), f).unwrap();
         assert_eq!(curves.lut.unwrap()[255][0], 255);
     }

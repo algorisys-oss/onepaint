@@ -2,11 +2,11 @@
 
 ## Status
 Built. Noise, screentone, solid, gradient and pattern fill layers
-composite on the GPU, on top of the 13 kinds in spec 42. Two cases still
-keep their tiles on the CPU:
-- the "sand" screentone shape, which hashes with `sin`, whose low bits
-  differ on the GPU;
-- imported pattern images, which can be 512² (built-in patterns are 32²).
+composite on the GPU, on top of the 13 kinds in spec 42. One case still
+keeps its tiles on the CPU: the "sand" screentone shape, which hashes with
+`sin`, whose low bits differ on the GPU. Imported pattern images (up to
+512², 4 MiB of table) go in the adjustment table like the built-in 32²
+tiles (2026-10-19); one that doesn't decode stays on the CPU, empty.
 
 ## Model
 - These kinds depend on the pixel's position. `Adjust` now carries its
@@ -22,8 +22,8 @@ keep their tiles on the CPU:
     - `tone`'s maths, with the angle's cos and sin, the cell size, the
       gradient direction and its extent, and the ink colour all computed
       on the CPU;
-  - 18, pattern fill: the built-in 32 × 32 tile (`pattern_pixels`) in the
-    adjustment table, sampled with `sample_repeat`'s wrap and bilinear,
+  - 18, pattern fill: the built-in 32 × 32 tile (`pattern_pixels`), or
+    the imported image, in the adjustment table, sampled with `sample_repeat`'s wrap and bilinear,
     after the offset, rotation and scale;
   - 16, gradient fill:
     - `shape_t` ported for all five shapes, with its end points in doc px;
@@ -64,8 +64,9 @@ keep their tiles on the CPU:
   75,000.
 
 ## Acceptance criteria
-1. `gpu_adjust` packs 18 kinds. Sand screentone, imported patterns,
-   spatial kinds and generators return `None`.
+1. `gpu_adjust` packs 18 kinds. Sand screentone, undecodable imported
+   patterns, spatial kinds and generators return `None`. The random test
+   documents include imported, translucent, odd-sized pattern tiles.
 2. Random documents with all 18 kinds equal `composite_tile` exactly on
    the CPU, planned with and without the cache. With the cache, each
    layer's adjustment is one shared `Arc` across tiles.

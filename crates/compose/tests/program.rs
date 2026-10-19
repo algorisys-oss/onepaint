@@ -104,7 +104,7 @@ fn random_adjustments_carry_their_params() {
 }
 
 #[test]
-fn sand_tone_and_imported_pattern_layers_stay_on_the_cpu() {
+fn sand_tone_and_undecodable_pattern_layers_stay_on_the_cpu() {
     for kind in ["tone", "pattern-fill"] {
         let mut doc = random_doc(4, 300, 300, false);
         let mut l = Layer::new("adj");

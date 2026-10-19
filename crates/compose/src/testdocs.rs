@@ -368,8 +368,20 @@ pub fn random_adjustment(r: &mut Rng) -> onepaint_doc::Adjustment {
         "pattern-fill" => {
             let k = c();
             let ids = ["checker", "stripes", "dots", "grid", "brick", "crosshatch", "halftone", "weave"];
-            json!({"patternId": ids[(k[0] * 8.0) as usize % 8], "patternColorA": c(), "patternColorB": c(),
-                   "patternScale": 0.3 + k[1] * 2.0, "patternAngle": k[2] * 90.0, "patternOffX": k[0] * 0.3, "patternOffY": k[1] * 0.2})
+            let mut v = json!({"patternId": ids[(k[0] * 8.0) as usize % 8], "patternColorA": c(), "patternColorB": c(),
+                   "patternScale": 0.3 + k[1] * 2.0, "patternAngle": k[2] * 90.0, "patternOffX": k[0] * 0.3, "patternOffY": k[1] * 0.2});
+            // An imported image now and then: odd-sized and translucent.
+            if k[2] < 0.4 {
+                let (w, h) = (7 + (k[0] * 40.0) as u32, 5 + (k[1] * 30.0) as u32);
+                let px: Vec<u8> = (0..w * h)
+                    .flat_map(|i| {
+                        let (x, y) = (i % w, i / w);
+                        [(x * 255 / w) as u8, (y * 255 / h) as u8, ((x * y) % 256) as u8, (40 + (x + y) * 7 % 216) as u8]
+                    })
+                    .collect();
+                v["patternImage"] = json!(onepaint_filters::pattern::png_data_url(&px, w, h));
+            }
+            v
         }
         "tone" => {
             let k = c();

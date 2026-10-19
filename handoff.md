@@ -97,7 +97,8 @@ more adjustment kinds, live PSD adjustments and byte-for-byte round trips
 (spec 51), 8-bit GPU atlases (spec 49), spec 52 phases 1–3a.
 
 Next, unless you redirect:
-1. Imported pattern fills and sand screentone on the GPU (`todo.md` §2.1).
+1. Imported pattern fills are on the GPU (2026-10-19). Sand screentone
+   would need a divergence (its `sin` hash), so it waits for your call.
 2. Oil paint on the GPU would need a different quadrant rule (divergence),
    so it waits for your call.
 
