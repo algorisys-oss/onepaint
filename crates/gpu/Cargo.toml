@@ -36,3 +36,7 @@ harness = false
 [[bench]]
 name = "opacity_drag"
 harness = false
+
+[[bench]]
+name = "view"
+harness = false

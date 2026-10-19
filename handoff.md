@@ -161,6 +161,10 @@ Items 1–5 from the earlier list; every step pushed as it landed.
 - **Debug hooks:** `ONEPAINT_NEW=WxH` (a blank document of that size;
   16384 × 12000 checked, one sheet and 4 × 3) and
   `ONEPAINT_VIEW=gray|proof|warn`.
+- **View bench** (`crates/gpu/benches/view.rs`, 8192² × 100 layers, 1920 × 1080):
+  - a pan or rotate re-presents the resident composite in 2.0–2.5 ms;
+  - zooming in from fit composites the 63 visible level-0 tiles in 63 ms,
+    which is the open todo item.
 - **Item 1, quiet measurements** (specs 38 and 39 have them):
   - the split drag frame was 54 ms against 144 ms unsplit. That exposed a
     segment-cache thrash; with the cache at 384 MiB it is **16.5 ms**,

@@ -59,7 +59,12 @@ an item changes there, change it here too.
 
 ### 1.7 Canvas and guides
 - [x] Pan, zoom, rotate
-- [ ] Measure pan, zoom and rotate at 60 fps on 8k × 8k with 100+ layers
+- [x] Measure pan, zoom and rotate at 60 fps on 8k × 8k with 100+ layers
+  (`gpu/benches/view.rs`, Iris Xe: pan 2.0 ms at fit and 2.5 ms at 100%,
+  rotate 2.2 ms)
+- [ ] Zoom in from fit: the 63 newly visible level-0 tiles take 63 ms at
+  100 layers (about 1 ms a tile). Spread them over frames, nearest the
+  view centre first, and show the coarser level until they land
 - [x] Grid and snapping, symmetry guides, 1–5-point perspective
 - [x] Rulers, guide lines, measure; quick-shape; speed lines
 - [x] Reference window; multi-document tabs
