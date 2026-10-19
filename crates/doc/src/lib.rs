@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod look;
 pub mod paper;
+pub mod styles;
 pub mod vector_mask;
 pub use look::{BlendIf, BlendRange, ChannelRanges, FULL_RANGE, mask_k};
 pub use paper::{PAPER_PRESETS, Paper, PaperPreset, paper_preset_id};

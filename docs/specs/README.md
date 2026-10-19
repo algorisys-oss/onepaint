@@ -66,3 +66,4 @@ The happypaint references are relative to `../happypaint/frontend/src/`.
 | 53 | [Whole-canvas filter layers on the GPU](53-gpu-whole-canvas-filters.md) | compose, gpu, engine |
 | 54 | [When the GPU can't take the work](54-gpu-robustness.md) | gpu, app |
 | 55 | [Ghost pegs on the GPU](55-gpu-ghost-pegs.md) | compose, gpu |
+| 56 | [Layer styles](56-layer-styles.md) | doc, compose, gpu, engine, formats, app |

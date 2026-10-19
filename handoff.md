@@ -44,6 +44,9 @@ Overnight (2026-10-18 → 19), all pushed, newest last:
   whole in the params (`filters::lut3d`, happypaint's parser tests),
   trilinear on the CPU and the GPU (code 24, tables up to 65³), a Load
   LUT… panel. PSD `clrL` is still raw-only.
+- Spec 56, layer styles: designed; phase 1 (the model, `doc::styles`)
+  built. Next: phase 2, the CPU oracle (exact distance field, the style
+  pass, styled layers and groups in the tree compositor).
 - `scripts/bench-gate/gate.sh save|check`: the perf-budget gate for
   AGENTS.md's 5% rule, on criterion's saved baselines (checked: the 9
   engine hot-path benches came out within 5% of themselves).
