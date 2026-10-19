@@ -631,6 +631,52 @@ impl crate::Group {
     }
 }
 
+/// A saved style (happypaint `StylePreset`): the user's own, kept in the
+/// app's settings and shared across drawings.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StylePreset {
+    pub id: String,
+    pub name: String,
+    pub styles: LayerStyles,
+}
+
+/// The user's presets from their stored JSON (`parseStylePresets`): bad
+/// JSON gives none; entries without a string id and name, with an id seen
+/// before, or without an effects list are dropped.
+pub fn parse_style_presets(raw: Option<&str>) -> Vec<StylePreset> {
+    let Some(Value::Array(list)) = raw.and_then(|r| serde_json::from_str::<Value>(r).ok()) else {
+        return Vec::new();
+    };
+    let mut out: Vec<StylePreset> = Vec::new();
+    for r in &list {
+        let (Some(id), Some(name)) = (r.get("id").and_then(Value::as_str), r.get("name").and_then(Value::as_str)) else {
+            continue;
+        };
+        if out.iter().any(|p| p.id == id) {
+            continue;
+        }
+        let Some(styles) = r.get("styles").filter(|s| s.get("effects").is_some_and(Value::is_array)).and_then(LayerStyles::from_json)
+        else {
+            continue;
+        };
+        out.push(StylePreset { id: id.into(), name: name.into(), styles });
+    }
+    out
+}
+
+/// The JSON [`parse_style_presets`] reads back.
+pub fn style_presets_json(presets: &[StylePreset]) -> String {
+    let v: Vec<Value> = presets.iter().map(|p| json!({"id": p.id, "name": p.name, "styles": p.styles.to_json()})).collect();
+    Value::Array(v).to_string()
+}
+
+/// A new preset's name: `name` trimmed, or "Style N" after the `count`
+/// already saved (`saveStylePreset`).
+pub fn preset_name(name: &str, count: usize) -> String {
+    let n = name.trim();
+    if n.is_empty() { format!("Style {}", count + 1) } else { n.into() }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -726,6 +772,23 @@ mod tests {
         assert_eq!((lit.effects[0].angle, lit.effects[1].angle, lit.effects[2].bevel.altitude), (10.0, 200.0, 50.0));
         let strokes = LayerStyles { fill_opacity: 1.0, effects: vec![default_effect(EffectKind::Stroke)] };
         assert!(strokes.with_global_light((10.0, 10.0)).is_none());
+    }
+
+    // happypaint style-presets.test.ts: stored presets are read defensively.
+    #[test]
+    fn stored_presets_are_read_defensively() {
+        assert!(parse_style_presets(None).is_empty());
+        assert!(parse_style_presets(Some("not json")).is_empty());
+        let ok = json!({"id": "a", "name": "Mine", "styles": {"fillOpacity": 1, "effects": [{"kind": "stroke", "size": 4}]}});
+        let raw = json!([ok, {"id": "a", "name": "dup", "styles": ok["styles"]}, {"id": "b"}, 42]).to_string();
+        let got = parse_style_presets(Some(&raw));
+        assert_eq!(got.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["a"]);
+        assert_eq!(got[0].styles.effects[0].kind, EffectKind::Stroke);
+        // Missing fields come from the defaults.
+        assert_eq!(got[0].styles.effects[0].color, default_effect(EffectKind::Stroke).color);
+        assert_eq!(parse_style_presets(Some(&style_presets_json(&got))), got);
+        assert_eq!(preset_name("  Gilt ", 3), "Gilt");
+        assert_eq!(preset_name(" ", 3), "Style 4");
     }
 
     // happypaint style-presets.test.ts: the built-ins pass the sanitizer unchanged.

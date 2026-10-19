@@ -51,8 +51,9 @@ Overnight (2026-10-18 → 19), all pushed, newest last:
   with compose; `layer_styles_match_the_tree_compositor`). Phase 4 in part: `LayerProps::styles`, built-in
   styles, the editor in Properties (`styles_ui.rs`; `ONEPAINT_STYLES=Gold`
   for screenshots), Global Light across the document, Bake, Merge Down
-  baking styles; PSD effects both ways (`psd_effects`, `psd_desc`). Next:
-  user presets with `.asl` import, gradient stops.
+  baking styles; PSD effects both ways (`psd_effects`, `psd_desc`). User presets
+  (`style_presets.rs`, `styles.json`) and `.asl` import (`formats::asl`)
+  done. Next: editing gradient-overlay stops.
 - `scripts/bench-gate/gate.sh save|check`: the perf-budget gate for
   AGENTS.md's 5% rule, on criterion's saved baselines (checked: the 9
   engine hot-path benches came out within 5% of themselves).

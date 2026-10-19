@@ -290,3 +290,34 @@ fn properties_edit_the_layer_style() {
     h.state_mut().session.execute(onepaint_engine::Command::Undo).unwrap();
     assert_eq!(styles(&h).unwrap().effects.len(), 2);
 }
+
+/// Spec 56: the current style saves as the user's own, applies in a click
+/// like the built-ins, and deletes with its ×.
+#[test]
+fn a_style_saves_as_a_preset_and_applies() {
+    let mut h = harness();
+    h.state_mut().layout.set_placement(PanelId::Properties, Placement::Dock { side: DockSide::Right }, None);
+    dock::set_panel_open(h.state_mut(), PanelId::Properties, true);
+    h.run();
+    let id = h.state().session.active().to_string();
+    let styles = |h: &Harness<'_, App>| h.state().session.doc().find(&id).and_then(|n| n.as_layer()).and_then(|l| l.styles());
+    h.get_by_label("Neon").click();
+    h.run();
+    h.state_mut().style_name = "Glow".into();
+    h.get_by_label("Save style").click();
+    h.run();
+    assert_eq!(h.state().style_presets.list.len(), 1);
+    assert_eq!(h.state().style_presets.list[0].name, "Glow");
+    assert!(h.state().style_name.is_empty());
+    h.get_by_label("Ink Outline").click();
+    h.run();
+    assert_eq!(styles(&h).unwrap().effects.len(), 1);
+    h.get_by_label("Glow").click();
+    h.run();
+    assert_eq!(styles(&h), h.state().style_presets.list.first().map(|p| p.styles.clone()));
+    let chip = h.get_by_label("Glow").rect().right_center();
+    let x = h.get_all_by_label("×").min_by(|a, b| a.rect().center().distance(chip).total_cmp(&b.rect().center().distance(chip))).unwrap();
+    x.click();
+    h.run();
+    assert!(h.state().style_presets.list.is_empty());
+}

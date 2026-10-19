@@ -353,6 +353,18 @@ fn effect_desc(e: &Effect) -> Desc {
 /// appears more than once; `None` when there are no effects to write
 /// (Fill opacity goes in `iOpa`, beside it).
 pub fn write(styles: &LayerStyles) -> Option<([u8; 4], Vec<u8>)> {
+    let (top, multi) = effects_desc(styles)?;
+    let mut o = Vec::new();
+    o.extend(0u32.to_be_bytes());
+    o.extend(16u32.to_be_bytes());
+    write_into(&mut o, &top);
+    Some((if multi { *b"lmfx" } else { *b"lfx2" }, o))
+}
+
+/// The effects descriptor for `styles` (an `lfx2` block's, or a style
+/// library's `Lefx`) and whether it needs `lmfx`; `None` when there are no
+/// effects to write.
+pub fn effects_desc(styles: &LayerStyles) -> Option<(Desc, bool)> {
     let written: Vec<&Effect> = styles.effects.iter().filter(|e| e.kind != EffectKind::PatternOverlay).collect();
     if written.is_empty() {
         return None;
@@ -406,11 +418,7 @@ pub fn write(styles: &LayerStyles) -> Option<([u8; 4], Vec<u8>)> {
     }
     let enabled = written.iter().filter(|e| e.enabled).count();
     top.push("numModifyingFX", DVal::Long(enabled as i32));
-    let mut o = Vec::new();
-    o.extend(0u32.to_be_bytes());
-    o.extend(16u32.to_be_bytes());
-    write_into(&mut o, &top);
-    Some((if multi { *b"lmfx" } else { *b"lfx2" }, o))
+    Some((top, multi))
 }
 
 fn base(kind: EffectKind, d: &Desc, on: bool) -> Option<Effect> {
@@ -588,6 +596,12 @@ pub fn read_block(data: &[u8], light: (f32, f32)) -> Option<Vec<Effect>> {
         return None;
     }
     let (top, _) = read(data, 8)?;
+    effects_in(&top, light)
+}
+
+/// The effects in an effects descriptor (see [`effects_desc`]); `None` when
+/// one of them can't be read.
+pub fn effects_in(top: &Desc, light: (f32, f32)) -> Option<Vec<Effect>> {
     let on = top.bool("masterFXSwitch").unwrap_or(false);
     let many = |single: &str, list: &str| -> Vec<Desc> {
         match top.list(list) {

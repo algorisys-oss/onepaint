@@ -34,6 +34,7 @@ mod progressive;
 mod reference;
 mod settings;
 mod status_bar;
+mod style_presets;
 mod styles_ui;
 mod tablet;
 mod text_ui;
@@ -207,6 +208,10 @@ pub struct App {
     pub hex: String,
     pub recent: Vec<Rgba>,
     pub palettes: palettes::Palettes,
+    /// The user's saved layer styles (spec 56).
+    pub style_presets: style_presets::StylePresets,
+    /// The Layer Style panel's New Style name.
+    pub style_name: String,
     pub settings: settings::Settings,
     /// Layer panel Bevel / Soften sliders (not saved, as in happypaint).
     pub bevel: [f32; 2],
@@ -306,6 +311,8 @@ impl App {
         // Nor the user's imported brushes.
         let brush_library =
             brush_library::BrushLibrary::load(if cfg!(test) || debug.scripted() { None } else { brush_library::default_dir() });
+        let style_presets =
+            style_presets::StylePresets::load(if cfg!(test) || debug.scripted() { None } else { style_presets::default_path() });
         let mut app = Self {
             tabs: vec![None],
             active_tab: 0,
@@ -320,6 +327,8 @@ impl App {
             hex: "#000000".into(),
             recent: Vec::new(),
             palettes,
+            style_presets,
+            style_name: String::new(),
             bevel: [0.0, 0.25],
             new_paper: 0,
             new_depth: onepaint_doc::Depth::Rgba16F,

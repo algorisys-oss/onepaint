@@ -14,13 +14,17 @@ built-in styles, and the Layer Style editor in Properties for pixel, text
 and path layers and groups; `ApplyGlobalLight` (linked effects across the
 document, a drag one undo step), `BakeStyles` (from the unmasked pixels,
 effects drawn Normal, the mask kept, as happypaint), and Merge Down bakes
-both layers' styles as far as they reach. Still to come in phase 4: user
-presets and gradient-stop editing. Phase 5 in part: PSD effects
+both layers' styles as far as they reach. User presets: save the current
+style by name, apply it in a click like the built-ins, delete it
+(`apps/onepaint/src/style_presets.rs`, `styles.json` in the config
+folder; `doc::styles::parse_style_presets` as happypaint's sanitizer).
+Still to come in phase 4: gradient-stop editing. Phase 5 in part: PSD effects
 (`formats::psd_effects` on a general descriptor reader, `psd_desc`):
 `lfx2`/`lmfx` both ways in ag-psd's byte order, `iOpa`, Global Light in
 resources 1037/1049, contours by name or nearest curve, happypaint's
 psd-effects tests. Pattern overlays and bevel textures aren't written (as
-happypaint). `.asl` import waits for user presets. happypaint v0.196.0–0.196.8; the source of truth is
+happypaint). `.asl` import (`formats::asl`, happypaint's tests): every style in a
+library becomes a user preset; the patterns block is skipped. happypaint v0.196.0–0.196.8; the source of truth is
 `engine/styles/layer-styles.ts` (model) and `style-renderer.ts` (WebGL),
 with `docs/layer-styles-spec.md` in happypaint.
 

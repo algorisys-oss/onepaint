@@ -277,15 +277,54 @@ pub fn panel(app: &mut App, ui: &mut Ui) {
     ui.label(RichText::new("Layer Style").font(onepaint_ui_kit::theme::semibold(15.0)).color(t.fg));
     ch |= num(ui, "Fill opacity", &mut styles.fill_opacity, 0.0..=100.0, 0.01, "%");
     widgets::section_label(ui, "Styles");
+    let mut picked = None;
+    let mut delete = None;
     ui.horizontal_wrapped(|ui| {
         for (name, preset) in builtin_presets() {
             if ui.selectable_label(false, name).clicked() {
-                styles = preset;
-                open = None;
-                ch = true;
+                picked = Some(preset);
             }
         }
     });
+    // The user's own, one per row with its ×.
+    for p in &app.style_presets.list {
+        ui.horizontal(|ui| {
+            if ui.selectable_label(false, &p.name).on_hover_text("Your style").clicked() {
+                picked = Some(p.styles.clone());
+            }
+            if ui.small_button("×").on_hover_text(format!("Delete {}", p.name)).clicked() {
+                delete = Some(p.id.clone());
+            }
+        });
+    }
+    if let Some(p) = picked {
+        // The whole style is replaced, under this layer's light (`applyPreset`).
+        styles = p.with_global_light(styles.global_light()).unwrap_or(p);
+        open = None;
+        ch = true;
+    }
+    if let Some(id) = delete {
+        app.style_presets.remove(&id);
+    }
+    ui.horizontal(|ui| {
+        ui.add(egui::TextEdit::singleline(&mut app.style_name).desired_width(150.0).hint_text("New style name"));
+        let any = !styles.effects.is_empty() || styles.fill_opacity < 1.0;
+        if ui.add_enabled_ui(any, |ui| widgets::secondary_button(ui, "Save style", 90.0)).inner.clicked() {
+            app.style_presets.add(&app.style_name, &styles);
+            app.style_name.clear();
+        }
+    });
+    if widgets::secondary_button(ui, "Import Photoshop styles (.asl)…", 220.0).clicked()
+        && let Some(path) = rfd::FileDialog::new().add_filter("Photoshop styles", &["asl"]).pick_file()
+    {
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("styles").to_string();
+        let now = ui.input(|i| i.time);
+        let msg = match std::fs::read(&path) {
+            Ok(b) => app.style_presets.import_asl(&b, &name),
+            Err(e) => format!("Couldn't read {name}: {e}"),
+        };
+        app.notify(msg, now);
+    }
     widgets::section_label(ui, "Effects");
     let mut remove = None;
     for (i, e) in styles.effects.iter_mut().enumerate() {
