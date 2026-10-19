@@ -137,6 +137,85 @@ pub fn srgb_to_lab(r: f64, g: f64, b: f64) -> [f64; 3] {
     [116.0 * y - 16.0, 500.0 * (x - y), 200.0 * (y - z)]
 }
 
+/// Lab (D50, the ICC PCS) → gamma sRGB, clamped; the D50 → D65 Bradford
+/// step is in the matrix (happypaint `labToSrgb`, `press-profile.ts`).
+pub fn lab_to_srgb(l: f64, a: f64, b: f64) -> [f64; 3] {
+    const MI: [f64; 9] = [3.1338561, -1.6168667, -0.4906146, -0.9787684, 1.9161415, 0.033454, 0.0719453, -0.2289914, 1.4052427];
+    const W: [f64; 3] = [0.9642, 1.0, 0.8249];
+    let inv = |t: f64| {
+        let t3 = t * t * t;
+        if t3 > 216.0 / 24389.0 { t3 } else { (116.0 * t - 16.0) * (27.0 / 24389.0) }
+    };
+    let fy = (l + 16.0) / 116.0;
+    let (x, y, z) = (inv(fy + a / 500.0) * W[0], inv(fy) * W[1], inv(fy - b / 200.0) * W[2]);
+    let lin = [MI[0] * x + MI[1] * y + MI[2] * z, MI[3] * x + MI[4] * y + MI[5] * z, MI[6] * x + MI[7] * y + MI[8] * z];
+    lin.map(|v| l2s(clamp01(v)))
+}
+
+/// Ink coverage (0 = no ink) → gamma sRGB for a CMYK file: through its ICC
+/// profile when it has a usable one, else the built-in press; baked to a
+/// 17⁴ grid and read multilinearly (happypaint `cmykConverter`).
+pub struct CmykToRgb {
+    grid: Vec<[f32; 3]>,
+}
+
+const CMYK_GRID: usize = 17;
+
+impl CmykToRgb {
+    /// `icc`: the file's embedded profile, if any.
+    pub fn new(icc: Option<&[u8]>) -> Self {
+        let n = CMYK_GRID;
+        let pts: Vec<[f64; 4]> = (0..n * n * n * n)
+            .map(|i| {
+                let g = |k: u32| ((i / n.pow(k)) % n) as f64 / (n - 1) as f64;
+                [g(3), g(2), g(1), g(0)]
+            })
+            .collect();
+        let through_icc = icc.and_then(|b| {
+            use moxcms::{ColorProfile, DataColorSpace, Layout, RenderingIntent, TransformOptions};
+            let prof = ColorProfile::new_from_slice(b).ok().filter(|p| p.color_space == DataColorSpace::Cmyk)?;
+            let opts = TransformOptions { rendering_intent: RenderingIntent::RelativeColorimetric, ..Default::default() };
+            let t = prof.create_transform_f32(Layout::Rgba, &ColorProfile::new_srgb(), Layout::Rgb, opts).ok()?;
+            let src: Vec<f32> = pts.iter().flat_map(|c| c.map(|v| v as f32)).collect();
+            let mut dst = vec![0.0f32; pts.len() * 3];
+            t.transform(&src, &mut dst).ok()?;
+            Some(dst.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect::<Vec<_>>())
+        });
+        let grid = through_icc.unwrap_or_else(|| pts.iter().map(|c| cmyk_to_proof_rgb(c).map(|v| v as f32)).collect());
+        CmykToRgb { grid }
+    }
+
+    /// Gamma sRGB 0..1 for ink coverage `c` (0..1 each).
+    pub fn rgb(&self, c: [f64; 4]) -> [f64; 3] {
+        let n = CMYK_GRID;
+        let g1 = (n - 1) as f64;
+        let mut i0 = [0usize; 4];
+        let mut f = [0.0f64; 4];
+        for k in 0..4 {
+            let x = c[k].clamp(0.0, 1.0) * g1;
+            i0[k] = (x.floor() as usize).min(n - 2);
+            f[k] = x - i0[k] as f64;
+        }
+        let mut out = [0.0f64; 3];
+        for corner in 0..16usize {
+            let mut w = 1.0;
+            let mut idx = 0;
+            for k in 0..4 {
+                let d = (corner >> (3 - k)) & 1;
+                w *= if d == 1 { f[k] } else { 1.0 - f[k] };
+                idx = idx * n + i0[k] + d;
+            }
+            if w != 0.0 {
+                let p = self.grid[idx];
+                for (o, v) in out.iter_mut().zip(p) {
+                    *o += w * f64::from(v);
+                }
+            }
+        }
+        out
+    }
+}
+
 fn normalize_proof(rgb: [f64; 3], white: [f64; 3], black: [f64; 3]) -> [f64; 3] {
     std::array::from_fn(|ch| {
         let (lo, hi) = (s2l(black[ch]), s2l(white[ch]));

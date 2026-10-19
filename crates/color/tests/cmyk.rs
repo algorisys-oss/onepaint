@@ -109,3 +109,27 @@ fn a_cmyk_icc_press_separates_and_proofs() {
     assert!(onepaint_color::cmyk::press_from_icc(&srgb).is_err());
     assert!(onepaint_color::cmyk::press_from_icc(b"junk").is_err());
 }
+
+/// Spec 61: Lab files read through the D50 matrix; CMYK files through the
+/// press (or their profile), baked to a grid.
+#[test]
+fn lab_and_cmyk_files_read_back_to_srgb() {
+    use onepaint_color::cmyk::{CmykToRgb, cmyk_to_proof_rgb, lab_to_srgb, srgb_to_lab};
+    for c in [[0.2, 0.5, 0.8], [1.0, 1.0, 1.0], [0.0, 0.0, 0.0], [0.9, 0.1, 0.3]] {
+        let l = srgb_to_lab(c[0], c[1], c[2]);
+        let back = lab_to_srgb(l[0], l[1], l[2]);
+        for k in 0..3 {
+            assert!((back[k] - c[k]).abs() < 2e-3, "{c:?} → {l:?} → {back:?}");
+        }
+    }
+    let conv = CmykToRgb::new(None);
+    for c in [[0.0; 4], [1.0, 0.0, 0.0, 0.0], [0.3, 0.6, 0.1, 0.2], [0.0, 0.0, 0.0, 1.0]] {
+        let (want, got) = (cmyk_to_proof_rgb(&c), conv.rgb(c));
+        for k in 0..3 {
+            assert!((want[k] - got[k]).abs() < 1e-2, "{c:?}: {got:?} vs {want:?}");
+        }
+    }
+    assert!(conv.rgb([0.0; 4])[2] < 0.97, "no ink is the paper, not pure white");
+    let rgb_icc = onepaint_color::icc::build_icc_profile(onepaint_color::icc::RgbSpace::Srgb);
+    assert_eq!(CmykToRgb::new(Some(&rgb_icc)).rgb([0.5; 4]), conv.rgb([0.5; 4]), "an RGB profile falls back to the press");
+}

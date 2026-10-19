@@ -787,10 +787,39 @@ struct RRec {
     raw: crate::psd_source::RawRecord,
 }
 
-fn decode_channel(c: &mut Cur, len: usize, w: usize, h: usize, depth: u16, psb: bool) -> Result<Vec<u8>, FormatError> {
+/// One channel's samples at the file's depth (spec 61): 1-bit rows packed
+/// MSB first and padded to a byte, 8/16-bit big-endian integers, 32-bit
+/// big-endian floats.
+pub(crate) struct Plane {
+    data: Vec<u8>,
+    depth: u16,
+    w: usize,
+}
+
+impl Plane {
+    /// Sample `i` (row-major) as 0..1 (32-bit as stored); 1-bit 1 is black.
+    fn sample(&self, i: usize) -> Option<f32> {
+        match self.depth {
+            8 => self.data.get(i).map(|v| f32::from(*v) / 255.0),
+            16 => self.data.get(i * 2..i * 2 + 2).map(|b| f32::from(u16::from_be_bytes([b[0], b[1]])) / 65535.0),
+            32 => self.data.get(i * 4..i * 4 + 4).map(|b| f32::from_be_bytes([b[0], b[1], b[2], b[3]])),
+            _ => {
+                let (x, y) = (i % self.w.max(1), i / self.w.max(1));
+                let byte = self.data.get(y * self.w.div_ceil(8) + x / 8)?;
+                Some(if (byte >> (7 - x % 8)) & 1 == 1 { 0.0 } else { 1.0 })
+            }
+        }
+    }
+}
+
+/// Bytes per row of a channel at `depth`.
+fn row_bytes(w: usize, depth: u16) -> usize {
+    if depth == 1 { w.div_ceil(8) } else { w * (depth as usize / 8) }
+}
+
+fn decode_channel(c: &mut Cur, len: usize, w: usize, h: usize, depth: u16, psb: bool) -> Result<Plane, FormatError> {
     let start = c.p;
-    let bpp = (depth / 8).max(1) as usize;
-    let row = w * bpp;
+    let row = row_bytes(w, depth);
     let comp = c.u16()?;
     let out = match comp {
         0 => c.take(row * h)?.to_vec(),
@@ -810,18 +839,7 @@ fn decode_channel(c: &mut Cur, len: usize, w: usize, h: usize, depth: u16, psb: 
             out.resize(row * h, 0);
             if comp == 3 {
                 for y in 0..h {
-                    let r = &mut out[y * row..(y + 1) * row];
-                    if bpp == 1 {
-                        for x in 1..row {
-                            r[x] = r[x].wrapping_add(r[x - 1]);
-                        }
-                    } else {
-                        for x in 1..w {
-                            let prev = u16::from_be_bytes([r[(x - 1) * 2], r[(x - 1) * 2 + 1]]);
-                            let cur = u16::from_be_bytes([r[x * 2], r[x * 2 + 1]]).wrapping_add(prev);
-                            r[x * 2..x * 2 + 2].copy_from_slice(&cur.to_be_bytes());
-                        }
-                    }
+                    unpredict(&mut out[y * row..(y + 1) * row], w, depth);
                 }
             }
             out
@@ -829,26 +847,115 @@ fn decode_channel(c: &mut Cur, len: usize, w: usize, h: usize, depth: u16, psb: 
         _ => return Err(bad("unknown compression")),
     };
     c.p = start + len;
-    // Down-convert 16-bit to 8-bit values for placement (rounded, not truncated).
-    if bpp == 2 {
-        return Ok(out.chunks_exact(2).map(|v| ((u16::from_be_bytes([v[0], v[1]]) as u32 * 255 + 32767) / 65535) as u8).collect());
-    }
-    Ok(out)
+    Ok(Plane { data: out, depth, w })
 }
 
-fn surface_from(planes: &[(i16, Vec<u8>)], rect: Rect, gray: bool, doc: Rect) -> Surface {
+/// Undo ZIP prediction on one row: byte deltas at 8-bit, big-endian u16
+/// deltas at 16-bit; at 32-bit the row is byte-planar (every float's first
+/// byte, then the second…) and delta-coded bytewise across it.
+fn unpredict(r: &mut [u8], w: usize, depth: u16) {
+    match depth {
+        16 => {
+            for x in 1..w {
+                let prev = u16::from_be_bytes([r[(x - 1) * 2], r[(x - 1) * 2 + 1]]);
+                let cur = u16::from_be_bytes([r[x * 2], r[x * 2 + 1]]).wrapping_add(prev);
+                r[x * 2..x * 2 + 2].copy_from_slice(&cur.to_be_bytes());
+            }
+        }
+        32 => {
+            for x in 1..r.len() {
+                r[x] = r[x].wrapping_add(r[x - 1]);
+            }
+            let planar = r.to_vec();
+            for x in 0..w {
+                for b in 0..4 {
+                    r[x * 4 + b] = planar[b * w + x];
+                }
+            }
+        }
+        _ => {
+            for x in 1..r.len() {
+                r[x] = r[x].wrapping_add(r[x - 1]);
+            }
+        }
+    }
+}
+
+/// How a file's colour channels become linear RGB (happypaint
+/// `channels.ts` `converter`; spec 61).
+pub(crate) enum ModeConv {
+    Rgb,
+    /// Grayscale, Duotone (its grey), Multichannel (its first channel), Bitmap.
+    Gray,
+    Cmyk(Box<onepaint_color::cmyk::CmykToRgb>),
+    Lab,
+    /// The colour table (planar R, G, B), and the transparent index.
+    Indexed(Vec<u8>, Option<u8>),
+}
+
+pub(crate) struct Conv {
+    mode: ModeConv,
+    /// 32-bit colour is linear light already.
+    linear: bool,
+}
+
+impl Conv {
+    /// Colour channels per pixel.
+    fn count(&self) -> usize {
+        match self.mode {
+            ModeConv::Rgb | ModeConv::Lab => 3,
+            ModeConv::Cmyk(_) => 4,
+            _ => 1,
+        }
+    }
+
+    /// Linear RGB and straight alpha from the samples.
+    fn px(&self, v: [f32; 4], alpha: f32) -> ([f32; 4], f32) {
+        let s2l = srgb_to_linear;
+        let from_srgb = |c: [f64; 3]| [s2l(c[0] as f32), s2l(c[1] as f32), s2l(c[2] as f32), 0.0];
+        let rgb = match &self.mode {
+            ModeConv::Rgb if self.linear => v.map(|c| c.clamp(0.0, 1.0)),
+            ModeConv::Rgb => v.map(s2l),
+            ModeConv::Gray => {
+                let g = if self.linear { v[0].clamp(0.0, 1.0) } else { s2l(v[0]) };
+                [g, g, g, 0.0]
+            }
+            ModeConv::Cmyk(c) => from_srgb(c.rgb([0, 1, 2, 3].map(|k| f64::from(1.0 - v[k])))),
+            ModeConv::Lab => from_srgb(onepaint_color::cmyk::lab_to_srgb(
+                f64::from(v[0]) * 100.0,
+                f64::from(v[1]) * 255.0 - 128.0,
+                f64::from(v[2]) * 255.0 - 128.0,
+            )),
+            ModeConv::Indexed(t, tidx) => {
+                let i = (v[0] * 255.0).round() as usize;
+                if *tidx == Some(i as u8) {
+                    return ([0.0; 4], 0.0);
+                }
+                let at = |k: usize| f32::from(t.get(k * 256 + i).copied().unwrap_or(0)) / 255.0;
+                [s2l(at(0)), s2l(at(1)), s2l(at(2)), 0.0]
+            }
+        };
+        (rgb, alpha)
+    }
+}
+
+/// A layer's pixels from its planes (colour ids 0.., alpha −1), as linear
+/// premultiplied light.
+fn surface_from(planes: &[(i16, Plane)], rect: Rect, conv: &Conv, doc: Rect) -> Surface {
     let mut s = Surface::new();
     let Some(ix) = rect.intersect(&doc) else { return s };
     let get = |id: i16| planes.iter().find(|p| p.0 == id).map(|p| &p.1);
-    let (r, g, b, a) = (get(0), get(if gray { 0 } else { 1 }), get(if gray { 0 } else { 2 }), get(-1));
+    let n = conv.count();
+    let colour: Vec<Option<&Plane>> = (0..4).map(|k| if k < n { get(k as i16) } else { None }).collect();
+    let alpha = get(-1);
     let mut data = Vec::with_capacity((ix.w * ix.h * 4) as usize);
     for y in ix.y..ix.bottom() {
         for x in ix.x..ix.right() {
             let i = ((y - rect.y) * rect.w + (x - rect.x)) as usize;
-            let v = |p: Option<&Vec<u8>>, d: u8| p.and_then(|p| p.get(i).copied()).unwrap_or(d);
-            let al = v(a, 255) as f32 / 255.0;
-            let l = |c: u8| srgb_to_linear(c as f32 / 255.0) * al;
-            data.extend_from_slice(&[l(v(r, 0)), l(v(g, 0)), l(v(b, 0)), al]);
+            let v: [f32; 4] = std::array::from_fn(|k| colour[k].and_then(|p| p.sample(i)).unwrap_or(0.0));
+            let a = alpha.and_then(|p| p.sample(i)).unwrap_or(1.0).clamp(0.0, 1.0);
+            let (rgb, a) = conv.px(v, a);
+            data.extend_from_slice(&[rgb[0] * a, rgb[1] * a, rgb[2] * a, a]);
         }
     }
     s.write_rect(ix, &data);
@@ -952,15 +1059,17 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
     let (h, w) = (c.u32()?, c.u32()?);
     let depth = c.u16()?;
     let mode = c.u16()?;
-    if depth != 8 && depth != 16 {
-        return Err(bad("only 8- and 16-bit PSDs are supported"));
+    if ![1, 8, 16, 32].contains(&depth) {
+        return Err(bad("only 1-, 8-, 16- and 32-bit PSDs are supported"));
     }
-    if mode != 3 && mode != 1 {
-        return Err(bad("only RGB and Grayscale PSDs are supported"));
+    // Bitmap, Grayscale, Indexed, RGB, CMYK, Multichannel, Duotone, Lab (spec 61).
+    if ![0, 1, 2, 3, 4, 7, 8, 9].contains(&mode) {
+        return Err(bad("this PSD's colour mode isn't supported"));
     }
-    let gray = mode == 1;
+    let rgb_mode = mode == 3;
     let cm = c.u32()? as usize;
-    c.take(cm)?;
+    let colour_data = c.take(cm)?.to_vec();
+    let (mut icc, mut transparent): (Option<Vec<u8>>, Option<u16>) = (None, None);
     let mut doc = Document::new(w, h, None);
     doc.root.clear();
     doc.name = "Imported PSD".into();
@@ -994,6 +1103,14 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                 .collect();
             doc.extra.insert("guides".into(), serde_json::json!({ "lines": lines }));
         }
+        // The embedded ICC profile (CMYK files read through it), and an
+        // indexed file's transparent colour.
+        if id == 1039 {
+            icc = c.b.get(start..start + sz).map(<[u8]>::to_vec);
+        }
+        if id == 1047 && sz >= 2 {
+            transparent = c.b.get(start..start + 2).map(|b| u16::from_be_bytes([b[0], b[1]]));
+        }
         if id == 1037 && sz >= 4 {
             light.0 = c.u32()? as i32 as f32;
         }
@@ -1003,6 +1120,17 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
         c.p = start + sz + sz % 2;
     }
     c.p = ir_end;
+    let conv = Conv {
+        mode: match mode {
+            3 => ModeConv::Rgb,
+            4 => ModeConv::Cmyk(Box::new(onepaint_color::cmyk::CmykToRgb::new(icc.as_deref()))),
+            9 => ModeConv::Lab,
+            2 => ModeConv::Indexed(colour_data, transparent.and_then(|t| u8::try_from(t).ok())),
+            _ => ModeConv::Gray,
+        },
+        linear: depth == 32,
+    };
+    let mut merged_alpha = false;
     let lm_len = c.len(psb)?;
     let lm_end = c.p + lm_len;
     let bounds = doc.bounds();
@@ -1014,7 +1142,10 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
         let li_len = c.len(psb)?;
         let li_end = c.p + li_len;
         if li_len > 0 {
-            let count = c.i16()?.unsigned_abs() as usize;
+            // A negative count: the merged image's first extra channel is its alpha.
+            let raw_count = c.i16()?;
+            merged_alpha = raw_count < 0;
+            let count = raw_count.unsigned_abs() as usize;
             let mut recs = Vec::with_capacity(count);
             for _ in 0..count {
                 let rec_start = c.p;
@@ -1056,7 +1187,7 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                 let br = c.u32()? as usize;
                 // Blend ranges: gray then each channel, This Layer then Underlying (RGB only).
                 let ranges = c.take(br)?;
-                let blend_if = (!gray && br >= 8).then(|| {
+                let blend_if = (rgb_mode && br >= 8).then(|| {
                     let mut b = onepaint_doc::BlendIf::default();
                     for (i, ch) in ranges.chunks_exact(8).take(4).enumerate() {
                         b.0[i].src.copy_from_slice(&ch[..4]);
@@ -1211,7 +1342,7 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                         planes.push((id, data));
                     }
                 }
-                let pixels = (rec.rect.w > 0 && rec.rect.h > 0).then(|| surface_from(&planes, rec.rect, gray, bounds));
+                let pixels = (rec.rect.w > 0 && rec.rect.h > 0).then(|| surface_from(&planes, rec.rect, &conv, bounds));
                 let mask = rec.mask.map(|(mr, dc, _)| {
                     let mut m = Document::filled(w, h, if dc >= 128 { [1.0; 4] } else { [0.0, 0.0, 0.0, 1.0] });
                     if let Some(px) = &mask_px
@@ -1219,7 +1350,8 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                     {
                         for y in ix.y..ix.bottom() {
                             for x in ix.x..ix.right() {
-                                let v = px.get(((y - mr.y) * mr.w + (x - mr.x)) as usize).copied().unwrap_or(dc) as f32 / 255.0;
+                                let v =
+                                    px.sample(((y - mr.y) * mr.w + (x - mr.x)) as usize).unwrap_or(f32::from(dc) / 255.0).clamp(0.0, 1.0);
                                 m.set(x, y, [v, v, v, 1.0]);
                             }
                         }
@@ -1317,10 +1449,12 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
     }
     c.p = lm_end;
     if doc.root.is_empty() {
-        // No layers: import the merged composite.
+        // No layers: import the merged composite. Its colour channels come
+        // first; the next is alpha only when the layer count said so.
         let comp = c.u16()?;
-        let row = w as usize * (depth as usize / 8);
-        let mut planes = Vec::new();
+        let row = row_bytes(w as usize, depth);
+        let colours = conv.count().min(nch as usize);
+        let planes_n = if nch as usize > colours && merged_alpha { colours + 1 } else { colours };
         let counts: Vec<usize> = if comp == 1 {
             (0..h as usize * nch as usize)
                 .map(|_| if psb { c.u32().map(|v| v as usize) } else { c.u16().map(|v| v as usize) })
@@ -1328,22 +1462,21 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
         } else {
             Vec::new()
         };
-        for ch in 0..nch.min(4) as usize {
-            let mut plane = Vec::with_capacity(row * h as usize);
+        let mut planes = Vec::new();
+        for ch in 0..planes_n {
+            let mut data = Vec::with_capacity(row * h as usize);
             for y in 0..h as usize {
                 if comp == 1 {
-                    plane.extend(unpackbits(c.take(counts[ch * h as usize + y])?, row)?);
+                    data.extend(unpackbits(c.take(counts[ch * h as usize + y])?, row)?);
                 } else {
-                    plane.extend_from_slice(c.take(row)?);
+                    data.extend_from_slice(c.take(row)?);
                 }
             }
-            if depth == 16 {
-                plane = plane.chunks_exact(2).map(|v| v[0]).collect();
-            }
-            planes.push((if ch == 3 || (gray && ch == 1) { -1 } else { ch as i16 }, plane));
+            let id = if ch == colours { -1 } else { ch as i16 };
+            planes.push((id, Plane { data, depth, w: w as usize }));
         }
         let mut l = Layer::new("Background");
-        l.pixels = surface_from(&planes, bounds, gray, bounds);
+        l.pixels = surface_from(&planes, bounds, &conv, bounds);
         doc.root.push(Node::Layer(l));
     }
     if let Some(mut s) = src.filter(|s| s.has_records()) {

@@ -73,8 +73,10 @@ Overnight (2026-10-18 → 19), all pushed, newest last:
   brush search and the Eraser's All brushes, in-app asks (palette delete,
   save selection name), the gradient editor and presets (spec 59), and
   on-canvas filter handles (spec 60).
-- Next: Help ▸ Manual (an in-app docs page), then the PSD codec's colour
-  modes and 32-bit. The menu-bar workspace waits for the owner. Was: the workspace UI catch-up (menu bar, options
+- PSD colour modes and depths read (spec 61): Bitmap … Lab, 1–32 bits.
+- Next: PSD writing in the file's mode and depth (happypaint keeps a
+  CMYK/16-bit/PSB file's shell), PSB export; Help ▸ Manual waits (an
+  onepaint manual to write). The menu-bar workspace waits for the owner. Was: the workspace UI catch-up (menu bar, options
   row, left tool rail…; `docs/parity-delta-2026-10-10.md`).
 - `scripts/bench-gate/gate.sh save|check`: the perf-budget gate for
   AGENTS.md's 5% rule, on criterion's saved baselines (checked: the 9

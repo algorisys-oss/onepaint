@@ -346,3 +346,134 @@ fn moving_a_guide_rewrites_just_the_guides() {
     let src = onepaint_formats::psd_source::PsdSource::of(&doc).unwrap();
     assert!(find(&moved, src.record_bytes(&doc.root[0]).unwrap()));
 }
+
+/// A PSD of any mode and depth with raw (uncompressed) channels: one layer
+/// of `planes` (id, samples as stored) covering the whole w × h image, or,
+/// with no planes, only a merged image of `merged` planes.
+#[allow(clippy::too_many_arguments)]
+fn raw_psd(
+    mode: u16,
+    depth: u16,
+    w: u32,
+    h: u32,
+    colour_data: &[u8],
+    resources: &[(u16, Vec<u8>)],
+    planes: &[(i16, Vec<u8>)],
+    merged: &[Vec<u8>],
+) -> Vec<u8> {
+    let mut o: Vec<u8> = Vec::new();
+    let be16 = |o: &mut Vec<u8>, v: u16| o.extend(v.to_be_bytes());
+    let be32 = |o: &mut Vec<u8>, v: u32| o.extend(v.to_be_bytes());
+    o.extend(b"8BPS");
+    be16(&mut o, 1);
+    o.extend([0; 6]);
+    be16(&mut o, merged.len().max(1) as u16);
+    be32(&mut o, h);
+    be32(&mut o, w);
+    be16(&mut o, depth);
+    be16(&mut o, mode);
+    be32(&mut o, colour_data.len() as u32);
+    o.extend(colour_data);
+    let mut res = Vec::new();
+    for (id, d) in resources {
+        res.extend(b"8BIM");
+        res.extend(id.to_be_bytes());
+        res.extend([0, 0]);
+        res.extend((d.len() as u32).to_be_bytes());
+        res.extend(d);
+        if d.len() % 2 == 1 {
+            res.push(0);
+        }
+    }
+    be32(&mut o, res.len() as u32);
+    o.extend(res);
+    // Layer and mask info.
+    let mut li = Vec::new();
+    if !planes.is_empty() {
+        li.extend((-1i16).to_be_bytes());
+        li.extend([0, 0, 0, 0, 0, 0, 0, 0]);
+        li.extend(h.to_be_bytes());
+        li.extend(w.to_be_bytes());
+        li.extend((planes.len() as u16).to_be_bytes());
+        for (id, d) in planes {
+            li.extend(id.to_be_bytes());
+            li.extend((d.len() as u32 + 2).to_be_bytes());
+        }
+        li.extend(b"8BIMnorm");
+        li.extend([255, 0, 0, 0]);
+        // Extra data: an empty mask, no blend ranges, the name "L" padded to 4.
+        li.extend(12u32.to_be_bytes());
+        li.extend([0; 4]);
+        li.extend([0; 4]);
+        li.extend([1, b'L', 0, 0]);
+        for (_, d) in planes {
+            li.extend([0, 0]);
+            li.extend(d);
+        }
+        if li.len() % 2 == 1 {
+            li.push(0);
+        }
+    }
+    let mut lm = Vec::new();
+    lm.extend((li.len() as u32).to_be_bytes());
+    lm.extend(li);
+    be32(&mut o, lm.len() as u32);
+    o.extend(lm);
+    be16(&mut o, 0);
+    for m in merged {
+        o.extend(m);
+    }
+    o
+}
+
+fn pixel(d: &Document, x: i32, y: i32) -> [u8; 4] {
+    let n = d.root.iter().filter_map(|n| n.as_layer()).next_back().unwrap();
+    let p = n.pixels.get(x, y);
+    let a = p[3];
+    let s = |v: f32| if a > 0.0 { (onepaint_color::linear_to_srgb(v / a) * 255.0).round() as u8 } else { 0 };
+    [s(p[0]), s(p[1]), s(p[2]), (a * 255.0).round() as u8]
+}
+
+// happypaint psd-file.test.ts: 16-bit samples scale, 32-bit colour is linear light.
+#[test]
+fn deep_psds_read_at_full_precision() {
+    let be16 = |v: &[u16]| v.iter().flat_map(|x| x.to_be_bytes()).collect::<Vec<u8>>();
+    let planes = [(0, be16(&[0, 65535])), (1, be16(&[32896, 0])), (2, be16(&[65535, 0])), (-1, be16(&[65535, 32896]))];
+    let d = read_psd(&raw_psd(3, 16, 2, 1, &[], &[], &planes, &[])).unwrap();
+    assert_eq!([pixel(&d, 0, 0), pixel(&d, 1, 0)], [[0, 128, 255, 255], [255, 0, 0, 128]]);
+    let bef = |v: &[f32]| v.iter().flat_map(|x| x.to_be_bytes()).collect::<Vec<u8>>();
+    let planes = [(0, bef(&[0.2140411, 1.0])), (1, bef(&[0.0, 0.0])), (2, bef(&[1.0, 0.0])), (-1, bef(&[0.5, 1.0]))];
+    let d = read_psd(&raw_psd(3, 32, 2, 1, &[], &[], &planes, &[])).unwrap();
+    assert_eq!([pixel(&d, 0, 0), pixel(&d, 1, 0)], [[127, 0, 255, 128], [255, 0, 0, 255]]);
+}
+
+/// Spec 61: CMYK (inverted: 255 is no ink), Lab, Indexed with its
+/// transparent colour, and Bitmap (1 is black, rows padded to a byte).
+#[test]
+fn other_colour_modes_read_as_rgb() {
+    // CMYK: no ink is the paper (a warm off-white), full K is near black.
+    let planes = [(0, vec![255, 255]), (1, vec![255, 255]), (2, vec![255, 255]), (3, vec![255, 0])];
+    let d = read_psd(&raw_psd(4, 8, 2, 1, &[], &[], &planes, &[])).unwrap();
+    let (paper, black) = (pixel(&d, 0, 0), pixel(&d, 1, 0));
+    assert!(paper[0] > 240 && paper[2] < paper[0], "{paper:?}");
+    assert!(black[0] < 70 && black[3] == 255, "{black:?}");
+    // Lab: L 100 is white; L 50 with a = b = 0 is mid grey (sRGB 119).
+    let planes = [(0, vec![255, 128]), (1, vec![128, 128]), (2, vec![128, 128])];
+    let d = read_psd(&raw_psd(9, 8, 2, 1, &[], &[], &planes, &[])).unwrap();
+    let (white, grey) = (pixel(&d, 0, 0), pixel(&d, 1, 0));
+    assert!(white.iter().take(3).all(|v| *v >= 253), "{white:?}");
+    assert!(grey.iter().take(3).all(|v| (115..=122).contains(v)), "{grey:?}");
+    // Indexed: a planar table; index 1 is transparent (resource 1047).
+    let mut table = vec![0u8; 768];
+    (table[0], table[256], table[512]) = (10, 200, 30);
+    let d = read_psd(&raw_psd(2, 8, 2, 1, &table, &[(1047, vec![0, 1])], &[], &[vec![0, 1]])).unwrap();
+    assert_eq!(pixel(&d, 0, 0), [10, 200, 30, 255]);
+    assert_eq!(pixel(&d, 1, 0)[3], 0);
+    // Bitmap: 10 px wide, so each row takes two bytes; 1 is black.
+    let rows = vec![0b1000_0000, 0b0100_0000, 0b0000_0000, 0b0000_0000];
+    let d = read_psd(&raw_psd(0, 1, 10, 2, &[], &[], &[], &[rows])).unwrap();
+    assert_eq!(pixel(&d, 0, 0)[0], 0);
+    assert_eq!(pixel(&d, 1, 0)[0], 255);
+    assert_eq!(pixel(&d, 9, 0)[0], 0, "the second byte of the row");
+    assert_eq!(pixel(&d, 0, 1)[0], 255, "the next row starts on a byte");
+}
