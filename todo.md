@@ -172,7 +172,12 @@ an item changes there, change it here too.
         each dispatch within the atlas; over-budget frames now alternate
         direction (spec 38)
   - [ ] Profile the per-tile GPU cost (≈20 µs per tile-layer; far from the
-        memory bandwidth limit)
+        memory bandwidth limit). 2026-10-19, `view` bench zoom-in: 3231
+        lean ops over 63 Rgba16Float tiles in 61 ms, so 19 µs an op, about
+        3.5 Gtexel/s or 28 GB/s of source reads at the governor's low clock.
+        Unrolling the lean loop to keep four loads in flight was 10% slower
+        (Mesa already overlaps them). Next: timestamp queries to split the
+        compute pass from the mip downsample and the job upload
 - [ ] From the photocraft comparison (2026-10-10; see handoff.md)
   - [x] Split the canvas composite into sheets for documents above the GPU
         texture limit (spec 40); the app now asks for the adapter's limits
