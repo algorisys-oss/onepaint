@@ -30,6 +30,15 @@ pub enum Command {
     MergeDown {
         id: NodeId,
     },
+    /// The layer's styles become its pixels (spec 56).
+    BakeStyles {
+        id: NodeId,
+    },
+    /// Every linked shadow and bevel takes this light (degrees; spec 56).
+    ApplyGlobalLight {
+        angle: f32,
+        altitude: f32,
+    },
     ClearLayer {
         id: NodeId,
     },

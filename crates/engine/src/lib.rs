@@ -26,6 +26,7 @@ mod saved_selection_ops;
 mod selection_ops;
 pub mod smart_filter_ops;
 mod smudge_ops;
+mod styles_ops;
 mod text_ops;
 mod track_ops;
 pub mod transform;
@@ -1245,6 +1246,8 @@ impl Session {
             Command::SetFrameRole { id, role } => self.set_frame_meta(&id, "animRole", role.map(serde_json::Value::String)),
             Command::SetLayerProps { id, props } => self.set_props(&id, props),
             Command::MergeDown { id } => self.merge_down(&id),
+            Command::BakeStyles { id } => self.bake_styles(&id),
+            Command::ApplyGlobalLight { angle, altitude } => self.apply_global_light(angle, altitude),
             Command::ClearLayer { id } => self.clear_layer(&id),
             Command::BevelFromAlpha { id, depth, softness } => {
                 let o = onepaint_brush::height::BevelOptions { depth, softness, ..Default::default() };
@@ -1696,7 +1699,13 @@ impl Session {
             }
         }
         collect(&tmp.root[1], &mut keys);
-        let keys: Vec<_> = keys.into_iter().collect();
+        // Both layers' styles bake in (spec 56), as far as their effects reach.
+        let reach = |n: &Node| match n {
+            Node::Layer(l) => l.styles().filter(|s| s.is_active()).map_or(0, |s| s.reach() + 1),
+            Node::Group(g) => g.styles().filter(|s| s.is_active()).map_or(0, |s| s.reach() + 1),
+        };
+        let reach = reach(&tmp.root[0]).max(reach(&tmp.root[1]));
+        let keys = styles_ops::grown_keys(keys, reach, self.doc.bounds());
         let merged = onepaint_compose::composite_tiles(&tmp, &keys, None);
         let below_id = below.id.clone();
         self.tree_edit(None, |s| {
@@ -1705,6 +1714,7 @@ impl Session {
                     l.pixels.set_tile(tx, ty, (!t.is_empty()).then(|| Arc::new(t)));
                 }
                 l.height = height;
+                l.set_styles(None);
             }
             s.doc.remove(id);
             s.active = below_id;

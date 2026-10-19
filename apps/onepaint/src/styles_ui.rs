@@ -330,6 +330,26 @@ pub fn panel(app: &mut App, ui: &mut Ui) {
         }
     });
     ui.ctx().data_mut(|d| d.insert_temp(open_id, open));
+    // Global Light: linked shadows and bevels across the whole document.
+    let linked = styles
+        .effects
+        .iter()
+        .any(|e| e.use_global_light && matches!(e.kind, EffectKind::DropShadow | EffectKind::InnerShadow | EffectKind::Bevel));
+    if linked {
+        widgets::section_label(ui, "Global Light");
+        let (mut angle, mut altitude) = styles.global_light();
+        let a = num(ui, "Light angle", &mut angle, 0.0..=359.0, 1.0, "°");
+        let b = num(ui, "Light altitude", &mut altitude, 0.0..=90.0, 1.0, "°");
+        if a || b {
+            let _ = app.session.execute(Command::ApplyGlobalLight { angle, altitude });
+            ch = false;
+        }
+    }
+    let is_layer = matches!(app.session.doc().find(&id), Some(onepaint_doc::Node::Layer(_)));
+    if is_layer && !styles.effects.is_empty() && widgets::secondary_button(ui, "Bake into pixels", 140.0).clicked() {
+        let _ = app.session.execute(Command::BakeStyles { id: id.clone() });
+        ch = false;
+    }
     if ch {
         let json = (styles != LayerStyles::default()).then(|| styles.to_json());
         let _ = app.session.execute(Command::SetLayerProps { id, props: LayerProps { styles: Some(json), ..Default::default() } });
