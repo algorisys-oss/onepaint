@@ -91,5 +91,52 @@ fn wet(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, dabs, composite, stroke, wet);
+/// Region tools on a 4096² page (they'd move to compute passes if slow):
+/// the wand, the paint bucket, feathering and growing a selection.
+fn regions(c: &mut Criterion) {
+    use onepaint_selection::{Mode, ellipse_polygon};
+    let mut s = Session::new(4096, 4096, Some(Rgba::WHITE));
+    s.execute(Command::AddLayer).unwrap();
+    s.execute(Command::SetBrushSize { size: 60.0 }).unwrap();
+    for k in 0..6 {
+        let y = 300.0 + k as f64 * 600.0;
+        s.stroke_begin(StrokePoint::at(100.0, y, 1.0, 0.0));
+        s.stroke_extend(&[StrokePoint::at(4000.0, y + 300.0, 1.0, 500.0)]);
+        s.stroke_end();
+    }
+    let mut g = c.benchmark_group("regions 4096²");
+    g.sample_size(10);
+    for (name, contiguous) in [("wand, contiguous", true), ("wand, global", false)] {
+        g.bench_function(name, |b| {
+            b.iter(|| {
+                let cmd = Command::SelectByColor { x: 50, y: 50, tolerance: 0.2, mode: Mode::Replace, contiguous, sample_all: true };
+                s.execute(black_box(cmd)).unwrap();
+            })
+        });
+    }
+    s.execute(Command::Deselect).unwrap();
+    g.bench_function("paint bucket", |b| {
+        b.iter(|| {
+            s.execute(black_box(Command::Fill { x: 50, y: 50, tolerance: 0.2, grow: 0 })).unwrap();
+            s.execute(Command::Undo).unwrap();
+        })
+    });
+    let oval = vec![ellipse_polygon([500.0, 500.0], [3600.0, 3600.0])];
+    s.execute(Command::SelectShape { contours: oval, mode: Mode::Replace }).unwrap();
+    g.bench_function("feather 30 px", |b| {
+        b.iter(|| {
+            s.execute(black_box(Command::SetFeather { radius: 30.0 })).unwrap();
+            s.execute(Command::SetFeather { radius: 0.0 }).unwrap();
+        })
+    });
+    g.bench_function("grow 10 px", |b| {
+        b.iter(|| {
+            s.execute(black_box(Command::GrowSelection { delta: 10 })).unwrap();
+            s.execute(Command::Undo).unwrap();
+        })
+    });
+    g.finish();
+}
+
+criterion_group!(benches, dabs, composite, stroke, wet, regions);
 criterion_main!(benches);

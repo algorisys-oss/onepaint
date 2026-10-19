@@ -118,41 +118,35 @@ impl Mask {
     }
 
     fn sliding(&self, r: u32, max: bool) -> Mask {
-        let pass = |src: &[u8], len: usize, stride: usize, count: usize, outer: usize, dst: &mut [u8]| {
+        // One line's running max (or min) over ±r, with a monotonic deque.
+        let line = |src: &[u8], dst: &mut [u8]| {
+            let len = src.len();
             let mut q: VecDeque<usize> = VecDeque::new();
-            for o in 0..count {
-                let base = o * outer;
-                q.clear();
-                let r = r as usize;
-                let mut next = 0;
-                for i in 0..len {
-                    let hi = (i + r).min(len - 1);
-                    while next <= hi {
-                        let v = src[base + next * stride];
-                        while let Some(&b) = q.back() {
-                            let bv = src[base + b * stride];
-                            if (max && bv <= v) || (!max && bv >= v) {
-                                q.pop_back();
-                            } else {
-                                break;
-                            }
+            let r = r as usize;
+            let mut next = 0;
+            for (i, d) in dst.iter_mut().enumerate() {
+                let hi = (i + r).min(len - 1);
+                while next <= hi {
+                    let v = src[next];
+                    while let Some(&b) = q.back() {
+                        let bv = src[b];
+                        if (max && bv <= v) || (!max && bv >= v) {
+                            q.pop_back();
+                        } else {
+                            break;
                         }
-                        q.push_back(next);
-                        next += 1;
                     }
-                    while q.front().is_some_and(|&f| f + r < i) {
-                        q.pop_front();
-                    }
-                    dst[base + i * stride] = q.front().map_or(0, |&f| src[base + f * stride]);
+                    q.push_back(next);
+                    next += 1;
                 }
+                while q.front().is_some_and(|&f| f + r < i) {
+                    q.pop_front();
+                }
+                *d = q.front().map_or(0, |&f| src[f]);
             }
         };
         let (w, h) = (self.w as usize, self.h as usize);
-        let mut tmp = vec![0; w * h];
-        pass(&self.data, w, 1, h, w, &mut tmp);
-        let mut out = vec![0; w * h];
-        pass(&tmp, h, w, w, 1, &mut out);
-        Mask { w: self.w, h: self.h, data: out }
+        Mask { w: self.w, h: self.h, data: separable(&self.data, w, h, line) }
     }
 
     /// Square max filter; the window is clipped at the canvas edge (S:453-462).
@@ -170,22 +164,18 @@ impl Mask {
         let r = (radius.round() as i64).max(1) as usize;
         let (w, h) = (self.w as usize, self.h as usize);
         let win = (2 * r + 1) as f32;
-        let mut a: Vec<f32> = self.data.iter().map(|&v| v as f32 / 255.0).collect();
-        let mut b = vec![0.0f32; w * h];
-        let blur = |src: &[f32], dst: &mut [f32], len: usize, stride: usize, count: usize, outer: usize| {
-            for o in 0..count {
-                let base = o * outer;
-                let at = |i: i64| src[base + (i.clamp(0, len as i64 - 1) as usize) * stride];
-                let mut sum: f32 = (-(r as i64)..=r as i64).map(at).sum();
-                for i in 0..len {
-                    dst[base + i * stride] = sum / win;
-                    sum += at(i as i64 + r as i64 + 1) - at(i as i64 - r as i64);
-                }
+        let a: Vec<f32> = self.data.iter().map(|&v| v as f32 / 255.0).collect();
+        let line = |src: &[f32], dst: &mut [f32]| {
+            let len = src.len();
+            let at = |i: i64| src[i.clamp(0, len as i64 - 1) as usize];
+            let mut sum: f32 = (-(r as i64)..=r as i64).map(at).sum();
+            for (i, d) in dst.iter_mut().enumerate() {
+                *d = sum / win;
+                sum += at(i as i64 + r as i64 + 1) - at(i as i64 - r as i64);
             }
         };
-        blur(&a, &mut b, w, 1, h, w);
-        blur(&b, &mut a, h, w, w, 1);
-        Mask { w: self.w, h: self.h, data: a.iter().map(|v| (v.min(1.0) * 255.0).round() as u8).collect() }
+        let out = separable(&a, w, h, line);
+        Mask { w: self.w, h: self.h, data: out.iter().map(|v| (v.min(1.0) * 255.0).round() as u8).collect() }
     }
 
     /// Feather then threshold at 128 → a hard mask (S:467-472).
@@ -220,6 +210,41 @@ impl Mask {
         }
         cur
     }
+}
+
+/// A separable filter: `line` along every row, then every column (rows in
+/// parallel; the columns as rows of the transposed image, which keeps them
+/// in cache). Each line runs in the same order as a strided pass would.
+fn separable<T: Copy + Default + Send + Sync>(src: &[T], w: usize, h: usize, line: impl Fn(&[T], &mut [T]) + Sync) -> Vec<T> {
+    use rayon::prelude::*;
+    let rows = |src: &[T], len: usize| {
+        let mut out = vec![T::default(); src.len()];
+        out.par_chunks_mut(len).zip(src.par_chunks(len)).for_each(|(d, s)| line(s, d));
+        out
+    };
+    let across = rows(src, w);
+    let down = rows(&transpose(&across, w, h), h);
+    transpose(&down, h, w)
+}
+
+/// `src` (`w` × `h`, row-major) transposed, in 64² blocks, rows of blocks in parallel.
+fn transpose<T: Copy + Default + Send + Sync>(src: &[T], w: usize, h: usize) -> Vec<T> {
+    use rayon::prelude::*;
+    const B: usize = 64;
+    let mut out = vec![T::default(); src.len()];
+    // Output row x holds input column x: a band of B output rows per task.
+    out.par_chunks_mut(B * h).enumerate().for_each(|(bx, band)| {
+        let x0 = bx * B;
+        let xs = band.len() / h;
+        for y0 in (0..h).step_by(B) {
+            for y in y0..(y0 + B).min(h) {
+                for dx in 0..xs {
+                    band[dx * h + y] = src[y * w + x0 + dx];
+                }
+            }
+        }
+    });
+    out
 }
 
 /// Combine a new region into the existing selection (S:46-62).
@@ -315,17 +340,21 @@ pub fn rasterize_polygons(w: u32, h: u32, contours: &[Vec<Pt>]) -> Mask {
 /// Pixels whose premultiplied RGBA is within `tol` (Chebyshev, 0..1) of the seed.
 /// Contiguous = 4-connected flood from the seed. `within` confines the search
 /// to coverage > 0. Returns `None` when the seed is outside the canvas or excluded.
+///
+/// Every pixel is tested once, rows in parallel; the flood then runs over
+/// that bitmap span by span.
 #[allow(clippy::too_many_arguments)]
 pub fn color_match(
     w: u32,
     h: u32,
-    get: &dyn Fn(u32, u32) -> [f32; 4],
+    get: &(dyn Fn(u32, u32) -> [f32; 4] + Sync),
     sx: i32,
     sy: i32,
     tol: f32,
     contiguous: bool,
     within: Option<&Mask>,
 ) -> Option<Mask> {
+    use rayon::prelude::*;
     if sx < 0 || sy < 0 || sx as u32 >= w || sy as u32 >= h {
         return None;
     }
@@ -336,40 +365,58 @@ pub fn color_match(
     }
     let seed = get(sx, sy);
     let tol = tol.clamp(0.0, 1.0) + 1e-6;
-    let matches = |x: u32, y: u32| {
-        let p = get(x, y);
-        (0..4).all(|c| (p[c] - seed[c]).abs() <= tol)
-    };
-    let mut m = Mask::new(w, h);
-    if !contiguous {
-        for y in 0..h {
-            for x in 0..w {
-                if inside(x, y) && matches(x, y) {
-                    m.data[(y * w + x) as usize] = 255;
+    let mut hits = Mask::new(w, h);
+    hits.data.par_chunks_mut(w as usize).enumerate().for_each(|(y, row)| {
+        let y = y as u32;
+        for (x, v) in row.iter_mut().enumerate() {
+            let x = x as u32;
+            if inside(x, y) {
+                let p = get(x, y);
+                if (0..4).all(|c| (p[c] - seed[c]).abs() <= tol) {
+                    *v = 255;
                 }
             }
         }
-        return Some(m);
+    });
+    if !contiguous {
+        return Some(hits);
     }
-    let mut stack = vec![(sx, sy)];
+    Some(flood(&hits, sx, sy))
+}
+
+/// The 4-connected region of `hits` holding (sx, sy): scanline spans, each
+/// pixel visited once.
+fn flood(hits: &Mask, sx: u32, sy: u32) -> Mask {
+    let (w, h) = (hits.w as usize, hits.h as usize);
+    let hit = |x: usize, y: usize| hits.data[y * w + x] != 0;
+    let mut m = Mask::new(hits.w, hits.h);
+    let mut stack = vec![(sx as usize, sy as usize)];
     while let Some((x, y)) = stack.pop() {
-        let i = (y * w + x) as usize;
-        if m.data[i] != 0 || !inside(x, y) || !matches(x, y) {
+        if m.data[y * w + x] != 0 || !hit(x, y) {
             continue;
         }
-        m.data[i] = 255;
-        if x > 0 {
-            stack.push((x - 1, y));
+        let (mut a, mut b) = (x, x);
+        while a > 0 && hit(a - 1, y) && m.data[y * w + a - 1] == 0 {
+            a -= 1;
         }
-        if x + 1 < w {
-            stack.push((x + 1, y));
+        while b + 1 < w && hit(b + 1, y) && m.data[y * w + b + 1] == 0 {
+            b += 1;
         }
-        if y > 0 {
-            stack.push((x, y - 1));
-        }
-        if y + 1 < h {
-            stack.push((x, y + 1));
+        m.data[y * w + a..=y * w + b].fill(255);
+        // One seed per run of hits above and below the span.
+        for ny in [y.wrapping_sub(1), y + 1] {
+            if ny >= h {
+                continue;
+            }
+            let mut in_run = false;
+            for nx in a..=b {
+                let open = hit(nx, ny) && m.data[ny * w + nx] == 0;
+                if open && !in_run {
+                    stack.push((nx, ny));
+                }
+                in_run = open;
+            }
         }
     }
-    Some(m)
+    m
 }

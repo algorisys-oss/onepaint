@@ -134,3 +134,110 @@ fn grow_within_dilates_four_connected() {
     let g = base.grown4(1, None);
     assert_eq!(g.data(), &[0, 0, 255, 0, 0, 0, 255, 255, 255, 0, 0, 0, 255, 0, 0]);
 }
+
+/// The span flood finds the same 4-connected region as a pixel-by-pixel
+/// search, on random blobs with holes, spirals and U-turns.
+#[test]
+fn contiguous_wand_matches_a_plain_flood() {
+    let (w, h) = (97u32, 61u32);
+    for seed in 0..40u64 {
+        let mut s = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let mut rnd = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (s >> 33) as u32
+        };
+        let density = 40 + rnd() % 30;
+        let cells: Vec<bool> = (0..w * h).map(|_| rnd() % 100 < density).collect();
+        let get = |x: u32, y: u32| if cells[(y * w + x) as usize] { [1.0; 4] } else { [0.0; 4] };
+        let (sx, sy) = (rnd() % w, rnd() % h);
+        let got = color_match(w, h, &get, sx as i32, sy as i32, 0.1, true, None).unwrap();
+        // A plain 4-way flood.
+        let want_on = cells[(sy * w + sx) as usize];
+        let mut want = vec![false; (w * h) as usize];
+        let mut stack = vec![(sx, sy)];
+        while let Some((x, y)) = stack.pop() {
+            let i = (y * w + x) as usize;
+            if want[i] || cells[i] != want_on {
+                continue;
+            }
+            want[i] = true;
+            if x > 0 {
+                stack.push((x - 1, y));
+            }
+            if x + 1 < w {
+                stack.push((x + 1, y));
+            }
+            if y > 0 {
+                stack.push((x, y - 1));
+            }
+            if y + 1 < h {
+                stack.push((x, y + 1));
+            }
+        }
+        for y in 0..h {
+            for x in 0..w {
+                assert_eq!(got.get(x, y) != 0, want[(y * w + x) as usize], "seed {seed} at {x},{y}");
+            }
+        }
+    }
+}
+
+/// The old strided passes, as references for the transposed ones.
+fn ref_sliding(m: &Mask, r: usize, max: bool) -> Vec<u8> {
+    let (w, h) = (m.width() as usize, m.height() as usize);
+    let pass = |src: &[u8], len: usize, stride: usize, count: usize, outer: usize, dst: &mut [u8]| {
+        for o in 0..count {
+            let base = o * outer;
+            for i in 0..len {
+                let (lo, hi) = (i.saturating_sub(r), (i + r).min(len - 1));
+                let vals = (lo..=hi).map(|k| src[base + k * stride]);
+                dst[base + i * stride] = if max { vals.max().unwrap() } else { vals.min().unwrap() };
+            }
+        }
+    };
+    let mut tmp = vec![0; w * h];
+    pass(m.data(), w, 1, h, w, &mut tmp);
+    let mut out = vec![0; w * h];
+    pass(&tmp, h, w, w, 1, &mut out);
+    out
+}
+
+fn ref_feather(m: &Mask, r: usize) -> Vec<u8> {
+    let (w, h) = (m.width() as usize, m.height() as usize);
+    let win = (2 * r + 1) as f32;
+    let mut a: Vec<f32> = m.data().iter().map(|&v| v as f32 / 255.0).collect();
+    let mut b = vec![0.0f32; w * h];
+    let blur = |src: &[f32], dst: &mut [f32], len: usize, stride: usize, count: usize, outer: usize| {
+        for o in 0..count {
+            let base = o * outer;
+            let at = |i: i64| src[base + (i.clamp(0, len as i64 - 1) as usize) * stride];
+            let mut sum: f32 = (-(r as i64)..=r as i64).map(at).sum();
+            for i in 0..len {
+                dst[base + i * stride] = sum / win;
+                sum += at(i as i64 + r as i64 + 1) - at(i as i64 - r as i64);
+            }
+        }
+    };
+    blur(&a, &mut b, w, 1, h, w);
+    blur(&b, &mut a, h, w, w, 1);
+    a.iter().map(|v| (v.min(1.0) * 255.0).round() as u8).collect()
+}
+
+#[test]
+fn grow_shrink_and_feather_match_the_strided_passes() {
+    for (w, h, seed) in [(131u32, 77u32, 1u64), (64, 200, 2), (300, 3, 3)] {
+        let mut s = seed;
+        let data: Vec<u8> = (0..w * h)
+            .map(|_| {
+                s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                if (s >> 40) % 5 < 2 { ((s >> 20) % 256) as u8 } else { 0 }
+            })
+            .collect();
+        let m = Mask::from_vec(w, h, data);
+        for r in [1u32, 4, 9] {
+            assert_eq!(m.dilated(r).data(), ref_sliding(&m, r as usize, true).as_slice(), "dilate {w}x{h} r{r}");
+            assert_eq!(m.eroded(r).data(), ref_sliding(&m, r as usize, false).as_slice(), "erode {w}x{h} r{r}");
+            assert_eq!(m.feathered(r as f32).data(), ref_feather(&m, r as usize).as_slice(), "feather {w}x{h} r{r}");
+        }
+    }
+}

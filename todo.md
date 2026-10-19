@@ -201,7 +201,15 @@ an item changes there, change it here too.
 - [x] Live wet media on the GPU (spec 35)
 - [ ] GPU stamping (instanced dabs into the stroke slot), checked against the CPU rasteriser
 - [ ] GPU smudge, liquify and filter passes with interactive previews
-- [ ] Flood fill, magic wand and feathering as compute passes
+- [ ] Flood fill, magic wand and feathering as compute passes. Measured
+      first (`hot_paths` bench `regions 4096²`, 2 rayon threads,
+      2026-10-19): the CPU paths were slow from single threads and strided
+      passes, not from the work: contiguous wand 1.32 → 0.40 s, global
+      0.70 → 0.34 s (most of it the CPU flatten), bucket 0.66 → 0.28 s,
+      feather 30 px 0.64 → 0.25 s, grow 10 px 0.57 → 0.20 s. Next: the
+      separable passes are memory-bound (64 MiB transposes); a band-wise
+      vertical pass, and reading the wand's composite from the GPU instead
+      of flattening
 
 ### 2.3 Platforms
 - [x] Linux (X11 and Wayland)

@@ -196,7 +196,7 @@ impl Session {
     }
 
     /// Apply `f` to every pixel of a layer inside `rect` (clipped to the canvas) as one undo step.
-    pub(crate) fn modify_layer(&mut self, id: &str, rect: Rect, f: impl Fn(i32, i32, [f32; 4]) -> [f32; 4]) {
+    pub(crate) fn modify_layer(&mut self, id: &str, rect: Rect, f: impl Fn(i32, i32, [f32; 4]) -> [f32; 4] + Sync) {
         let Some(rect) = rect.intersect(&self.doc.bounds()) else {
             return;
         };
@@ -237,29 +237,31 @@ impl Bucket {
 }
 
 /// Apply `f` to every pixel of `pixels` inside `rect`; returns the tiles
-/// that changed (before, after).
-pub(crate) fn paint_rect(pixels: &mut Surface, rect: Rect, f: impl Fn(i32, i32, [f32; 4]) -> [f32; 4]) -> Vec<TileChange> {
-    let mut changes: Vec<TileChange> = Vec::new();
-    for (tx, ty) in rect.tiles() {
-        let Some(ix) = rect.intersect(&Rect::from_tile(tx, ty)) else {
-            continue;
-        };
-        let before = pixels.tile(tx, ty).cloned();
-        let mut buf = before.as_ref().map(|t| t.to_f32()).unwrap_or_else(|| vec![0.0; TILE_PX * 4]);
-        for y in ix.y..ix.bottom() {
-            for x in ix.x..ix.right() {
-                let i = (((y - ty * TILE) * TILE + (x - tx * TILE)) * 4) as usize;
-                let o = f(x, y, [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]);
-                buf[i..i + 4].copy_from_slice(&o);
+/// that changed (before, after). Tiles are worked in parallel.
+pub(crate) fn paint_rect(pixels: &mut Surface, rect: Rect, f: impl Fn(i32, i32, [f32; 4]) -> [f32; 4] + Sync) -> Vec<TileChange> {
+    use rayon::prelude::*;
+    let keys: Vec<(i32, i32)> = rect.tiles().collect();
+    let src = &*pixels;
+    let changes: Vec<TileChange> = keys
+        .par_iter()
+        .filter_map(|&(tx, ty)| {
+            let ix = rect.intersect(&Rect::from_tile(tx, ty))?;
+            let before = src.tile(tx, ty).cloned();
+            let mut buf = before.as_ref().map(|t| t.to_f32()).unwrap_or_else(|| vec![0.0; TILE_PX * 4]);
+            for y in ix.y..ix.bottom() {
+                for x in ix.x..ix.right() {
+                    let i = (((y - ty * TILE) * TILE + (x - tx * TILE)) * 4) as usize;
+                    let o = f(x, y, [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]);
+                    buf[i..i + 4].copy_from_slice(&o);
+                }
             }
-        }
-        let t = Tile::from_f32(&buf);
-        let after = (!t.is_empty()).then(|| Arc::new(t));
-        if before.as_deref() == after.as_deref() {
-            continue;
-        }
-        pixels.set_tile(tx, ty, after.clone());
-        changes.push(((tx, ty), before, after));
+            let t = Tile::from_f32(&buf);
+            let after = (!t.is_empty()).then(|| Arc::new(t));
+            (before.as_deref() != after.as_deref()).then_some(((tx, ty), before, after))
+        })
+        .collect();
+    for ((tx, ty), _, after) in &changes {
+        pixels.set_tile(*tx, *ty, after.clone());
     }
     changes
 }
