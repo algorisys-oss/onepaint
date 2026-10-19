@@ -14,6 +14,7 @@ pub mod psd;
 pub mod psd_adjust;
 pub mod psd_desc;
 pub mod psd_effects;
+mod psd_enc;
 pub mod psd_fill;
 pub mod psd_source;
 mod psd_write;

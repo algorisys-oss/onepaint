@@ -104,7 +104,26 @@ enum Entry {
     Node(NodeId),
 }
 
-/// An opened 8-bit RGB PSD (not PSB), kept with its document.
+/// How the file stores its pixels, so edits are written back in kind.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Shell {
+    /// The header's colour mode and depth, and whether it is a PSB.
+    pub mode: u16,
+    pub depth: u16,
+    pub psb: bool,
+    /// The colour mode data (an indexed table, duotone inks), without its length.
+    pub colour_data: Range<usize>,
+    /// The layers' home: the layer and mask section (`None`), or a global
+    /// `Lr16`, `Lr32` or `Layr` block's key and data.
+    pub layers_in: Option<([u8; 4], Range<usize>)>,
+    /// The merged image: its channel count, whether the first extra one is
+    /// alpha, and its data (from the compression word to the end).
+    pub channels: u16,
+    pub merged_alpha: bool,
+    pub merged: Range<usize>,
+}
+
+/// An opened PSD or PSB, kept with its document.
 #[derive(Debug)]
 pub struct PsdSource {
     pub(crate) bytes: Arc<Vec<u8>>,
@@ -117,17 +136,32 @@ pub struct PsdSource {
     /// global layer mask and file-wide additional info: patterns, linked
     /// smart objects…).
     pub(crate) tail: Range<usize>,
+    pub(crate) shell: Shell,
     records: HashMap<NodeId, (RawRecord, Fp)>,
     order: Vec<Entry>,
+    /// A flattened file's Background, made from the merged image.
+    merged_layer: Option<(NodeId, LayerFp)>,
 }
 
 impl PsdSource {
-    pub(crate) fn new(bytes: Arc<Vec<u8>>, doc: &Document, resources: Range<usize>, tail: Range<usize>) -> Self {
-        Self { bytes, width: doc.width, height: doc.height, dpi: doc.dpi, resources, tail, records: HashMap::new(), order: Vec::new() }
+    pub(crate) fn new(bytes: Arc<Vec<u8>>, doc: &Document, resources: Range<usize>, shell: Shell) -> Self {
+        Self {
+            bytes,
+            width: doc.width,
+            height: doc.height,
+            dpi: doc.dpi,
+            resources,
+            tail: 0..0,
+            shell,
+            records: HashMap::new(),
+            order: Vec::new(),
+            merged_layer: None,
+        }
     }
 
-    pub(crate) fn has_records(&self) -> bool {
-        !self.records.is_empty()
+    /// Note the layer a flattened file was read into.
+    pub(crate) fn merged_only(&mut self, l: &Layer) {
+        self.merged_layer = Some((l.id.clone(), LayerFp::of(l)));
     }
 
     /// Note a divider record (records go bottom to top, as in the file).
@@ -199,6 +233,9 @@ impl PsdSource {
                 out.push(Entry::Node(n.id().to_string()));
             }
             true
+        }
+        if let Some((id, fp)) = &self.merged_layer {
+            return self.same_dpi(doc) && matches!(doc.root.as_slice(), [Node::Layer(l)] if l.id == *id && fp.matches(l));
         }
         let mut order = Vec::new();
         self.same_dpi(doc) && walk(&doc.root, self, &mut order) && order == self.order

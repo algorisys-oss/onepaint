@@ -240,7 +240,7 @@ See `docs/parity-delta-2026-10-10.md`.
       PSD selc; 2026-10-19); Color Lookup (`.cube`/`.3dl`, CPU, GPU up to
       65³; 2026-10-19). Left: Color Lookup's PSD `clrL` live (its records
       already round-trip untouched)
-- [ ] PSD codec parity (modes, 32-bit, round trip, live adjustments, fills, styles)
+- [x] PSD codec parity (modes, 32-bit, round trip, live adjustments, fills, styles; own mode and depth, PSB: spec 64)
 - [x] Wet physics v0.199 (spec 58): paper absorbs, the halo, tip-shaped dabs, wash fill
 - [x] Ten procedural papers, sheet colour, flecks and mottle (spec 57)
 - [~] Workspace: scrollbars, angle dial, in-app dialogs, brush search,

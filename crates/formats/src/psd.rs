@@ -218,7 +218,54 @@ impl Plane {
 }
 
 /// Bytes per row of a channel at `depth`.
-fn row_bytes(w: usize, depth: u16) -> usize {
+/// Keys whose length is 8 bytes in a PSB.
+pub(crate) const LONG_KEYS: [&[u8; 4]; 15] =
+    [b"LMsk", b"Lr16", b"Lr32", b"Layr", b"Mt16", b"Mt32", b"Mtrn", b"Alph", b"FMsk", b"lnk2", b"FEid", b"FXid", b"PxSD", b"lnkE", b"cinf"];
+
+/// The global additional-info blocks after the layer info (`tail`: the
+/// global layer mask, then the blocks): each one's key, its whole block
+/// (signature to padding) and its data.
+pub(crate) fn global_blocks(
+    bytes: &[u8],
+    tail: std::ops::Range<usize>,
+    psb: bool,
+) -> Vec<([u8; 4], std::ops::Range<usize>, std::ops::Range<usize>)> {
+    let mut out = Vec::new();
+    let mut c = Cur { b: &bytes[..tail.end], p: tail.start };
+    let Ok(gm) = c.u32() else { return out };
+    c.p += gm as usize;
+    while c.p + 12 <= tail.end {
+        // Some writers pad between blocks (ag-psd skips zero bytes).
+        if bytes[c.p] == 0 {
+            c.p += 1;
+            continue;
+        }
+        let start = c.p;
+        let Ok(sig) = c.take(4) else { break };
+        if sig != b"8BIM" && sig != b"8B64" {
+            break;
+        }
+        let Ok(k) = c.take(4) else { break };
+        let key = [k[0], k[1], k[2], k[3]];
+        let long = psb && LONG_KEYS.contains(&&key);
+        let Ok(len) = (if long { c.u64().map(|v| v as usize) } else { c.u32().map(|v| v as usize) }) else { break };
+        let data = c.p..(c.p + len).min(tail.end);
+        c.p = data.end + (len % 2);
+        // Global blocks pad to 4 (Photoshop), sometimes only to 2.
+        while c.p < tail.end && !(c.p - data.start).is_multiple_of(4) && bytes[c.p] == 0 {
+            c.p += 1;
+        }
+        out.push((key, start..c.p.min(tail.end), data));
+    }
+    out
+}
+
+/// The global block holding the layers, when the main layer info is empty.
+fn layer_block(bytes: &[u8], tail: std::ops::Range<usize>, psb: bool) -> Option<([u8; 4], std::ops::Range<usize>)> {
+    global_blocks(bytes, tail, psb).into_iter().find(|b| matches!(&b.0, b"Lr16" | b"Lr32" | b"Layr")).map(|b| (b.0, b.2))
+}
+
+pub(crate) fn row_bytes(w: usize, depth: u16) -> usize {
     if depth == 1 { w.div_ceil(8) } else { w * (depth as usize / 8) }
 }
 
@@ -258,7 +305,7 @@ fn decode_channel(c: &mut Cur, len: usize, w: usize, h: usize, depth: u16, psb: 
 /// Undo ZIP prediction on one row: byte deltas at 8-bit, big-endian u16
 /// deltas at 16-bit; at 32-bit the row is byte-planar (every float's first
 /// byte, then the second…) and delta-coded bytewise across it.
-fn unpredict(r: &mut [u8], w: usize, depth: u16) {
+pub(crate) fn unpredict(r: &mut [u8], w: usize, depth: u16) {
     match depth {
         16 => {
             for x in 1..w {
@@ -473,6 +520,7 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
     }
     let rgb_mode = mode == 3;
     let cm = c.u32()? as usize;
+    let cm_start = c.p;
     let colour_data = c.take(cm)?.to_vec();
     let (mut icc, mut transparent): (Option<Vec<u8>>, Option<u16>) = (None, None);
     let mut doc = Document::new(w, h, None);
@@ -539,14 +587,30 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
     let lm_len = c.len(psb)?;
     let lm_end = c.p + lm_len;
     let bounds = doc.bounds();
-    // An 8-bit RGB PSD is what onepaint writes: keep its records to save
-    // untouched layers back as they were.
-    let mut src = (depth == 8 && mode == 3 && !psb)
-        .then(|| crate::psd_source::PsdSource::new(std::sync::Arc::new(bytes.to_vec()), &doc, ir_start..ir_end, lm_end..lm_end));
+    // Keep the file and its records, to save untouched layers back as they
+    // were and edits in the file's own mode and depth.
+    let shell = crate::psd_source::Shell {
+        mode,
+        depth,
+        psb,
+        colour_data: cm_start..cm_start + cm,
+        channels: nch,
+        merged: lm_end..bytes.len(),
+        ..Default::default()
+    };
+    let mut src = Some(crate::psd_source::PsdSource::new(std::sync::Arc::new(bytes.to_vec()), &doc, ir_start..ir_end, shell));
     if lm_len > 0 {
         let li_len = c.len(psb)?;
         let li_end = c.p + li_len;
-        if li_len > 0 {
+        // 16- and 32-bit files from Photoshop keep their layers in a global
+        // block instead (`Lr16`, `Lr32`, `Layr`).
+        let layers_in = if li_len > 0 { None } else { layer_block(bytes, li_end..lm_end, psb) };
+        if let (Some(s), Some(b)) = (src.as_mut(), &layers_in) {
+            s.shell.layers_in = Some(b.clone());
+        }
+        let at = if li_len > 0 { Some(c.p) } else { layers_in.map(|b| b.1.start) };
+        if let Some(at) = at {
+            c.p = at;
             // A negative count: the merged image's first extra channel is its alpha.
             let raw_count = c.i16()?;
             merged_alpha = raw_count < 0;
@@ -625,23 +689,7 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                     }
                     let mut k = [0u8; 4];
                     k.copy_from_slice(c.take(4)?);
-                    let long = psb
-                        && matches!(
-                            &k,
-                            b"LMsk"
-                                | b"Lr16"
-                                | b"Lr32"
-                                | b"Layr"
-                                | b"Mt16"
-                                | b"Mt32"
-                                | b"Mtrn"
-                                | b"Alph"
-                                | b"FMsk"
-                                | b"lnk2"
-                                | b"FEid"
-                                | b"FXid"
-                                | b"PxSD"
-                        );
+                    let long = psb && LONG_KEYS.contains(&&k);
                     let l = if long { c.u64()? as usize } else { c.u32()? as usize };
                     let start = c.p;
                     let data = c.take(l.min(ex_end.saturating_sub(start)))?;
@@ -866,6 +914,7 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
         c.p = li_end;
         if let Some(s) = src.as_mut() {
             s.tail = li_end..lm_end;
+            s.shell.merged_alpha = merged_alpha;
         }
     }
     c.p = lm_end;
@@ -898,9 +947,12 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
         }
         let mut l = Layer::new("Background");
         l.pixels = surface_from(&planes, bounds, &conv, bounds);
+        if let Some(s) = src.as_mut() {
+            s.merged_only(&l);
+        }
         doc.root.push(Node::Layer(l));
     }
-    if let Some(mut s) = src.filter(|s| s.has_records()) {
+    if let Some(mut s) = src {
         s.fingerprint(&doc.root);
         doc.source = Some(std::sync::Arc::new(s));
     }

@@ -366,6 +366,11 @@ fn trilinear(lut: &[u8], r: f64, g: f64, b: f64) -> [f64; 4] {
     out
 }
 
+/// Gamma sRGB (0..1) → ink amounts (0..1) through `p`'s separation LUT.
+pub fn separate_with(p: &Press, rgb: [f64; 3]) -> [f64; 4] {
+    trilinear(&p.sep_lut, rgb[0], rgb[1], rgb[2]).map(|v| v / 255.0)
+}
+
 /// Straight RGBA8 (already on white) → CMYK bytes through the built-in press.
 pub fn separate_rgba8(rgba: &[u8]) -> Vec<u8> {
     separate_rgba8_with(builtin_press(), rgba)

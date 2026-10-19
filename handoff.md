@@ -81,8 +81,11 @@ Overnight (2026-10-18 → 19), all pushed, newest last:
   layers; the GPU frame budget now counts program ops (spec 39).
 - Mixer patch load (spec 63): `brush::reservoir`, `Command::LoadMixerPatch`
   and `ClearMixerPatch`, Alt-click and "Load from canvas" in the app.
-- Next: PSD writing in the file's mode and depth (happypaint keeps a
-  CMYK/16-bit/PSB file's shell), PSB export; Help ▸ Manual waits (an
+- PSD saves in the file's own mode and depth, PSB past 30000 px, layers
+  in `Lr16`/`Lr32` read and written (spec 64; `psd_enc.rs`, writer split
+  into `psd_write.rs`). Don't share `target/` with a git worktree: it left
+  a stale `onepaint-color` rlib once (touch the file to rebuild).
+- Next: Help ▸ Manual waits (an
   onepaint manual to write). The menu-bar workspace waits for the owner. Was: the workspace UI catch-up (menu bar, options
   row, left tool rail…; `docs/parity-delta-2026-10-10.md`).
 - `scripts/bench-gate/gate.sh save|check`: the perf-budget gate for

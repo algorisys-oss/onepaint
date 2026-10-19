@@ -365,11 +365,30 @@ fn raw_psd(
     planes: &[(i16, Vec<u8>)],
     merged: &[Vec<u8>],
 ) -> Vec<u8> {
+    raw_psd_in(mode, depth, w, h, colour_data, resources, planes, merged, None, false)
+}
+
+/// [`raw_psd`] with the layer in a global block (`Lr16`, as Photoshop's
+/// 16-bit files) and as a PSB (version 2, long lengths).
+#[allow(clippy::too_many_arguments)]
+fn raw_psd_in(
+    mode: u16,
+    depth: u16,
+    w: u32,
+    h: u32,
+    colour_data: &[u8],
+    resources: &[(u16, Vec<u8>)],
+    planes: &[(i16, Vec<u8>)],
+    merged: &[Vec<u8>],
+    layers_in: Option<&[u8; 4]>,
+    psb: bool,
+) -> Vec<u8> {
     let mut o: Vec<u8> = Vec::new();
     let be16 = |o: &mut Vec<u8>, v: u16| o.extend(v.to_be_bytes());
     let be32 = |o: &mut Vec<u8>, v: u32| o.extend(v.to_be_bytes());
+    let len = |o: &mut Vec<u8>, v: usize| if psb { o.extend((v as u64).to_be_bytes()) } else { o.extend((v as u32).to_be_bytes()) };
     o.extend(b"8BPS");
-    be16(&mut o, 1);
+    be16(&mut o, if psb { 2 } else { 1 });
     o.extend([0; 6]);
     be16(&mut o, merged.len().max(1) as u16);
     be32(&mut o, h);
@@ -401,7 +420,7 @@ fn raw_psd(
         li.extend((planes.len() as u16).to_be_bytes());
         for (id, d) in planes {
             li.extend(id.to_be_bytes());
-            li.extend((d.len() as u32 + 2).to_be_bytes());
+            len(&mut li, d.len() + 2);
         }
         li.extend(b"8BIMnorm");
         li.extend([255, 0, 0, 0]);
@@ -419,9 +438,25 @@ fn raw_psd(
         }
     }
     let mut lm = Vec::new();
-    lm.extend((li.len() as u32).to_be_bytes());
-    lm.extend(li);
-    be32(&mut o, lm.len() as u32);
+    match layers_in {
+        None => {
+            len(&mut lm, li.len());
+            lm.extend(li);
+        }
+        Some(key) => {
+            // An empty main layer info, no global mask, then the block.
+            len(&mut lm, 0);
+            lm.extend(0u32.to_be_bytes());
+            while li.len() % 4 != 0 {
+                li.push(0);
+            }
+            lm.extend(b"8BIM");
+            lm.extend(key);
+            len(&mut lm, li.len());
+            lm.extend(li);
+        }
+    }
+    len(&mut o, lm.len());
     o.extend(lm);
     be16(&mut o, 0);
     for m in merged {
@@ -480,4 +515,163 @@ fn other_colour_modes_read_as_rgb() {
     assert_eq!(pixel(&d, 1, 0)[0], 255);
     assert_eq!(pixel(&d, 9, 0)[0], 0, "the second byte of the row");
     assert_eq!(pixel(&d, 0, 1)[0], 255, "the next row starts on a byte");
+}
+
+/// (version, channels, depth, mode) from a file's header.
+fn header(b: &[u8]) -> (u16, u16, u16, u16) {
+    let u16_at = |i: usize| u16::from_be_bytes([b[i], b[i + 1]]);
+    (u16_at(4), u16_at(12), u16_at(22), u16_at(24))
+}
+
+/// A painted layer on top: (the colour as straight sRGB 0..255 at (0, 0)).
+fn add_painted(d: &mut Document, rgb: [u8; 3]) {
+    let mut l = Layer::new("New");
+    let c = Rgba::new(rgb[0] as f32 / 255.0, rgb[1] as f32 / 255.0, rgb[2] as f32 / 255.0, 1.0);
+    fill(&mut l.pixels, 0, 0, d.width as i32, d.height as i32, c.to_linear_premul());
+    d.root.push(Node::Layer(l));
+}
+
+fn near(a: [u8; 4], b: [u8; 4], tol: u8) -> bool {
+    a.iter().zip(b).all(|(x, y)| x.abs_diff(y) <= tol)
+}
+
+// Photoshop keeps a 16-bit file's layers in a global `Lr16` block; an edit
+// goes back there at 16 bits, the untouched layer as it was.
+#[test]
+fn sixteen_bit_layers_in_a_global_block_read_and_write_back() {
+    let be16 = |v: &[u16]| v.iter().flat_map(|x| x.to_be_bytes()).collect::<Vec<u8>>();
+    let planes = [(0, be16(&[0, 65535])), (1, be16(&[32896, 0])), (2, be16(&[65535, 0])), (-1, be16(&[65535, 32896]))];
+    let src = raw_psd_in(3, 16, 2, 1, &[], &[], &planes, &[], Some(b"Lr16"), false);
+    let mut d = read_psd(&src).unwrap();
+    assert_eq!(d.root.len(), 1, "the layer, not the merged image");
+    assert_eq!([pixel(&d, 0, 0), pixel(&d, 1, 0)], [[0, 128, 255, 255], [255, 0, 0, 128]]);
+    let old = onepaint_formats::psd_source::PsdSource::of(&d).unwrap().record_bytes(&d.root[0]).unwrap().to_vec();
+    add_painted(&mut d, [200, 80, 40]);
+    let out = write_psd(&d, &[0.5, 0.5, 0.5, 1.0, 0.5, 0.5, 0.5, 1.0]).unwrap();
+    assert_eq!(header(&out), (1, 3, 16, 3));
+    assert!(find(&out, b"8BIMLr16") && find(&out, &old), "in Lr16, the old record kept");
+    let r = read_psd(&out).unwrap();
+    assert_eq!(r.root.len(), 2);
+    assert_eq!(pixel(&r, 0, 0), [200, 80, 40, 255]);
+    let first = r.root[0].as_layer().unwrap().pixels.get(1, 0);
+    assert_eq!(first, d.root[0].as_layer().unwrap().pixels.get(1, 0), "16-bit samples as they were");
+}
+
+/// Spec 63's sibling: an edit goes back in the file's own colour mode and depth.
+#[test]
+fn edits_go_back_in_the_files_mode_and_depth() {
+    let be32 = |v: &[f32]| v.iter().flat_map(|x| x.to_be_bytes()).collect::<Vec<u8>>();
+    let colour = [150u8, 120, 90];
+    type Planes = Vec<(i16, Vec<u8>)>;
+    let cases: [(u16, u16, Planes, u8); 4] = [
+        (4, 8, vec![(0, vec![255]), (1, vec![200]), (2, vec![255]), (3, vec![255])], 10),
+        (1, 8, vec![(0, vec![128])], 1),
+        (9, 8, vec![(0, vec![128]), (1, vec![128]), (2, vec![128])], 2),
+        (3, 32, vec![(0, be32(&[0.5])), (1, be32(&[0.25])), (2, be32(&[0.0]))], 1),
+    ];
+    for (mode, depth, planes, tol) in cases {
+        let mut d = read_psd(&raw_psd(mode, depth, 1, 1, &[], &[], &planes, &[])).unwrap();
+        add_painted(&mut d, colour);
+        let out = write_psd(&d, &[0.5, 0.4, 0.3, 1.0]).unwrap();
+        assert_eq!((header(&out).2, header(&out).3), (depth, mode), "mode {mode}");
+        let r = read_psd(&out).unwrap();
+        let got = pixel(&r, 0, 0);
+        let want = if mode == 1 {
+            let y = (0.299 * 150.0 + 0.587 * 120.0 + 0.114 * 90.0f32).round() as u8;
+            [y, y, y, 255]
+        } else {
+            [colour[0], colour[1], colour[2], 255]
+        };
+        assert!(near(got, want, tol), "mode {mode}: {got:?} vs {want:?}");
+    }
+}
+
+#[test]
+fn past_30000_px_writes_a_psb() {
+    let mut d = Document::new(30001, 2, None);
+    let mut l = Layer::new("Edge");
+    fill(&mut l.pixels, 29990, 0, 11, 2, Rgba::new(0.0, 0.5, 1.0, 1.0).to_linear_premul());
+    d.root.push(Node::Layer(l));
+    let comp = vec![1.0f32; 30001 * 2 * 4];
+    let out = write_psd(&d, &comp).unwrap();
+    assert_eq!(header(&out).0, 2, "version 2");
+    let mut r = read_psd(&out).unwrap();
+    assert_eq!((r.width, r.height), (30001, 2));
+    let px = r.root.last().unwrap().as_layer().unwrap().pixels.get(30000, 1);
+    let want = Rgba::new(0.0, 0.5, 1.0, 1.0).to_linear_premul();
+    assert!(px.iter().zip(want).all(|(a, b)| (a - b).abs() < 0.01), "{px:?}");
+    // Saved again with another layer: still a PSB, the first record reused.
+    let old = onepaint_formats::psd_source::PsdSource::of(&r).unwrap().record_bytes(&r.root[1]).unwrap().to_vec();
+    add_painted(&mut r, [10, 20, 30]);
+    let again = write_psd(&r, &comp).unwrap();
+    assert_eq!(header(&again).0, 2);
+    assert!(find(&again, &old));
+    assert_eq!(read_psd(&again).unwrap().root.len(), 3);
+    // A PSB source in a 16-bit global block (long lengths throughout).
+    let be16 = |v: &[u16]| v.iter().flat_map(|x| x.to_be_bytes()).collect::<Vec<u8>>();
+    let planes = [(0, be16(&[65535])), (1, be16(&[0])), (2, be16(&[0])), (-1, be16(&[65535]))];
+    let mut p = read_psd(&raw_psd_in(3, 16, 1, 1, &[], &[], &planes, &[], Some(b"Lr16"), true)).unwrap();
+    assert_eq!(pixel(&p, 0, 0), [255, 0, 0, 255]);
+    add_painted(&mut p, [0, 255, 0]);
+    let out = write_psd(&p, &[0.0, 1.0, 0.0, 1.0]).unwrap();
+    assert_eq!(header(&out), (2, 3, 16, 3));
+    let r = read_psd(&out).unwrap();
+    assert_eq!(r.root.len(), 2);
+    assert_eq!(pixel(&r, 0, 0), [0, 255, 0, 255]);
+}
+
+/// The merged image's data, decoded (8-bit RLE or raw): each channel's bytes.
+fn merged_channels(b: &[u8]) -> Vec<Vec<u8>> {
+    let u32_at = |i: usize| u32::from_be_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]) as usize;
+    let (_, n, _, _) = header(b);
+    let (h, w) = (u32_at(14), u32_at(18));
+    let mut p = 26;
+    p += 4 + u32_at(p);
+    p += 4 + u32_at(p);
+    p += 4 + u32_at(p);
+    let comp = u16::from_be_bytes([b[p], b[p + 1]]);
+    p += 2;
+    let n = n as usize;
+    if comp == 0 {
+        return (0..n).map(|c| b[p + c * w * h..p + (c + 1) * w * h].to_vec()).collect();
+    }
+    let counts: Vec<usize> = (0..n * h).map(|i| u16::from_be_bytes([b[p + i * 2], b[p + i * 2 + 1]]) as usize).collect();
+    p += n * h * 2;
+    let mut out = Vec::new();
+    for c in 0..n {
+        let mut ch = Vec::new();
+        for y in 0..h {
+            let k = counts[c * h + y];
+            ch.extend(unpackbits(&b[p..p + k], w).unwrap());
+            p += k;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+#[test]
+fn flattened_files_keep_their_mode_spot_channels_and_bytes() {
+    // A flattened CMYK file with a spot channel after the inks.
+    let merged = [vec![255, 255], vec![200, 200], vec![255, 255], vec![255, 255], vec![7, 9]];
+    let src = raw_psd(4, 8, 2, 1, &[], &[(1045, vec![0, 0, 0, 4, 0, 83, 0, 112])], &[], &merged);
+    let mut d = read_psd(&src).unwrap();
+    assert_eq!(write_psd(&d, &[0.5; 8]).unwrap(), src, "untouched: the file as it was");
+    add_painted(&mut d, [150, 120, 90]);
+    let out = write_psd(&d, &[0.5, 0.4, 0.3, 1.0, 0.5, 0.4, 0.3, 1.0]).unwrap();
+    assert_eq!(header(&out), (1, 5, 8, 4), "CMYK with its spot channel");
+    assert_eq!(merged_channels(&out)[4], vec![7, 9], "the spot channel as it was");
+    assert!(find(&out, &[0, 83, 0, 112]), "and its name");
+    // Indexed becomes 8-bit RGB once edited, without its table.
+    let mut table = vec![0u8; 768];
+    (table[0], table[256], table[512]) = (10, 200, 30);
+    let src = raw_psd(2, 8, 2, 1, &table, &[(1047, vec![0, 1])], &[], &[vec![0, 1]]);
+    let mut d = read_psd(&src).unwrap();
+    assert_eq!(write_psd(&d, &[0.5; 8]).unwrap(), src);
+    add_painted(&mut d, [1, 2, 3]);
+    let out = write_psd(&d, &[0.5; 8]).unwrap();
+    assert_eq!((header(&out).2, header(&out).3), (8, 3));
+    assert_eq!(&out[26..30], &[0, 0, 0, 0], "no colour table");
+    assert!(!find(&out, &[b'8', b'B', b'I', b'M', 0x04, 0x17]), "no transparent index");
+    assert_eq!(pixel(&read_psd(&out).unwrap(), 0, 0), [1, 2, 3, 255]);
 }
