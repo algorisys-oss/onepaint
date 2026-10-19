@@ -61,6 +61,11 @@ Per level, the set of tiles whose content there is stale:
 - Each frame, the canvas composites the tiles stale at `D`, visible first,
   within the frame budget it already has. Tiles stale only at finer levels
   wait until the view zooms in.
+- The GPU's share of the budget counts program ops, not tiles:
+  `progressive::GPU_OPS_PER_FRAME` (512) level-0 ops a frame, ×4 per
+  level, at least one tile. A 100-layer tile runs about 50 ops, so zooming
+  in from fit on such a page refines about ten tiles a frame instead of
+  stalling one frame for 63 ms (`gpu/benches/view.rs`).
 
 ### Composite pyramid (`gpu`)
 - The canvas composite texture gets `L_MAX + 1` mip levels.

@@ -1565,7 +1565,11 @@ impl Canvas {
             let n = order.len().min((GPU_TILES_PER_FRAME << (2 * level)).min(MAX_GPU_TILES_PER_FRAME));
             // Tiles the GPU couldn't take last time go to the CPU.
             let (forced, gpu_keys): (Vec<_>, Vec<_>) = order[..n].iter().partition(|k| self.cpu_only.contains(k));
-            let (progs, mut cpu) = session.plan(&gpu_keys);
+            let (mut progs, mut cpu) = session.plan(&gpu_keys);
+            // Deep tiles cost more: keep to the frame's op budget, and leave
+            // the rest stale for the next frame.
+            let budget = crate::progressive::GPU_OPS_PER_FRAME << (2 * level);
+            progs.truncate(crate::progressive::fit(progs.iter().map(|p| p.ops.len() + 1), budget));
             for p in &progs {
                 self.levels.composited((p.tx, p.ty), level);
             }

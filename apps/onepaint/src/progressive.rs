@@ -9,6 +9,26 @@ use std::collections::BTreeSet;
 
 pub const BUDGET_MS: f64 = 10.0;
 
+/// The GPU's share of a frame, in level-0 program ops (one op over one
+/// tile). An op took about 19 µs on Iris Xe (`gpu/benches/view.rs`), so
+/// this is about 10 ms; a one-layer page still does 256 tiles a frame.
+pub const GPU_OPS_PER_FRAME: usize = 512;
+
+/// How many of `costs` (in order) fit `budget`; at least one, so a
+/// single tile dearer than the budget still makes progress.
+pub fn fit(costs: impl IntoIterator<Item = usize>, budget: usize) -> usize {
+    let mut spent = 0;
+    let mut n = 0;
+    for c in costs {
+        spent += c;
+        if n > 0 && spent > budget {
+            break;
+        }
+        n += 1;
+    }
+    n
+}
+
 /// Order tiles: inside `visible` first, then by distance from `centre` (doc px).
 pub fn prioritize(tiles: &BTreeSet<(i32, i32)>, visible: Rect, centre: [f64; 2]) -> Vec<(i32, i32)> {
     let mut v: Vec<_> = tiles.iter().copied().collect();
@@ -35,5 +55,13 @@ mod tests {
         assert_eq!(&order[..2], &[(2, 2), (3, 2)]);
         assert_eq!(order[2], (0, 0), "nearest of the rest");
         assert_eq!(order.last(), Some(&(9, 9)));
+    }
+
+    #[test]
+    fn fit_takes_the_prefix_within_budget() {
+        assert_eq!(fit([2; 300], 512), 256, "a one-layer page: 256 tiles");
+        assert_eq!(fit([52; 63], 512), 9, "100 layers: about ten tiles");
+        assert_eq!(fit([600, 1], 512), 1, "an over-budget tile still runs");
+        assert_eq!(fit([], 512), 0);
     }
 }

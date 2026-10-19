@@ -147,7 +147,7 @@ fn bench(c: &mut Criterion) {
     // (about 8 × 5 at 100% in a 1920 × 1080 view, centred).
     let n = (SIZE / TILE as u32) as i32;
     let visible: Vec<TileProgram> = all.iter().filter(|p| (p.tx - n / 2).abs() <= 4 && (p.ty - n / 2).abs() <= 3).cloned().collect();
-    eprintln!("zoom-in composites {} tiles", visible.len());
+    eprintln!("zoom-in composites {} tiles, {} ops", visible.len(), visible.iter().map(|p| p.ops.len()).sum::<usize>());
     g.bench_function("zoom in: composite the visible level-0 tiles", |b| {
         b.iter(|| {
             canvas.composite(&device, &queue, &visible, 0);
