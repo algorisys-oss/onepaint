@@ -17,7 +17,8 @@ case "$mode" in
   save) cargo bench -j 2 $benches -- --save-baseline gate ;;
   check)
     find target/criterion -path '*/change/estimates.json' -delete 2>/dev/null || true
-    cargo bench -j 2 $benches -- --baseline gate
+    # Lenient: a bench added since the baseline has nothing to compare yet.
+    cargo bench -j 2 $benches -- --baseline-lenient gate
     python3 scripts/bench-gate/check.py target/criterion "${BUDGET:-0.05}"
     ;;
   *) echo "usage: $0 save|check" >&2; exit 2 ;;

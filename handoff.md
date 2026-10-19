@@ -96,7 +96,12 @@ Overnight (2026-10-18 → 19), all pushed, newest last:
   row, left tool rail…; `docs/parity-delta-2026-10-10.md`).
 - `scripts/bench-gate/gate.sh save|check`: the perf-budget gate for
   AGENTS.md's 5% rule, on criterion's saved baselines (checked: the 9
-  engine hot-path benches came out within 5% of themselves).
+  engine hot-path benches came out within 5% of themselves). A baseline
+  saved hours earlier drifts with the machine (2026-10-19: +25–50% on
+  untouched composites, −28% on the untouched wet step), so save and
+  check in one sitting, or A/B the two commits back to back (a worktree
+  with its own `CARGO_TARGET_DIR`). Re-saved at `0af5484`. `check` is
+  lenient about benches added since the baseline.
 
 Earlier on 2026-10-18 (pushed): the happypaint v0.204.7 parity items, four
 more adjustment kinds, live PSD adjustments and byte-for-byte round trips
