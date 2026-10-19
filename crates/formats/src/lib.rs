@@ -5,6 +5,7 @@ pub mod asl;
 pub mod book;
 pub mod brushes;
 pub mod export;
+pub mod happy_rec;
 pub mod icc_embed;
 mod image;
 pub mod palette;

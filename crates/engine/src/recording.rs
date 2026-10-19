@@ -33,6 +33,12 @@ pub enum RecEvent {
         t: f64,
         steps: usize,
     },
+    /// A command from a happypaint recording (spec 62).
+    Happy {
+        t: f64,
+        name: String,
+        args: serde_json::Value,
+    },
 }
 
 impl RecEvent {
@@ -45,7 +51,8 @@ impl RecEvent {
             | RecEvent::End { t }
             | RecEvent::Cancel { t }
             | RecEvent::Tick { t, .. }
-            | RecEvent::WetSteps { t, .. } => *t,
+            | RecEvent::WetSteps { t, .. }
+            | RecEvent::Happy { t, .. } => *t,
         }
     }
 }
@@ -249,6 +256,9 @@ impl Session {
             RecEvent::Cancel { .. } => self.stroke_cancel(),
             RecEvent::Tick { now, .. } => self.stroke_tick(*now),
             RecEvent::WetSteps { steps, .. } => self.wet_steps(*steps),
+            RecEvent::Happy { name, args, .. } => {
+                self.apply_happy(name, args);
+            }
         }
     }
 }
@@ -271,6 +281,10 @@ impl Replay {
 
     pub fn len(&self) -> usize {
         self.events.len()
+    }
+
+    pub(crate) fn from_parts(session: Session, events: Vec<RecEvent>) -> Self {
+        Self { session, events, pos: 0 }
     }
 
     /// The start session and the events, for replaying on a live canvas.

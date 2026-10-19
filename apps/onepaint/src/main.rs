@@ -809,12 +809,28 @@ impl App {
         }
     }
 
-    fn pick_recording(&mut self, now: f64) -> Option<onepaint_engine::recording::Recording> {
-        let path = rfd::FileDialog::new().add_filter("onepaint recording", &["onepaint-rec"]).pick_file()?;
-        match std::fs::read(&path)
-            .map_err(|e| e.to_string())
-            .and_then(|b| onepaint_engine::recording::Recording::from_bytes(&b).map_err(|e| e.to_string()))
-        {
+    /// A recording to replay: onepaint's own, or happypaint's (spec 62),
+    /// which says which kinds of its commands onepaint skips.
+    fn pick_replay(&mut self, now: f64) -> Option<onepaint_engine::recording::Replay> {
+        use onepaint_engine::recording::{Recording, Replay};
+        let path = rfd::FileDialog::new()
+            .add_filter("Recordings", &["onepaint-rec", "happypaint-rec"])
+            .add_filter("onepaint recording", &["onepaint-rec"])
+            .add_filter("happypaint recording", &["happypaint-rec"])
+            .pick_file()?;
+        let happy = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("happypaint-rec"));
+        let replay = std::fs::read(&path).map_err(|e| e.to_string()).and_then(|b| {
+            if happy {
+                let (r, skipped) = Replay::from_happypaint(&b).map_err(|e| e.to_string())?;
+                if !skipped.is_empty() {
+                    self.notify(format!("Replaying without: {}", skipped.join(", ")), now);
+                }
+                Ok(r)
+            } else {
+                Recording::from_bytes(&b).and_then(|r| Replay::new(&r)).map_err(|e| e.to_string())
+            }
+        });
+        match replay {
             Ok(r) => Some(r),
             Err(e) => {
                 self.notify(format!("Couldn't open the recording: {e}"), now);
@@ -825,24 +841,19 @@ impl App {
 
     /// Play a recording on the canvas (replaces the document, asks first if dirty).
     pub fn replay_recording(&mut self, now: f64) {
-        let Some(rec) = self.pick_recording(now) else { return };
-        match onepaint_engine::recording::Replay::new(&rec) {
-            Ok(r) => {
-                let (session, events) = r.into_parts();
-                self.session = session;
-                let d = self.session.doc();
-                self.canvas.reset_for([d.width, d.height]);
-                self.path = None;
-                self.saved_history_len = None;
-                self.thumbs.clear();
-                self.replaying = Some((events, 0));
-            }
-            Err(e) => self.notify(format!("Couldn't replay: {e}"), now),
-        }
+        let Some(r) = self.pick_replay(now) else { return };
+        let (session, events) = r.into_parts();
+        self.session = session;
+        let d = self.session.doc();
+        self.canvas.reset_for([d.width, d.height]);
+        self.path = None;
+        self.saved_history_len = None;
+        self.thumbs.clear();
+        self.replaying = Some((events, 0));
     }
 
     pub fn export_timelapse(&mut self, now: f64) {
-        let Some(rec) = self.pick_recording(now) else { return };
+        let Some(replay) = self.pick_replay(now) else { return };
         let Some(path) = rfd::FileDialog::new()
             .add_filter("MP4 video", &["mp4"])
             .add_filter("Animated GIF", &["gif"])
@@ -852,7 +863,7 @@ impl App {
             return;
         };
         let gif = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("gif"));
-        let bytes = onepaint_engine::recording::Replay::new(&rec).and_then(|r| if gif { r.timelapse_gif() } else { r.timelapse_mp4() });
+        let bytes = if gif { replay.timelapse_gif() } else { replay.timelapse_mp4() };
         match bytes.map_err(|e| e.to_string()).and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string())) {
             Ok(()) => self.notify(format!("Exported {}", path.display()), now),
             Err(e) => self.notify(format!("Export failed: {e}"), now),

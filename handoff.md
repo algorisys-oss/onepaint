@@ -74,6 +74,8 @@ Overnight (2026-10-18 → 19), all pushed, newest last:
   save selection name), the gradient editor and presets (spec 59), and
   on-canvas filter handles (spec 60).
 - PSD colour modes and depths read (spec 61): Bitmap … Lab, 1–32 bits.
+- happypaint recordings replay (spec 62; `RecEvent::Happy`, id map in
+  `Session::happy_ids`).
 - Next: PSD writing in the file's mode and depth (happypaint keeps a
   CMYK/16-bit/PSB file's shell), PSB export; Help ▸ Manual waits (an
   onepaint manual to write). The menu-bar workspace waits for the owner. Was: the workspace UI catch-up (menu bar, options

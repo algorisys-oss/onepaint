@@ -72,3 +72,4 @@ The happypaint references are relative to `../happypaint/frontend/src/`.
 | 59 | [Gradient editor, presets and fill handles](59-gradient-editor.md) | filters, ui_kit, app |
 | 60 | [On-canvas filter handles](60-filter-handles.md) | filters, app |
 | 61 | [PSD colour modes and depths on read](61-psd-colour-modes.md) | color, formats |
+| 62 | [Replaying happypaint recordings](62-happypaint-recordings.md) | formats, engine, app |

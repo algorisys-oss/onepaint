@@ -15,6 +15,7 @@ mod filter_ops;
 pub mod guides;
 pub use command::{Command, WashFillOptions};
 mod frame_ops;
+mod happy_replay;
 mod height_ops;
 mod liquify_ops;
 mod mask_ops;
@@ -394,6 +395,8 @@ impl Preferences {
 pub struct Session {
     /// Panel coverage kept between frames' plans (spec 44).
     plan_cache: onepaint_compose::program::PlanCache,
+    /// A happypaint recording's layer ids → onepaint's (spec 62 replay).
+    happy_ids: std::collections::HashMap<String, NodeId>,
     prefs: Preferences,
     doc: Document,
     active: NodeId,
@@ -522,6 +525,7 @@ impl Session {
             wet_backend: None,
             mixer_held: None,
             plan_cache: Default::default(),
+            happy_ids: Default::default(),
         };
         s.load_saved_selections();
         s.quantize_document();
