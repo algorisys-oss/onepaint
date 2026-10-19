@@ -45,7 +45,10 @@ modes landed (2026-10-18); only names onepaint doesn't know are kept now.
 - ~~CMYK Selective Color.~~ Done 2026-10-19 (`cmyk-selective-color`;
   the older sample-based kind is now labelled "Selective Color+", as in
   happypaint).
-- Color Lookup (`.cube`/`.3dl`).
+- ~~Color Lookup (`.cube`/`.3dl`).~~ Done 2026-10-19: happypaint's parsers
+  and their tests, trilinear on the CPU and on the GPU (tables up to 65³;
+  bigger ones on the CPU). PSD `clrL` isn't read live yet; its record
+  round-trips untouched.
 - ~~Black & White hue weights and tint, and Color Balance tone ranges.
   happypaint re-renders existing layers of both kinds with the new
   formulas, so the same file now looks different in onepaint.~~ Done

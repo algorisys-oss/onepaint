@@ -735,6 +735,31 @@ fn adjust(op: Op, s: vec4<f32>, pos: vec2<i32>) -> vec4<f32> {
         case 8u: {
             o = lut3(lut, c01(w));
         }
+        case 24u: {
+            // Color Lookup (filters lut3d.rs `sample`): p0.x the side, p1 the
+            // domain's minimum, p2 its extent; the entries at `lut`, red fastest.
+            let n = u32(p0.x);
+            let m = f32(n - 1u);
+            let t = clamp((c01(w) - p1.xyz) / p2.xyz, vec3<f32>(0.0), vec3<f32>(1.0)) * m;
+            let i0 = min(vec3<u32>(floor(t)), vec3<u32>(n - 1u));
+            let i1 = min(i0 + 1u, vec3<u32>(n - 1u));
+            let f = t - vec3<f32>(i0);
+            let c000 = adj[lut + i0.x + n * (i0.y + n * i0.z)].xyz;
+            let c100 = adj[lut + i1.x + n * (i0.y + n * i0.z)].xyz;
+            let c010 = adj[lut + i0.x + n * (i1.y + n * i0.z)].xyz;
+            let c110 = adj[lut + i1.x + n * (i1.y + n * i0.z)].xyz;
+            let c001 = adj[lut + i0.x + n * (i0.y + n * i1.z)].xyz;
+            let c101 = adj[lut + i1.x + n * (i0.y + n * i1.z)].xyz;
+            let c011 = adj[lut + i0.x + n * (i1.y + n * i1.z)].xyz;
+            let c111 = adj[lut + i1.x + n * (i1.y + n * i1.z)].xyz;
+            let c00 = c000 + (c100 - c000) * f.x;
+            let c10 = c010 + (c110 - c010) * f.x;
+            let c01_ = c001 + (c101 - c001) * f.x;
+            let c11 = c011 + (c111 - c011) * f.x;
+            let y0 = c00 + (c10 - c00) * f.y;
+            let y1 = c01_ + (c11 - c01_) * f.y;
+            o = c01(y0 + (y1 - y0) * f.z);
+        }
         case 23u: {
             // Selective Color, CMYK (filters colour.rs `cmyk_selective`):
             // (C, M, Y, K) per range in rows 0–8, Absolute in row 9.

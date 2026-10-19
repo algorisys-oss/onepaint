@@ -13,6 +13,9 @@ use crate::{Frame, Kind, Lut, MAX_COLOR_SAMPLES, Params, build_curves_lut, build
 /// of target, delta and range, rounded up to whole `vec4`s.
 pub const GPU_PARAMS: usize = 68;
 
+/// The largest Color Lookup table side the GPU takes.
+pub const GPU_LUT_MAX: usize = 65;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct GpuAdjust {
     /// The kind's code in `compose.wgsl` (`ADJ_*`).
@@ -66,6 +69,16 @@ pub fn gpu_adjust(kind: Kind, p: &Params, frame: Frame) -> Option<GpuAdjust> {
         Kind::Curves => {
             lut = Some(Box::new(build_curves_lut(p)));
             8
+        }
+        Kind::ColorLookup => {
+            // The table goes in the adjustment table, read trilinear by hand;
+            // past 65³ (4 MiB a batch) it stays on the CPU.
+            let l = crate::lut3d::lut_of(p.lut.as_ref()).filter(|l| l.size <= GPU_LUT_MAX)?;
+            put(0, &[l.size as f32]);
+            put(4, &l.domain_min);
+            put(8, &[0, 1, 2].map(|i| l.domain_max[i] - l.domain_min[i]));
+            table = Some(l.data.iter().map(|c| [c[0], c[1], c[2], 1.0]).collect());
+            24
         }
         Kind::CmykSelectiveColor => {
             let (t, abs) = crate::colour::sc_table(p);
@@ -200,6 +213,7 @@ mod tests {
     fn colour_kinds_pack_and_the_rest_stay_on_the_cpu() {
         let f = Frame::default();
         let gpu: Vec<Kind> = Kind::ALL.into_iter().filter(|&k| gpu_adjust(k, &crate::default_params(k), f).is_some()).collect();
+        // Color Lookup has no table by default, so it stays on the CPU (as a no-op).
         assert_eq!(gpu.len(), 23);
         assert!(gpu.iter().all(|k| k.is_color()));
         for k in [Kind::GaussianBlur, Kind::Clouds] {

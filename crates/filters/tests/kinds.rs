@@ -9,8 +9,8 @@ fn p(json: &str) -> Params {
 }
 
 #[test]
-fn all_53_kinds_parse_and_have_a_section() {
-    assert_eq!(Kind::ALL.len(), 53);
+fn all_54_kinds_parse_and_have_a_section() {
+    assert_eq!(Kind::ALL.len(), 54);
     for k in Kind::ALL {
         assert_eq!(Kind::parse(k.as_str()), Some(k));
         assert!(SECTIONS.contains(&k.section()), "{k:?}");
@@ -168,6 +168,7 @@ fn every_new_kind_has_a_panel() {
                 | Kind::Sharpen
                 | Kind::SelectiveColor
                 | Kind::CmykSelectiveColor
+                | Kind::ColorLookup
         );
         assert_eq!(ui::controls(k).is_empty(), spec10, "{k:?}");
     }

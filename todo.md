@@ -225,7 +225,9 @@ See `docs/parity-delta-2026-10-10.md`.
       weights + tint and Color Balance ranges + Preserve Luminosity
       (v0.201.3 formulas, CPU, GPU, PSD blwh/blnc both ways, panels;
       2026-10-19); Selective Color (CMYK ranges, `cmyk-selective-color`,
-      PSD selc; 2026-10-19). Left: Color Lookup
+      PSD selc; 2026-10-19); Color Lookup (`.cube`/`.3dl`, CPU, GPU up to
+      65³; 2026-10-19). Left: Color Lookup's PSD `clrL` live (its records
+      already round-trip untouched)
 - [ ] PSD codec parity (modes, 32-bit, round trip, live adjustments, fills, styles)
 - [ ] Wet physics v0.199 (paper absorbs, halo, wash fill, tip-shaped dabs)
 - [ ] Ten procedural papers, sheet colour, flecks and mottle

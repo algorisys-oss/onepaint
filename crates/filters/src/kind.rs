@@ -49,6 +49,7 @@ kinds! {
     ReplaceColor = "replace-color", "Replace Color", "Color";
     SelectiveColor = "selective-color", "Selective Color+", "Color";
     CmykSelectiveColor = "cmyk-selective-color", "Selective Color", "Color";
+    ColorLookup = "color-lookup", "Color Lookup", "Color";
     GaussianBlur = "gaussian-blur", "Gaussian Blur", "Blur";
     MotionBlur = "motion-blur", "Motion Blur", "Blur";
     RadialBlur = "radial-blur", "Radial Blur", "Blur";
@@ -130,6 +131,7 @@ impl Kind {
                 | Kind::ReplaceColor
                 | Kind::SelectiveColor
                 | Kind::CmykSelectiveColor
+                | Kind::ColorLookup
                 | Kind::Tone
         ) || self.is_fill()
     }
@@ -193,6 +195,8 @@ pub fn default_params(k: Kind) -> Params {
             p.preserve_lum = Some(true);
         }
         Kind::CmykSelectiveColor => (p.sc_cmyk, p.sc_method) = (Some(vec![0.0; 4 * SC_RANGES.len()]), Some("relative".into())),
+        // No table: a no-op until one is loaded.
+        Kind::ColorLookup => {}
         Kind::Exposure => (p.exposure, p.exp_offset, p.exp_gamma) = (Some(0.0), Some(0.0), Some(1.0)),
         Kind::Vibrance => (p.vibrance, p.vib_saturation) = (Some(0.0), Some(0.0)),
         // Photoshop's default: Warming Filter (85), 25% density, luminosity kept.
@@ -371,6 +375,7 @@ pub fn is_identity(k: Kind, p: &Params) -> bool {
         }
         Kind::Curves => [&p.curve, &p.curve_r, &p.curve_g, &p.curve_b].into_iter().all(curve_is_identity),
         Kind::CmykSelectiveColor => p.sc_cmyk.as_deref().is_none_or(|v| v.iter().all(|x| *x == 0.0)),
+        Kind::ColorLookup => crate::lut3d::lut_of(p.lut.as_ref()).is_none(),
         Kind::ColorBalance => [
             p.cyan_red,
             p.magenta_green,

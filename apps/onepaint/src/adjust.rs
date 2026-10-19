@@ -159,6 +159,7 @@ pub fn params_ui(ui: &mut Ui, kind: Kind, p: &mut Params, curve_tab: &mut usize,
             ch |= slider(ui, "Out white", &mut p.out_white, 1.0, 0.0..=100.0, 0.01, "");
         }
         Kind::CmykSelectiveColor => ch |= cmyk_ranges(ui, p, curve_tab),
+        Kind::ColorLookup => ch |= lut_ui(ui, p),
         Kind::Curves => {
             let names = ["RGB", "Red", "Green", "Blue"];
             ui.horizontal(|ui| {
@@ -517,6 +518,59 @@ fn pattern_ui(ui: &mut Ui, p: &mut Params, colour: onepaint_color::Rgba) -> bool
         ui.label(RichText::new("Imported image tile").font(theme::medium(10.5)).color(t.fg_faint));
     }
     ch
+}
+
+/// Color Lookup (happypaint `lut-picker.tsx`): the table's name and size,
+/// and Load LUT… for a `.cube` or `.3dl` file, kept whole in the params.
+fn lut_ui(ui: &mut Ui, p: &mut Params) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let err_id = egui::Id::new("lut-load-error");
+    let mut ch = false;
+    match onepaint_filters::lut3d::lut_of(p.lut.as_ref()) {
+        Some(l) => {
+            let name = p.lut.as_ref().map_or("", |f| f.name.as_str());
+            ui.label(RichText::new(format!("{name} · {0}³", l.size)).color(t.fg));
+        }
+        None => {
+            ui.label(RichText::new("No table loaded.").color(t.fg_muted));
+        }
+    }
+    if widgets::secondary_button(ui, "Load LUT…", 110.0).clicked()
+        && let Some(path) = rfd::FileDialog::new().add_filter("3D LUT", &["cube", "3dl"]).pick_file()
+    {
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        match load_lut(&path, &name) {
+            Some(lut) => {
+                p.lut = Some(lut);
+                // A new table replaces the one a PSD came with, and its settings.
+                p.extra.remove("lutPsd");
+                ui.ctx().data_mut(|d| {
+                    d.remove::<String>(err_id);
+                });
+                ch = true;
+            }
+            None => {
+                let msg = format!("Couldn't read {name} as a 3D colour table (up to 129³).");
+                ui.ctx().data_mut(|d| d.insert_temp(err_id, msg));
+            }
+        }
+    }
+    if let Some(e) = ui.ctx().data(|d| d.get_temp::<String>(err_id)) {
+        ui.label(RichText::new(e).font(theme::medium(10.5)).color(t.danger));
+    }
+    ch
+}
+
+/// A `.cube` or `.3dl` file (64 MB at most) as Color Lookup keeps it, if it
+/// parses.
+fn load_lut(path: &std::path::Path, name: &str) -> Option<onepaint_filters::LutFile> {
+    let format = onepaint_filters::lut3d::lut_format_of(name)?;
+    if std::fs::metadata(path).ok()?.len() > 64 << 20 {
+        return None;
+    }
+    let text = std::fs::read_to_string(path).ok()?;
+    onepaint_filters::lut3d::parse_lut(format, &text)?;
+    Some(onepaint_filters::LutFile { format: format.into(), name: name.into(), text })
 }
 
 /// Decode an image file into a pattern tile data URL.

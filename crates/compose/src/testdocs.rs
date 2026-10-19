@@ -275,12 +275,33 @@ pub fn random_adjustment(r: &mut Rng) -> onepaint_doc::Adjustment {
         "photo-filter",
         "channel-mixer",
         "cmyk-selective-color",
+        "color-lookup",
     ];
     let kind = kinds[r.below(kinds.len() as u32) as usize];
     let mut c = || [r.f(), r.f(), r.f()];
     let v = match kind {
         "brightness-contrast" => json!({"brightness": c()[0] - 0.5, "contrast": c()[1] - 0.5}),
         "hue-saturation" => json!({"hue": (c()[0] - 0.5) * 360.0, "saturation": c()[1] * 2.0 - 1.0, "brightness": c()[2] - 0.5}),
+        "color-lookup" => {
+            // A small table bending each channel, sometimes over a wider domain.
+            let (k, pick) = (c(), c());
+            let (n, wide) = (3 + ((pick[0] * 4.0) as usize).min(3), pick[1] < 0.3);
+            let mut text = format!("TITLE \"random\"\nLUT_3D_SIZE {n}\n");
+            if wide {
+                text += "DOMAIN_MIN -0.1 0 0\nDOMAIN_MAX 1.2 1 1.1\n";
+            }
+            let m = (n - 1) as f32;
+            for b in 0..n {
+                for g in 0..n {
+                    for rr in 0..n {
+                        let v = [rr as f32 / m, g as f32 / m, b as f32 / m];
+                        let o = [v[0] * (1.0 - k[0]) + v[1] * k[0], v[1].powf(0.5 + k[1]), 1.0 - v[2] * k[2]];
+                        text += &format!("{} {} {}\n", o[0], o[1], o[2]);
+                    }
+                }
+            }
+            json!({"lut": {"format": "cube", "name": "random.cube", "text": text}})
+        }
         "cmyk-selective-color" => {
             let sc: Vec<f32> = (0..36).map(|_| if r.chance(0.3) { r.f() * 2.0 - 1.0 } else { 0.0 }).collect();
             json!({"scCmyk": sc, "scMethod": if r.chance(0.5) { "absolute" } else { "relative" }})

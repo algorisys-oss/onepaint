@@ -210,3 +210,24 @@ fn cmyk_selective_color_shifts_ranges() {
     assert!(o.iter().all(|v| near(*v, 0.08, 1e-4)), "{o:?}");
     assert!(is_identity(Kind::CmykSelectiveColor, &default_params(Kind::CmykSelectiveColor)));
 }
+
+/// happypaint v0.201.6 Color Lookup: the pixel's work values looked up in
+/// the table, trilinear; no table is a no-op.
+#[test]
+fn color_lookup_maps_through_the_table() {
+    let mut text = String::from("LUT_3D_SIZE 2\n");
+    for b in 0..2 {
+        for g in 0..2 {
+            for r in 0..2 {
+                text += &format!("{b} {g} {r}\n");
+            }
+        }
+    }
+    let lut = LutFile { format: "cube".into(), name: "swap.cube".into(), text };
+    let c = [srgb_to_linear(0.8), srgb_to_linear(0.4), srgb_to_linear(0.2), 1.0];
+    let o = srgb(run(Kind::ColorLookup, Params { lut: Some(lut), ..Default::default() }, c));
+    assert!(near(o[0], 0.2, 1e-4) && near(o[1], 0.4, 1e-4) && near(o[2], 0.8, 1e-4), "{o:?}");
+    assert!(is_identity(Kind::ColorLookup, &default_params(Kind::ColorLookup)));
+    let none = run(Kind::ColorLookup, Params::default(), c);
+    assert!(near(none[0], c[0], 1e-6));
+}

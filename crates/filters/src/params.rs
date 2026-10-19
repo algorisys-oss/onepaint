@@ -52,6 +52,15 @@ fn one() -> f32 {
     1.0
 }
 
+/// A Color Lookup table file kept whole (happypaint `lut`): its format
+/// ("cube" or "3dl"), name and text, so it saves back unchanged.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LutFile {
+    pub format: String,
+    pub name: String,
+    pub text: String,
+}
+
 macro_rules! params {
     ($( $(#[$m:meta])* $f:ident : $t:ty ),* $(,)?) => {
         /// happypaint's flat `AdjustmentParams` bag (camelCase JSON); unknown fields are kept.
@@ -114,6 +123,8 @@ params! {
     bw_magentas: f32,
     bw_tint: bool,
     bw_tint_color: [f32; 3],
+    // color-lookup: the table file (`lutPsd`, Photoshop's own fields, is kept in `extra`)
+    lut: LutFile,
     // cmyk-selective-color: (C, M, Y, K) per range in `SC_RANGES` order
     // (−1..1), and "relative" or "absolute"
     sc_cmyk: Vec<f32>,

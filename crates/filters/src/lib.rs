@@ -13,6 +13,7 @@ pub mod gradient;
 mod kind;
 pub mod lightning;
 pub mod liquify;
+pub mod lut3d;
 mod params;
 pub mod pattern;
 mod render;
@@ -24,7 +25,7 @@ pub use colour::{MAX_COLOR_SAMPLES, fill_stops, rgb01_to_hsv, sc_table as sc_tab
 pub use kind::{
     BW_DEFAULT_TINT, BW_DEFAULT_WEIGHTS, Kind, SC_RANGES, SECTIONS, channel_mixer_rows, default_params, field_blur_max, is_identity,
 };
-pub use params::{BlurPin, ColorSample, FillStop, Params, Stop};
+pub use params::{BlurPin, ColorSample, FillStop, LutFile, Params, Stop};
 pub use tex::Frame;
 
 use colour::{hsv2rgb, rgb2hsv};
@@ -208,6 +209,10 @@ impl Prepared {
             }
             Kind::ColorBalance => colour::color_balance(w.map(c01), p),
             Kind::CmykSelectiveColor => colour::cmyk_selective(w.map(c01), p),
+            Kind::ColorLookup => {
+                let rgb = w.map(c01);
+                lut3d::lut_of(p.lut.as_ref()).map_or(rgb, |l| l.sample(rgb).map(c01))
+            }
             Kind::Exposure => {
                 // In linear light, like a camera (EXPOSURE_SRC).
                 let gain = 2f32.powf(p.exposure.unwrap_or(0.0));

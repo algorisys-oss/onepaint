@@ -40,6 +40,10 @@ Overnight (2026-10-18 → 19), all pushed, newest last:
 - Selective Color, Photoshop's (`cmyk-selective-color`, v0.201.5): nine
   ranges × C/M/Y/K, Relative or Absolute, CPU, GPU (code 23), PSD selc,
   a range-picker panel.
+- Color Lookup (`color-lookup`, v0.201.6): `.cube`/`.3dl` tables kept
+  whole in the params (`filters::lut3d`, happypaint's parser tests),
+  trilinear on the CPU and the GPU (code 24, tables up to 65³), a Load
+  LUT… panel. PSD `clrL` is still raw-only.
 - `scripts/bench-gate/gate.sh save|check`: the perf-budget gate for
   AGENTS.md's 5% rule, on criterion's saved baselines (checked: the 9
   engine hot-path benches came out within 5% of themselves).
