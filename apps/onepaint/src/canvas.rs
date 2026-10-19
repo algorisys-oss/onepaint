@@ -148,6 +148,49 @@ fn rgba(c: Color32) -> [f32; 4] {
     [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, a as f32 / 255.0]
 }
 
+/// The Fill tool's Wash settings, each 0..1 (happypaint `tool-store.ts`
+/// `wash`; spec 58 C).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WashSettings {
+    pub water: f32,
+    pub pigment: f32,
+    pub grade: f32,
+    pub soft: f32,
+    pub speed: f32,
+    pub sample_all: bool,
+    pub water_only: bool,
+}
+
+impl Default for WashSettings {
+    fn default() -> Self {
+        Self { water: 0.6, pigment: 0.7, grade: 0.0, soft: 0.2, speed: 0.5, sample_all: true, water_only: false }
+    }
+}
+
+impl WashSettings {
+    /// Every slider kept in 0..1 (`setWash`).
+    pub fn clamped(self) -> Self {
+        let c = |v: f32| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
+        Self { water: c(self.water), pigment: c(self.pigment), grade: c(self.grade), soft: c(self.soft), speed: c(self.speed), ..self }
+    }
+
+    /// The engine's options (`washFillOptions`): softness up to 24 px, the
+    /// front 2..50 px per step, no pigment for a water-only wash.
+    pub fn options(self, tolerance: f32, grow: u32) -> onepaint_engine::WashFillOptions {
+        let s = self.clamped();
+        onepaint_engine::WashFillOptions {
+            tolerance,
+            grow,
+            sample_all: s.sample_all,
+            water: s.water,
+            pigment: if s.water_only { 0.0 } else { s.pigment },
+            grade: s.grade,
+            soft: s.soft * 24.0,
+            speed: 2.0 * 25f32.powf(s.speed),
+        }
+    }
+}
+
 /// Sticky tool options (happypaint tool-store defaults).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ToolOptions {
@@ -157,6 +200,9 @@ pub struct ToolOptions {
     pub wand_sample_all: bool,
     pub fill_tolerance: f32,
     pub fill_grow: u32,
+    /// Fill as a watercolour wash (spec 58 C).
+    pub fill_wash: bool,
+    pub wash: WashSettings,
     pub gradient_shape: GShape,
     /// Foreground → transparent (false) or foreground → background (true).
     pub gradient_to_bg: bool,
@@ -184,6 +230,8 @@ impl Default for ToolOptions {
             wand_sample_all: false,
             fill_tolerance: 0.15,
             fill_grow: 1,
+            fill_wash: false,
+            wash: WashSettings::default(),
             gradient_shape: GShape::Linear,
             gradient_to_bg: false,
             gradient_reverse: false,
@@ -786,6 +834,12 @@ impl Canvas {
                     Drag::None
                 }
             },
+            Tool::Fill if self.options.fill_wash => {
+                let o = self.options;
+                let options = o.wash.options(o.fill_tolerance, o.fill_grow);
+                let _ = session.execute(Command::WashFill { x: d[0].floor() as i32, y: d[1].floor() as i32, options });
+                Drag::None
+            }
             Tool::Fill => {
                 let o = self.options;
                 let _ = session.execute(Command::Fill {
@@ -1961,5 +2015,23 @@ fn gradient_fill_params(
         grad_by: Some((b[1] / h) as f32),
         grad_reverse: Some(false),
         ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod wash_tests {
+    use super::WashSettings;
+
+    // happypaint wash-options.test.ts.
+    #[test]
+    fn wash_settings_map_to_the_engines_options() {
+        let s = WashSettings { water: 0.6, pigment: 0.7, grade: 0.0, soft: 0.5, speed: 0.5, water_only: false, sample_all: true };
+        let o = s.options(0.15, 1);
+        assert_eq!((o.pigment, o.soft, o.speed), (0.7, 12.0, 10.0));
+        let only = WashSettings { water_only: true, pigment: 0.9, ..s };
+        assert_eq!(only.options(0.15, 1).pigment, 0.0);
+        assert_eq!(WashSettings { water_only: false, ..only }.options(0.15, 1).pigment, 0.9);
+        let wild = WashSettings { water: 3.0, speed: -1.0, ..s }.options(0.15, 1);
+        assert_eq!((wild.water, wild.speed), (1.0, 2.0));
     }
 }

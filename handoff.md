@@ -65,8 +65,10 @@ Overnight (2026-10-18 → 19), all pushed, newest last:
   advection acceptance, wet-only water exchange, bloom, ×4 slope; the
   `fluid.halo`; `wetModel` 2 on new drawings), CPU and GPU, mutations
   caught. B done: tip-shaped live dabs (`fluid::WetTip`,
-  `wet_dab_rotation`). Next: C, wash fill (`wash-field.ts`, walls with a
-  guard band, Fill tool options).
+  `wet_dab_rotation`). C done: wash fill (`fluid::wash`, `fluid::walls`,
+  `Command::WashFill`, the Fill tool's Wash options; `ONEPAINT_WASH=1`).
+  Spec 58 is complete. Next: the workspace UI catch-up (menu bar, options
+  row, left tool rail…; `docs/parity-delta-2026-10-10.md`).
 - `scripts/bench-gate/gate.sh save|check`: the perf-budget gate for
   AGENTS.md's 5% rule, on criterion's saved baselines (checked: the 9
   engine hot-path benches came out within 5% of themselves).

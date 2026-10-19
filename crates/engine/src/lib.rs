@@ -13,7 +13,7 @@ mod command;
 mod depth_ops;
 mod filter_ops;
 pub mod guides;
-pub use command::Command;
+pub use command::{Command, WashFillOptions};
 mod frame_ops;
 mod height_ops;
 mod liquify_ops;
@@ -1109,6 +1109,7 @@ impl Session {
                     | Command::SetLiquify { .. }
                     | Command::SetWetTilt { .. }
                     | Command::SetPaper { .. }
+                    | Command::WashFill { .. }
             )
         {
             self.dry_wet();

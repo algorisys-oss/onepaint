@@ -55,6 +55,8 @@ pub enum Param {
     FluidWater,
     /// Live fluid pigment per dab.
     FluidPigment,
+    /// How far a live dab's water reaches past its pigment (`fluid.halo`, 1..3).
+    FluidHalo,
     /// Random spacing variation (`spacingJitter`).
     SpacingJitter,
     /// Hue drift across the stroke (`color.hueShift`, −1..1 of the wheel).
@@ -80,6 +82,8 @@ pub enum Unit {
     Rate,
     /// The pressure firmness (Soft / Lin / Firm).
     Firmness,
+    /// A multiple, shown as `1.5×`.
+    Times,
 }
 
 pub struct ParamInfo {
@@ -108,7 +112,7 @@ pub const SECTIONS: &[(&str, &[Param])] = {
         ("Dual brush", &[MaskStrength]),
         ("Colour tip", &[TipHue, TipSat, TipVal]),
         ("Wet", &[Wetness, Load, Mix]),
-        ("Fluid", &[FluidWater, FluidPigment]),
+        ("Fluid", &[FluidWater, FluidPigment, FluidHalo]),
     ]
 };
 
@@ -218,6 +222,7 @@ impl Param {
             Mix => info("Mix", 0.0, 1.0, Percent),
             FluidWater => info("Water", 0.05, 2.0, Percent),
             FluidPigment => info("Pigment", 0.0, 1.0, Percent),
+            FluidHalo => info("Halo", 1.0, 3.0, Times),
             SpacingJitter => info("Space·J", 0.0, 1.0, Percent),
             HueShift => info("Hue→Shift", -1.0, 1.0, Percent),
             GrainMove => info("Movement", 0.0, 1.0, Percent),
@@ -246,6 +251,7 @@ impl Param {
             Unit::Rate if v < 0.5 => "Off".into(),
             Unit::Rate => format!("{v:.0}/s"),
             Unit::Firmness => pressure_label(firm_to_curve(v)).into(),
+            Unit::Times => format!("{v:.1}×"),
         }
     }
 
@@ -258,7 +264,7 @@ impl Param {
             // Mix is derived while blending and moot until the brush is wet.
             Param::Load => wet_num(b, "wetness", 0.0) > 0.0 || b.impasto_depth() > 0.0,
             Param::Mix => !is_blender(b) && wet_num(b, "wetness", 0.0) > 0.0,
-            Param::FluidWater | Param::FluidPigment => b.fluid().is_some_and(|f| f.water > 0.0 || f.blow > 0.0),
+            Param::FluidWater | Param::FluidPigment | Param::FluidHalo => b.fluid().is_some_and(|f| f.water > 0.0 || f.blow > 0.0),
             Param::GrainMove => b.grain.is_some(),
             Param::MaskStrength => b.extra.contains_key("maskTip"),
             Param::TipHue | Param::TipSat | Param::TipVal => crate::color_tip_for(&b.tip_id).is_some(),
@@ -306,6 +312,7 @@ impl Param {
             Mix => wet_num(b, "mix", 0.5),
             FluidWater => b.fluid().map_or(0.0, |f| f.water),
             FluidPigment => b.fluid().map_or(0.0, |f| f.pigment),
+            FluidHalo => b.fluid().map_or(1.0, |f| f.halo()),
             SpacingJitter => b.spacing_jitter.unwrap_or(0.0),
             HueShift => color_get(b, |c| c.hue_shift),
             GrainMove => b.grain.as_ref().and_then(|g| g.moves).unwrap_or(0.0),
@@ -458,6 +465,17 @@ impl Param {
             Mix => set_wet(b, "mix", clamp01(v)),
             FluidWater => set_fluid(b, "water", v.clamp(0.0, 2.0)),
             FluidPigment => set_fluid(b, "pigment", clamp01(v)),
+            // No halo is stored as none (happypaint writes it only above 1).
+            FluidHalo => {
+                let v = v.clamp(1.0, 3.0);
+                if v <= 1.0 {
+                    if let Some(o) = b.extra.get_mut("fluid").and_then(|f| f.as_object_mut()) {
+                        o.remove("halo");
+                    }
+                } else {
+                    set_fluid(b, "halo", v);
+                }
+            }
             SpacingJitter => {
                 let v = clamp01(v);
                 b.spacing_jitter = (v > 0.0).then_some(v);
@@ -859,7 +877,7 @@ mod tests {
                 let i = p.info();
                 // Fluid sliders only apply to live-fluid brushes.
                 let mut b = match p {
-                    Param::FluidWater | Param::FluidPigment => preset("watercolor-live").unwrap(),
+                    Param::FluidWater | Param::FluidPigment | Param::FluidHalo => preset("watercolor-live").unwrap(),
                     Param::TipHue | Param::TipSat | Param::TipVal => preset("rgba-oil").unwrap(),
                     _ => hard(),
                 };
@@ -871,7 +889,7 @@ mod tests {
                 let got = p.get(&b);
                 let tol = match i.unit {
                     Unit::Px | Unit::Rate | Unit::Firmness | Unit::Degrees => 1.0,
-                    Unit::Percent => 1e-9,
+                    Unit::Percent | Unit::Times => 1e-9,
                 };
                 assert!((got - v).abs() <= tol, "{}: set {v} got {got}", i.label);
                 assert!(!p.format(got).is_empty());

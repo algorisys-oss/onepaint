@@ -1384,6 +1384,29 @@ fn fill_options(app: &mut App, ui: &mut Ui) {
     if widgets::slider_row(ui, "Grow", &mut grow, 0.0..=8.0, |v| format!("{v:.0} px")).changed() {
         app.canvas.options.fill_grow = grow.round() as u32;
     }
+    // A watercolour wash instead of a flat fill (spec 58 C).
+    let o = &mut app.canvas.options;
+    widgets::toggle(ui, &mut o.fill_wash, "Wash");
+    if !o.fill_wash {
+        return;
+    }
+    let w = &mut o.wash;
+    widgets::toggle(ui, &mut w.water_only, "Water only");
+    widgets::toggle(ui, &mut w.sample_all, "All layers");
+    let pct = |v: f32| format!("{v:.0}%");
+    let row = |ui: &mut Ui, label: &str, v: &mut f32| {
+        let mut p = *v * 100.0;
+        if widgets::slider_row(ui, label, &mut p, 0.0..=100.0, pct).changed() {
+            *v = p / 100.0;
+        }
+    };
+    row(ui, "Water", &mut w.water);
+    if !w.water_only {
+        row(ui, "Pigment", &mut w.pigment);
+        row(ui, "Graded", &mut w.grade);
+    }
+    row(ui, "Soft", &mut w.soft);
+    row(ui, "Speed", &mut w.speed);
 }
 
 fn size_fields(app: &mut App, ui: &mut Ui, keep_aspect: bool) {

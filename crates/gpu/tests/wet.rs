@@ -145,3 +145,49 @@ fn a_session_dries_the_same_on_the_gpu() {
     // a little more paint. Hence a mean bound, and a looser max.
     assert!(painted > 1000 && mean < 1e-4 && d < 5e-3, "Δ max {d}, mean {mean}");
 }
+
+/// A wash fill dries the same on the GPU: it steps one at a time while
+/// the wash spreads, with the CPU laying each band (spec 58 C).
+#[test]
+fn a_wash_fill_dries_the_same_on_the_gpu() {
+    use onepaint_engine::{Command, Session, WashFillOptions};
+    let Some((device, queue)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let run = |gpu: bool| {
+        let mut s = Session::new(240, 160, None);
+        if gpu {
+            s.set_wet_backend(Some(Box::new(WetGpu::new(&device, &queue))));
+        }
+        let left = vec![[0.0, 0.0], [100.0, 0.0], [100.0, 160.0], [0.0, 160.0]];
+        s.execute(Command::SelectShape { contours: vec![left], mode: onepaint_engine::SelectMode::Replace }).unwrap();
+        s.execute(Command::SetColor { rgba: onepaint_color::Rgba::new(0.0, 0.0, 0.0, 1.0) }).unwrap();
+        s.execute(Command::FillSelection).unwrap();
+        s.execute(Command::Deselect).unwrap();
+        s.execute(Command::SetColor { rgba: onepaint_color::Rgba::new(0.2, 0.4, 0.9, 1.0) }).unwrap();
+        let o =
+            WashFillOptions { tolerance: 0.1, grow: 0, sample_all: false, water: 0.4, pigment: 0.7, grade: 0.3, soft: 4.8, speed: 10.0 };
+        s.execute(Command::WashFill { x: 180, y: 80, options: o }).unwrap();
+        let mut now = 0.0;
+        for _ in 0..4000 {
+            if !s.wet_active() {
+                break;
+            }
+            now += 64.0;
+            s.wet_tick(now);
+        }
+        assert!(!s.wet_active(), "dried on its own");
+        s.doc().layer(s.active()).unwrap().pixels.read_rect(s.doc().bounds())
+    };
+    let (cpu, gpu) = (run(false), run(true));
+    let n = cpu.len() as f32;
+    let mean = cpu.iter().zip(&gpu).map(|(a, b)| (a - b).abs()).sum::<f32>() / n;
+    let d = cpu.iter().zip(&gpu).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
+    let painted = gpu.chunks_exact(4).filter(|p| p[3] > 0.05).count();
+    eprintln!("wash Δ max {d:.2e} mean {mean:.2e}, {painted} px painted");
+    // The step-level tests hold 1e-3. A wash keeps half the canvas wet for
+    // about a thousand steps, and the GPU's and CPU's float orders drift
+    // apart over them (the same with f32 tiles, so not the f16 loss above).
+    assert!(painted > 8000 && mean < 5e-4 && d < 5e-3, "Δ max {d}, mean {mean}");
+}

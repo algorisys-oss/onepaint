@@ -271,6 +271,13 @@ pub enum Command {
         tolerance: f32,
         grow: u32,
     },
+    /// A watercolour wash over the region a tap picks, in the current colour
+    /// (spec 58 C): it spreads out from the tap and dries like wet paint.
+    WashFill {
+        x: i32,
+        y: i32,
+        options: WashFillOptions,
+    },
     /// Fill the selection with the current colour.
     FillSelection,
     /// Clear the active layer inside the selection (or entirely, with none).
@@ -396,4 +403,21 @@ pub enum Command {
         #[serde(default)]
         border: Option<f64>,
     },
+}
+
+/// A wash fill's settings (happypaint `WashFillOptions`): the region
+/// (tolerance, grow, sample all layers), water and pigment 0..1 (pigment
+/// 0 = water only), how much the pigment thins with distance 0..1, the edge
+/// softness in px and the front's speed in px per step.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WashFillOptions {
+    pub tolerance: f32,
+    pub grow: u32,
+    pub sample_all: bool,
+    pub water: f32,
+    pub pigment: f32,
+    pub grade: f32,
+    pub soft: f32,
+    pub speed: f32,
 }

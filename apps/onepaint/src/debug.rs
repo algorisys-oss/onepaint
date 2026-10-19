@@ -29,6 +29,7 @@
 //! - `ONEPAINT_ADJUST=color-balance` adds an adjustment layer of that kind at its defaults
 //!   (Black & White with its tint on), shown in Properties (`ONEPAINT_DOCK=1` docks it).
 //! - `ONEPAINT_PAPER=khadi` starts on a new canvas of that paper, its Background the sheet colour (spec 57).
+//! - `ONEPAINT_WASH=1` washes the region between the demo's strokes and lets it spread (spec 58 C).
 //! - `ONEPAINT_STYLES=Gold` gives the active layer a built-in layer style (spec 56).
 //! - `ONEPAINT_EXIT=1` closes the app after the screenshot.
 
@@ -295,6 +296,16 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
             params.bw_tint = Some(true);
         }
         let _ = app.session.execute(Command::AddAdjustmentLayer { kind: kind.as_str().into(), params });
+    }
+    if frame == 4 && std::env::var("ONEPAINT_WASH").is_ok() {
+        let (w, h) = (app.session.doc().width as f64, app.session.doc().height as f64);
+        app.set_color(Rgba::from_hex("#3b6fb6").unwrap_or_default());
+        let options = crate::canvas::WashSettings { water: 0.7, pigment: 0.6, grade: 0.4, ..Default::default() }.options(0.15, 1);
+        let _ = app.session.execute(Command::WashFill { x: (w * 0.5) as i32, y: (h * 0.42) as i32, options });
+        // Let it spread and settle for a few seconds.
+        for i in 1..=200 {
+            app.session.wet_tick(f64::from(i) * 64.0);
+        }
     }
     if frame == 4
         && let Ok(name) = std::env::var("ONEPAINT_STYLES")

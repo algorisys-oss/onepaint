@@ -145,3 +145,56 @@ fn a_recorded_wet_session_replays_exactly() {
     let b = r.session.doc().layer(&id).unwrap().pixels.read_rect(s.doc().bounds());
     assert!(a == b, "replayed pixels match");
 }
+
+fn wash_opts(pigment: f32) -> WashFillOptions {
+    WashFillOptions { tolerance: 0.1, grow: 0, sample_all: false, water: 0.6, pigment, grade: 0.0, soft: 4.8, speed: 10.0 }
+}
+
+/// The left half painted black: the "line art" a wash fills beside.
+fn half_black() -> Session {
+    let mut s = session();
+    let left = onepaint_selection::rect_polygon([0.0, 0.0], [120.0, 160.0]);
+    s.execute(Command::SelectShape { contours: vec![left], mode: onepaint_selection::Mode::Replace }).unwrap();
+    s.execute(Command::SetColor { rgba: Rgba::new(0.0, 0.0, 0.0, 1.0) }).unwrap();
+    s.execute(Command::FillSelection).unwrap();
+    s.execute(Command::Deselect).unwrap();
+    s.execute(Command::SetColor { rgba: Rgba::new(0.9, 0.2, 0.1, 1.0) }).unwrap();
+    s
+}
+
+/// Spec 58 C: a wash spreads over the region the tap picks, stays inside
+/// it, dries by itself, and undoes as one step.
+#[test]
+fn a_wash_fill_spreads_in_its_region_and_dries() {
+    let mut s = half_black();
+    let undo_before = s.history_len();
+    s.execute(Command::WashFill { x: 200, y: 80, options: wash_opts(0.7) }).unwrap();
+    assert!(s.wet_active(), "the wash is wet");
+    run(&mut s, 0.0, 4000);
+    assert!(!s.wet_active(), "and dries by itself");
+    let px = |x, y| s.doc().layer(s.active()).unwrap().pixels.get(x, y);
+    let (near, far) = (px(200, 80), px(130, 20));
+    assert!(near[3] > 0.2 && far[3] > 0.05, "the whole region took paint: {near:?} {far:?}");
+    assert!(near[0] > near[2], "in the wash's colour: {near:?}");
+    // The black side is untouched.
+    assert_eq!(px(60, 80), s.doc().space().pixel(Rgba::new(0.0, 0.0, 0.0, 1.0)));
+    assert_eq!(s.history_len(), undo_before + 1);
+    s.execute(Command::Undo).unwrap();
+    assert_eq!(s.doc().layer(s.active()).unwrap().pixels.get(200, 80)[3], 0.0);
+}
+
+/// Water only wets; a tap outside the canvas or on a locked layer does nothing.
+#[test]
+fn water_only_washes_and_refusals() {
+    let mut s = half_black();
+    s.execute(Command::WashFill { x: 200, y: 80, options: wash_opts(0.0) }).unwrap();
+    assert!(s.wet_active());
+    run(&mut s, 0.0, 4000);
+    assert_eq!(s.doc().layer(s.active()).unwrap().pixels.get(200, 80)[3], 0.0, "water leaves no pigment");
+    s.execute(Command::WashFill { x: 500, y: 80, options: wash_opts(0.7) }).unwrap();
+    assert!(!s.wet_active());
+    let id = s.active().to_string();
+    s.execute(Command::SetLayerProps { id, props: LayerProps { locked: Some(true), ..Default::default() } }).unwrap();
+    s.execute(Command::WashFill { x: 200, y: 80, options: wash_opts(0.7) }).unwrap();
+    assert!(!s.wet_active());
+}

@@ -110,6 +110,9 @@ impl Session {
                 self.refresh_clip();
             }
             Command::Fill { x, y, tolerance, grow } => self.fill(x, y, tolerance, grow.min(8)),
+            Command::WashFill { x, y, options } => {
+                self.wash_fill(x, y, options);
+            }
             Command::FillSelection => self.fill_selection(),
             Command::ClearSelected => {
                 self.ensure_raster();

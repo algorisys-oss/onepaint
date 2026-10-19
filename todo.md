@@ -232,7 +232,7 @@ See `docs/parity-delta-2026-10-10.md`.
       65³; 2026-10-19). Left: Color Lookup's PSD `clrL` live (its records
       already round-trip untouched)
 - [ ] PSD codec parity (modes, 32-bit, round trip, live adjustments, fills, styles)
-- [~] Wet physics v0.199 (spec 58): paper absorbs, the halo and tip-shaped dabs done; left: wash fill
+- [x] Wet physics v0.199 (spec 58): paper absorbs, the halo, tip-shaped dabs, wash fill
 - [x] Ten procedural papers, sheet colour, flecks and mottle (spec 57)
 - [ ] Workspace: menu bar, options row, left tool rail, side-slider extras,
       scrollbars, angle dial, in-app dialogs, manual, brush search

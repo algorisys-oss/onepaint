@@ -41,7 +41,21 @@ pub(crate) struct WetSession {
     last_now: Option<f64>,
     /// What the canvas shows over the layer: suspended paint and the damp veil.
     preview: Surface,
+    /// A wash fill still spreading (spec 58 C).
+    wash: Option<WashSpread>,
 }
+
+/// A wash fill spreading out from its tap, a band per step.
+pub(crate) struct WashSpread {
+    field: fluid::wash::WashField,
+    band: fluid::WashBand,
+    /// px per step, and where the front stops.
+    speed: f32,
+    end: f32,
+}
+
+/// How far before the tap the front starts, and past the farthest pixel it ends.
+const WASH_MARGIN: f32 = 32.0;
 
 impl WetSession {
     fn rect(&self, doc: Rect) -> Option<Rect> {
@@ -120,26 +134,10 @@ impl Session {
         if self.wet.as_ref().is_some_and(|s| s.layer != self.active || (!fl.pure_blow() && s.sim.oil != fl.oil)) {
             self.dry_wet();
         }
-        let doc = self.doc.bounds();
         if self.wet.is_none() {
             let r = size / 2.0 + 8.0;
             let seed = Rect::covering((first.x - r) as f32, (first.y - r) as f32, (first.x + r) as f32, (first.y + r) as f32);
-            let mut sim = FluidSim::new(doc, seed, fl.oil);
-            sim.space = self.doc.space();
-            sim.set_tilt(self.wet_tilt[0], self.wet_tilt[1]);
-            sim.set_paper(self.doc.paper().as_ref(), self.doc.dpi);
-            let before = self.doc.layer(&self.active).map(|l| l.pixels.clone()).unwrap_or_default();
-            self.wet = Some(WetSession {
-                layer: self.active.clone(),
-                sim,
-                clock: WetClock::default(),
-                before,
-                height: None,
-                bounds: [first.x, first.y, first.x, first.y],
-                time_acc: 0.0,
-                last_now: None,
-                preview: Surface::new(),
-            });
+            self.open_wet_session(seed, [first.x, first.y, first.x, first.y], fl.oil);
         }
         if impasto > 0.0
             && let Some(s) = self.wet.as_mut()
@@ -297,11 +295,130 @@ impl Session {
         true
     }
 
-    /// Run `n` fixed steps (live ticks and replay).
+    /// Run `n` fixed steps (live ticks and replay). While a wash spreads,
+    /// each step lays its next band first.
     pub(crate) fn wet_steps(&mut self, n: usize) {
+        if self.wet.as_ref().is_some_and(|s| s.wash.is_some()) {
+            for _ in 0..n {
+                self.advance_wash();
+                if !self.wet_steps_on_backend(1) {
+                    self.wet_cpu_steps(1);
+                }
+                if self.wet.is_none() {
+                    return;
+                }
+            }
+            return;
+        }
         if n > 0 && self.wet_steps_on_backend(n) {
             return;
         }
+        self.wet_cpu_steps(n);
+    }
+
+    /// A fresh wet session on the active layer.
+    fn open_wet_session(&mut self, seed: Rect, bounds: [f64; 4], oil: bool) {
+        let mut sim = FluidSim::new(self.doc.bounds(), seed, oil);
+        sim.space = self.doc.space();
+        sim.set_tilt(self.wet_tilt[0], self.wet_tilt[1]);
+        sim.set_paper(self.doc.paper().as_ref(), self.doc.dpi);
+        let before = self.doc.layer(&self.active).map(|l| l.pixels.clone()).unwrap_or_default();
+        self.wet = Some(WetSession {
+            layer: self.active.clone(),
+            sim,
+            clock: WetClock::default(),
+            before,
+            height: None,
+            bounds,
+            time_acc: 0.0,
+            last_now: None,
+            preview: Surface::new(),
+            wash: None,
+        });
+    }
+
+    /// Wash the region a tap picks (happypaint `beginWashFill`, spec 58 C):
+    /// it spreads out from the tap over the next steps, walled in to the
+    /// region, and dries like any wet paint. `false` when it can't start.
+    pub(crate) fn wash_fill(&mut self, x: i32, y: i32, o: crate::command::WashFillOptions) -> bool {
+        if self.stroke.is_some() || self.smudge.is_some() || self.transform.is_some() || self.liquify.is_some() {
+            return false;
+        }
+        let (w, h) = (self.doc.width, self.doc.height);
+        if x < 0 || y < 0 || x as u32 >= w || y as u32 >= h {
+            return false;
+        }
+        let id = self.active.clone();
+        let raster = !self.is_text_layer(&id) && !self.is_path_layer(&id);
+        let Some(l) = self.doc.layer(&id) else { return false };
+        if !raster || !l.visible || l.locked || l.alpha_lock || l.adjustment.is_some() || (l.mask.is_some() && l.mask_enabled) {
+            return false;
+        }
+        if self.wet.as_ref().is_some_and(|s| s.layer != id || s.sim.oil) {
+            self.dry_wet();
+        }
+        let base = self.selection.clone();
+        let region = if o.sample_all {
+            let flat = self.flatten();
+            let get = |px: u32, py: u32| {
+                let i = ((py * w + px) * 4) as usize;
+                [flat[i], flat[i + 1], flat[i + 2], flat[i + 3]]
+            };
+            onepaint_selection::color_match(w, h, &get, x, y, o.tolerance, true, base.as_deref())
+        } else {
+            let Some(l) = self.doc.layer(&id) else { return false };
+            let get = |px: u32, py: u32| l.pixels.get(px as i32, py as i32);
+            onepaint_selection::color_match(w, h, &get, x, y, o.tolerance, true, base.as_deref())
+        };
+        let Some(region) = region else { return false };
+        let region = region.grown4(o.grow.min(8), base.as_deref());
+        let mask: Vec<bool> = region.data().iter().map(|v| *v != 0).collect();
+        let weight = base.as_deref().map(|b| b.data());
+        let opts = fluid::wash::WashOpts { weight, ..Default::default() };
+        let Some(field) = fluid::wash::wash_field(&mask, w as usize, h as usize, x, y, &opts).filter(|f| f.count >= 4) else {
+            return false;
+        };
+        let fr = Rect::new(field.x0, field.y0, field.width(), field.y1 - field.y0);
+        let fb = [f64::from(fr.x), f64::from(fr.y), f64::from(fr.right()), f64::from(fr.bottom())];
+        if self.wet.is_none() {
+            self.open_wet_session(fr, fb, false);
+        }
+        let lin = self.doc.space().pixel(self.color);
+        let Some(s) = self.wet.as_mut() else { return false };
+        s.sim.add_wall(&field);
+        let b = s.bounds;
+        s.bounds = [b[0].min(fb[0]), b[1].min(fb[1]), b[2].max(fb[2]), b[3].max(fb[3])];
+        let band = fluid::WashBand {
+            level: 0.5 + 2.0 * o.water.clamp(0.0, 1.0),
+            pigment: o.pigment.clamp(0.0, 1.0),
+            soft: o.soft.max(0.0),
+            grade: o.grade.clamp(0.0, 1.0),
+            max_dist: field.max_dist,
+            color: [lin[0], lin[1], lin[2]],
+            from: -WASH_MARGIN,
+            to: -WASH_MARGIN,
+        };
+        let end = field.max_dist + WASH_MARGIN;
+        s.wash = Some(WashSpread { field, band, speed: o.speed.max(0.5), end });
+        let sim_rect = s.sim.rect();
+        self.mark_dirty(sim_rect);
+        true
+    }
+
+    /// Lay the spreading wash's next band (`advanceWashFill`).
+    fn advance_wash(&mut self) {
+        let Some(s) = self.wet.as_mut() else { return };
+        let Some(w) = s.wash.as_mut() else { return };
+        w.band.to = w.band.from + w.speed;
+        s.sim.deposit_wash(&w.field, &w.band);
+        s.clock.deposit_water(f64::from(w.band.level));
+        w.band.from = w.band.to;
+        if w.band.from >= w.end {
+            s.wash = None;
+        }
+    }
+
+    fn wet_cpu_steps(&mut self, n: usize) {
         let doc = self.doc.bounds();
         for _ in 0..n {
             let Some(mut s) = self.wet.take() else { return };
@@ -316,7 +433,7 @@ impl Session {
                 dirty = s.sim.step(&mut layer.pixels, rect, false);
             }
             s.preview = s.sim.preview();
-            let done = s.clock.step() == ClockState::Dry && self.wet_stroke.is_none() && !s.sim.oil;
+            let done = s.clock.step() == ClockState::Dry && self.wet_stroke.is_none() && !s.sim.oil && s.wash.is_none();
             let sim_rect = s.sim.rect();
             self.wet = Some(s);
             self.mark_dirty(dirty.union(&sim_rect));
@@ -344,7 +461,7 @@ impl Session {
         let (mut clock, mut k, mut done) = (s.clock, 0, false);
         while k < n {
             k += 1;
-            if clock.step() == ClockState::Dry && self.wet_stroke.is_none() && !s.sim.oil {
+            if clock.step() == ClockState::Dry && self.wet_stroke.is_none() && !s.sim.oil && s.wash.is_none() {
                 done = true;
                 break;
             }

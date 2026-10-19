@@ -2010,6 +2010,21 @@ mod tests {
         assert_eq!(h.state().session.color().to_hex(), "#ff0000");
     }
 
+    /// Spec 58 C: with Wash on, the Fill tool lays a wet wash instead of a flat fill.
+    #[test]
+    fn the_fill_tool_washes() {
+        let mut h = harness();
+        h.run();
+        h.state_mut().set_color(Rgba::new(0.2, 0.4, 0.9, 1.0));
+        key(&mut h, egui::Key::G, egui::Modifiers::NONE);
+        h.state_mut().canvas.options.fill_wash = true;
+        click(&mut h, pos2(600.0, 400.0));
+        assert!(h.state().session.wet_active(), "the wash is wet");
+        let d = h.state().canvas.view.screen_to_doc([600.0, 400.0]);
+        let flat = h.state().session.doc().layer(h.state().session.active()).unwrap().pixels.get(d[0] as i32, d[1] as i32);
+        assert!(flat[3] < 0.05, "no flat fill, only what has settled so far: {flat:?}");
+    }
+
     /// Whether the composite (including any floating transform) shows the red-ish paint
     /// rather than the white background at a screen point.
     fn active_alpha(h: &Harness<'_, App>, screen: [f32; 2]) -> f32 {
