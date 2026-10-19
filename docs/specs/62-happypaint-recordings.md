@@ -29,8 +29,9 @@ the layers it creates (happypaint injects ids; onepaint makes its own).
   selections, transforms, canvas resize and scale, text and path layers
   and their objects (created, edited, moved, removed, rasterized), undo
   and redo.
+- Mixer patches (`loadMixerPatch`, `clearMixerPatch`) replay since spec 63.
 - Skipped (named in a notice): panels, layer
-  styles and smart filters, mixer patches, airbrush ticks, image inserts,
+  styles and smart filters, airbrush ticks, image inserts,
   and anything newer. Per-stroke symmetry transforms and dab seeds aren't
   carried: onepaint's own symmetry and RNG apply (happypaint itself aims
   at visual reproduction, not identical pixels).
