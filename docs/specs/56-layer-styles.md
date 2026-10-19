@@ -79,6 +79,26 @@ programs on the tiles within `effect_reach + 4`.
   recomputes per frame on the GPU where the reach allows (it is per tile,
   not per document); the CPU path follows happypaint.
 
+### Phase 3 in detail (GPU)
+- **Styled source.** A styled node's content is a `SpatialSrc` with a
+  `styled` part: the styles, the node's own **content programs** on the
+  tiles of its region (tile ± `margin`), and a **backdrop program**, the
+  layers below it in its container on this tile (what `eff` blends
+  against). A layer's content plan is the layer alone (opacity 1, Normal,
+  no styles); its mask is in it, so the source's content carries no mask
+  of its own. A group's is its children, and its register starts as the
+  styled content (`PushContent`, as ghost pegs). Riders, inherit alpha,
+  knockout and Pass Through containers stay on the CPU.
+- **CPU interpreter.** Runs the programs, quantizes them to f16 as the GPU
+  cache does, and calls the oracle's style pass.
+- **GPU.** The content programs and the backdrop fill cache slots (spec
+  52's stages); `assemble` lays the content out; the distance field is the
+  exact transform in two compute passes (one invocation per column, then
+  per row, Felzenszwalb's envelope in private arrays; the region is at
+  most 768² px, so reach ≤ 124 px runs on the GPU and wider stays on the
+  CPU); the style pass ports `STYLE_SRC` with the effects in a storage
+  buffer and writes the filtered tile.
+
 ## Engine and UI
 - Commands: `SetLayerStyles { id, styles }` (one undo step; a preview
   variant while the dialog drags), `ApplyGlobalLight`, `BakeStyles`;

@@ -219,7 +219,18 @@ pub struct SpatialSrc {
     /// The backdrop is the group's content on the tiles the inverse
     /// transform reaches, and the filter resamples it; `kind` is unused.
     pub peg: Option<[f32; 4]>,
+    /// A styled layer or group (spec 56); the backdrop list is then the
+    /// node's own content on the tiles around this one.
+    pub styled: Option<Arc<Styled>>,
     filtered: std::sync::OnceLock<Vec<f32>>,
+}
+
+/// A styled node's styles and what it blends its effects against: the
+/// layers below it in its container, on this tile.
+#[derive(Debug)]
+pub struct Styled {
+    pub styles: onepaint_doc::styles::LayerStyles,
+    pub under: Arc<crate::program::TileProgram>,
 }
 
 impl SpatialSrc {
@@ -238,7 +249,21 @@ impl SpatialSrc {
             (x, y, crate::program::segment_key(&p.ops, p.origin())).hash(&mut h);
         }
         let reach = reach(kind, &params);
-        Self { kind, params, reach, tx, ty, region, frame, backdrop, key: h.finish(), whole: None, peg: None, filtered: Default::default() }
+        Self {
+            kind,
+            params,
+            reach,
+            tx,
+            ty,
+            region,
+            frame,
+            backdrop,
+            key: h.finish(),
+            whole: None,
+            peg: None,
+            styled: None,
+            filtered: Default::default(),
+        }
     }
 
     /// Tile `(tx, ty)` of a ghost group through `peg`, reading `backdrop`
@@ -268,6 +293,7 @@ impl SpatialSrc {
             key: h.finish(),
             whole: None,
             peg: Some(peg),
+            styled: None,
             filtered: Default::default(),
         }
     }
@@ -290,8 +316,52 @@ impl SpatialSrc {
             key: h.finish(),
             whole: Some(whole),
             peg: None,
+            styled: None,
             filtered: Default::default(),
         }
+    }
+
+    /// Tile `(tx, ty)` of a styled node: `content` is its own programs on the
+    /// tiles of `region` (the tile ± the styles' margin).
+    pub(crate) fn of_styled(
+        styled: Styled,
+        (tx, ty): (i32, i32),
+        region: Rect,
+        frame: Frame,
+        content: Vec<((i32, i32), Arc<crate::program::TileProgram>)>,
+    ) -> Self {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        ("styled", styled.styles.to_json().to_string(), tx, ty, frame.doc_w, frame.doc_h).hash(&mut h);
+        crate::program::segment_key(&styled.under.ops, styled.under.origin()).hash(&mut h);
+        for ((x, y), p) in &content {
+            (x, y, crate::program::segment_key(&p.ops, p.origin())).hash(&mut h);
+        }
+        Self {
+            kind: Kind::GaussianBlur,
+            params: Params::default(),
+            reach: styled.styles.reach(),
+            tx,
+            ty,
+            region,
+            frame,
+            backdrop: content,
+            key: h.finish(),
+            whole: None,
+            peg: None,
+            styled: Some(Arc::new(styled)),
+            filtered: Default::default(),
+        }
+    }
+
+    /// A styled node's tile (spec 56): the oracle's style pass over its
+    /// content and backdrop, both through f16 as the GPU's cache images.
+    fn styled(&self, st: &Styled) -> Vec<f32> {
+        let tiles: std::collections::HashMap<(i32, i32), Vec<f32>> =
+            self.backdrop.iter().map(|(at, p)| (*at, Tile::from_f32(&crate::program::run(p)).to_f32())).collect();
+        let content = |x: i32, y: i32| tiles.get(&(x, y)).cloned();
+        let under = Tile::from_f32(&crate::program::run(&st.under)).to_f32();
+        crate::styles::styled_tile(&st.styles, (self.tx, self.ty), self.frame, &content, None, Some(&under))
     }
 
     /// A ghost group's tile through its peg, as `compose::pegged` draws it:
@@ -336,6 +406,9 @@ impl SpatialSrc {
             }
             if let Some(peg) = self.peg {
                 return self.pegged(peg);
+            }
+            if let Some(st) = &self.styled {
+                return self.styled(st);
             }
             let r = self.region;
             let mut src = Surface::new();

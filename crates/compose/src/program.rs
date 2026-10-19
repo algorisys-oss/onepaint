@@ -780,6 +780,47 @@ impl Planner<'_> {
     /// children planned on the tiles the inverse transform reaches, which
     /// the filter resamples. The GPU assembles them in a 3 × 3-tile image,
     /// so a peg that shrinks past that stays on the CPU.
+    /// A styled node's content (spec 56): `alone` (the node by itself)
+    /// planned on the tiles within the styles' margin, the layers `below`
+    /// it on this tile as what its effects blend against, and the styles.
+    /// The GPU assembles 3 × 3 tiles, so wider margins stay on the CPU.
+    fn styled_content(&self, styles: onepaint_doc::styles::LayerStyles, alone: Vec<Node>, below: &[Node]) -> Result<Content, Unsupported> {
+        if self.reveal == Reveal::Below {
+            return Err(Unsupported);
+        }
+        let m = crate::styles::margin(&styles);
+        if m > TILE {
+            return Err(Unsupported);
+        }
+        let t = onepaint_raster::Rect::from_tile(self.tx, self.ty);
+        let region = onepaint_raster::Rect::new(t.x - m, t.y - m, t.w + 2 * m, t.h + 2 * m).intersect(&self.doc.bounds()).unwrap_or(t);
+        let sub = |root: Vec<Node>| {
+            let mut d = self.doc.clone_shallow();
+            d.root = root;
+            d.source = None;
+            d.set_paper(None);
+            d
+        };
+        let (own, under) = (sub(alone), sub(below.to_vec()));
+        let plan_on =
+            |d: &Document, x: i32, y: i32| plan(d, x, y, self.ov, None, self.cache, &Wholes::default()).map(Arc::new).ok_or(Unsupported);
+        let content = region.tiles().map(|(x, y)| Ok(((x, y), plan_on(&own, x, y)?))).collect::<Result<Vec<_>, Unsupported>>()?;
+        let under = plan_on(&under, self.tx, self.ty)?;
+        self.spatial.set(true);
+        let styled = crate::spatial::Styled { styles, under };
+        let src = crate::spatial::SpatialSrc::of_styled(styled, (self.tx, self.ty), region, self.frame, content);
+        Ok(Content {
+            base: None,
+            stroke: None,
+            mask: MaskSrc::None,
+            mask_stroke: None,
+            relief: None,
+            density: 1.0,
+            vmask: None,
+            spatial: Some(Arc::new(src)),
+        })
+    }
+
     /// `None`: nothing over the document reaches the tile.
     fn pegged_content(&self, g: &onepaint_doc::Group) -> Result<Option<Content>, Unsupported> {
         let peg = crate::ghost_peg(g).ok_or(Unsupported)?;
@@ -1044,11 +1085,17 @@ impl Planner<'_> {
                 Node::Group(g) => {
                     let clip = self.panel_clip(g);
                     if g.visible && g.opacity > 0.0 && !g.children.is_empty() && !matches!(clip, Some(Clip::Empty)) {
-                        // Layer styles (spec 56) render on the CPU until phase 3.
-                        if g.styles().is_some_and(|s| s.is_active()) {
-                            return Err(Unsupported);
-                        }
-                        if g.extra.contains_key(GHOST_PEG_KEY) {
+                        let styled = g.styles().filter(|s| s.is_active());
+                        if let Some(st) = styled {
+                            // Layer styles (spec 56): the register starts as the styled
+                            // group; riders and pegs stay on the CPU.
+                            let riders = nodes[i + 1..j].iter().any(|r| r.visible() && r.opacity() > 0.0);
+                            if riders || g.extra.contains_key(GHOST_PEG_KEY) {
+                                return Err(Unsupported);
+                            }
+                            let content = self.styled_content(st, g.children.clone(), &nodes[..i])?;
+                            self.push(Op::PushContent(content))?;
+                        } else if g.extra.contains_key(GHOST_PEG_KEY) {
                             // Spec 55: the group's content through its peg, as a register.
                             match self.pegged_content(g)? {
                                 Some(content) => self.push(Op::PushContent(content))?,
@@ -1071,13 +1118,24 @@ impl Planner<'_> {
                 }
                 Node::Layer(l) => {
                     if l.visible && l.opacity > 0.0 {
-                        if l.adjustment.is_none() && l.styles().is_some_and(|s| s.is_active()) {
-                            return Err(Unsupported);
-                        }
                         let family = &nodes[i + 1..j];
-                        let content = match crate::spatial::spatial_kind(l) {
-                            Some(kind) => self.spatial_content(l, kind, &nodes[..i])?,
-                            None => self.content(l)?,
+                        let styled = l.styles().filter(|s| s.is_active()).filter(|_| l.adjustment.is_none());
+                        let content = match (styled, crate::spatial::spatial_kind(l)) {
+                            (Some(st), _) => {
+                                // Layer styles (spec 56); families, inherit alpha and
+                                // knockouts stay on the CPU.
+                                if !family.is_empty() || l.inherit_alpha || l.knockout().is_some() {
+                                    return Err(Unsupported);
+                                }
+                                let mut alone = l.clone();
+                                (alone.opacity, alone.blend_mode, alone.clipped, alone.visible) = (1.0, BlendMode::Normal, false, true);
+                                alone.set_styles(None);
+                                alone.set_blend_if(None);
+                                alone.set_knockout(None);
+                                Some(self.styled_content(st, vec![Node::Layer(alone)], &nodes[..i])?)
+                            }
+                            (None, Some(kind)) => self.spatial_content(l, kind, &nodes[..i])?,
+                            (None, None) => self.content(l)?,
                         };
                         let punch = |c: &Content| Op::Knockout { content: c.clone(), opacity: l.opacity, reveal: self.reveal };
                         let punch = content.as_ref().filter(|_| l.knockout().is_some()).map(punch);

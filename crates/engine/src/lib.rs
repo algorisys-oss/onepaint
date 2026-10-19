@@ -667,7 +667,14 @@ impl Session {
         let doc = self.display_doc_gpu();
         // Spec 38: split at the layer being changed, so the rest is cached.
         let hot = ov.as_ref().map_or(self.active.as_str(), |o| o.layer_id).to_string();
-        onepaint_compose::program::plan_tiles_cached(&doc, keys, ov.as_ref(), Some(&hot), Some(&self.plan_cache))
+        let (progs, mut cpu) = onepaint_compose::program::plan_tiles_cached(&doc, keys, ov.as_ref(), Some(&hot), Some(&self.plan_cache));
+        // Styled layers run on the CPU until the GPU has their pass (spec 56 phase 3).
+        let styled = |p: &onepaint_compose::program::TileProgram| {
+            onepaint_compose::program::op_contents(&p.ops).any(|c| c.spatial.as_ref().is_some_and(|s| s.styled.is_some()))
+        };
+        let (gpu, styled): (Vec<_>, Vec<_>) = progs.into_iter().partition(|p| !styled(p));
+        cpu.extend(styled.iter().map(|p| (p.tx, p.ty)));
+        (gpu, cpu)
     }
 
     /// [`Self::flatten`] as premultiplied linear light, whatever the
