@@ -199,7 +199,11 @@ an item changes there, change it here too.
 
 ### 2.2 GPU painting
 - [x] Live wet media on the GPU (spec 35)
-- [ ] GPU stamping (instanced dabs into the stroke slot), checked against the CPU rasteriser
+- [ ] GPU stamping (instanced dabs into the stroke slot), checked against the CPU rasteriser.
+      The CPU rasteriser first (2026-10-19, 2 threads): rows only over the
+      tip's span, f16 rows converted in batches, big dabs' tiles in
+      parallel: r6 5.0 → 1.8 µs, r30 82 → 38 µs, r120 1.21 → 0.30 ms,
+      r500 4.6 ms; a 24 px stroke of 100 events 12.0 → 6.8 ms
 - [ ] GPU smudge, liquify and filter passes with interactive previews
 - [ ] Flood fill, magic wand and feathering as compute passes. Measured
       first (`hot_paths` bench `regions 4096²`, 2 rayon threads,

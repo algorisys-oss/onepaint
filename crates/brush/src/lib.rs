@@ -512,6 +512,45 @@ fn smoothstep(e0: f64, e1: f64, x: f64) -> f64 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// The offsets from the dab's centre (`px`, doc px) a tip can cover on the
+/// row at `py`, or `None` when it misses the row: the rotated ellipse for
+/// round tips, the rotated square for square and image tips. Callers pad it
+/// by a pixel; pixels outside give coverage 0 anyway.
+fn row_span(tip: &Tip, py: f64, c: f64, sn: f64, ax: f64, ay: f64) -> Option<(f64, f64)> {
+    match tip {
+        Tip::Circle | Tip::Gauss => {
+            // (px·c + py·s)²/ax² + (−px·s + py·c)²/ay² < 1, a quadratic in px.
+            let (ia, ib) = (1.0 / (ax * ax), 1.0 / (ay * ay));
+            let a = c * c * ia + sn * sn * ib;
+            let b = 2.0 * c * sn * (ia - ib) * py;
+            let cc = (sn * sn * ia + c * c * ib) * py * py - 1.0;
+            let disc = b * b - 4.0 * a * cc;
+            if disc < 0.0 || a <= 0.0 {
+                return None;
+            }
+            let r = disc.sqrt();
+            Some(((-b - r) / (2.0 * a), (-b + r) / (2.0 * a)))
+        }
+        Tip::Square | Tip::Image(_) => {
+            // |px·α + β| < 1 for both axes of the rotated square.
+            let mut lo = f64::NEG_INFINITY;
+            let mut hi = f64::INFINITY;
+            for (al, be) in [(c / ax, py * sn / ax), (-sn / ay, py * c / ay)] {
+                if al.abs() < 1e-12 {
+                    if be.abs() >= 1.0 {
+                        return None;
+                    }
+                    continue;
+                }
+                let (p, q) = ((-1.0 - be) / al, (1.0 - be) / al);
+                lo = lo.max(p.min(q));
+                hi = hi.min(p.max(q));
+            }
+            (lo <= hi).then_some((lo, hi))
+        }
+    }
+}
+
 /// Bounding box of a dab in document px (square/image tips reach √2 further).
 pub fn dab_bounds(d: &Dab) -> Rect {
     let r = d.radius / d.aspect.max(1e-3).sqrt() * std::f64::consts::SQRT_2 + 1.0;
@@ -623,16 +662,29 @@ fn rasterize_impl<const PAPER: bool, const EXTRA: bool>(
     } else {
         ([0.0; 3], 0.0)
     };
-    for (tx, ty) in bounds.tiles() {
+    // One tile of the dab; `row` is scratch for a row span as f32.
+    let paint = |tx: i32, ty: i32, tile: &mut onepaint_raster::Tile, row: &mut Vec<f32>| {
         let tr = Rect::from_tile(tx, ty);
         let Some(ix) = bounds.intersect(&tr) else {
-            continue;
+            return;
         };
-        let tile = s.tile_mut(tx, ty);
         let tooth = if PAPER { paper.map(|p| p.tile(tx, ty)) } else { None };
         for y in ix.y..ix.bottom() {
             let py = y as f64 + 0.5 - d.y;
-            for x in ix.x..ix.right() {
+            // Only the pixels the tip can reach on this row.
+            let Some((x0, x1)) =
+                row_span(tip, py, c, sn, ax, ay).map(|(a, b)| ((d.x + a - 0.5).floor() as i32 - 1, (d.x + b - 0.5).ceil() as i32 + 2))
+            else {
+                continue;
+            };
+            let (sx0, sx1) = (ix.x.max(x0), ix.right().min(x1));
+            if sx0 >= sx1 {
+                continue;
+            }
+            // The span's pixels as f32, converted in one batch each way.
+            let (l0, lyi) = ((sx0 - tx * TILE) as usize, (y - ty * TILE) as usize);
+            tile.read_row(lyi, l0, (sx1 - tx * TILE) as usize, row);
+            for x in sx0..sx1 {
                 let px = x as f64 + 0.5 - d.x;
                 // Undo the rotation, then normalise by the ellipse axes.
                 let lx = (px * c + py * sn) / ax;
@@ -679,8 +731,8 @@ fn rasterize_impl<const PAPER: bool, const EXTRA: bool>(
                 if a <= 0.0 {
                     continue;
                 }
-                let (lxi, lyi) = ((x - tx * TILE) as usize, (y - ty * TILE) as usize);
-                let dst = tile.get(lxi, lyi);
+                let k = (x - sx0) as usize * 4;
+                let dst = [row[k], row[k + 1], row[k + 2], row[k + 3]];
                 let col = match extras.color.filter(|_| EXTRA) {
                     Some(mode) => color_tip_rgb(mode, lx * 0.5 + 0.5, ly * 0.5 + 0.5, brush_srgb, brush_sat, extras.space),
                     None => d.color,
@@ -692,9 +744,80 @@ fn rasterize_impl<const PAPER: bool, const EXTRA: bool>(
                     let k = 1.0 - a;
                     [src[0] + dst[0] * k, src[1] + dst[1] * k, src[2] + dst[2] * k, src[3] + dst[3] * k]
                 };
-                tile.set(lxi, lyi, out);
+                row[k..k + 4].copy_from_slice(&out);
             }
+            tile.write_row(lyi, l0, row);
+        }
+    };
+    let keys: Vec<(i32, i32)> = bounds.tiles().collect();
+    if keys.len() >= 4 {
+        // A big dab: its tiles in parallel (each pixel is independent).
+        use rayon::prelude::*;
+        s.tiles_mut(&keys)
+            .into_par_iter()
+            .for_each_init(|| Vec::with_capacity(TILE as usize * 4), |row, ((tx, ty), tile)| paint(tx, ty, tile, row));
+    } else {
+        let mut row = Vec::with_capacity(TILE as usize * 4);
+        for (tx, ty) in keys {
+            paint(tx, ty, s.tile_mut(tx, ty), &mut row);
         }
     }
     bounds
+}
+
+#[cfg(test)]
+mod span_tests {
+    use super::*;
+
+    /// Every pixel a tip reaches lies inside its row's padded span.
+    #[test]
+    fn row_spans_hold_every_covered_pixel() {
+        let mut seed = 7u64;
+        let mut rnd = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let image = Tip::Image(std::sync::Arc::new(tips::Mask::from_u8(2, &[255; 4])));
+        for tip in [Tip::Circle, Tip::Gauss, Tip::Square, image] {
+            for _ in 0..200 {
+                let (dx, dy) = (rnd() * 3.0, rnd() * 3.0);
+                let radius = 0.3 + rnd() * 40.0;
+                let aspect = 0.05 + rnd() * 1.5;
+                let rot = rnd() * 7.0;
+                let sc = aspect.sqrt();
+                let (ax, ay) = (radius / sc, radius * sc);
+                let (c, sn) = (rot.cos(), rot.sin());
+                let d = Dab {
+                    x: 50.0 + dx,
+                    y: 50.0 + dy,
+                    radius,
+                    alpha: 1.0,
+                    rotation: rot,
+                    aspect,
+                    hardness: 0.5,
+                    color: [0.0; 3],
+                    grain_off: [0.0; 2],
+                };
+                let b = dab_bounds(&d);
+                for y in b.y..b.bottom() {
+                    let py = y as f64 + 0.5 - d.y;
+                    let span = row_span(&tip, py, c, sn, ax, ay)
+                        .map(|(a, b)| ((d.x + a - 0.5).floor() as i32 - 1, (d.x + b - 0.5).ceil() as i32 + 2));
+                    for x in b.x..b.right() {
+                        let px = x as f64 + 0.5 - d.x;
+                        let lx = (px * c + py * sn) / ax;
+                        let ly = (-px * sn + py * c) / ay;
+                        let inside = match tip {
+                            Tip::Circle | Tip::Gauss => lx * lx + ly * ly < 1.0,
+                            _ => lx.abs() < 1.0 && ly.abs() < 1.0,
+                        };
+                        if inside {
+                            let (x0, x1) = span.unwrap_or_else(|| panic!("{x},{y} covered but the row has no span"));
+                            assert!(x >= x0 && x < x1, "{x},{y} outside {x0}..{x1}");
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

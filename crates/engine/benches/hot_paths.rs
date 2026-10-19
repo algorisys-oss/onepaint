@@ -9,7 +9,7 @@ use onepaint_raster::Surface;
 use onepaint_stroke::StrokePoint;
 
 fn dabs(c: &mut Criterion) {
-    for r in [6.0, 30.0, 120.0] {
+    for r in [6.0, 30.0, 120.0, 500.0] {
         let d = Dab {
             x: 300.0,
             y: 300.0,

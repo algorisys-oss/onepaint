@@ -127,6 +127,16 @@ impl Surface {
         Arc::make_mut(self.tiles.entry((tx, ty)).or_default())
     }
 
+    /// Mutable tiles at `keys` (created transparent if missing; copy-on-write
+    /// if shared), disjoint, for working them in parallel. In no set order.
+    pub fn tiles_mut(&mut self, keys: &[(i32, i32)]) -> Vec<((i32, i32), &mut Tile)> {
+        for &k in keys {
+            self.tiles.entry(k).or_default();
+        }
+        let want: std::collections::HashSet<(i32, i32)> = keys.iter().copied().collect();
+        self.tiles.iter_mut().filter(|(k, _)| want.contains(*k)).map(|(k, t)| (*k, Arc::make_mut(t))).collect()
+    }
+
     pub fn set_tile(&mut self, tx: i32, ty: i32, tile: Option<Arc<Tile>>) {
         match tile {
             Some(t) => {

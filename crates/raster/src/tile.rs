@@ -109,6 +109,36 @@ impl Tile {
         }
     }
 
+    /// Pixels `lx0..lx1` of row `ly` as f32 (four a pixel) into `out`,
+    /// converted in one batch.
+    pub fn read_row(&self, ly: usize, lx0: usize, lx1: usize, out: &mut Vec<f32>) {
+        let (a, b) = ((ly * TILE as usize + lx0) * 4, (ly * TILE as usize + lx1) * 4);
+        out.resize(b - a, 0.0);
+        match &self.data {
+            Data::F16(d) => half::slice::HalfFloatSliceExt::convert_to_f32_slice(&d[a..b], out),
+            Data::Unorm8(d) => {
+                for (o, v) in out.iter_mut().zip(&d[a..b]) {
+                    *o = *v as f32 / 255.0;
+                }
+            }
+        }
+    }
+
+    /// Write back a row span read with [`Self::read_row`] (exact for the
+    /// values it read: f16 and 8-bit round trips through f32 are lossless).
+    pub fn write_row(&mut self, ly: usize, lx0: usize, src: &[f32]) {
+        let a = (ly * TILE as usize + lx0) * 4;
+        let b = a + src.len();
+        match &mut self.data {
+            Data::F16(d) => half::slice::HalfFloatSliceExt::convert_from_f32_slice(&mut d[a..b], src),
+            Data::Unorm8(d) => {
+                for (o, v) in d[a..b].iter_mut().zip(src) {
+                    *o = byte(*v);
+                }
+            }
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         match &self.data {
             Data::F16(d) => d.chunks_exact(4).all(|p| p[3].to_f32() <= 0.0),
@@ -176,6 +206,36 @@ impl Tile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A row read and written back unchanged leaves the tile as it was, and
+    /// matches per-pixel `get`/`set` (the dab rasteriser relies on both).
+    #[test]
+    fn row_round_trips_are_exact() {
+        // Every finite f16 bit pattern, subnormals included.
+        let vals: Vec<f16> = (0..TILE_PX as u32 * 4)
+            .map(|i| f16::from_bits((i.wrapping_mul(2654435761) >> 16) as u16))
+            .map(|v| if v.is_finite() { v } else { f16::ZERO })
+            .collect();
+        let t = Tile::from_f16(vals);
+        let mut row = Vec::new();
+        for (ly, a, b) in [(0usize, 0usize, 256usize), (17, 3, 200), (255, 250, 256)] {
+            let mut u = t.clone();
+            u.read_row(ly, a, b, &mut row);
+            for (k, lx) in (a..b).enumerate() {
+                assert_eq!(&row[k * 4..k * 4 + 4], &t.get(lx, ly));
+            }
+            u.write_row(ly, a, &row);
+            assert_eq!(u, t);
+        }
+        let mut e = Tile::from_f32(&vec![0.0; TILE_PX * 4]).to_store(Store::Unorm8);
+        for lx in 0..256 {
+            e.set(lx, 9, [lx as f32 / 255.0; 4]);
+        }
+        let mut u = e.clone();
+        u.read_row(9, 0, 256, &mut row);
+        u.write_row(9, 0, &row);
+        assert_eq!(u, e);
+    }
 
     fn bytes(t: &Tile) -> Vec<u8> {
         match &t.data {
