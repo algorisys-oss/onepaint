@@ -76,6 +76,7 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] Vector path layers, plus path ops
 - [x] Adjustment layers and fill layers (colour, fill and spatial kinds all composite live)
 - [x] Per-layer smart-filter stacks (add from any filter, toggle, edit, remove, bake; cached; exported)
+- [x] Layer styles on layers and groups: all 10 effects, Fill opacity, Global Light, built-in and user presets, `.asl` import, Bake, on the GPU and in PSD `lfx2`/`lmfx` (happypaint v0.196; spec 56)
 
 ## Blend modes (29)
 The modes are, in the layer menu's order (`layer-panel/blend-modes.ts`):
@@ -173,7 +174,7 @@ screentone are added as live layers.
 - [x] Autosave and the gallery (crash-recovery autosave; a gallery of recent drawings with thumbnails, shown at launch)
 - [x] `.happypaint-book` (open as tabs; save all tabs as a book)
 - [ ] `.happypaint-rec`
-- [~] PSD: read and write layers, groups, masks, blend modes, clipping, DPI, fill layers as pixels, and live adjustment layers: invert, posterize, threshold, brightness-contrast, levels, curves, hue-saturation, color-balance (midtones), black-white (Photoshop's weights and tint not kept yet), gradient map (solid; stop colours in RGB, HSB, Lab or grey), exposure, vibrance, photo filter and channel mixer (8/16-bit RGB/grey read, PSB read; text exported as pixels). An 8-bit RGB PSD saves back byte for byte when untouched, and keeps untouched layers' records (styles, text, smart objects) when edited (spec 51). Missing against happypaint's codec: other colour modes, 32-bit, PSB export, untouched round trips of 16-bit/grey/PSB files, fill recipes, layer styles, locks, labels and guides.
+- [~] PSD: read and write layers, groups, masks, blend modes, clipping, DPI, fill layers as pixels, and live adjustment layers: invert, posterize, threshold, brightness-contrast, levels, curves, hue-saturation, color-balance (midtones), black-white (Photoshop's weights and tint not kept yet), gradient map (solid; stop colours in RGB, HSB, Lab or grey), exposure, vibrance, photo filter and channel mixer (8/16-bit RGB/grey read, PSB read; text exported as pixels). An 8-bit RGB PSD saves back byte for byte when untouched, and keeps untouched layers' records (styles, text, smart objects) when edited (spec 51). Missing against happypaint's codec: other colour modes, 32-bit, PSB export, untouched round trips of 16-bit/grey/PSB files, fill recipes, locks, labels and guides.
 - [x] PNG, JPEG, WebP, TIFF and Netpbm, keeping ICC profiles and DPI (import all, converting embedded RGB profiles; export PNG/JPEG/TIFF/PPM with scale, DPI and ICC tags)
 - [x] GIF, MP4, WebM and PNG-zip export (GIF, MP4 and PNG-zip; WebM is covered by MP4, divergence 20)
 - [x] Clipboard: copy and paste images (in-place paste, the system clipboard, layer via copy/cut)

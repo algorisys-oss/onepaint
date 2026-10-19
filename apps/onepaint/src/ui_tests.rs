@@ -321,3 +321,42 @@ fn a_style_saves_as_a_preset_and_applies() {
     h.run();
     assert!(h.state().style_presets.list.is_empty());
 }
+
+/// Spec 56: a gradient overlay's stops edit on a bar: a click adds a stop,
+/// which the current colour can then recolour.
+#[test]
+fn gradient_overlay_stops_edit_on_the_bar() {
+    let mut h = harness();
+    h.state_mut().layout.set_placement(PanelId::Properties, Placement::Dock { side: DockSide::Right }, None);
+    dock::set_panel_open(h.state_mut(), PanelId::Properties, true);
+    h.run();
+    let id = h.state().session.active().to_string();
+    let stops = |h: &Harness<'_, App>| {
+        let st = h.state().session.doc().find(&id).and_then(|n| n.as_layer()).and_then(|l| l.styles()).unwrap();
+        st.effects.iter().find(|e| e.kind == onepaint_doc::styles::EffectKind::GradientOverlay).unwrap().stops.clone()
+    };
+    h.get_by_label("Gold").click();
+    h.run();
+    assert_eq!(stops(&h).len(), 3);
+    // The effect's row, above the Add chips.
+    h.get_all_by_label("Gradient Overlay").min_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).unwrap().click();
+    h.run();
+    let bar = h.get_by_label("Gradient: 3 stops").rect();
+    click_with(&mut h, egui::pos2(bar.left() + 7.0 + (bar.width() - 14.0) * 0.25, bar.top() + 8.0), Default::default());
+    let s = stops(&h);
+    assert_eq!(s.len(), 4);
+    assert!((s[3]["pos"].as_f64().unwrap() - 0.25).abs() < 0.02, "{s:?}");
+    h.state_mut().session.execute(onepaint_engine::Command::SetColor { rgba: onepaint_color::Rgba::new(1.0, 0.0, 0.0, 1.0) }).unwrap();
+    h.run();
+    // The swatch beside the label.
+    let l = h.get_by_label("Stop colour").rect();
+    click_with(&mut h, egui::pos2(l.right() + 16.0, l.center().y), Default::default());
+    assert_eq!(stops(&h)[3]["color"], serde_json::json!([1.0, 0.0, 0.0]));
+    // Drag its handle along; the others stay.
+    let bar = h.get_by_label("Gradient: 4 stops").rect();
+    let x = |p: f32| bar.left() + 7.0 + (bar.width() - 14.0) * p;
+    drag(&mut h, egui::pos2(x(0.25), bar.top() + 26.0), egui::pos2(x(0.6), bar.top() + 26.0));
+    let s = stops(&h);
+    assert!((s[3]["pos"].as_f64().unwrap() - 0.6).abs() < 0.02, "{s:?}");
+    assert_eq!(s[1]["pos"].as_f64(), Some(0.5));
+}

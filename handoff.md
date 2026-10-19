@@ -53,7 +53,9 @@ Overnight (2026-10-18 → 19), all pushed, newest last:
   for screenshots), Global Light across the document, Bake, Merge Down
   baking styles; PSD effects both ways (`psd_effects`, `psd_desc`). User presets
   (`style_presets.rs`, `styles.json`) and `.asl` import (`formats::asl`)
-  done. Next: editing gradient-overlay stops.
+  and gradient-overlay stop editing (`ui_kit::gradient_stops`) done:
+  spec 56 is complete. Next: the remaining parity items (wet physics
+  v0.199, procedural papers, workspace UI).
 - `scripts/bench-gate/gate.sh save|check`: the perf-budget gate for
   AGENTS.md's 5% rule, on criterion's saved baselines (checked: the 9
   engine hot-path benches came out within 5% of themselves).

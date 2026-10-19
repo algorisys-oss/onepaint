@@ -18,7 +18,11 @@ both layers' styles as far as they reach. User presets: save the current
 style by name, apply it in a click like the built-ins, delete it
 (`apps/onepaint/src/style_presets.rs`, `styles.json` in the config
 folder; `doc::styles::parse_style_presets` as happypaint's sanitizer).
-Still to come in phase 4: gradient-stop editing. Phase 5 in part: PSD effects
+Gradient overlay stops edit on a bar (`ui_kit::gradient_stops`, as
+happypaint's `gradient-stops.tsx`: click to add, drag to move,
+double-click to delete, the selected stop takes the current colour);
+like happypaint's dialog, an edit writes every stop opaque with no
+midpoint. Phase 4 is done. Phase 5 in part: PSD effects
 (`formats::psd_effects` on a general descriptor reader, `psd_desc`):
 `lfx2`/`lmfx` both ways in ag-psd's byte order, `iOpa`, Global Light in
 resources 1037/1049, contours by name or nearest curve, happypaint's

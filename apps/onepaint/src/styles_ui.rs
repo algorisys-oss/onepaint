@@ -96,6 +96,34 @@ fn colour(ui: &mut Ui, label: &str, rgb: &mut [f32; 3], current: onepaint_color:
     changed
 }
 
+/// A gradient overlay's stops: the bar, and the selected stop's colour.
+/// Any edit writes every stop opaque, with no midpoint, as happypaint's
+/// dialog does.
+fn stops_ui(ui: &mut Ui, salt: &str, e: &mut Effect, current: onepaint_color::Rgba) -> bool {
+    use onepaint_ui_kit::gradient_stops::{Stop, gradient_stops};
+    let num = |v: &serde_json::Value, k: &str| v.get(k).and_then(serde_json::Value::as_f64).unwrap_or(0.0) as f32;
+    let mut stops: Vec<Stop> = e
+        .stops
+        .iter()
+        .map(|s| {
+            let c = s.get("color").and_then(serde_json::Value::as_array);
+            let ch = |k: usize| c.and_then(|c| c.get(k)).and_then(serde_json::Value::as_f64).unwrap_or(0.0) as f32;
+            (num(s, "pos"), [ch(0), ch(1), ch(2)])
+        })
+        .collect();
+    let sel_id = egui::Id::new(salt).with("selected");
+    let mut sel = ui.ctx().data(|d| d.get_temp::<usize>(sel_id)).unwrap_or(0).min(stops.len().saturating_sub(1));
+    let mut changed = gradient_stops(ui, &mut stops, &mut sel, "Gradient").changed();
+    if let Some(s) = stops.get_mut(sel) {
+        changed |= colour(ui, "Stop colour", &mut s.1, current);
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(sel_id, sel));
+    if changed {
+        e.stops = stops.iter().map(|(pos, c)| serde_json::json!({"pos": pos, "color": c, "opacity": 1})).collect();
+    }
+    changed
+}
+
 /// A slider in display units (`stored = shown · scale`).
 fn num(ui: &mut Ui, label: &str, v: &mut f32, range: std::ops::RangeInclusive<f32>, scale: f32, unit: &str) -> bool {
     let mut x = Some(*v);
@@ -182,6 +210,7 @@ fn effect_ui(ui: &mut Ui, i: usize, e: &mut Effect, current: onepaint_color::Rgb
         EffectKind::GradientOverlay => {
             let shapes =
                 [("linear", "Linear"), ("radial", "Radial"), ("angle", "Angle"), ("reflected", "Reflected"), ("diamond", "Diamond")];
+            ch |= stops_ui(ui, &salt("stops"), e, current);
             ch |= choice(ui, &salt("shape"), "Style", &mut e.shape, &shapes);
             ch |= num(ui, "Angle", &mut e.angle, 0.0..=359.0, 1.0, "°");
             ch |= num(ui, "Scale", &mut e.scale, 10.0..=150.0, 0.01, "%");
