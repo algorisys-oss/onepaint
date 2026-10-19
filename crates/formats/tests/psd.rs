@@ -195,11 +195,20 @@ fn adjustment_layers_survive_a_psd_round_trip() {
         l.adjustment = Some(Box::new(Adjustment { kind: k.into(), params: default_params(Kind::parse(k).unwrap()) }));
         d.root.push(Node::Layer(l));
     }
+    // Color Lookup comes back live with its table.
+    let cube = "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
+    let lut = onepaint_filters::LutFile { format: "cube".into(), name: "Identity.cube".into(), text: cube.into() };
+    let mut l = Layer::new("color-lookup");
+    let params = onepaint_filters::Params { lut: Some(lut.clone()), ..Default::default() };
+    l.adjustment = Some(Box::new(Adjustment { kind: "color-lookup".into(), params }));
+    d.root.push(Node::Layer(l));
     let r = read_psd(&write_psd(&d, &vec![1.0f32; 16 * 16 * 4]).unwrap()).unwrap();
-    for k in kinds {
-        let l = r.root.iter().filter_map(|n| n.as_layer()).find(|l| l.name == k).unwrap();
-        assert_eq!(l.adjustment.as_ref().map(|a| a.kind.as_str()), Some(k));
+    for k in kinds.iter().chain(&["color-lookup"]) {
+        let l = r.root.iter().filter_map(|n| n.as_layer()).find(|l| l.name == *k).unwrap();
+        assert_eq!(l.adjustment.as_ref().map(|a| a.kind.as_str()), Some(*k));
     }
+    let l = r.root.last().and_then(|n| n.as_layer()).unwrap();
+    assert_eq!(l.adjustment.as_ref().and_then(|a| a.params.lut.clone()), Some(lut));
 }
 
 fn find(hay: &[u8], needle: &[u8]) -> bool {

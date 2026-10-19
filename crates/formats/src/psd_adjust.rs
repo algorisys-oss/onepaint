@@ -224,9 +224,78 @@ pub fn read(key: &[u8; 4], d: &[u8]) -> Option<Adjustment> {
         b"blwh" => ("black-white", black_white(d)?),
         b"selc" => ("cmyk-selective-color", selective_cmyk(d)?),
         b"grdm" => ("gradient-map", gradient_map(d)?),
+        b"clrL" => ("color-lookup", color_lookup(d)?),
         _ => return None,
     };
     Some(Adjustment { kind: kind.into(), params })
+}
+
+/// Color Lookup (`clrL`: version 1, then a descriptor), as happypaint's
+/// `psd-map.ts`: only a 3D LUT file onepaint can read comes in live (an
+/// abstract or device-link profile, or a `.look`, keeps its record).
+/// Photoshop's own fields go to `extra.lutPsd`.
+fn color_lookup(d: &[u8]) -> Option<Params> {
+    use crate::psd_desc::DVal;
+    if be16(d, 0)? != 1 {
+        return None;
+    }
+    let (desc, _) = crate::psd_desc::read(d, 6)?;
+    if desc.enum_val("lookupType").is_some_and(|t| t != "3DLUT") {
+        return None;
+    }
+    let Some(DVal::Data(data)) = desc.get("LUT3DFileData") else { return None };
+    let name = desc.text("LUT3DFileName").or(desc.text("Nm  ")).filter(|n| !n.is_empty()).unwrap_or("LUT").to_string();
+    let format = match desc.enum_val("LUTFormat") {
+        Some("LUTFormatCUBE") => "cube",
+        Some("LUTFormat3DL") => "3dl",
+        _ => onepaint_filters::lut3d::lut_format_of(&name)?,
+    };
+    let text = String::from_utf8_lossy(data).into_owned();
+    onepaint_filters::lut3d::parse_lut(format, &text)?;
+    let mut p = Params { lut: Some(onepaint_filters::LutFile { format: format.into(), name, text }), ..Default::default() };
+    let mut psd = serde_json::Map::new();
+    if let Some(b) = desc.bool("Dthr") {
+        psd.insert("dither".into(), b.into());
+    }
+    for key in ["dataOrder", "tableOrder"] {
+        if let Some(o) = desc.enum_val(key) {
+            psd.insert(key.into(), (if o == "bgrOrder" { "bgr" } else { "rgb" }).into());
+        }
+    }
+    if !psd.is_empty() {
+        p.extra.insert("lutPsd".into(), psd.into());
+    }
+    Some(p)
+}
+
+/// `clrL` for a Color Lookup layer (ag-psd's key order). A table loaded in
+/// onepaint has no companion profile: Photoshop's was compiled from the
+/// table it came with, and an untouched layer keeps its original record.
+fn color_lookup_block(p: &Params) -> Vec<u8> {
+    use crate::psd_desc::{DVal, Desc};
+    let mut d = Desc::new("null");
+    d.push("lookupType", DVal::Enum("colorLookupType".into(), "3DLUT".into()));
+    if let Some(l) = &p.lut {
+        let psd = p.extra.get("lutPsd");
+        let field = |k: &str| psd.and_then(|v| v.get(k));
+        let order = |k: &str| field(k).and_then(|v| v.as_str()).map(|o| if o == "bgr" { "bgrOrder" } else { "rgbOrder" });
+        d.push("Nm  ", DVal::Text(l.name.clone()));
+        d.push("Dthr", DVal::Bool(field("dither").and_then(serde_json::Value::as_bool).unwrap_or(true)));
+        let fmt = if l.format == "3dl" { "LUTFormat3DL" } else { "LUTFormatCUBE" };
+        d.push("LUTFormat", DVal::Enum("LUTFormatType".into(), fmt.into()));
+        for k in ["dataOrder", "tableOrder"] {
+            if let Some(o) = order(k) {
+                d.push(k, DVal::Enum("colorLookupOrder".into(), o.into()));
+            }
+        }
+        d.push("LUT3DFileData", DVal::Data(l.text.as_bytes().to_vec()));
+        d.push("LUT3DFileName", DVal::Text(l.name.clone()));
+    }
+    let mut o = Vec::new();
+    o.extend(1u16.to_be_bytes());
+    o.extend(16u32.to_be_bytes());
+    crate::psd_desc::write_into(&mut o, &d);
+    o
 }
 
 /// The block for an adjustment layer of these kinds.
@@ -235,6 +304,7 @@ pub fn write(a: &Adjustment) -> Option<([u8; 4], Vec<u8>)> {
     let mut o = Vec::new();
     let pct = |v: f32| (v.clamp(-2.0, 2.0) * 100.0).round() as i16;
     let key = match a.kind.as_str() {
+        "color-lookup" => return Some((*b"clrL", color_lookup_block(p))),
         "exposure" => {
             o.extend(1u16.to_be_bytes());
             o.extend(p.exposure.unwrap_or(0.0).clamp(-20.0, 20.0).to_be_bytes());
@@ -644,6 +714,33 @@ mod tests {
 
     fn close3(a: [f32; 3], b: [f32; 3], eps: f32) -> bool {
         (0..3).all(|i| (a[i] - b[i]).abs() <= eps)
+    }
+
+    // happypaint psd-roundtrip.test.ts: Color Lookup comes in live with its
+    // table, and a replaced table goes out without a stale profile.
+    #[test]
+    fn color_lookup_round_trips_live() {
+        let cube = "LUT_3D_SIZE 2\n0 0 0\n0 0 1\n0 1 0\n0 1 1\n1 0 0\n1 0 1\n1 1 0\n1 1 1\n";
+        let mut p = Params {
+            lut: Some(onepaint_filters::LutFile { format: "cube".into(), name: "Swap.CUBE".into(), text: cube.into() }),
+            ..Default::default()
+        };
+        p.extra.insert("lutPsd".into(), serde_json::json!({ "dither": false, "dataOrder": "bgr" }));
+        let a = Adjustment { kind: "color-lookup".into(), params: p };
+        let (key, block) = write(&a).unwrap();
+        assert_eq!(&key, b"clrL");
+        let back = read(&key, &block).unwrap();
+        assert_eq!(back, a);
+        assert!(!block.windows(7).any(|w| w == b"profile"), "no profile");
+        // An abstract profile or an unreadable table stays a record.
+        let mut d = crate::psd_desc::Desc::new("null");
+        d.push("lookupType", crate::psd_desc::DVal::Enum("colorLookupType".into(), "abstractProfile".into()));
+        let mut o = vec![0, 1, 0, 0, 0, 16];
+        crate::psd_desc::write_into(&mut o, &d);
+        assert!(read(b"clrL", &o).is_none());
+        let mut bad = a.clone();
+        bad.params.lut.as_mut().unwrap().text = "nonsense".into();
+        assert!(read(b"clrL", &write(&bad).unwrap().1).is_none());
     }
 
     #[test]

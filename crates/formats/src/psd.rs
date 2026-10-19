@@ -727,9 +727,8 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                         b"PtFl" | b"vscg" => vector_fill = true,
                         b"vstk" => vector_stroke = true,
                         b"nvrt" => adjustment = adj("invert", Default::default()),
-                        b"expA" | b"vibA" | b"phfl" | b"mixr" | b"levl" | b"curv" | b"hue2" | b"blnc" | b"blwh" | b"selc" | b"grdm" => {
-                            adjustment = crate::psd_adjust::read(&k, data)
-                        }
+                        b"expA" | b"vibA" | b"phfl" | b"mixr" | b"levl" | b"curv" | b"hue2" | b"blnc" | b"blwh" | b"selc" | b"grdm"
+                        | b"clrL" => adjustment = crate::psd_adjust::read(&k, data),
                         b"post" => {
                             adjustment = adj(
                                 "posterize",

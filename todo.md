@@ -232,14 +232,13 @@ See `docs/parity-delta-2026-10-10.md`.
       in Properties with the built-in styles, Global Light, Bake, Merge
       Down baking them, PSD lfx2/lmfx/iOpa both ways. User presets,
       .asl import and gradient stops done
-- [~] New adjustments: Exposure, Vibrance, Photo Filter, Channel Mixer done
+- [x] New adjustments: Exposure, Vibrance, Photo Filter, Channel Mixer done
       (CPU, GPU, PSD expA/vibA/phfl/mixr, panels; 2026-10-18); B&W hue
       weights + tint and Color Balance ranges + Preserve Luminosity
       (v0.201.3 formulas, CPU, GPU, PSD blwh/blnc both ways, panels;
       2026-10-19); Selective Color (CMYK ranges, `cmyk-selective-color`,
       PSD selc; 2026-10-19); Color Lookup (`.cube`/`.3dl`, CPU, GPU up to
-      65³; 2026-10-19). Left: Color Lookup's PSD `clrL` live (its records
-      already round-trip untouched)
+      65³; 2026-10-19); Color Lookup's PSD `clrL` live both ways
 - [x] PSD codec parity (modes, 32-bit, round trip, live adjustments, fills, styles; own mode and depth, PSB: spec 64)
 - [x] Wet physics v0.199 (spec 58): paper absorbs, the halo, tip-shaped dabs, wash fill
 - [x] Ten procedural papers, sheet colour, flecks and mottle (spec 57)
