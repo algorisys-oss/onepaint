@@ -134,3 +134,23 @@ mod tests {
         assert!(h.state().brush_library.remove(&id).unwrap());
     }
 }
+
+/// Whether a brush shows for a library search (happypaint's
+/// `brush-library.tsx`): the lowercased, trimmed `query` in its name or
+/// category; an empty query matches everything.
+pub fn matches(name: &str, category: &str, query: &str) -> bool {
+    let q = query.trim().to_lowercase();
+    q.is_empty() || name.to_lowercase().contains(&q) || category.to_lowercase().contains(&q)
+}
+
+#[cfg(test)]
+mod search_tests {
+    #[test]
+    fn search_matches_name_or_category() {
+        use super::matches;
+        assert!(matches("Soft Round", "Airbrush", ""));
+        assert!(matches("Soft Round", "Airbrush", "  ROUND "));
+        assert!(matches("Soft Round", "Airbrush", "airb"));
+        assert!(!matches("Soft Round", "Airbrush", "ink"));
+    }
+}

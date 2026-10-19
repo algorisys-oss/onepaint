@@ -286,6 +286,10 @@ pub struct App {
     pub curve_tab: usize,
     /// Category shown in the brush library.
     pub brush_category: String,
+    /// The library's search (name or category), and the Eraser's "All
+    /// brushes" scope with the tool it was chosen on.
+    pub brush_query: String,
+    pub brush_all: Option<Tool>,
     /// Imported brushes and where they persist.
     pub brush_library: brush_library::BrushLibrary,
     /// Brush studio state: try-it pad, preview, search.
@@ -377,6 +381,8 @@ impl App {
             loading: None,
             curve_tab: 0,
             brush_category: String::new(),
+            brush_query: String::new(),
+            brush_all: None,
             brush_library,
             studio: brush_studio::Studio::default(),
             open_later: None,
@@ -1337,7 +1343,7 @@ impl App {
                     let mut b = self.session.current_brush().clone();
                     let deg = Param::Angle.get(&b) + step;
                     Param::Angle.set(&mut b, deg);
-                    let _ = self.session.execute(Command::SetBrushPreset { preset: Box::new(b) });
+                    let _ = self.session.execute(Command::SetCurrentBrush { preset: Box::new(b) });
                 }
             }
             if on(Action::BrushSizeUp) {
@@ -2020,6 +2026,40 @@ mod tests {
         key(&mut h, egui::Key::I, egui::Modifiers::NONE);
         click(&mut h, pos2(600.0, 400.0));
         assert_eq!(h.state().session.color().to_hex(), "#ff0000");
+    }
+
+    /// The brush library searches every brush by name or category, and the
+    /// Eraser can paint with any brush ("All brushes"), staying an eraser.
+    #[test]
+    fn the_brush_library_searches_and_the_eraser_takes_any_brush() {
+        let mut h = harness();
+        h.run();
+        h.state_mut().popover = Some(Popover::Brushes);
+        h.run();
+        h.state_mut().brush_query = "charcoal".into();
+        h.run();
+        assert!(h.query_by_label("Soft Round").is_none(), "filtered out");
+        let pick = onepaint_brush::presets().into_iter().find(|p| p.name.to_lowercase().contains("charcoal")).unwrap();
+        h.get_by_label(&pick.name).click();
+        h.run();
+        assert_eq!(h.state().session.current_brush().id, pick.id);
+        h.state_mut().brush_query = "zzzz".into();
+        h.run();
+        assert!(h.query_by_label_contains("No brushes match").is_some());
+        // The Eraser: its own brushes until "All brushes".
+        h.state_mut().brush_query.clear();
+        h.state_mut().set_tool(Tool::Eraser);
+        h.state_mut().popover = Some(Popover::Brushes);
+        h.run();
+        assert!(h.query_by_label("Pencil").is_none());
+        h.get_by_label("All brushes").click();
+        h.run();
+        assert!(h.query_by_label("Pencil").is_some(), "listed under the erasers");
+        h.state_mut().brush_query = "pencil".into();
+        h.run();
+        h.get_all_by_label("Pencil").next().unwrap().click();
+        h.run();
+        assert_eq!((h.state().session.tool(), h.state().session.current_brush().id.as_str()), (Tool::Eraser, "pencil"));
     }
 
     /// Scrollbars appear once the drawing runs past the view: dragging the

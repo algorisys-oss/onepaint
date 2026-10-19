@@ -222,6 +222,11 @@ pub enum Command {
     SetBrushPreset {
         preset: Box<BrushPreset>,
     },
+    /// The current tool's brush, edited in place (the angle dial): unlike
+    /// `SetBrushPreset` it never switches between Brush and Eraser.
+    SetCurrentBrush {
+        preset: Box<BrushPreset>,
+    },
     SetBrushSize {
         size: f64,
     },

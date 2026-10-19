@@ -1099,6 +1099,7 @@ impl Session {
                     | Command::SetTool { .. }
                     | Command::SetBrush { .. }
                     | Command::SetBrushPreset { .. }
+                    | Command::SetCurrentBrush { .. }
                     | Command::SetBrushSize { .. }
                     | Command::SetBrushOpacity { .. }
                     | Command::SetBrushFlow { .. }
@@ -1136,6 +1137,7 @@ impl Session {
                 | Command::SetTool { .. }
                 | Command::SetBrush { .. }
                 | Command::SetBrushPreset { .. }
+                | Command::SetCurrentBrush { .. }
                 | Command::SetBrushSize { .. }
                 | Command::SetBrushOpacity { .. }
                 | Command::SetBrushFlow { .. }
@@ -1364,9 +1366,11 @@ impl Session {
                 self.paint.liquify_strength = strength.clamp(0.0, 1.0);
                 Ok(())
             }
+            // Any brush works as an eraser: on the Eraser it stays one
+            // (happypaint's brush library); an eraser preset picks the Eraser.
             Command::SetBrush { preset_id } => {
                 let p = onepaint_brush::preset(&preset_id).ok_or(EngineError::UnknownPreset(preset_id))?;
-                if p.is_eraser() {
+                if p.is_eraser() || self.tool == Tool::Eraser {
                     self.eraser = p;
                     self.tool = Tool::Eraser;
                 } else {
@@ -1383,6 +1387,10 @@ impl Session {
                     self.brush = *preset;
                     self.tool = Tool::Brush;
                 }
+                Ok(())
+            }
+            Command::SetCurrentBrush { preset } => {
+                *self.current_brush_mut() = *preset;
                 Ok(())
             }
             Command::SetBrushSize { size } => {

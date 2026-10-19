@@ -64,3 +64,21 @@ fn set_brush_preset_is_not_undoable_and_serialises() {
     assert_eq!(s.current_brush().id, "soft-round");
     assert_eq!(s.history_len(), before);
 }
+
+/// Any brush works as an eraser: picked on the Eraser it stays one;
+/// `SetCurrentBrush` edits the current slot in place.
+#[test]
+fn the_eraser_keeps_any_brush_it_picks() {
+    let mut s = Session::new(64, 64, None);
+    s.execute(Command::SetTool { tool: Tool::Eraser }).unwrap();
+    s.execute(Command::SetBrush { preset_id: "pencil".into() }).unwrap();
+    assert_eq!((s.tool(), s.current_brush().id.as_str()), (Tool::Eraser, "pencil"));
+    let mut b = s.current_brush().clone();
+    b.tip_angle_deg = Some(30.0);
+    s.execute(Command::SetCurrentBrush { preset: Box::new(b) }).unwrap();
+    assert_eq!((s.tool(), s.current_brush().tip_angle_deg), (Tool::Eraser, Some(30.0)));
+    // On the Brush, an eraser preset still picks the Eraser.
+    s.execute(Command::SetTool { tool: Tool::Brush }).unwrap();
+    s.execute(Command::SetBrush { preset_id: "eraser-hard".into() }).unwrap();
+    assert_eq!(s.tool(), Tool::Eraser);
+}

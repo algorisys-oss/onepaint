@@ -421,7 +421,28 @@ fn brushes(app: &mut App, ui: &mut Ui) {
     ui.add_space(4.0);
     let current = app.session.current_brush().id.clone();
     let eraser = app.session.tool() == Tool::Eraser;
+    // Search (happypaint's library): name or category, over every brush.
+    let r = ui.add(egui::TextEdit::singleline(&mut app.brush_query).desired_width(f32::INFINITY).hint_text("Search brushes…"));
+    if r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        app.brush_query.clear();
+    }
+    let query = app.brush_query.trim().to_lowercase();
+    let searching = !query.is_empty();
+    // The Eraser's scope: its own brushes, or any brush (it stays an eraser);
+    // back to its own whenever another tool shows the library.
     if !eraser {
+        app.brush_all = None;
+    }
+    let all = eraser && app.brush_all == Some(Tool::Eraser);
+    if eraser && !searching {
+        ui.add_space(4.0);
+        if let Some(i) = segmented(ui, &["All brushes", "Erasers"], if all { 0 } else { 1 }) {
+            app.brush_all = (i == 0).then_some(Tool::Eraser);
+        }
+        ui.label(RichText::new("Any brush works as an eraser — it stays on the eraser tool.").font(theme::medium(11.0)).color(t.fg_faint));
+    }
+    if !eraser && !searching {
+        ui.add_space(4.0);
         // Category chips; the list shows one category at a time (124 presets).
         let mut cats: Vec<String> = onepaint_brush::categories().into_iter().filter(|c| c != "Eraser").collect();
         let user = onepaint_brush::user_presets();
@@ -446,24 +467,36 @@ fn brushes(app: &mut App, ui: &mut Ui) {
                 }
             }
         });
-        ui.add_space(4.0);
     }
+    ui.add_space(4.0);
     let category = app.brush_category.clone();
     // Imported and custom brushes (and custom erasers) live in the user library.
     let user_cat = category == onepaint_brush::IMPORTED_CATEGORY || category == onepaint_brush::CUSTOM_CATEGORY;
-    let list: Vec<_> = if eraser {
-        onepaint_brush::presets().into_iter().chain(onepaint_brush::user_presets()).collect()
+    let list: Vec<_> = if searching {
+        let all: Vec<_> = onepaint_brush::presets().into_iter().chain(onepaint_brush::user_presets()).collect();
+        all.into_iter().filter(|p| crate::brush_library::matches(&p.name, &p.category, &query)).collect()
+    } else if eraser && all {
+        // Erasers first, then every other brush in library order.
+        let every: Vec<_> = onepaint_brush::presets().into_iter().chain(onepaint_brush::user_presets()).collect();
+        let (mut e, rest): (Vec<_>, Vec<_>) = every.into_iter().partition(|p| p.is_eraser());
+        e.extend(rest);
+        e
+    } else if eraser {
+        onepaint_brush::presets().into_iter().chain(onepaint_brush::user_presets()).filter(|p| p.is_eraser()).collect()
     } else if user_cat {
-        onepaint_brush::user_presets()
+        onepaint_brush::user_presets().into_iter().filter(|p| p.category == category).collect()
     } else {
-        onepaint_brush::presets()
+        onepaint_brush::presets().into_iter().filter(|p| p.category == category).collect()
     };
+    if searching && list.is_empty() {
+        ui.label(RichText::new(format!("No brushes match “{}”.", app.brush_query.trim())).color(t.fg_muted));
+    }
     let mut delete = None;
     // Fit the list below the top bar so the popover never overlaps it: the
     // footer below takes ~330 px (files, Size, Opacity, Flow, Angle, studio).
     let room = (ui.ctx().content_rect().height() - ui.cursor().top() - 330.0).clamp(120.0, 360.0);
     egui::ScrollArea::vertical().max_height(room).show(ui, |ui| {
-        for p in list.into_iter().filter(|p| if eraser { p.is_eraser() } else { p.category == category }) {
+        for p in list {
             let sel = p.id == current;
             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 62.0), Sense::click());
             resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, sel, &p.name));
@@ -1399,7 +1432,7 @@ fn brush_angle(app: &mut App, ui: &mut Ui) {
         .inner;
     if changed {
         Param::Angle.set(&mut b, deg);
-        let _ = app.session.execute(Command::SetBrushPreset { preset: Box::new(b) });
+        let _ = app.session.execute(Command::SetCurrentBrush { preset: Box::new(b) });
     }
 }
 
