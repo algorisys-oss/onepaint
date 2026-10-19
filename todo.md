@@ -49,7 +49,7 @@ an item changes there, change it here too.
 - [x] On-canvas handles (spec 60): centres, reaches, tilt-shift band,
       iris/spin ellipse, Field Blur pins, gradient fill ends, pattern origin
       (ripple has none, as happypaint)
-  - [ ] Render: light rays, lens flare, clouds, fog, smoke, nebula, starfield, lightning
+  - [x] Render: light rays, lens flare, clouds, fog, smoke, nebula, starfield, lightning
 
 ### 1.6 Selection
 - [x] Shapes and the wand; add, subtract, intersect
