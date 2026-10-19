@@ -69,10 +69,12 @@ Overnight (2026-10-18 → 19), all pushed, newest last:
   `Command::WashFill`, the Fill tool's Wash options; `ONEPAINT_WASH=1`).
   Spec 58 is complete.
 - PSD: locks (`lspf`), colour labels (`lclr`) and guides (1032) both ways.
-- Next: the workspace items that don't wait on the layout decision
-  (scrollbars, angle dial, brush search, Manual, in-app dialogs, the
-  gradient-fill stop editor), then the PSD codec's colour modes and
-  32-bit. The menu-bar workspace waits for the owner. Was: the workspace UI catch-up (menu bar, options
+- Workspace items done: brush angle dial ({ / }), canvas scrollbars,
+  brush search and the Eraser's All brushes, in-app asks (palette delete,
+  save selection name), the gradient editor and presets (spec 59), and
+  on-canvas filter handles (spec 60).
+- Next: Help ▸ Manual (an in-app docs page), then the PSD codec's colour
+  modes and 32-bit. The menu-bar workspace waits for the owner. Was: the workspace UI catch-up (menu bar, options
   row, left tool rail…; `docs/parity-delta-2026-10-10.md`).
 - `scripts/bench-gate/gate.sh save|check`: the perf-budget gate for
   AGENTS.md's 5% rule, on criterion's saved baselines (checked: the 9

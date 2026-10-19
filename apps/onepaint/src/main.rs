@@ -2081,6 +2081,46 @@ mod tests {
         assert!(!h.state().canvas.options.gradient_reverse, "the tool's Reverse is untouched");
     }
 
+    /// Spec 60: a selected fill or filter layer shows its handles on the
+    /// canvas; dragging one edits the layer (one undo step), and Field Blur
+    /// takes a new pin where an empty press lands.
+    #[test]
+    fn filter_handles_edit_the_layer_on_the_canvas() {
+        let mut h = harness();
+        h.run();
+        let params = onepaint_filters::default_params(onepaint_filters::Kind::GradientFill);
+        h.state_mut().session.execute(Command::AddAdjustmentLayer { kind: "gradient-fill".into(), params }).unwrap();
+        h.run();
+        let screen = |h: &Harness<'_, App>, d: [f64; 2]| {
+            let (rect, v) = (h.state().canvas.screen_rect, h.state().canvas.view);
+            let s = v.doc_to_screen(d);
+            pos2(rect.left() + s[0] as f32, rect.top() + s[1] as f32)
+        };
+        let (w, hh) = (f64::from(h.state().session.doc().width), f64::from(h.state().session.doc().height));
+        let params = |h: &Harness<'_, App>| {
+            let l = h.state().session.doc().layer(h.state().session.active()).unwrap();
+            l.adjustment.as_ref().unwrap().params.clone()
+        };
+        let p0 = params(&h);
+        let end = [f64::from(p0.grad_bx.unwrap_or(0.5)) * w, f64::from(p0.grad_by.unwrap_or(1.0)) * hh];
+        let undo = h.state().session.history_len();
+        let from = screen(&h, end);
+        drag_stroke(&mut h, from, from + egui::vec2(-80.0, -60.0));
+        h.run();
+        let p1 = params(&h);
+        assert!(p1.grad_bx.unwrap() < p0.grad_bx.unwrap_or(0.5) && p1.grad_by.unwrap() < p0.grad_by.unwrap_or(1.0), "the end moved");
+        assert_eq!(h.state().session.history_len(), undo + 1, "one undo step");
+        // Field Blur: an empty press adds a pin there.
+        let fb = onepaint_filters::default_params(onepaint_filters::Kind::FieldBlur);
+        let pins = fb.pins.as_ref().map_or(0, Vec::len);
+        h.state_mut().session.execute(Command::AddAdjustmentLayer { kind: "field-blur".into(), params: fb }).unwrap();
+        h.run();
+        let at = screen(&h, [w * 0.2, hh * 0.8]);
+        click(&mut h, at);
+        h.run();
+        assert_eq!(params(&h).pins.map_or(0, |p| p.len()), pins + 1);
+    }
+
     /// The brush library searches every brush by name or category, and the
     /// Eraser can paint with any brush ("All brushes"), staying an eraser.
     #[test]

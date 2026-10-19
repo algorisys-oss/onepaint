@@ -109,10 +109,10 @@ screentone are added as live layers.
 - [x] exposure, vibrance, photo-filter, channel-mixer (happypaint v0.199): CPU and GPU, panels, PSD `expA`/`vibA`/`phfl`/`mixr` both ways (Photo Filter's colour decoded as in v0.204.7)
 - [x] gaussian-blur, motion-blur, sharpen, noise
 - [x] color-to-alpha, replace-color, selective-color (pipette samples the target from the canvas; Selective Colour+ ranges can be added and removed)
-- [~] radial-blur, tilt-shift, iris-blur, field-blur, spin-blur (no on-canvas handles; centres and pins are sliders)
-- [~] **Distort:** twirl, pinch, ripple, polar-coordinates (no on-canvas handles)
+- [x] radial-blur, tilt-shift, iris-blur, field-blur, spin-blur, with on-canvas handles (centres, the focus band, the ellipse, pins; spec 60)
+- [x] **Distort:** twirl, pinch, ripple, polar-coordinates (centre and reach handles; spec 60)
 - [x] **Stylize:** bloom, chromatic-aberration, halftone, tone, glitch, mosaic, crystallize, emboss, oil-paint, wind, line-art (Sobel/XDoG)
-- [~] **Render:** light-rays, lens-flare, clouds, fog, smoke, nebula, starfield, lightning (no on-canvas handles; the lightning raster replaces Canvas2D)
+- [x] **Render:** light-rays, lens-flare, clouds, fog, smoke, nebula, starfield, lightning (centre handles for light rays and lens flare; the lightning raster replaces Canvas2D)
 - [x] **Fill:** gradient-fill, solid-fill, pattern-fill (built-ins and imported image tiles, stored as PNG data URLs fit within 512 px)
 - [x] Smart-filter stacks (`layer.filters`)
 

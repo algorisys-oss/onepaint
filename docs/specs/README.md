@@ -70,3 +70,4 @@ The happypaint references are relative to `../happypaint/frontend/src/`.
 | 57 | [Procedural papers](57-procedural-papers.md) | brush, doc, compose, gpu, engine, app |
 | 58 | [Wet physics, v0.195.3–v0.199](58-wet-physics-v0199.md) | brush, gpu, engine, app |
 | 59 | [Gradient editor, presets and fill handles](59-gradient-editor.md) | filters, ui_kit, app |
+| 60 | [On-canvas filter handles](60-filter-handles.md) | filters, app |

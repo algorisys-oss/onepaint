@@ -275,6 +275,12 @@ enum Drag {
     Gradient {
         start: Pt,
     },
+    /// A filter's on-canvas handle (spec 60): of the active adjustment
+    /// layer, or of the open filter preview (`None`).
+    FilterHandle {
+        layer: Option<String>,
+        handle: onepaint_filters::handles::HandleId,
+    },
     ShapeTool {
         start: Pt,
         shape: Option<Shape>,
@@ -734,6 +740,38 @@ impl Canvas {
             let index = lines.len() - 1;
             Self::edit_lines(session, lines);
             return Drag::GuideMove { index, offset: [0.0, 0.0], from_ruler: true };
+        }
+        // Filter handles (Blur Gallery, a twirl's centre, a fill's ends…). An
+        // open filter preview owns every press; a selected adjustment layer
+        // only those that hit a handle (or add a Field Blur pin, or re-drag
+        // a gradient fill under the Gradient tool).
+        if let Some((kind, params, layer)) = filter_target(session) {
+            use onepaint_filters::handles::{HandleId, hit, press_empty, remove_pin};
+            let d = self.doc_pt(p);
+            let doc = [f64::from(self.doc_size[0]), f64::from(self.doc_size[1])];
+            let dps = 1.0 / self.view.scale;
+            let h = hit(kind, &params, doc, d, HANDLE_HIT_PX * dps, dps);
+            if let (Some(HandleId::Pin(i)), true) = (h, m.alt) {
+                if let Some(q) = remove_pin(&params, i) {
+                    apply_filter_params(session, layer.as_deref(), q);
+                    if layer.is_some() {
+                        let _ = session.execute(Command::SealHistory);
+                    }
+                }
+                return Drag::None;
+            }
+            let claims_empty =
+                kind == onepaint_filters::Kind::FieldBlur || (kind == onepaint_filters::Kind::GradientFill && tool == Tool::Gradient);
+            let empty = if h.is_some() || (layer.is_some() && !claims_empty) { None } else { press_empty(kind, &params, doc, d) };
+            if let Some(handle) = h.or(empty.as_ref().map(|e| e.1)) {
+                if let Some((q, _)) = empty {
+                    apply_filter_params(session, layer.as_deref(), q);
+                }
+                return Drag::FilterHandle { layer, handle };
+            }
+            if layer.is_none() {
+                return Drag::None;
+            }
         }
         if self.measuring {
             let d = self.doc_pt(p);
@@ -1200,6 +1238,13 @@ impl Canvas {
                             });
                         }
                         Drag::Panel(pd) => crate::panel_ui::drag(pd, session, d),
+                        Drag::FilterHandle { layer, handle } => {
+                            if let Some((_, params, _)) = filter_target(session) {
+                                let doc = [f64::from(self.doc_size[0]), f64::from(self.doc_size[1])];
+                                let q = onepaint_filters::handles::drag(&params, doc, *handle, d);
+                                apply_filter_params(session, layer.as_deref(), q);
+                            }
+                        }
                         Drag::Gradient { start } => {
                             let start = *start;
                             let stops = self.gradient_stops(session);
@@ -1299,6 +1344,10 @@ impl Canvas {
                             let _ = session.execute(Command::SealHistory);
                         }
                         Drag::Panel(pd) => crate::panel_ui::release(pd, session, &self.panel_options),
+                        // A layer's handle drag is one undo step.
+                        Drag::FilterHandle { layer: Some(_), .. } => {
+                            let _ = session.execute(Command::SealHistory);
+                        }
                         Drag::FillShape { points } => {
                             let opacity = session.current_brush().opacity as f32;
                             let _ = session.execute(Command::FillShape { points, opacity });
@@ -1667,6 +1716,48 @@ impl Canvas {
     }
 
     /// Pinned ruler bars (unrotated view) and the measure line, on top of everything.
+    /// The live filter's guides and handles (spec 60; happypaint
+    /// `filter-handles-overlay.ts`): lines dark under light, handles white
+    /// discs ringed in accent.
+    fn filter_overlay(&self, ui: &egui::Ui, rect: Rect, session: &Session) {
+        use onepaint_filters::handles::{Guide, guides, handles};
+        let Some((kind, params, _)) = filter_target(session) else { return };
+        let doc = [f64::from(self.doc_size[0]), f64::from(self.doc_size[1])];
+        let p = ui.painter();
+        let accent = Color32::from_rgba_unmultiplied(60, 140, 250, 242);
+        let line = |a: Pos2, b: Pos2, dashed: bool| {
+            for (w, c) in [(3.0, Color32::from_black_alpha(140)), (1.25, Color32::WHITE)] {
+                if dashed {
+                    p.extend(egui::Shape::dashed_line(&[a, b], Stroke::new(w, c), 6.0, 4.0));
+                } else {
+                    p.line_segment([a, b], Stroke::new(w, c));
+                }
+            }
+        };
+        for g in guides(kind, &params, doc) {
+            match g {
+                Guide::Poly { pts, closed, dashed } => {
+                    let s: Vec<Pos2> = pts.iter().map(|q| self.to_screen(rect, *q)).collect();
+                    for w in s.windows(2) {
+                        line(w[0], w[1], dashed);
+                    }
+                    if closed && s.len() > 2 {
+                        line(s[s.len() - 1], s[0], dashed);
+                    }
+                }
+                Guide::Label { x, y, text } => {
+                    let at = self.to_screen(rect, [x, y]) + egui::vec2(10.0, -10.0);
+                    p.text(at, egui::Align2::LEFT_BOTTOM, text, onepaint_ui_kit::theme::mono(11.0), Color32::WHITE);
+                }
+            }
+        }
+        for h in handles(kind, &params, doc, 1.0 / self.view.scale) {
+            let c = self.to_screen(rect, [h.x, h.y]);
+            p.circle_filled(c, 6.0, Color32::WHITE);
+            p.circle_stroke(c, 6.0, Stroke::new(1.75, accent));
+        }
+    }
+
     /// Scrollbars along the bottom and right while the document runs past
     /// the view (happypaint `canvas-scrollbars.tsx`): drag a thumb to pan,
     /// click the track to page.
@@ -1941,6 +2032,7 @@ impl Canvas {
             ui.painter().circle_stroke(f, 5.0, Stroke::new(1.5, Color32::WHITE));
         }
         self.rulers_and_measure(ui, rect, session);
+        self.filter_overlay(ui, rect, session);
         self.scrollbars(ui, rect, session);
         // Toolbars and popovers float over the canvas: there the pointer is
         // theirs (plain arrow, no brush ring) unless a stroke is under way.
@@ -2075,6 +2167,36 @@ fn warp_points(w: &onepaint_engine::transform::WarpMode) -> Vec<Pt> {
         onepaint_engine::transform::WarpMode::Quad(q) => q.to_vec(),
         onepaint_engine::transform::WarpMode::Mesh(m) => m.clone(),
     }
+}
+
+/// Screen px a press may miss a filter handle by.
+const HANDLE_HIT_PX: f64 = 12.0;
+
+/// Whose filter handles are live (spec 60): the open filter preview's, or
+/// else the selected, visible adjustment layer's, unless its mask takes the
+/// paint. `None` for the layer means the preview owns the params.
+fn filter_target(session: &Session) -> Option<(onepaint_filters::Kind, onepaint_filters::Params, Option<String>)> {
+    use onepaint_filters::handles::has_handles;
+    if let Some((k, p)) = session.filter_state() {
+        return has_handles(k).then(|| (k, p.clone(), None));
+    }
+    let l = session.doc().layer(session.active())?;
+    let a = l.adjustment.as_ref()?;
+    let k = onepaint_filters::Kind::parse(&a.kind).filter(|k| has_handles(*k))?;
+    if !l.visible || (session.mask_target() && l.mask.is_some()) {
+        return None;
+    }
+    Some((k, a.params.clone(), Some(l.id.clone())))
+}
+
+/// New params for the filter's owner: the layer (live, one undo step per
+/// drag) or the open preview.
+fn apply_filter_params(session: &mut Session, layer: Option<&str>, params: onepaint_filters::Params) {
+    let cmd = match layer {
+        Some(id) => Command::SetAdjustment { id: id.to_string(), params },
+        None => Command::UpdateFilter { params },
+    };
+    let _ = session.execute(cmd);
 }
 
 /// A gradient drag as live gradient-fill layer params (endpoints as document fractions).

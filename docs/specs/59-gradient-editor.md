@@ -6,7 +6,7 @@ Built (2026-10-19): the stop model and saved state
 Gradient tool's panel and a Gradient fill layer's Properties
 (`apps/onepaint/src/gradient_ui.rs`; `gradients.json` in the config
 folder; `ONEPAINT_POPOVER=gradient`). On-canvas handles for gradient and
-pattern fills to come.
+pattern fills are in spec 60.
 
 ## Source
 happypaint v0.188.0 (gradient presets, stops, fill layers) and v0.191.0

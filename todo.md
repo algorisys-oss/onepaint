@@ -47,9 +47,9 @@ an item changes there, change it here too.
 - [x] Blur, sharpen, noise; colour-to-alpha, replace and selective colour
 - [x] Stylize, fill kinds, smart-filter stacks
 - [x] Spatial kinds as live adjustment layers
-- [ ] On-canvas handles
-  - [ ] Radial, tilt-shift, iris, field and spin blur (centres and pins)
-  - [ ] Distort: twirl, pinch, ripple, polar coordinates
+- [x] On-canvas handles (spec 60): centres, reaches, tilt-shift band,
+      iris/spin ellipse, Field Blur pins, gradient fill ends, pattern origin
+      (ripple has none, as happypaint)
   - [ ] Render: light rays, lens flare, clouds, fog, smoke, nebula, starfield, lightning
 
 ### 1.6 Selection

@@ -11,6 +11,7 @@ mod distort;
 pub mod gpu;
 pub mod gradient;
 pub mod gradient_model;
+pub mod handles;
 mod kind;
 pub mod lightning;
 pub mod liquify;
