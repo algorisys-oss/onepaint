@@ -34,6 +34,7 @@ mod progressive;
 mod reference;
 mod settings;
 mod status_bar;
+mod styles_ui;
 mod tablet;
 mod text_ui;
 mod thumbs;

@@ -130,22 +130,26 @@ impl Tool {
     }
 }
 
-/// The farthest any feathered mask or spatial layer in `nodes` reads (0
-/// without one).
+/// The farthest any feathered mask, spatial layer or layer style in `nodes`
+/// reads (0 without one).
 fn feather_reach(nodes: &[Node]) -> i32 {
+    // Effects draw as far as they reach past the pixels (spec 56).
+    let styled = |s: Option<onepaint_doc::styles::LayerStyles>| s.filter(|s| s.is_active()).map_or(0, |s| s.reach() + 1);
     nodes
         .iter()
         .map(|n| match n {
-            Node::Layer(l) if l.mask.is_some() && l.mask_feather() > 0.0 => onepaint_compose::feather::reach(l.mask_feather()),
-            // A spatial layer redraws as far as its filter reads (spec 52).
-            Node::Layer(l) if onepaint_compose::spatial::spatial_kind(l).is_some() => l
-                .adjustment
-                .as_ref()
-                .and_then(|a| onepaint_filters::Kind::parse(&a.kind).map(|k| onepaint_filters::reach(k, &a.params)))
-                .unwrap_or(0)
-                .min(1 << 16),
-            Node::Layer(_) => 0,
-            Node::Group(g) => feather_reach(&g.children),
+            Node::Layer(l) => {
+                let feather =
+                    if l.mask.is_some() && l.mask_feather() > 0.0 { onepaint_compose::feather::reach(l.mask_feather()) } else { 0 };
+                // A spatial layer redraws as far as its filter reads (spec 52).
+                let spatial = onepaint_compose::spatial::spatial_kind(l)
+                    .and(l.adjustment.as_ref())
+                    .and_then(|a| onepaint_filters::Kind::parse(&a.kind).map(|k| onepaint_filters::reach(k, &a.params)))
+                    .unwrap_or(0)
+                    .min(1 << 16);
+                feather.max(spatial).max(styled(l.styles()))
+            }
+            Node::Group(g) => feather_reach(&g.children).max(styled(g.styles())),
         })
         .max()
         .unwrap_or(0)
@@ -185,6 +189,9 @@ pub struct LayerProps {
     /// Set (to change Apply / Invert) or, with `Some(None)`, delete the vector mask; layers only.
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "some_option")]
     pub vector_mask: Option<Option<onepaint_doc::VectorMask>>,
+    /// Layer styles (spec 56) as happypaint's `styles` JSON; `Some(None)` clears them.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "some_option")]
+    pub styles: Option<Option<serde_json::Value>>,
 }
 
 /// Keep an explicit `null` as `Some(None)`, so "clear" survives a replay.
@@ -209,6 +216,7 @@ impl LayerProps {
             (self.mask_feather.is_some(), "feather"),
             (self.blend_if.is_some(), "blendIf"),
             (self.vector_mask.is_some(), "vectorMask"),
+            (self.styles.is_some(), "styles"),
         ] {
             if set {
                 k.push_str(name);
@@ -1586,6 +1594,7 @@ impl Session {
             if let Some(v) = p.blend_mode {
                 n.set_blend_mode(v);
             }
+            let styles = p.styles.map(|v| v.and_then(|j| onepaint_doc::styles::LayerStyles::from_json(&j)));
             match n {
                 Node::Layer(l) => {
                     if let Some(v) = p.clipped {
@@ -1612,10 +1621,17 @@ impl Session {
                     if let Some(v) = p.vector_mask {
                         l.set_vector_mask(v);
                     }
+                    // Adjustment and fill layers take no styles (happypaint `canStyle`).
+                    if let Some(v) = styles.filter(|_| l.adjustment.is_none()) {
+                        l.set_styles(v);
+                    }
                 }
                 Node::Group(g) => {
                     if let Some(v) = p.collapsed {
                         g.collapsed = v;
+                    }
+                    if let Some(v) = styles {
+                        g.set_styles(v);
                     }
                 }
             }

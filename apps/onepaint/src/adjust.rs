@@ -108,7 +108,7 @@ fn seeded(k: Kind, c: onepaint_color::Rgba) -> Params {
 }
 
 /// Slider in display units mapped onto a stored value (`stored = shown * scale`).
-fn slider(
+pub(crate) fn slider(
     ui: &mut Ui,
     label: &str,
     v: &mut Option<f32>,

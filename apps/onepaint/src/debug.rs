@@ -28,6 +28,7 @@
 //!   (after the demo; spec 52 runs a lone one live on the GPU).
 //! - `ONEPAINT_ADJUST=color-balance` adds an adjustment layer of that kind at its defaults
 //!   (Black & White with its tint on), shown in Properties (`ONEPAINT_DOCK=1` docks it).
+//! - `ONEPAINT_STYLES=Gold` gives the active layer a built-in layer style (spec 56).
 //! - `ONEPAINT_EXIT=1` closes the app after the screenshot.
 
 use crate::{App, Popover};
@@ -285,6 +286,14 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
             params.bw_tint = Some(true);
         }
         let _ = app.session.execute(Command::AddAdjustmentLayer { kind: kind.as_str().into(), params });
+    }
+    if frame == 4
+        && let Ok(name) = std::env::var("ONEPAINT_STYLES")
+        && let Some((_, st)) = onepaint_doc::styles::builtin_presets().into_iter().find(|(n, _)| n.eq_ignore_ascii_case(&name))
+    {
+        let id = app.session.active().to_string();
+        let props = onepaint_engine::LayerProps { styles: Some(Some(st.to_json())), ..Default::default() };
+        let _ = app.session.execute(Command::SetLayerProps { id, props });
     }
     if frame == 3 && app.debug.impasto {
         let (w, h) = (app.session.doc().width as f64, app.session.doc().height as f64);

@@ -47,8 +47,11 @@ Overnight (2026-10-18 → 19), all pushed, newest last:
 - Spec 56, layer styles: phases 1–2 built: the model (`doc::styles`) and
   the CPU renderer (`compose::styles`, happypaint's `STYLE_SRC` per tile
   over the tile ± twice the reach, exact distance field). Styled tiles
-  render on the CPU. Next: phase 3 (GPU), then the dialog (phase 4), PSD
-  `lfx2` and `.asl` (phase 5).
+  render on the CPU. Phase 4 in part: `LayerProps::styles`, built-in
+  styles, the editor in Properties (`styles_ui.rs`; `ONEPAINT_STYLES=Gold`
+  for screenshots). Next: the rest of phase 4 (Global Light across
+  layers, Bake, user presets, gradient stops), phase 3 (GPU), phase 5
+  (PSD `lfx2`, `.asl`).
 - `scripts/bench-gate/gate.sh save|check`: the perf-budget gate for
   AGENTS.md's 5% rule, on criterion's saved baselines (checked: the 9
   engine hot-path benches came out within 5% of themselves).

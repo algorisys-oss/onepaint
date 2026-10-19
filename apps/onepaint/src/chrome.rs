@@ -1192,6 +1192,9 @@ fn properties(app: &mut App, ui: &mut Ui) {
     let active = app.session.active().to_string();
     if app.session.doc().layer(&active).is_some_and(|l| l.adjustment.is_some()) {
         crate::adjust::layer_panel(app, ui);
+    } else if app.session.doc().find(&active).is_some() {
+        // A pixel, text or path layer, or a group: its layer style (spec 56).
+        crate::styles_ui::panel(app, ui);
     } else {
         crate::dock::fit_width(ui, 240.0);
         ui.label(RichText::new("Select an adjustment layer to edit its settings.").color(t.fg_muted));

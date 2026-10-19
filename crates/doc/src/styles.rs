@@ -546,6 +546,61 @@ impl LayerStyles {
     }
 }
 
+/// The built-in styles (happypaint `BUILTIN_STYLES`): name and styles.
+pub fn builtin_presets() -> Vec<(&'static str, LayerStyles)> {
+    let rgb = |s: &str| parse_hex(s).unwrap_or([0.0; 3]);
+    let fx = |kind: EffectKind, f: &dyn Fn(&mut Effect)| {
+        let mut e = default_effect(kind);
+        f(&mut e);
+        e
+    };
+    let styles = |effects: Vec<Effect>| LayerStyles { fill_opacity: 1.0, effects };
+    vec![
+        (
+            "Sticker",
+            styles(vec![
+                fx(EffectKind::Stroke, &|e| (e.color, e.size) = (rgb("#ffffff"), 6.0)),
+                fx(EffectKind::Stroke, &|e| (e.color, e.size) = (rgb("#1a1a1a"), 10.0)),
+                fx(EffectKind::DropShadow, &|e| (e.opacity, e.distance, e.size) = (0.35, 6.0, 10.0)),
+            ]),
+        ),
+        ("Ink Outline", styles(vec![fx(EffectKind::Stroke, &|e| (e.color, e.size) = (rgb("#111111"), 3.0))])),
+        ("Soft Shadow", styles(vec![fx(EffectKind::DropShadow, &|e| (e.opacity, e.distance, e.size) = (0.45, 10.0, 22.0))])),
+        (
+            "Neon",
+            styles(vec![
+                fx(EffectKind::InnerGlow, &|e| (e.color, e.opacity, e.size) = ([1.0; 3], 0.8, 4.0)),
+                // Normal, not Screen: a Screen glow vanishes on a white canvas.
+                fx(EffectKind::OuterGlow, &|e| {
+                    (e.color, e.opacity, e.size, e.spread, e.blend_mode) = (rgb("#29e6ff"), 0.9, 24.0, 0.1, BlendMode::Normal)
+                }),
+            ]),
+        ),
+        (
+            "Embossed",
+            styles(vec![
+                fx(EffectKind::Bevel, &|e| (e.size, e.bevel.depth, e.bevel.soften) = (8.0, 1.5, 1.0)),
+                fx(EffectKind::DropShadow, &|e| (e.opacity, e.distance, e.size) = (0.4, 3.0, 5.0)),
+            ]),
+        ),
+        (
+            "Gold",
+            styles(vec![
+                fx(EffectKind::Bevel, &|e| {
+                    (e.size, e.bevel.depth, e.bevel.highlight_color, e.bevel.shadow_color) = (10.0, 2.0, rgb("#fff6d0"), rgb("#5a3a00"))
+                }),
+                fx(EffectKind::GradientOverlay, &|e| {
+                    e.stops = vec![
+                        json!({"pos": 0, "color": [0.55, 0.38, 0.08], "opacity": 1}),
+                        json!({"pos": 0.5, "color": [1, 0.85, 0.4], "opacity": 1}),
+                        json!({"pos": 1, "color": [0.62, 0.45, 0.12], "opacity": 1}),
+                    ]
+                }),
+            ]),
+        ),
+    ]
+}
+
 impl crate::Layer {
     /// The layer's styles, if it has any.
     pub fn styles(&self) -> Option<LayerStyles> {
@@ -671,6 +726,16 @@ mod tests {
         assert_eq!((lit.effects[0].angle, lit.effects[1].angle, lit.effects[2].bevel.altitude), (10.0, 200.0, 50.0));
         let strokes = LayerStyles { fill_opacity: 1.0, effects: vec![default_effect(EffectKind::Stroke)] };
         assert!(strokes.with_global_light((10.0, 10.0)).is_none());
+    }
+
+    // happypaint style-presets.test.ts: the built-ins pass the sanitizer unchanged.
+    #[test]
+    fn the_built_in_presets_are_already_clean() {
+        let presets = builtin_presets();
+        assert!(presets.len() >= 5);
+        for (name, s) in presets {
+            assert_eq!(LayerStyles::from_json(&s.to_json()).as_ref(), Some(&s), "{name}");
+        }
     }
 
     #[test]

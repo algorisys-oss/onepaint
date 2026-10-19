@@ -219,7 +219,9 @@ See `docs/parity-delta-2026-10-10.md`.
       untouched transform fades a soft selection; fill layers export to PSD
       empty; damp veil 0.12 in 8-bit; granulation sign
 - [x] 8 blend modes + Pass Through groups (2026-10-18)
-- [ ] Layer styles (v0.196.x)
+- [~] Layer styles (v0.196.x; spec 56): model, CPU rendering, the editor
+      in Properties with the built-in styles. Left: GPU, Global Light
+      across layers, Bake, user presets, gradient stops, PSD lfx2, .asl
 - [~] New adjustments: Exposure, Vibrance, Photo Filter, Channel Mixer done
       (CPU, GPU, PSD expA/vibA/phfl/mixr, panels; 2026-10-18); B&W hue
       weights + tint and Color Balance ranges + Preserve Luminosity

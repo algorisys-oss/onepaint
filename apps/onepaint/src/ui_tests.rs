@@ -257,3 +257,36 @@ fn help_has_a_guide_to_the_panel_tool() {
     assert!(h.query_by_label("Drag inside a panel").is_some());
     assert!(h.query_by_label("Drag the status-bar swatch onto the canvas").is_some());
 }
+
+/// Spec 56: Properties edits the active layer's style. A built-in style
+/// applies in one click; an effect can be added, opened and switched off.
+#[test]
+fn properties_edit_the_layer_style() {
+    let mut h = harness();
+    h.state_mut().layout.set_placement(PanelId::Properties, Placement::Dock { side: DockSide::Right }, None);
+    dock::set_panel_open(h.state_mut(), PanelId::Properties, true);
+    h.run();
+    let id = h.state().session.active().to_string();
+    let styles = |h: &Harness<'_, App>| h.state().session.doc().find(&id).and_then(|n| n.as_layer()).and_then(|l| l.styles());
+    assert!(styles(&h).is_none());
+    h.get_by_label("Ink Outline").click();
+    h.run();
+    let st = styles(&h).expect("styled");
+    assert_eq!(st.effects.len(), 1);
+    assert_eq!(st.effects[0].kind, onepaint_doc::styles::EffectKind::Stroke);
+    // Add a drop shadow: it goes on top, open for editing.
+    h.get_by_label("Drop Shadow").click();
+    h.run();
+    let st = styles(&h).unwrap();
+    assert_eq!(st.effects[0].kind, onepaint_doc::styles::EffectKind::DropShadow);
+    assert!(h.get_all_by_label("Distance").count() > 0, "its controls are open");
+    // Remove it again, with the × on its row.
+    let row = h.get_all_by_label("Drop Shadow").map(|n| n.rect().center().y).fold(f32::MAX, f32::min);
+    let x = h.get_all_by_label("×").min_by(|a, b| (a.rect().center().y - row).abs().total_cmp(&(b.rect().center().y - row).abs())).unwrap();
+    x.click();
+    h.run();
+    assert_eq!(styles(&h).unwrap().effects.len(), 1);
+    // One undo step per edit.
+    h.state_mut().session.execute(onepaint_engine::Command::Undo).unwrap();
+    assert_eq!(styles(&h).unwrap().effects.len(), 2);
+}
