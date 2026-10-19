@@ -5,7 +5,7 @@ use crate::{App, Popover};
 use egui::{RichText, Ui};
 use onepaint_engine::Command;
 use onepaint_filters::ui::Control;
-use onepaint_filters::{BlurPin, ColorSample, Kind, MAX_BLUR_PINS, Params, SECTIONS, Stop, default_params};
+use onepaint_filters::{BlurPin, ColorSample, Kind, MAX_BLUR_PINS, Params, SC_RANGES, SECTIONS, Stop, default_params};
 use onepaint_stroke::{CurvePoint, Interp, eval_curve};
 use onepaint_ui_kit::{Tokens, theme, widgets};
 use serde_json::Value;
@@ -158,6 +158,7 @@ pub fn params_ui(ui: &mut Ui, kind: Kind, p: &mut Params, curve_tab: &mut usize,
             ch |= slider(ui, "Out black", &mut p.out_black, 0.0, 0.0..=100.0, 0.01, "");
             ch |= slider(ui, "Out white", &mut p.out_white, 1.0, 0.0..=100.0, 0.01, "");
         }
+        Kind::CmykSelectiveColor => ch |= cmyk_ranges(ui, p, curve_tab),
         Kind::Curves => {
             let names = ["RGB", "Red", "Green", "Blue"];
             ui.horizontal(|ui| {
@@ -238,6 +239,53 @@ pub fn params_ui(ui: &mut Ui, kind: Kind, p: &mut Params, curve_tab: &mut usize,
         }
         Kind::PatternFill => ch |= pattern_ui(ui, p, colour),
         _ => ch |= generic(ui, kind, p, colour),
+    }
+    ch
+}
+
+/// Selective Color (happypaint `cmyk-ranges.tsx`): pick a range (edited
+/// ones are marked •), then its Cyan, Magenta, Yellow and Black, and the
+/// method. `range` is the panel's own state (it shares the Curves tab's).
+fn cmyk_ranges(ui: &mut Ui, p: &mut Params, range: &mut usize) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let mut v = p.sc_cmyk.clone().unwrap_or_default();
+    v.resize(4 * SC_RANGES.len(), 0.0);
+    *range = (*range).min(SC_RANGES.len() - 1);
+    let mut ch = false;
+    ui.label(RichText::new("Colours").color(t.fg_muted));
+    ui.horizontal_wrapped(|ui| {
+        for (i, name) in SC_RANGES.iter().enumerate() {
+            let edited = v[i * 4..i * 4 + 4].iter().any(|x| *x != 0.0);
+            let mut label = name[..1].to_uppercase() + &name[1..];
+            if edited {
+                label.push_str(" •");
+            }
+            if ui.selectable_label(*range == i, label).clicked() {
+                *range = i;
+            }
+        }
+    });
+    for (k, ink) in ["Cyan", "Magenta", "Yellow", "Black"].iter().enumerate() {
+        let at = *range * 4 + k;
+        let mut x = Some(v[at]);
+        if slider(ui, ink, &mut x, 0.0, -100.0..=100.0, 0.01, "%") {
+            v[at] = x.unwrap_or(0.0);
+            ch = true;
+        }
+    }
+    let mut abs = p.sc_method.as_deref() == Some("absolute");
+    ui.label(RichText::new("Method").color(t.fg_muted));
+    ui.horizontal(|ui| {
+        for (on, name) in [(false, "Relative"), (true, "Absolute")] {
+            if ui.selectable_label(abs == on, name).clicked() && abs != on {
+                abs = on;
+                ch = true;
+            }
+        }
+    });
+    if ch {
+        p.sc_cmyk = Some(v);
+        p.sc_method = Some(if abs { "absolute" } else { "relative" }.into());
     }
     ch
 }

@@ -912,7 +912,7 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                         // A shape layer: its pixels are already cut to the path.
                         b"SoCo" | b"GdFl" | b"PtFl" | b"vscg" => vector_fill = true,
                         b"nvrt" => adjustment = adj("invert", Default::default()),
-                        b"expA" | b"vibA" | b"phfl" | b"mixr" | b"levl" | b"curv" | b"hue2" | b"blnc" | b"blwh" | b"grdm" => {
+                        b"expA" | b"vibA" | b"phfl" | b"mixr" | b"levl" | b"curv" | b"hue2" | b"blnc" | b"blwh" | b"selc" | b"grdm" => {
                             adjustment = crate::psd_adjust::read(&k, data)
                         }
                         b"post" => {

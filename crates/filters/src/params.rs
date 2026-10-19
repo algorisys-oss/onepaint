@@ -114,6 +114,10 @@ params! {
     bw_magentas: f32,
     bw_tint: bool,
     bw_tint_color: [f32; 3],
+    // cmyk-selective-color: (C, M, Y, K) per range in `SC_RANGES` order
+    // (−1..1), and "relative" or "absolute"
+    sc_cmyk: Vec<f32>,
+    sc_method: String,
     // color-balance shadows and highlights (−1..1); the midtones are
     // cyan_red, magenta_green, yellow_blue
     #[serde(rename = "cbShadowCR")]

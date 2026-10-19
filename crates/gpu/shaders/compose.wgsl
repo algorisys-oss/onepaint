@@ -735,6 +735,39 @@ fn adjust(op: Op, s: vec4<f32>, pos: vec2<i32>) -> vec4<f32> {
         case 8u: {
             o = lut3(lut, c01(w));
         }
+        case 23u: {
+            // Selective Color, CMYK (filters colour.rs `cmyk_selective`):
+            // (C, M, Y, K) per range in rows 0–8, Absolute in row 9.
+            let rgb = c01(w);
+            let mn = min(rgb.x, min(rgb.y, rgb.z));
+            let mx = max(rgb.x, max(rgb.y, rgb.z));
+            let md = rgb.x + rgb.y + rgb.z - mn - mx;
+            let abs_mode = adj[base + 9u].x > 0.5;
+            var wts = array<f32, 9>(-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0);
+            if (rgb.x == mx) { wts[0] = mx - md; }
+            if (rgb.z == mn) { wts[1] = md - mn; }
+            if (rgb.y == mx) { wts[2] = mx - md; }
+            if (rgb.x == mn) { wts[3] = md - mn; }
+            if (rgb.z == mx) { wts[4] = mx - md; }
+            if (rgb.y == mn) { wts[5] = md - mn; }
+            if (mn > 0.5) { wts[6] = mn * 2.0 - 1.0; }
+            if (mx > 0.0 && mn < 1.0) { wts[7] = 1.0 - (abs(mx - 0.5) + abs(mn - 0.5)); }
+            if (mx < 0.5) { wts[8] = 1.0 - mx * 2.0; }
+            var d = vec3<f32>(0.0);
+            for (var i = 0u; i < 9u; i++) {
+                let wt = wts[i];
+                if (wt <= 0.0) {
+                    continue;
+                }
+                let a = adj[base + i];
+                var res = (vec3<f32>(-1.0) - a.xyz) * a.w - a.xyz;
+                if (!abs_mode) {
+                    res *= vec3<f32>(1.0) - rgb;
+                }
+                d += wt * clamp(res, -rgb, vec3<f32>(1.0) - rgb);
+            }
+            o = c01(rgb + d);
+        }
         case 9u: {
             // Color Balance (filters colour.rs `color_balance`): p0 the
             // shadows and Preserve Luminosity, p1 the midtones, p2 the highlights.

@@ -37,6 +37,9 @@ Overnight (2026-10-18 → 19), all pushed, newest last:
   formulas: files from happypaint now look the same here. CPU, GPU, PSD
   both ways, data-driven panels (`filters::ui`, with a `Heading`
   control); `ONEPAINT_ADJUST=<kind>` shows a kind's Properties panel.
+- Selective Color, Photoshop's (`cmyk-selective-color`, v0.201.5): nine
+  ranges × C/M/Y/K, Relative or Absolute, CPU, GPU (code 23), PSD selc,
+  a range-picker panel.
 - `scripts/bench-gate/gate.sh save|check`: the perf-budget gate for
   AGENTS.md's 5% rule, on criterion's saved baselines (checked: the 9
   engine hot-path benches came out within 5% of themselves).

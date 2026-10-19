@@ -67,6 +67,14 @@ pub fn gpu_adjust(kind: Kind, p: &Params, frame: Frame) -> Option<GpuAdjust> {
             lut = Some(Box::new(build_curves_lut(p)));
             8
         }
+        Kind::CmykSelectiveColor => {
+            let (t, abs) = crate::colour::sc_table(p);
+            for (i, r) in t.iter().enumerate() {
+                put(i * 4, r);
+            }
+            put(36, &[if abs { 1.0 } else { 0.0 }]);
+            23
+        }
         Kind::ColorBalance => {
             let v = |x: Option<f32>| x.unwrap_or(0.0);
             let keep = if p.preserve_lum == Some(false) { 0.0 } else { 1.0 };
@@ -192,7 +200,7 @@ mod tests {
     fn colour_kinds_pack_and_the_rest_stay_on_the_cpu() {
         let f = Frame::default();
         let gpu: Vec<Kind> = Kind::ALL.into_iter().filter(|&k| gpu_adjust(k, &crate::default_params(k), f).is_some()).collect();
-        assert_eq!(gpu.len(), 22);
+        assert_eq!(gpu.len(), 23);
         assert!(gpu.iter().all(|k| k.is_color()));
         for k in [Kind::GaussianBlur, Kind::Clouds] {
             assert!(gpu_adjust(k, &crate::default_params(k), f).is_none(), "{k:?}");

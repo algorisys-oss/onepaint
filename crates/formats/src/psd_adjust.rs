@@ -221,8 +221,8 @@ pub fn read(key: &[u8; 4], d: &[u8]) -> Option<Adjustment> {
         b"curv" => ("curves", curves(d)?),
         b"hue2" => ("hue-saturation", hue_sat(d)?),
         b"blnc" => ("color-balance", color_balance(d)?),
-        // Photoshop's colour weights and tint aren't kept yet (`todo.md`).
         b"blwh" => ("black-white", black_white(d)?),
+        b"selc" => ("cmyk-selective-color", selective_cmyk(d)?),
         b"grdm" => ("gradient-map", gradient_map(d)?),
         _ => return None,
     };
@@ -391,6 +391,20 @@ pub fn write(a: &Adjustment) -> Option<([u8; 4], Vec<u8>)> {
             o.extend(write_black_white(p));
             *b"blwh"
         }
+        "cmyk-selective-color" => {
+            // Version 1, the method, then ten (C, M, Y, K) groups in percent:
+            // the first unused, then the ranges in `SC_RANGES` order.
+            let (t, abs) = onepaint_filters::sc_table_of(p);
+            o.extend(1u16.to_be_bytes());
+            o.extend(u16::from(abs).to_be_bytes());
+            o.extend([0u8; 8]);
+            for range in t {
+                for v in range {
+                    o.extend(((v.clamp(-1.0, 1.0) * 100.0).round() as i16).to_be_bytes());
+                }
+            }
+            *b"selc"
+        }
         "gradient-map" => {
             o.extend(write_gradient_map(p));
             *b"grdm"
@@ -462,6 +476,17 @@ fn hue_sat(d: &[u8]) -> Option<Params> {
 }
 
 /// The midtones; onepaint's Color Balance has no shadow or highlight range yet.
+/// Selective Color (`selc`): version 1, relative (0) or absolute (1), then
+/// ten (C, M, Y, K) groups in percent, the first unused.
+fn selective_cmyk(d: &[u8]) -> Option<Params> {
+    if be16(d, 0)? != 1 {
+        return None;
+    }
+    let abs = be16(d, 2)? == 1;
+    let sc = (0..36).map(|i| be16(d, 12 + i * 2).map(|v| v as i16 as f32 / 100.0)).collect::<Option<Vec<_>>>()?;
+    Some(Params { sc_cmyk: Some(sc), sc_method: Some(if abs { "absolute" } else { "relative" }.into()), ..Default::default() })
+}
+
 /// Color Balance (`blnc`): shadows, midtones and highlights, each (cyan–red,
 /// magenta–green, yellow–blue) in percent, then Preserve Luminosity.
 fn color_balance(d: &[u8]) -> Option<Params> {
@@ -687,6 +712,14 @@ mod tests {
             let (key, data) = write(&Adjustment { kind: kind.into(), params: p }).unwrap();
             read(&key, &data).unwrap()
         };
+        // happypaint psd-map.test.ts: Selective Color in percent, Absolute kept.
+        let mut sc = vec![0.0; 36];
+        (sc[0], sc[7], sc[35]) = (-0.25, 0.6, -1.0);
+        let s = rt("cmyk-selective-color", Params { sc_cmyk: Some(sc.clone()), sc_method: Some("absolute".into()), ..Default::default() });
+        assert_eq!(
+            (s.kind.as_str(), s.params.sc_cmyk, s.params.sc_method.as_deref()),
+            ("cmyk-selective-color", Some(sc), Some("absolute"))
+        );
         let h =
             rt("hue-saturation", Params { hue: Some(40.0), saturation: Some(0.3), brightness: Some(-0.2), ..Default::default() }).params;
         assert_eq!((h.hue, h.saturation, h.brightness), (Some(40.0), Some(0.3), Some(-0.2)));

@@ -425,6 +425,70 @@ pub(crate) fn color_balance(rgb: [f32; 3], p: &Params) -> [f32; 3] {
     set_lum(o, lum_w3c(rgb)).map(|v| v.clamp(0.0, 1.0))
 }
 
+/// Selective Color's (C, M, Y, K) per range, 36 values (missing ones 0),
+/// and whether the method is Absolute.
+pub fn sc_table(p: &Params) -> ([[f32; 4]; 9], bool) {
+    let mut t = [[0.0; 4]; 9];
+    for (i, v) in p.sc_cmyk.as_deref().unwrap_or(&[]).iter().take(36).enumerate() {
+        t[i / 4][i % 4] = *v;
+    }
+    (t, p.sc_method.as_deref() == Some("absolute"))
+}
+
+/// SELECTIVE_CMYK_SRC (happypaint v0.201.5, AR:1127; ffmpeg's
+/// selectivecolor): nine ranges, reds/greens/blues weighted by max − mid,
+/// yellows/cyans/magentas by mid − min, whites, neutrals and blacks by
+/// their own ramps, each adding C/M/Y/K. `rgb` is straight work values in 0..1.
+pub(crate) fn cmyk_selective(rgb: [f32; 3], p: &Params) -> [f32; 3] {
+    let (t, abs) = sc_table(p);
+    let comp = |v: f32, adj: f32, k: f32| {
+        let mut res = (-1.0 - adj) * k - adj;
+        if !abs {
+            res *= 1.0 - v;
+        }
+        res.clamp(-v, 1.0 - v)
+    };
+    let range = |a: [f32; 4], w: f32| {
+        if w <= 0.0 {
+            return [0.0; 3];
+        }
+        [0, 1, 2].map(|i| w * comp(rgb[i], a[i], a[3]))
+    };
+    let [r, g, b] = rgb;
+    let (mn, mx) = (r.min(g).min(b), r.max(g).max(b));
+    let md = r + g + b - mn - mx;
+    let mut d = [0.0f32; 3];
+    let mut add = |x: [f32; 3]| (0..3).for_each(|i| d[i] += x[i]);
+    if r == mx {
+        add(range(t[0], mx - md));
+    }
+    if b == mn {
+        add(range(t[1], md - mn));
+    }
+    if g == mx {
+        add(range(t[2], mx - md));
+    }
+    if r == mn {
+        add(range(t[3], md - mn));
+    }
+    if b == mx {
+        add(range(t[4], mx - md));
+    }
+    if g == mn {
+        add(range(t[5], md - mn));
+    }
+    if mn > 0.5 {
+        add(range(t[6], mn * 2.0 - 1.0));
+    }
+    if mx > 0.0 && mn < 1.0 {
+        add(range(t[7], 1.0 - ((mx - 0.5).abs() + (mn - 0.5).abs())));
+    }
+    if mx < 0.5 {
+        add(range(t[8], 1.0 - mx * 2.0));
+    }
+    [0, 1, 2].map(|i| (rgb[i] + d[i]).clamp(0.0, 1.0))
+}
+
 /// The W3C / PDF blend luminosity (0.3, 0.59, 0.11).
 pub(crate) fn lum_w3c(c: [f32; 3]) -> f32 {
     0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2]

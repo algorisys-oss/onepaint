@@ -187,3 +187,26 @@ fn params_round_trip_happypaint_json() {
     assert_eq!(back.get("zzz"), Some(&serde_json::json!(1)), "unknown fields survive");
     assert_eq!(default_params(Kind::Levels).gamma, Some(1.0));
 }
+
+/// happypaint v0.201.5 Selective Color (CMYK): per range, each ink shifts
+/// its channel by (−1 − adj)·k − adj, scaled by the room left (Relative) or
+/// not (Absolute), clipped to the channel, times the range's weight.
+#[test]
+fn cmyk_selective_color_shifts_ranges() {
+    let at = |range: usize, ink: usize, v: f32, method: &str| {
+        let mut sc = vec![0.0; 36];
+        sc[range * 4 + ink] = v;
+        Params { sc_cmyk: Some(sc), sc_method: Some(method.into()), ..Default::default() }
+    };
+    let lin = |c: [f32; 3]| [srgb_to_linear(c[0]), srgb_to_linear(c[1]), srgb_to_linear(c[2]), 1.0];
+    // Absolute cyan on pure red takes all its red.
+    let o = srgb(run(Kind::CmykSelectiveColor, at(0, 0, 1.0, "absolute"), lin([1.0, 0.0, 0.0])));
+    assert!(o.iter().all(|v| v.abs() < 1e-4), "{o:?}");
+    // Relative: scaled by the room left (1 − 0.8), times the reds weight (0.6).
+    let o = srgb(run(Kind::CmykSelectiveColor, at(0, 0, 0.5, "relative"), lin([0.8, 0.2, 0.2])));
+    assert!(near(o[0], 0.74, 1e-4) && near(o[1], 0.2, 1e-4), "{o:?}");
+    // Black ink in the blacks darkens a dark grey: −0.8 clipped to −0.2, × 0.6.
+    let o = srgb(run(Kind::CmykSelectiveColor, at(8, 3, 1.0, "relative"), lin([0.2; 3])));
+    assert!(o.iter().all(|v| near(*v, 0.08, 1e-4)), "{o:?}");
+    assert!(is_identity(Kind::CmykSelectiveColor, &default_params(Kind::CmykSelectiveColor)));
+}

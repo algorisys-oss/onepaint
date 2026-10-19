@@ -621,6 +621,22 @@ fn eight_bit_documents_blend_in_gamma_space_like_the_cpu() {
 }
 
 /// Every layer's pixel and mask tiles stored 8-bit, as an 8-bit document keeps them (spec 49).
+/// Hide threshold and posterize layers. In an 8-bit document whole flat
+/// regions share one byte value, so where it sits on a step the region flips
+/// together, past what `STEP_OVER` allows for isolated pixels.
+fn unposterize(nodes: &mut [Node]) {
+    for n in nodes {
+        match n {
+            Node::Group(g) => unposterize(&mut g.children),
+            Node::Layer(l) => {
+                if l.adjustment.as_ref().is_some_and(|a| a.kind == "posterize" || a.kind == "threshold") {
+                    l.visible = false;
+                }
+            }
+        }
+    }
+}
+
 fn quantized(mut doc: Document) -> Document {
     use onepaint_raster::Store;
     fn walk(nodes: &mut [Node]) {
@@ -656,7 +672,8 @@ fn eight_bit_tiles_use_8_bit_atlases() {
     let tex = target(&device, w, h);
     let view = onepaint_gpu::mip::level_view(&tex, 0);
     for seed in 0..8 {
-        let doc = quantized(with_adjustments(random_doc(seed, w, h, false), seed));
+        let mut doc = quantized(with_adjustments(random_doc(seed, w, h, false), seed));
+        unposterize(&mut doc.root);
         gc.run(&device, &queue, &programs(&doc, None), &view, [w, h]);
         assert_adjusted(&doc, &read(&device, &queue, &tex), &format!("seed {seed}"));
     }

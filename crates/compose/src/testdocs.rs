@@ -274,12 +274,17 @@ pub fn random_adjustment(r: &mut Rng) -> onepaint_doc::Adjustment {
         "vibrance",
         "photo-filter",
         "channel-mixer",
+        "cmyk-selective-color",
     ];
     let kind = kinds[r.below(kinds.len() as u32) as usize];
     let mut c = || [r.f(), r.f(), r.f()];
     let v = match kind {
         "brightness-contrast" => json!({"brightness": c()[0] - 0.5, "contrast": c()[1] - 0.5}),
         "hue-saturation" => json!({"hue": (c()[0] - 0.5) * 360.0, "saturation": c()[1] * 2.0 - 1.0, "brightness": c()[2] - 0.5}),
+        "cmyk-selective-color" => {
+            let sc: Vec<f32> = (0..36).map(|_| if r.chance(0.3) { r.f() * 2.0 - 1.0 } else { 0.0 }).collect();
+            json!({"scCmyk": sc, "scMethod": if r.chance(0.5) { "absolute" } else { "relative" }})
+        }
         "black-white" => {
             let (a, b, t) = (c(), c(), c());
             json!({
@@ -384,6 +389,12 @@ pub fn with_adjustments(mut doc: Document, seed: u64) -> Document {
             // Hard Mix flips at b + s = 1, and an inverted backdrop sits exactly
             // there: rounding alone decides every pixel, on either side.
             if l.blend_mode == BlendMode::HardMix && l.adjustment.as_ref().is_some_and(|a| a.kind == "invert") {
+                l.blend_mode = BlendMode::Normal;
+            }
+            // Color Dodge steps at s = 1 (white there, d / (1 − s) just under:
+            // black over a black channel), and the channel mixer clamps bright
+            // pixels to exactly 1, which a fused multiply-add can miss by an ulp.
+            if l.blend_mode == BlendMode::ColorDodge && l.adjustment.as_ref().is_some_and(|a| a.kind == "channel-mixer") {
                 l.blend_mode = BlendMode::Normal;
             }
             l.opacity = if r.chance(0.5) { 1.0 } else { r.f() };

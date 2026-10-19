@@ -47,7 +47,8 @@ kinds! {
     GradientMap = "gradient-map", "Gradient Map", "Color";
     ColorToAlpha = "color-to-alpha", "Color to Alpha", "Color";
     ReplaceColor = "replace-color", "Replace Color", "Color";
-    SelectiveColor = "selective-color", "Selective Color", "Color";
+    SelectiveColor = "selective-color", "Selective Color+", "Color";
+    CmykSelectiveColor = "cmyk-selective-color", "Selective Color", "Color";
     GaussianBlur = "gaussian-blur", "Gaussian Blur", "Blur";
     MotionBlur = "motion-blur", "Motion Blur", "Blur";
     RadialBlur = "radial-blur", "Radial Blur", "Blur";
@@ -128,6 +129,7 @@ impl Kind {
                 | Kind::ColorToAlpha
                 | Kind::ReplaceColor
                 | Kind::SelectiveColor
+                | Kind::CmykSelectiveColor
                 | Kind::Tone
         ) || self.is_fill()
     }
@@ -190,6 +192,7 @@ pub fn default_params(k: Kind) -> Params {
             (p.cyan_red, p.magenta_green, p.yellow_blue) = (Some(0.0), Some(0.0), Some(0.0));
             p.preserve_lum = Some(true);
         }
+        Kind::CmykSelectiveColor => (p.sc_cmyk, p.sc_method) = (Some(vec![0.0; 4 * SC_RANGES.len()]), Some("relative".into())),
         Kind::Exposure => (p.exposure, p.exp_offset, p.exp_gamma) = (Some(0.0), Some(0.0), Some(1.0)),
         Kind::Vibrance => (p.vibrance, p.vib_saturation) = (Some(0.0), Some(0.0)),
         // Photoshop's default: Warming Filter (85), 25% density, luminosity kept.
@@ -336,6 +339,9 @@ fn curve_is_identity(c: &Option<Vec<CurvePoint>>) -> bool {
 }
 
 /// Field Blur's strongest pin (AR `fieldBlurMax`).
+/// Selective Color's ranges, in the order of `scCmyk`'s groups of (C, M, Y, K).
+pub const SC_RANGES: [&str; 9] = ["reds", "yellows", "greens", "cyans", "blues", "magentas", "whites", "neutrals", "blacks"];
+
 /// Black & White's default hue weights, Photoshop's "Default" preset
 /// (happypaint `BW_DEFAULT_WEIGHTS`): reds, yellows, greens, cyans, blues,
 /// magentas. A missing weight reads as its default.
@@ -364,6 +370,7 @@ pub fn is_identity(k: Kind, p: &Params) -> bool {
                 && p.out_white.unwrap_or(1.0) == 1.0
         }
         Kind::Curves => [&p.curve, &p.curve_r, &p.curve_g, &p.curve_b].into_iter().all(curve_is_identity),
+        Kind::CmykSelectiveColor => p.sc_cmyk.as_deref().is_none_or(|v| v.iter().all(|x| *x == 0.0)),
         Kind::ColorBalance => [
             p.cyan_red,
             p.magenta_green,

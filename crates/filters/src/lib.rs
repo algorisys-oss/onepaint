@@ -20,8 +20,10 @@ mod stylize;
 mod tex;
 pub mod ui;
 
-pub use colour::{MAX_COLOR_SAMPLES, fill_stops, rgb01_to_hsv, selective_color_rgb};
-pub use kind::{BW_DEFAULT_TINT, BW_DEFAULT_WEIGHTS, Kind, SECTIONS, channel_mixer_rows, default_params, field_blur_max, is_identity};
+pub use colour::{MAX_COLOR_SAMPLES, fill_stops, rgb01_to_hsv, sc_table as sc_table_of, selective_color_rgb};
+pub use kind::{
+    BW_DEFAULT_TINT, BW_DEFAULT_WEIGHTS, Kind, SC_RANGES, SECTIONS, channel_mixer_rows, default_params, field_blur_max, is_identity,
+};
 pub use params::{BlurPin, ColorSample, FillStop, Params, Stop};
 pub use tex::Frame;
 
@@ -205,6 +207,7 @@ impl Prepared {
                 [0, 1, 2].map(|i| lut_sample(&lut, c01(w[i]), i))
             }
             Kind::ColorBalance => colour::color_balance(w.map(c01), p),
+            Kind::CmykSelectiveColor => colour::cmyk_selective(w.map(c01), p),
             Kind::Exposure => {
                 // In linear light, like a camera (EXPOSURE_SRC).
                 let gain = 2f32.powf(p.exposure.unwrap_or(0.0));

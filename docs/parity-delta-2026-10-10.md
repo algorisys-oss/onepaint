@@ -42,7 +42,9 @@ modes landed (2026-10-18); only names onepaint doesn't know are kept now.
 
 ### Adjustments (v0.201.2–0.201.6)
 - Exposure, Vibrance, Photo Filter, Channel Mixer.
-- CMYK Selective Color.
+- ~~CMYK Selective Color.~~ Done 2026-10-19 (`cmyk-selective-color`;
+  the older sample-based kind is now labelled "Selective Color+", as in
+  happypaint).
 - Color Lookup (`.cube`/`.3dl`).
 - ~~Black & White hue weights and tint, and Color Balance tone ranges.
   happypaint re-renders existing layers of both kinds with the new
