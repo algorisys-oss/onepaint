@@ -14,6 +14,7 @@ pub mod psd;
 pub mod psd_adjust;
 pub mod psd_desc;
 pub mod psd_effects;
+pub mod psd_fill;
 pub mod psd_source;
 pub mod tiff_cmyk;
 pub mod video;

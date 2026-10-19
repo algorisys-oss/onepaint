@@ -174,10 +174,14 @@ fn fill_layers_export_their_picture() {
     let flat = vec![1.0f32; 64 * 48 * 4];
     let back = read_psd(&write_psd(&d, &flat).unwrap()).unwrap();
     let Some(Node::Layer(s)) = back.root.iter().find(|n| n.name() == "Solid") else { panic!("the fill layer") };
-    let p = s.pixels.get(10, 10);
-    let c = onepaint_color::Space::Linear.to_srgb8(p);
-    // 0.5 · 255 = 127.5 rounds either way through the transfer table.
-    assert!(c[0] == 255 && c[1].abs_diff(128) <= 1 && c[2] == 0 && c[3] == 255, "{c:?}");
+    // It comes back live (SoCo), its colour to the 8 bits Photoshop keeps…
+    let a = s.adjustment.as_ref().expect("a live fill");
+    assert_eq!(a.kind, "solid-fill");
+    let c = a.params.fill_color.unwrap();
+    assert!(c[0] == 1.0 && (c[1] - 128.0 / 255.0).abs() < 1e-6 && c[2] == 0.0, "{c:?}");
+    // …and the record still carries the picture for readers without fills.
+    let bytes = write_psd(&d, &flat).unwrap();
+    assert!(bytes.windows(8).any(|w| w == b"8BIMSoCo"));
 }
 
 #[test]

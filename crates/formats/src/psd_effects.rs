@@ -123,7 +123,7 @@ fn contour_of(d: Option<&Desc>, fallback: Contour) -> Contour {
     Contour::ALL.into_iter().min_by(|a, b| err(*a).total_cmp(&err(*b))).unwrap_or(fallback)
 }
 
-fn colour(c: [f32; 3]) -> DVal {
+pub(crate) fn colour(c: [f32; 3]) -> DVal {
     let mut d = Desc::new("RGBC");
     let v = |x: f32| DVal::Doub((x.clamp(0.0, 1.0) * 255.0).round() as f64);
     d.push("Rd  ", v(c[0])).push("Grn ", v(c[1])).push("Bl  ", v(c[2]));
@@ -146,7 +146,7 @@ fn hsv_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
 }
 
 /// A colour read back (RGB, float RGB, HSB or grey); `None` otherwise.
-fn colour_of(d: Option<&Desc>) -> Option<[f32; 3]> {
+pub(crate) fn colour_of(d: Option<&Desc>) -> Option<[f32; 3]> {
     let d = d?;
     if let (Some(r), Some(g), Some(b)) = (d.f64("Rd  "), d.f64("Grn "), d.f64("Bl  ")) {
         return Some([r, g, b].map(|v| (v as f32 / 255.0).clamp(0.0, 1.0)));
@@ -197,7 +197,7 @@ fn head(class: &str, e: &Effect) -> Desc {
 }
 
 fn gradient(e: &Effect) -> DVal {
-    let mut stops: Vec<(f64, [f32; 3], f32, Option<f64>)> = e
+    let stops: Vec<(f64, [f32; 3], f32, Option<f64>)> = e
         .stops
         .iter()
         .filter_map(|s| {
@@ -207,6 +207,12 @@ fn gradient(e: &Effect) -> DVal {
             Some((s.get("pos")?.as_f64()?, rgb, op, s.get("mid").and_then(Value::as_f64)))
         })
         .collect();
+    gradient_desc(stops)
+}
+
+/// A custom gradient descriptor (`Grdn`) of stops (position, straight sRGB,
+/// opacity, midpoint of the segment to the next stop).
+pub(crate) fn gradient_desc(mut stops: Vec<(f64, [f32; 3], f32, Option<f64>)>) -> DVal {
     stops.sort_by(|a, b| a.0.total_cmp(&b.0));
     // Photoshop keeps a segment's midpoint on its right-hand stop.
     let mid = |i: usize| if i > 0 { stops[i - 1].3.unwrap_or(0.5) } else { 0.5 };
@@ -536,7 +542,7 @@ fn effect_of(kind: EffectKind, d: &Desc, on: bool, light: (f32, f32)) -> Option<
 
 /// A gradient's stops read back: colour stops with the opacity at each
 /// (linear between opacity stops), midpoints from the stop on their right.
-fn stops_of(g: &Desc) -> Option<Vec<Value>> {
+pub(crate) fn stops_of(g: &Desc) -> Option<Vec<Value>> {
     let intr = g.f64("Intr").filter(|v| *v > 0.0).unwrap_or(4096.0);
     let objs = |k: &str| -> Vec<Desc> {
         g.list(k)

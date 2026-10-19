@@ -283,6 +283,8 @@ fn layer_record(l: &Layer, doc: Rect, frame: onepaint_filters::Frame) -> Record 
                 w.u8(0);
                 extra.push((*b"brit", w.0));
             }
+            // Solid and gradient fills as live fill blocks, beside their picture.
+            "solid-fill" | "gradient-fill" => extra.extend(crate::psd_fill::write(a, f64::from(doc.w), f64::from(doc.h))),
             _ => extra.extend(crate::psd_adjust::write(a)),
         }
     }
@@ -780,6 +782,8 @@ struct RRec {
     /// Layer styles (spec 56): the last effects block's data, and Fill opacity.
     effects: Option<Vec<u8>>,
     fill: Option<f32>,
+    /// A Solid Color or Gradient fill read as a live fill layer.
+    live_fill: Option<onepaint_doc::Adjustment>,
     /// `lspf` flags and the `lclr` colour index.
     locks: u32,
     label: u16,
@@ -1211,6 +1215,8 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                 let (mut locks, mut label) = (0u32, 0u16);
                 let mut vector_mask = None;
                 let mut vector_fill = false;
+                let mut fill_block: Option<([u8; 4], Vec<u8>)> = None;
+                let mut vector_stroke = false;
                 while c.p + 12 <= ex_end {
                     let sig = c.take(4)?;
                     if sig != b"8BIM" && sig != b"8B64" {
@@ -1265,7 +1271,12 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                         b"iOpa" => fill = Some(d.u8()? as f32 / 255.0),
                         b"vmsk" | b"vsms" => vector_mask = vector_mask.or_else(|| read_vmsk(data, w as f64, h as f64)),
                         // A shape layer: its pixels are already cut to the path.
-                        b"SoCo" | b"GdFl" | b"PtFl" | b"vscg" => vector_fill = true,
+                        b"SoCo" | b"GdFl" => {
+                            vector_fill = true;
+                            fill_block = Some((k, data.to_vec()));
+                        }
+                        b"PtFl" | b"vscg" => vector_fill = true,
+                        b"vstk" => vector_stroke = true,
                         b"nvrt" => adjustment = adj("invert", Default::default()),
                         b"expA" | b"vibA" | b"phfl" | b"mixr" | b"levl" | b"curv" | b"hue2" | b"blnc" | b"blwh" | b"selc" | b"grdm" => {
                             adjustment = crate::psd_adjust::read(&k, data)
@@ -1312,6 +1323,11 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                     knockout,
                     mask_look,
                     blend_if,
+                    // A fill without a path or stroke comes in live (a shape
+                    // layer keeps Photoshop's pixels, as happypaint).
+                    live_fill: fill_block
+                        .filter(|_| vector_mask.is_none() && !vector_stroke)
+                        .and_then(|(k, d)| crate::psd_fill::read_block(&k, &d, f64::from(w), f64::from(h))),
                     vector_mask: vector_mask.filter(|_| !vector_fill),
                     effects,
                     fill,
@@ -1406,7 +1422,11 @@ pub fn read_psd_with(bytes: &[u8], progress: &crate::Progress) -> Result<Documen
                         l.set_blend_if(rec.blend_if);
                         l.set_vector_mask(rec.vector_mask);
                         l.mask = mask;
-                        l.adjustment = rec.adjustment.map(Box::new);
+                        l.adjustment = rec.adjustment.or(rec.live_fill).map(Box::new);
+                        if l.adjustment.as_ref().is_some_and(|a| a.kind.ends_with("-fill")) {
+                            // A fill draws itself; its record's pixels were the rendered picture.
+                            l.pixels = Surface::new();
+                        }
                         l.set_knockout(match rec.knockout {
                             1 => Some(onepaint_doc::Knockout::Shallow),
                             2 => Some(onepaint_doc::Knockout::Deep),
