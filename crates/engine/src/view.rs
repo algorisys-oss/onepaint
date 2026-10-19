@@ -86,3 +86,106 @@ impl View {
         self.set_scale_at(c, 1.0);
     }
 }
+
+// ── Scrollbars (happypaint `utils/scrollbars.ts`, v0.192.0) ──
+
+/// Room to scroll past the document, as a share of the view.
+pub const SCROLL_MARGIN: f64 = 0.4;
+/// The smallest thumb, px.
+pub const THUMB_MIN: f64 = 24.0;
+
+/// One scrollbar's geometry along its axis, screen px.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AxisBar {
+    pub visible: bool,
+    pub range: f64,
+    pub view: f64,
+    pub track: f64,
+    pub thumb_start: f64,
+    pub thumb_size: f64,
+}
+
+impl View {
+    /// The document's screen extent: x0, x1, y0, y1 of its four corners
+    /// (rotated too).
+    pub fn doc_screen_extent(&self) -> [f64; 4] {
+        let [w, h] = self.doc_size;
+        let pts = [[0.0, 0.0], [w, 0.0], [0.0, h], [w, h]].map(|p| self.doc_to_screen(p));
+        let f = |k: usize, max: bool| {
+            pts.iter().map(|p| p[k]).fold(if max { f64::MIN } else { f64::MAX }, if max { f64::max } else { f64::min })
+        };
+        [f(0, false), f(0, true), f(1, false), f(1, true)]
+    }
+}
+
+/// A bar for a view `view` px long showing content from `a` to `b` on a
+/// `track` px track: hidden while the content fits.
+pub fn axis_bar(view: f64, a: f64, b: f64, track: f64) -> AxisBar {
+    if a >= 0.0 && b <= view {
+        return AxisBar { visible: false, range: view, view, track, thumb_start: 0.0, thumb_size: track };
+    }
+    let m = SCROLL_MARGIN * view;
+    let lo = (a - m).min(0.0);
+    let hi = (b + m).max(view);
+    let range = view.max(hi - lo);
+    let thumb_size = track.min(THUMB_MIN.max(view / range * track));
+    let scrollable = range - view;
+    let travel = track - thumb_size;
+    let thumb_start = if scrollable > 0.0 { -lo / scrollable * travel } else { 0.0 };
+    AxisBar { visible: scrollable > 0.0, range, view, track, thumb_start: thumb_start.clamp(0.0, travel.max(0.0)), thumb_size }
+}
+
+/// The pan (px) a thumb moved `d_thumb` px stands for.
+pub fn thumb_drag_to_pan(bar: &AxisBar, d_thumb: f64) -> f64 {
+    let scrollable = bar.range - bar.view;
+    let travel = bar.track - bar.thumb_size;
+    if scrollable <= 0.0 || travel <= 0.0 {
+        return 0.0;
+    }
+    -(d_thumb * scrollable) / travel
+}
+
+/// The pan a click on the track before (−1) or after (1) the thumb takes.
+pub fn page_step(view: f64, dir: f64) -> f64 {
+    -dir * (view * 0.9).round()
+}
+
+#[cfg(test)]
+mod scroll_tests {
+    use super::*;
+
+    // happypaint scrollbars.test.ts.
+    #[test]
+    fn the_document_extent_on_screen() {
+        let v = View { view_size: [1000.0, 800.0], doc_size: [400.0, 300.0], scale: 2.0, rotation: 0.0, offset: [0.0, 0.0] };
+        assert_eq!(v.doc_screen_extent(), [100.0, 900.0, 100.0, 700.0]);
+        let r = View {
+            view_size: [1000.0, 1000.0],
+            doc_size: [400.0, 200.0],
+            scale: 1.0,
+            rotation: std::f64::consts::FRAC_PI_2,
+            offset: [0.0, 0.0],
+        };
+        let e = r.doc_screen_extent();
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        assert!(close(e[0], 400.0) && close(e[1], 600.0) && close(e[2], 300.0) && close(e[3], 700.0), "{e:?}");
+    }
+
+    #[test]
+    fn bars_hide_while_it_fits_and_size_their_thumbs() {
+        assert!(!axis_bar(1000.0, 100.0, 900.0, 1000.0).visible);
+        let b = axis_bar(1000.0, -500.0, 1500.0, 1000.0);
+        assert!(b.visible && b.range == 2800.0);
+        assert!((b.thumb_size - 1000.0 / 2800.0 * 1000.0).abs() < 1e-9);
+        assert!((b.thumb_start - (1000.0 - b.thumb_size) / 2.0).abs() < 1e-9, "centred");
+        assert_eq!(axis_bar(1000.0, 400.0, 1500.0, 1000.0).thumb_start, 0.0, "at the margin");
+        let far = axis_bar(1000.0, 5000.0, 9000.0, 1000.0);
+        assert!(far.thumb_start == 0.0 && far.thumb_start + far.thumb_size <= 1000.0);
+        let huge = axis_bar(1000.0, -1e6, 1e6, 600.0);
+        assert_eq!(huge.thumb_size, 24.0);
+        assert!((thumb_drag_to_pan(&huge, 576.0) + (huge.range - 1000.0)).abs() < 1e-6);
+        assert!((thumb_drag_to_pan(&b, b.track - b.thumb_size) + (b.range - b.view)).abs() < 1e-9);
+        assert_eq!(thumb_drag_to_pan(&axis_bar(1000.0, 100.0, 900.0, 1000.0), 50.0), 0.0);
+        assert_eq!((page_step(1000.0, 1.0), page_step(1000.0, -1.0)), (-900.0, 900.0));
+    }
+}

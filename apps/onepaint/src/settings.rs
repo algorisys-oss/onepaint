@@ -66,6 +66,8 @@ pub struct Settings {
     pub keybindings: crate::keymap::Overrides,
     /// The size and opacity sliders beside the canvas (happypaint `sideSliders*`).
     pub side_sliders: bool,
+    /// Scrollbars on the canvas when the document runs past the view.
+    pub scrollbars: bool,
     pub side_sliders_mode: crate::side_sliders::Mode,
     /// Px from the centre along the edge.
     pub side_sliders_offset: f32,
@@ -95,6 +97,7 @@ impl Default for Settings {
             keybindings: Default::default(),
             timeline_metric: TimelineMetric::Frames,
             side_sliders: true,
+            scrollbars: true,
             side_sliders_mode: Default::default(),
             side_sliders_offset: 0.0,
             side_sliders_float: Default::default(),
@@ -235,6 +238,8 @@ pub fn dialog(app: &mut App, ui: &mut Ui) {
                 s.brush_cursor = styles[i];
             }
             widgets::toggle(ui, &mut s.cursor_use_color, "Draw the cursor in the paint colour");
+            widgets::toggle(ui, &mut s.scrollbars, "Scrollbars on the canvas")
+                .on_hover_text("Shown when the drawing runs past the view: drag to pan, click the track to page.");
             widgets::toggle(ui, &mut s.cursor_tip_shape, "Trace the tip")
                 .on_hover_text("A leaf brush shows a leaf, not a circle. Round and square tips are unaffected.");
             let mut th = s.cursor_thickness as f32;

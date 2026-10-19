@@ -435,6 +435,13 @@ pub struct Canvas {
     pub panel_options: crate::panel_ui::PanelOptions,
     /// Ignore this frame's press (it closes a typed value elsewhere).
     pub swallow_press: bool,
+    /// Show scrollbars when the document runs past the view.
+    pub scrollbars: bool,
+    /// Where the canvas sat on screen last frame.
+    pub screen_rect: Rect,
+    /// A scrollbar thumb being dragged: the axis (0 x, 1 y), the bar when
+    /// it was pressed, where the press began and the pan applied so far.
+    scroll_drag: Option<(usize, onepaint_engine::view::AxisBar, f32, f64)>,
 }
 
 impl Canvas {
@@ -482,6 +489,9 @@ impl Canvas {
             loupe: None,
             panel_options: Default::default(),
             swallow_press: false,
+            scrollbars: true,
+            screen_rect: Rect::NOTHING,
+            scroll_drag: None,
         }
     }
 
@@ -972,6 +982,7 @@ impl Canvas {
         let ppp = ui.ctx().pixels_per_point();
         // Overlays (handles, guides, cursors) stay on the stage, off the docks and status bar.
         ui.set_clip_rect(rect);
+        self.screen_rect = rect;
         self.view.view_size = [rect.width() as f64, rect.height() as f64];
         let resp = ui.interact(rect, ui.id().with("canvas"), Sense::click_and_drag());
         let time_ms = ui.input(|i| i.time) * 1000.0;
@@ -1651,6 +1662,87 @@ impl Canvas {
     }
 
     /// Pinned ruler bars (unrotated view) and the measure line, on top of everything.
+    /// Scrollbars along the bottom and right while the document runs past
+    /// the view (happypaint `canvas-scrollbars.tsx`): drag a thumb to pan,
+    /// click the track to page.
+    fn scrollbars(&mut self, ui: &egui::Ui, rect: Rect, session: &Session) {
+        use onepaint_engine::view::{axis_bar, page_step, thumb_drag_to_pan};
+        use onepaint_stroke::guide_lines::{RULER_PX, rulers_pinned};
+        const BAR: f32 = 10.0;
+        if !self.scrollbars {
+            self.scroll_drag = None;
+            return;
+        }
+        let t = Tokens::get(ui.ctx());
+        let g = session.guides();
+        let reserve = if g.rulers && g.visible && rulers_pinned(self.view.rotation) { RULER_PX } else { 0.0 };
+        let [vw, vh] = self.view.view_size;
+        let [x0, x1, y0, y1] = self.view.doc_screen_extent();
+        let bars = [
+            axis_bar(vw - reserve - f64::from(BAR), x0 - reserve, x1 - reserve, (vw - reserve - f64::from(BAR)).max(0.0)),
+            axis_bar(vh - reserve - f64::from(BAR), y0 - reserve, y1 - reserve, (vh - reserve - f64::from(BAR)).max(0.0)),
+        ];
+        for (axis, bar) in bars.into_iter().enumerate() {
+            if !bar.visible && self.scroll_drag.is_none_or(|d| d.0 != axis) {
+                continue;
+            }
+            let r = reserve as f32;
+            let track = if axis == 0 {
+                Rect::from_min_size(pos2(rect.left() + r, rect.bottom() - BAR), egui::vec2(bar.track as f32, BAR))
+            } else {
+                Rect::from_min_size(pos2(rect.right() - BAR, rect.top() + r), egui::vec2(BAR, bar.track as f32))
+            };
+            let along = |p: Pos2| if axis == 0 { p.x - track.left() } else { p.y - track.top() };
+            let resp = ui.interact(track, ui.id().with(("scrollbar", axis)), Sense::click_and_drag());
+            let on_thumb = |p: Pos2| (bar.thumb_start..=bar.thumb_start + bar.thumb_size).contains(&f64::from(along(p)));
+            let origin = ui.input(|i| i.pointer.press_origin());
+            if resp.drag_started()
+                && let Some(p) = origin.filter(|p| on_thumb(*p))
+            {
+                // The bar as pressed: the range shifting as the view moves can't feed back.
+                self.scroll_drag = Some((axis, bar, along(p), 0.0));
+            } else if resp.clicked()
+                && let Some(p) = resp.interact_pointer_pos().filter(|p| !on_thumb(*p))
+            {
+                let dir = if f64::from(along(p)) < bar.thumb_start { -1.0 } else { 1.0 };
+                let step = page_step(bar.view, dir);
+                if axis == 0 { self.view.pan(step, 0.0) } else { self.view.pan(0.0, step) }
+            }
+            if let Some((a, b0, start, applied)) = self.scroll_drag
+                && a == axis
+            {
+                if resp.dragged()
+                    && let Some(p) = resp.interact_pointer_pos()
+                {
+                    let d = f64::from(along(p) - start).clamp(-b0.thumb_start, b0.track - b0.thumb_size - b0.thumb_start);
+                    let pan = thumb_drag_to_pan(&b0, d);
+                    if axis == 0 {
+                        self.view.pan(pan - applied, 0.0)
+                    } else {
+                        self.view.pan(0.0, pan - applied)
+                    }
+                    self.scroll_drag = Some((a, b0, start, pan));
+                }
+                if !resp.dragged() {
+                    self.scroll_drag = None;
+                }
+            }
+            let held = self.scroll_drag.is_some_and(|d| d.0 == axis);
+            let hot = resp.hovered() || held;
+            let p = ui.painter();
+            p.rect_filled(track, 0.0, t.bg.gamma_multiply(if hot { 0.7 } else { 0.35 }));
+            let (s, z) = (bar.thumb_start as f32, bar.thumb_size as f32);
+            let thumb = if axis == 0 {
+                Rect::from_min_size(pos2(track.left() + s, track.top()), egui::vec2(z, BAR))
+            } else {
+                Rect::from_min_size(pos2(track.left(), track.top() + s), egui::vec2(BAR, z))
+            }
+            .shrink(2.0);
+            let fill = if held { t.accent } else { t.fg.gamma_multiply(if hot { 0.5 } else { 0.32 }) };
+            p.rect_filled(thumb, 5.0, fill);
+        }
+    }
+
     fn rulers_and_measure(&self, ui: &egui::Ui, rect: Rect, session: &Session) {
         use onepaint_stroke::guide_lines::{RULER_PX, measure_between, ruler_ticks_span, rulers_pinned};
         let g = session.guides();
@@ -1844,6 +1936,7 @@ impl Canvas {
             ui.painter().circle_stroke(f, 5.0, Stroke::new(1.5, Color32::WHITE));
         }
         self.rulers_and_measure(ui, rect, session);
+        self.scrollbars(ui, rect, session);
         // Toolbars and popovers float over the canvas: there the pointer is
         // theirs (plain arrow, no brush ring) unless a stroke is under way.
         let Some(hp) = hover.filter(|_| resp.hovered() || resp.dragged()) else { return };

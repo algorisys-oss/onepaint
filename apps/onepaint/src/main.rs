@@ -1450,6 +1450,7 @@ impl eframe::App for App {
         let pegging = self.timing.peg_mode && self.session.anim_settings().enabled;
         self.canvas.peg_target = self.timing.peg_target.clone().filter(|_| pegging);
         self.canvas.swallow_press = self.side.entry_open();
+        self.canvas.scrollbars = self.settings.scrollbars && !self.hide_ui;
         self.canvas.show(ui, rect, &mut self.session, space, r, self.gpu_ok, self.gpu_compose);
         // Keep a short history of pen samples (the canvas may use a move a frame late).
         let excess = self.canvas.pen_queue.len().saturating_sub(512);
@@ -2019,6 +2020,45 @@ mod tests {
         key(&mut h, egui::Key::I, egui::Modifiers::NONE);
         click(&mut h, pos2(600.0, 400.0));
         assert_eq!(h.state().session.color().to_hex(), "#ff0000");
+    }
+
+    /// Scrollbars appear once the drawing runs past the view: dragging the
+    /// thumb pans (and never paints), a click on the track pages.
+    #[test]
+    fn scrollbars_pan_the_view() {
+        use onepaint_engine::view::axis_bar;
+        let mut h = harness();
+        h.run();
+        h.state_mut().canvas.view.scale = 4.0;
+        h.run();
+        let (rect, v) = (h.state().canvas.screen_rect, h.state().canvas.view);
+        let [x0, x1, _, _] = v.doc_screen_extent();
+        let track = v.view_size[0] - 10.0;
+        let bar = axis_bar(track, x0, x1, track);
+        assert!(bar.visible);
+        let thumb = pos2(rect.left() + (bar.thumb_start + bar.thumb_size / 2.0) as f32, rect.bottom() - 5.0);
+        let before = h.state().canvas.view.offset[0];
+        drag_stroke(&mut h, thumb, thumb + egui::vec2(40.0, 0.0));
+        h.run();
+        let after = h.state().canvas.view.offset[0];
+        let want = onepaint_engine::view::thumb_drag_to_pan(&bar, 40.0);
+        assert!((after - before - want).abs() < 1.0, "panned {} for {want}", after - before);
+        assert!(!h.state().session.can_undo(), "the drag didn't paint");
+        // A click on the track past the thumb pages right.
+        let end = pos2(rect.left() + track as f32 - 3.0, rect.bottom() - 5.0);
+        click(&mut h, end);
+        h.run();
+        assert!(
+            (h.state().canvas.view.offset[0] - (after - (track * 0.9).round())).abs() < 1e-6,
+            "{} vs {after}",
+            h.state().canvas.view.offset[0]
+        );
+        // Off in Settings: no bars.
+        h.state_mut().settings.scrollbars = false;
+        h.run();
+        let o = h.state().canvas.view.offset[0];
+        click(&mut h, end);
+        assert_eq!(h.state().canvas.view.offset[0], o);
     }
 
     /// Shift+[ / Shift+] turn the brush tip 15° (wrapping), plain [ / ] still size it.
