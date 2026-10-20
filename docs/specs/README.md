@@ -75,3 +75,4 @@ The happypaint references are relative to `../happypaint/frontend/src/`.
 | 62 | [Replaying happypaint recordings](62-happypaint-recordings.md) | formats, engine, app |
 | 63 | [Loading the Mixer from the canvas](63-mixer-patch.md) | brush, engine, ui_kit, app |
 | 64 | [PSD in the file's own mode and depth, and PSB](64-psd-own-mode.md) | formats, color |
+| 65 | [Workspace layout: menu bar, options row, left rail](65-workspace-layout.md) (proposed) | app, ui_kit |
