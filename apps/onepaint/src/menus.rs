@@ -313,6 +313,20 @@ pub fn build(app: &App) -> Vec<Menu> {
     .collect()
 }
 
+/// All the menus as one, for narrow windows (happypaint's ☰ sheet): each
+/// menu's rows under its title.
+pub fn folded(menus: Vec<Menu>) -> Vec<Menu> {
+    let mut entries = Vec::new();
+    for (i, m) in menus.into_iter().enumerate() {
+        if i > 0 {
+            entries.push(MenuEntry::Sep);
+        }
+        entries.push(MenuEntry::Header(m.title));
+        entries.extend(m.entries);
+    }
+    vec![Menu { title: "Menu".into(), entries }]
+}
+
 /// Each header and the rows after it, up to the next separator, as a submenu.
 fn fold_sections(entries: Vec<MenuEntry>) -> Vec<MenuEntry> {
     let mut out = Vec::new();

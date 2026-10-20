@@ -490,3 +490,19 @@ fn the_header_stands_in_for_the_title_bar() {
     assert!(sent(&mut h, "Minimize").contains(&egui::ViewportCommand::Minimized(true)));
     assert!(sent(&mut h, "Close").contains(&egui::ViewportCommand::Close));
 }
+
+/// Spec 65 phase 5: below 900 px the menus fold into one and the zoom
+/// leaves the options row for the status bar.
+#[test]
+fn narrow_windows_fold_the_menus_and_the_zoom() {
+    let mut h = harness_sized(850.0, 700.0);
+    h.run();
+    assert!(h.query_by_label("File").is_none() && h.query_by_label("Zoom").is_none());
+    assert!(h.query_by_label("Zoom in").is_some(), "the status bar's zoom");
+    crate::tests::menu_pick(&mut h, "Menu", "New canvas…");
+    assert_eq!(h.state().popover, Some(Popover::NewDoc));
+    // Wide again: the eight menus.
+    let mut h = harness();
+    h.run();
+    assert!(h.query_by_label("Menu").is_none() && h.query_by_label("File").is_some());
+}

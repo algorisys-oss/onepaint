@@ -156,7 +156,10 @@ fn top_bar(app: &mut App, ctx: &egui::Context) -> egui::Rect {
             app.popover = Some(Popover::Gallery);
         }
         left.add_space(4.0);
-        picked = onepaint_ui_kit::menu_bar::menu_bar(&mut left, &crate::menus::build(app));
+        // Narrow windows fold the menus into one, each a captioned section.
+        let menus = crate::menus::build(app);
+        let menus = if dock::compact(screen) { crate::menus::folded(menus) } else { menus };
+        picked = onepaint_ui_kit::menu_bar::menu_bar(&mut left, &menus);
         let menus_end = left.min_rect().right();
         // The end: recording, wet paint, then the panel buttons.
         let mut right = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::right_to_left(egui::Align::Center)));
@@ -288,10 +291,13 @@ fn options_row(app: &mut App, ctx: &egui::Context, row: egui::Rect) {
         ui.painter().rect_filled(row, 0.0, t.panel);
         ui.painter().hline(row.x_range(), row.bottom() - 0.5, egui::Stroke::new(1.0, t.border));
         let inner = row.shrink2(vec2(8.0, 4.0));
-        let zoom_w = 96.0;
+        // Narrow windows read the zoom in the status bar instead.
+        let zoom_w = if dock::compact(view) { 0.0 } else { 96.0 };
         let zoom_rect = egui::Rect::from_min_max(pos2(inner.right() - zoom_w, inner.top()), inner.max);
-        let mut z = ui.new_child(egui::UiBuilder::new().max_rect(zoom_rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
-        crate::options_row::zoom(app, &mut z);
+        if zoom_w > 0.0 {
+            let mut z = ui.new_child(egui::UiBuilder::new().max_rect(zoom_rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
+            crate::options_row::zoom(app, &mut z);
+        }
         let left = egui::Rect::from_min_max(inner.min, pos2(zoom_rect.left() - 8.0, inner.bottom()));
         let mut l = ui.new_child(egui::UiBuilder::new().max_rect(left).layout(egui::Layout::left_to_right(egui::Align::Center)));
         l.set_clip_rect(left);

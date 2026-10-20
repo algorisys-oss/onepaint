@@ -1,8 +1,9 @@
 # 65: Workspace layout (menu bar, options row, left rail)
 
 ## Status
-Agreed (2026-10-20). Phases 1–4 (the menu bar, the options row, the left
-rail, the title bar) are built (below); phases 5–6 follow.
+Agreed (2026-10-20). Phases 1–5 (the menu bar, the options row, the left
+rail, the title bar, narrow windows) are built (below); phase 6, the
+manual, follows.
 Replaces onepaint's canvas-first chrome (a "…" menu, a floating tool bar
 top right, the Layers popover) with happypaint's v0.204 workspace.
 Retires divergences 41 and 42, and the View-menu half of 49.
@@ -248,6 +249,16 @@ themes; the old chrome stays usable until phase 3 switches the default.
 - Not verified by eye yet (the desktop session was idle while this
   landed); the window commands are checked in
   `the_header_stands_in_for_the_title_bar`.
+
+## Phase 5 as built
+- Below 900 px (`dock::compact`): the menus fold into one "Menu" whose
+  list has each menu's rows under its title (`menus::folded`); the zoom
+  menu leaves the options row (the status bar keeps its zoom); panel
+  labels already go below 1180 px, and the tool bar is the scrolling
+  strip above the status bar, as before.
+- The ≤600 px rules (brush strip hidden, bottom sheets) don't apply: the
+  window's minimum width is 720 px.
+- Test: `narrow_windows_fold_the_menus_and_the_zoom`.
 
 ## Divergences
 - 41, 42 retire. 49 narrows to the eyedropper square (side sliders).
