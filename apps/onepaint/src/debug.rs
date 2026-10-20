@@ -1,5 +1,6 @@
 //! Debug automation driven by environment variables, for visual checks:
 //!
+//! - `ONEPAINT_TOOL=mixer|fill|selectwand|…` picks that tool.
 //! - `ONEPAINT_MENU=file|edit|view|…` opens that menu in the menu bar.
 //! - `ONEPAINT_SCREENSHOT=out.png` saves a screenshot of the window after a few frames.
 //! - `ONEPAINT_DEMO=1` paints a small demo scene first.
@@ -155,6 +156,13 @@ fn wave(app: &mut App, y: f64, amp: f64, color: Rgba, preset: &str, size: f64) {
 pub fn tick(app: &mut App, ctx: &egui::Context) {
     let frame = app.debug.frame;
     app.debug.frame += 1;
+    // ONEPAINT_TOOL=mixer: that tool (its options row shows).
+    if frame == 2
+        && let Ok(name) = std::env::var("ONEPAINT_TOOL")
+        && let Some(t) = onepaint_engine::Tool::ALL.into_iter().find(|t| format!("{t:?}").eq_ignore_ascii_case(&name))
+    {
+        app.set_tool(t);
+    }
     // ONEPAINT_MENU=view: that menu open in the menu bar (and ONEPAINT_SUBMENU=0..: a submenu of Adjust).
     if frame >= 2
         && let Ok(m) = std::env::var("ONEPAINT_MENU")

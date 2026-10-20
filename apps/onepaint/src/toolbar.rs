@@ -28,7 +28,6 @@ enum Item {
     Select,
     Animation,
     Adjustments,
-    Color,
     Sep,
 }
 
@@ -52,7 +51,6 @@ const ITEMS: &[Item] = &[
     Item::Tool(Tool::Mixer, "palette", "Mixer brush (Shift+B)"),
     Item::Tool(Tool::Liquify, "waves", "Liquify"),
     Item::Sep,
-    Item::Color,
 ];
 
 pub const PAN_LABEL: &str = "Pan (H) — drag to move the canvas. Hold Space with any tool, or drag with the middle mouse button";
@@ -352,11 +350,10 @@ fn item(app: &mut App, ui: &mut Ui, it: Item, view: Rect) {
     match it {
         Item::Tool(t, icon, label) => {
             if icons::button(ui, icon, BTN, tool == t, label).clicked() {
-                if tool == t {
-                    let opts = if matches!(t, Tool::Brush | Tool::Eraser) { Some(Popover::Brushes) } else { dock::tool_options(t) };
-                    if let Some(p) = opts {
-                        dock::toggle(app, p, view);
-                    }
+                // Again on the brush or eraser: the brushes. Other tools'
+                // options are in the options row (spec 65).
+                if tool == t && matches!(t, Tool::Brush | Tool::Eraser) {
+                    dock::toggle(app, Popover::Brushes, view);
                 }
                 app.set_tool(t);
             }
@@ -386,13 +383,6 @@ fn item(app: &mut App, ui: &mut Ui, it: Item, view: Rect) {
                 } else {
                     app.popover = if app.popover == Some(Popover::Adjustments) { None } else { Some(Popover::Adjustments) };
                 }
-            }
-        }
-        Item::Color => {
-            let c = app.session.color();
-            let r = widgets::swatch(ui, c, BTN, dock::showing(app, Popover::Color, view)).on_hover_text("Colour");
-            if r.clicked() {
-                dock::toggle(app, Popover::Color, view);
             }
         }
         Item::Sep => {}

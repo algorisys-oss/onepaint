@@ -1,8 +1,8 @@
 # 65: Workspace layout (menu bar, options row, left rail)
 
 ## Status
-Agreed (2026-10-20). Phase 1, the menu bar, is built (below); phases 2–6
-follow.
+Agreed (2026-10-20). Phases 1 (the menu bar) and 2 (the options row) are
+built (below); phases 3–6 follow.
 Replaces onepaint's canvas-first chrome (a "…" menu, a floating tool bar
 top right, the Layers popover) with happypaint's v0.204 workspace.
 Retires divergences 41 and 42, and the View-menu half of 49.
@@ -197,6 +197,30 @@ themes; the old chrome stays usable until phase 3 switches the default.
 - Tests: `every_menu_command_is_reachable`,
   `menus_run_their_command_and_escape_closes`, the engine's
   `tests/structure.rs`, `menu_bar` focus stepping.
+
+## Phase 2 as built
+- `options_row.rs` in the header's second row (`chrome::ROW2_H`): the
+  colours (foreground opens the Colour popover under it, background
+  swaps, swap, black and white), the brush strip for Brush, Eraser,
+  Smudge, Mixer and Shape (the brush ▾, angle dial, Stabilizer and its
+  amount, Pressure Size / Opacity), each tool's options, and the zoom
+  menu fixed at the end. It scrolls sideways; popovers it opens anchor
+  under their control (`App::row_anchor`).
+- `ui_kit::inline`: `inline_slider`, `chip`, `menu_chip`, `dropdown`.
+- The transform bar is gone: the row shows the transform's controls
+  whenever one is pending. The tool bar's colour swatch is gone, and
+  clicking an active tool no longer opens its options popover (Brush and
+  Eraser still open the brushes); the Panel tool no longer opens its
+  layouts. The stacked controls stay in the Tool options panel (View ▸
+  Panels).
+- Kept as onepaint has them: Fill's Grow, the gradient's stops in its
+  panel ("Stops ▾"), the pen's path menu in its panel ("Path ▾"), saved
+  selections in the selection panel ("Saved ▾"). Not yet: the shape
+  segment's Polygon sides as a field, the selection Amount field (refine
+  steps are 4 px), Tone for Fill (onepaint has no tone fill).
+- A view still fitted to the window refits when the canvas changes size
+  (the header, a dock, the window); a panned or zoomed one stays.
+- Tests: `the_options_row_drives_the_brush_the_tool_and_the_zoom`.
 
 ## Divergences
 - 41, 42 retire. 49 narrows to the eyedropper square (side sliders).

@@ -6,6 +6,7 @@
 pub mod gradient_editor;
 pub mod gradient_stops;
 pub mod icons;
+pub mod inline;
 pub mod menu_bar;
 pub mod range_bar;
 pub mod theme;

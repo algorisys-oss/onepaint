@@ -172,6 +172,15 @@ pub fn overlay(ui: &Ui, session: &Session, pd: Option<&PanelDrag>, to_screen: im
 }
 
 /// The panel options popover: layout presets, page style and help.
+/// A page of `rows` × `cols` panels with the current gutter, margin and border.
+pub fn create_grid(app: &mut App, rows: u32, cols: u32, now: f64) {
+    let o = app.canvas.panel_options;
+    let cmd = Command::CreatePanelGrid { rows, cols, gutter: o.gutter as f64, margin: o.margin as f64, border: o.border as f64 };
+    if let Err(e) = app.session.execute(cmd) {
+        app.notify(e.to_string(), now);
+    }
+}
+
 pub fn options(app: &mut App, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let now = ui.input(|i| i.time);
@@ -181,17 +190,7 @@ pub fn options(app: &mut App, ui: &mut Ui) {
         for l in LAYOUT_PRESETS {
             let label = format!("{}×{}", l.rows, l.cols);
             if widgets::secondary_button(ui, &label, 44.0).on_hover_text(l.tip).clicked() {
-                let o = app.canvas.panel_options;
-                let cmd = Command::CreatePanelGrid {
-                    rows: l.rows,
-                    cols: l.cols,
-                    gutter: o.gutter as f64,
-                    margin: o.margin as f64,
-                    border: o.border as f64,
-                };
-                if let Err(e) = app.session.execute(cmd) {
-                    app.notify(e.to_string(), now);
-                }
+                create_grid(app, l.rows, l.cols, now);
             }
         }
     });
@@ -276,9 +275,7 @@ mod tests {
         let _ = h.state_mut().session.execute(onepaint_engine::Command::Undo);
         assert!(h.state().session.panel_frames().is_empty());
 
-        // A preset lays out a page.
-        h.state_mut().popover = Some(Popover::PanelOptions);
-        h.run();
+        // A preset from the options row lays out a page.
         h.get_by_label("2×2").click();
         h.run();
         assert_eq!(h.state().session.panel_frames().len(), 4);
@@ -318,9 +315,10 @@ mod tests {
         let mut h = harness();
         h.run();
         h.state_mut().set_tool(Tool::Panel);
-        h.state_mut().popover = Some(Popover::PanelOptions);
         h.run();
         h.get_by_label("1×2").click();
+        h.run();
+        h.state_mut().popover = Some(Popover::PanelOptions);
         h.run();
         let h0 = h.state().session.history_len();
         let r = h.get_by_label("Gutter width").rect();
@@ -334,12 +332,12 @@ mod tests {
     }
 
     #[test]
-    fn picking_the_tool_shows_its_layouts_and_the_frame_line_moves_a_frame() {
+    fn the_row_lays_out_a_page_and_the_frame_line_moves_a_frame() {
         let mut h = harness();
         h.run();
         h.get_by_label("Panel (manga)").click();
         h.run();
-        assert_eq!(h.state().popover, Some(Popover::PanelOptions), "the layouts show on first pick");
+        // The layouts are in the options row.
         h.get_by_label("1×2").click();
         h.run();
         h.state_mut().popover = None;

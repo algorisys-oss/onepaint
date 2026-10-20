@@ -442,3 +442,41 @@ fn menus_run_their_command_and_escape_closes() {
     assert!(!onepaint_ui_kit::menu_bar::is_open(&h.ctx));
     assert_eq!(h.state().session.history_len(), before, "no dab");
 }
+
+/// Spec 65 phase 2: the options row drives the brush, the tool and the view.
+#[test]
+fn the_options_row_drives_the_brush_the_tool_and_the_zoom() {
+    use egui::accesskit::Role;
+    let mut h = harness();
+    h.run();
+    // The brush strip: pressure overrides and the stabiliser.
+    h.get_by_label("Size").click();
+    h.run();
+    assert!(h.state().settings.force_size_pressure);
+    h.get_by_label("Stabilizer").click();
+    h.run();
+    assert!(h.state().session.current_brush().stabilizer.as_ref().is_some_and(|s| s.enabled));
+    // The foreground swatch opens the colour popover under itself.
+    let fg = h.get_by_label("Foreground colour").rect();
+    h.get_by_label("Foreground colour").click();
+    h.run();
+    assert_eq!(h.state().popover, Some(Popover::Color));
+    let at = h.state().row_anchor.unwrap();
+    assert!(at.0 == Popover::Color && (at.1.x - fg.left()).abs() < 1.0 && at.1.y > fg.bottom());
+    h.state_mut().popover = None;
+    // Fill: Wash shows its own settings.
+    h.state_mut().set_tool(Tool::Fill);
+    h.run();
+    assert!(h.query_by_role_and_label(Role::Slider, "Tolerance").is_some());
+    assert!(h.query_by_role_and_label(Role::Slider, "Water").is_none());
+    h.get_by_label("Wash").click();
+    h.run();
+    assert!(h.state().canvas.options.fill_wash);
+    assert!(h.query_by_role_and_label(Role::Slider, "Water").is_some());
+    // The zoom menu at the end of the row.
+    h.get_by_label("Zoom").click();
+    h.run();
+    h.get_by_label("100%").click();
+    h.run();
+    assert!((h.state().canvas.view.scale - 1.0).abs() < 1e-9);
+}

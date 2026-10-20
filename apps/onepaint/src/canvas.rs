@@ -1055,7 +1055,18 @@ impl Canvas {
         // Overlays (handles, guides, cursors) stay on the stage, off the docks and status bar.
         ui.set_clip_rect(rect);
         self.screen_rect = rect;
-        self.view.view_size = [rect.width() as f64, rect.height() as f64];
+        let size = [rect.width() as f64, rect.height() as f64];
+        if size != self.view.view_size {
+            // A view still fitted to the old size stays fitted (the header, a
+            // dock or the window changed the room); a panned or zoomed one stays put.
+            let mut fitted = self.view;
+            fitted.fit();
+            let was_fit = fitted.scale == self.view.scale && fitted.offset == self.view.offset && self.view.rotation == 0.0;
+            self.view.view_size = size;
+            if was_fit {
+                self.view.fit();
+            }
+        }
         let resp = ui.interact(rect, ui.id().with("canvas"), Sense::click_and_drag());
         let time_ms = ui.input(|i| i.time) * 1000.0;
         let shift = ui.input(|i| i.modifiers.shift);

@@ -29,6 +29,7 @@ mod layout;
 mod levels;
 mod loading;
 mod menus;
+mod options_row;
 mod palettes;
 mod panel_ui;
 mod pen;
@@ -203,6 +204,8 @@ pub struct App {
     pub canvas: Canvas,
     pub theme: ThemeKind,
     pub popover: Option<Popover>,
+    /// Where a popover opened from the options row sits (under its control).
+    pub row_anchor: Option<(Popover, egui::Pos2)>,
     pub hide_ui: bool,
     pub path: Option<PathBuf>,
     pub saved_history_len: Option<usize>,
@@ -331,6 +334,7 @@ impl App {
             canvas: Canvas::new(size),
             theme,
             popover: None,
+            row_anchor: None,
             hide_ui: false,
             path: None,
             saved_history_len: Some(0),
@@ -1047,10 +1051,6 @@ impl App {
         let _ = self.session.execute(Command::SetTool { tool });
         if tool == Tool::Move && was != Tool::Move {
             self.begin_transform();
-        }
-        // The Panel tool shows its page layouts as soon as it is picked.
-        if tool == Tool::Panel && was != Tool::Panel {
-            self.popover = Some(Popover::PanelOptions);
         }
     }
 
@@ -2110,7 +2110,10 @@ pub(crate) mod tests {
         h.state_mut().session.execute(Command::AddAdjustmentLayer { kind: "gradient-fill".into(), params }).unwrap();
         h.run();
         let undo = h.state().session.history_len();
-        h.get_by_label("Reverse").click();
+        // The layer editor's Reverse (the options row has the tool's, above it).
+        let mut revs: Vec<_> = h.query_all_by_label("Reverse").collect();
+        revs.sort_by(|a, b| a.rect().top().total_cmp(&b.rect().top()));
+        revs.last().unwrap().click();
         h.run();
         let rev = |h: &Harness<'_, App>| {
             let l = h.state().session.doc().layer(h.state().session.active()).unwrap();
@@ -2631,9 +2634,8 @@ pub(crate) mod tests {
         assert!(!h.state().session.guides().symmetry.is_on());
         key(&mut h, egui::Key::S, egui::Modifiers::NONE);
         assert_eq!(h.state().session.tool(), Tool::Smudge);
-        h.get_by_label("Smudge (S)").click();
-        h.run();
-        assert_eq!(h.state().popover, Some(Popover::SmudgeOptions));
+        // Its strength is in the options row.
+        assert!(h.query_by_role_and_label(egui::accesskit::Role::Slider, "Strength").is_some());
         key(&mut h, egui::Key::B, egui::Modifiers::SHIFT);
         assert_eq!(h.state().session.tool(), Tool::Mixer);
     }
@@ -3307,9 +3309,7 @@ pub(crate) mod tests {
         key(&mut h, egui::Key::V, egui::Modifiers::NONE);
         h.run();
         assert!(h.state().session.transform_active());
-        h.get_by_label("Move / transform (V)").click();
-        h.run();
-        assert_eq!(h.state().popover, Some(Popover::MoveOptions));
+        // The options row has the transform's controls.
         h.get_by_label("Distort").click();
         h.run();
         let q = match h.state().session.transform_warp() {

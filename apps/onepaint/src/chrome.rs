@@ -5,11 +5,8 @@ use crate::{App, Popover, dock};
 use egui::{Align2, Area, Id, Order, RichText, Sense, Ui, pos2, vec2};
 use onepaint_doc::{BlendIf, BlendMode, Knockout, Node};
 use onepaint_engine::{Command, LayerProps, Tool};
-use onepaint_ui_kit::widgets::{self, glass_frame, popover_frame};
+use onepaint_ui_kit::widgets::{self, popover_frame};
 use onepaint_ui_kit::{Tokens, icons, theme};
-
-const M: f32 = 12.0;
-const BAR_H: f32 = 44.0;
 
 pub fn show(app: &mut App, ctx: &egui::Context) {
     let screen = ctx.content_rect();
@@ -27,7 +24,10 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     let toolbar = crate::toolbar::show(app, ctx, screen, stage_bottom, screen.left());
     crate::timeline::show(app, ctx, screen);
     if let Some(p) = app.popover {
-        let (anchor, side) = crate::toolbar::popover_anchor(app, screen);
+        let (anchor, side) = match app.row_anchor {
+            Some((rp, at)) if Some(rp) == app.popover => (at, Align2::LEFT_TOP),
+            _ => crate::toolbar::popover_anchor(app, screen),
+        };
         let rect = match p {
             Popover::Brushes => popover_at(ctx, "brushes", anchor, side, |ui| crate::dock::with_grip(app, ui, PanelId::Brush, brushes)),
             Popover::Layers => popover_at(ctx, "layers", anchor, side, |ui| crate::dock::with_grip(app, ui, PanelId::Layers, layers)),
@@ -96,52 +96,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             app.popover = None;
         }
     }
-    if app.session.transform_active() {
-        transform_bar(app, ctx, screen);
-    }
     toast(app, ctx, screen);
-}
-
-fn transform_bar(app: &mut App, ctx: &egui::Context, screen: egui::Rect) {
-    // At the bottom, clear of the tool bar (spec 65 moves these into the options row).
-    Area::new(Id::new("transform-bar"))
-        .order(Order::Middle)
-        .pivot(Align2::CENTER_BOTTOM)
-        .fixed_pos(pos2(screen.center().x, screen.bottom() - crate::status_bar::HEIGHT - M))
-        .show(ctx, |ui| {
-            glass_frame(ui).show(ui, |ui| {
-                ui.set_height(BAR_H - 12.0);
-                ui.horizontal_centered(|ui| {
-                    let s = &mut app.session;
-                    let c = &mut app.canvas;
-                    if icons::button(ui, "arrow-left-right", 32.0, false, "Flip horizontal").clicked() {
-                        c.xform_about_centre(s, |p| onepaint_engine::transform::TransformParams { sx: -p.sx, ..p });
-                    }
-                    if icons::button(ui, "arrow-up-down", 32.0, false, "Flip vertical").clicked() {
-                        c.xform_about_centre(s, |p| onepaint_engine::transform::TransformParams { sy: -p.sy, ..p });
-                    }
-                    if icons::button(ui, "rotate-ccw", 32.0, false, "Rotate −15°").clicked() {
-                        c.xform_about_centre(s, |p| onepaint_engine::transform::TransformParams {
-                            rotation: p.rotation - 15f64.to_radians(),
-                            ..p
-                        });
-                    }
-                    if icons::button(ui, "rotate-cw", 32.0, false, "Rotate +15°").clicked() {
-                        c.xform_about_centre(s, |p| onepaint_engine::transform::TransformParams {
-                            rotation: p.rotation + 15f64.to_radians(),
-                            ..p
-                        });
-                    }
-                    widgets::vline(ui, 24.0);
-                    if widgets::secondary_button(ui, "Cancel", 80.0).clicked() {
-                        app.cancel_transform();
-                    }
-                    if widgets::primary_button(ui, "Apply", 80.0).clicked() {
-                        app.commit_transform();
-                    }
-                });
-            });
-        });
 }
 
 fn popover_at(ctx: &egui::Context, id: &str, pos: egui::Pos2, align: Align2, body: impl FnOnce(&mut Ui)) -> egui::Rect {
@@ -155,7 +110,10 @@ fn popover_at(ctx: &egui::Context, id: &str, pos: egui::Pos2, align: Align2, bod
 
 /// Row 1 of the header (spec 65): the app mark and the menu bar, the
 /// drawing's name centred in the window, and the panel buttons.
-pub const HEADER_H: f32 = 40.0;
+pub const ROW1_H: f32 = 40.0;
+/// Row 2, the options row.
+pub const ROW2_H: f32 = 40.0;
+pub const HEADER_H: f32 = ROW1_H + ROW2_H;
 
 /// The header's height; none in Zen mode.
 pub fn header_h(app: &App) -> f32 {
@@ -169,7 +127,7 @@ fn top_bar(app: &mut App, ctx: &egui::Context) -> egui::Rect {
         onepaint_ui_kit::menu_bar::close(ctx);
         return egui::Rect::from_min_size(screen.min, vec2(0.0, 0.0));
     }
-    let bar = egui::Rect::from_min_size(screen.min, vec2(screen.width(), HEADER_H));
+    let bar = egui::Rect::from_min_size(screen.min, vec2(screen.width(), ROW1_H));
     let labelled = screen.width() >= 1180.0;
     let mut picked = None;
     Area::new(Id::new("header")).order(Order::Middle).fixed_pos(bar.min).show(ctx, |ui| {
@@ -252,10 +210,38 @@ fn top_bar(app: &mut App, ctx: &egui::Context) -> egui::Rect {
             }
         }
     });
+    options_row(app, ctx, egui::Rect::from_min_size(bar.left_bottom(), vec2(screen.width(), ROW2_H)));
     if let Some(id) = picked.and_then(crate::menus::decode) {
         crate::menus::run(app, id, ctx);
     }
-    bar
+    bar.union(egui::Rect::from_min_size(bar.left_bottom(), vec2(screen.width(), ROW2_H)))
+}
+
+/// Row 2 (spec 65): the options, scrolling sideways, and the zoom menu.
+fn options_row(app: &mut App, ctx: &egui::Context, row: egui::Rect) {
+    let t = Tokens::get(ctx);
+    let view = ctx.content_rect();
+    Area::new(Id::new("options-row")).order(Order::Middle).fixed_pos(row.min).show(ctx, |ui| {
+        ui.painter().rect_filled(row, 0.0, t.panel);
+        ui.painter().hline(row.x_range(), row.bottom() - 0.5, egui::Stroke::new(1.0, t.border));
+        let inner = row.shrink2(vec2(8.0, 4.0));
+        let zoom_w = 96.0;
+        let zoom_rect = egui::Rect::from_min_max(pos2(inner.right() - zoom_w, inner.top()), inner.max);
+        let mut z = ui.new_child(egui::UiBuilder::new().max_rect(zoom_rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
+        crate::options_row::zoom(app, &mut z);
+        let left = egui::Rect::from_min_max(inner.min, pos2(zoom_rect.left() - 8.0, inner.bottom()));
+        let mut l = ui.new_child(egui::UiBuilder::new().max_rect(left).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        l.set_clip_rect(left);
+        // The wheel scrolls the row sideways when it overflows.
+        egui::ScrollArea::horizontal()
+            .id_salt("options-row")
+            .max_width(left.width())
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+            .show(&mut l, |ui| {
+                ui.set_height(left.height());
+                ui.horizontal_centered(|ui| crate::options_row::show(app, ui, view));
+            });
+    });
 }
 
 fn toast(app: &mut App, ctx: &egui::Context, screen: egui::Rect) {
@@ -1338,7 +1324,7 @@ fn saved_selections(app: &mut App, ui: &mut Ui, has: bool) {
 /// The brush's tip angle (happypaint's options-row dial): the dial and the
 /// degrees; it does nothing while the brush is wet (the mixer shapes its
 /// own dab), so it shows dimmed then.
-fn brush_angle(app: &mut App, ui: &mut Ui) {
+pub(crate) fn brush_angle(app: &mut App, ui: &mut Ui) {
     use onepaint_brush::studio::Param;
     let t = Tokens::get(ui.ctx());
     let mut b = app.session.current_brush().clone();
@@ -1546,7 +1532,7 @@ fn smudge_options(app: &mut App, ui: &mut Ui) {
 }
 
 /// Photoshop's Mixer Brush combinations (`utils/mixer-presets.ts`): (name, wet, load, mix).
-const MIXER_PRESETS: [(&str, f64, f64, f64); 12] = [
+pub(crate) const MIXER_PRESETS: [(&str, f64, f64, f64); 12] = [
     ("Dry", 0.0, 0.5, 0.0),
     ("Dry, Light Load", 0.0, 0.15, 0.0),
     ("Dry, Heavy Load", 0.0, 1.0, 0.0),
