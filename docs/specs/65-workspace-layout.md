@@ -1,8 +1,8 @@
 # 65: Workspace layout (menu bar, options row, left rail)
 
 ## Status
-Agreed (2026-10-20). Phases 1 (the menu bar), 2 (the options row) and 3
-(the left rail) are built (below); phases 4–6 follow.
+Agreed (2026-10-20). Phases 1–4 (the menu bar, the options row, the left
+rail, the title bar) are built (below); phases 5–6 follow.
 Replaces onepaint's canvas-first chrome (a "…" menu, a floating tool bar
 top right, the Layers popover) with happypaint's v0.204 workspace.
 Retires divergences 41 and 42, and the View-menu half of 49.
@@ -235,6 +235,19 @@ themes; the old chrome stays usable until phase 3 switches the default.
 - Tests: `the_tool_rail_defaults_left_and_keeps_float_and_right`,
   `the_tool_bar_docks_as_a_rail_and_flips`,
   `every_tool_is_reachable_from_the_tool_bar` (no exemptions now).
+
+## Phase 4 as built
+- `main` opens the window without the system's decorations on Linux and
+  Windows unless Settings ▸ "Use the system title bar" is on (read at
+  start-up; macOS always keeps its own). `App::custom_title` says which.
+- Row 1 is the title bar: empty space starts a window drag
+  (`ViewportCommand::StartDrag`), a double-click maximises or restores;
+  Minimize, Maximize / Restore and Close sit at its end.
+- 5 px strips along the window's edges (corners first) start a resize
+  (`BeginResize`) while it isn't maximised.
+- Not verified by eye yet (the desktop session was idle while this
+  landed); the window commands are checked in
+  `the_header_stands_in_for_the_title_bar`.
 
 ## Divergences
 - 41, 42 retire. 49 narrows to the eyedropper square (side sliders).

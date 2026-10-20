@@ -471,3 +471,22 @@ fn the_options_row_drives_the_brush_the_tool_and_the_zoom() {
     crate::tests::click_near(&mut h, "100%", z);
     assert!((h.state().canvas.view.scale - 1.0).abs() < 1e-9);
 }
+
+/// Spec 65 phase 4: as the title bar, the header has the window controls,
+/// which drive the window; with the system's title bar it doesn't.
+#[test]
+fn the_header_stands_in_for_the_title_bar() {
+    let mut h = harness();
+    h.run();
+    assert!(h.query_by_label("Maximize").is_none(), "the system's title bar has them");
+    h.state_mut().custom_title = true;
+    h.run();
+    let sent = |h: &mut Harness<'_, App>, label: &str| {
+        h.get_by_label(label).click();
+        h.step();
+        h.output().viewport_output.get(&egui::ViewportId::ROOT).map(|v| v.commands.clone()).unwrap_or_default()
+    };
+    assert!(sent(&mut h, "Maximize").contains(&egui::ViewportCommand::Maximized(true)));
+    assert!(sent(&mut h, "Minimize").contains(&egui::ViewportCommand::Minimized(true)));
+    assert!(sent(&mut h, "Close").contains(&egui::ViewportCommand::Close));
+}

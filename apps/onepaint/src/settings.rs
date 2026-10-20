@@ -68,6 +68,9 @@ pub struct Settings {
     pub side_sliders: bool,
     /// Scrollbars on the canvas when the document runs past the view.
     pub scrollbars: bool,
+    /// The system's title bar instead of onepaint's header (spec 65; for
+    /// window managers that misbehave without one). Read at start-up.
+    pub system_title_bar: bool,
     pub side_sliders_mode: crate::side_sliders::Mode,
     /// Px from the centre along the edge.
     pub side_sliders_offset: f32,
@@ -98,6 +101,7 @@ impl Default for Settings {
             timeline_metric: TimelineMetric::Frames,
             side_sliders: true,
             scrollbars: true,
+            system_title_bar: false,
             side_sliders_mode: Default::default(),
             side_sliders_offset: 0.0,
             side_sliders_float: Default::default(),
@@ -240,6 +244,10 @@ pub fn dialog(app: &mut App, ui: &mut Ui) {
             widgets::toggle(ui, &mut s.cursor_use_color, "Draw the cursor in the paint colour");
             widgets::toggle(ui, &mut s.scrollbars, "Scrollbars on the canvas")
                 .on_hover_text("Shown when the drawing runs past the view: drag to pan, click the track to page.");
+            if !cfg!(target_os = "macos") {
+                widgets::toggle(ui, &mut s.system_title_bar, "Use the system title bar")
+                    .on_hover_text("Takes effect when onepaint starts again.");
+            }
             widgets::toggle(ui, &mut s.cursor_tip_shape, "Trace the tip")
                 .on_hover_text("A leaf brush shows a leaf, not a circle. Round and square tips are unaffected.");
             let mut th = s.cursor_thickness as f32;

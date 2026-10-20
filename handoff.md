@@ -89,7 +89,9 @@ Overnight (2026-10-18 → 19), all pushed, newest last:
   new engine commands for Group/Ungroup/Merge visible/Flatten/Invert
   mask. Phase 2, the options row, done (`options_row.rs`,
   `ui_kit::inline`). Phase 3, the left rail and Layers docked right by
-  default, done. Next: phase 4, the title bar (window controls).
+  default, done. Phase 4, the header as the title bar (no system
+  decorations unless Settings says so), done but not yet tried on a live
+  desktop. Next: phase 5, narrow windows.
   Screenshots: a Wayland window gets no frames while the session is
   idle or locked, so `ONEPAINT_SCREENSHOT` runs stall at frame 0 then.
 - CPU speedups (bit-identical): wand, bucket, feather and grow 2–3×

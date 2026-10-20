@@ -97,6 +97,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         }
     }
     toast(app, ctx, screen);
+    resize_edges(app, ctx);
 }
 
 fn popover_at(ctx: &egui::Context, id: &str, pos: egui::Pos2, align: Align2, body: impl FnOnce(&mut Ui)) -> egui::Rect {
@@ -133,6 +134,17 @@ fn top_bar(app: &mut App, ctx: &egui::Context) -> egui::Rect {
     Area::new(Id::new("header")).order(Order::Middle).fixed_pos(bar.min).show(ctx, |ui| {
         ui.painter().rect_filled(bar, 0.0, t.panel);
         ui.painter().hline(bar.x_range(), bar.bottom() - 0.5, egui::Stroke::new(1.0, t.border));
+        // As the title bar: empty space drags the window, a double-click
+        // maximises it (the widgets drawn after it take their own clicks).
+        if app.custom_title {
+            let r = ui.interact(bar, Id::new("title-drag"), Sense::click_and_drag());
+            if r.double_clicked() {
+                let max = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
+            } else if r.drag_started() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+        }
         let inner = bar.shrink2(vec2(8.0, 6.0));
         let mut left = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)));
         // The app mark: back to the gallery.
@@ -149,6 +161,10 @@ fn top_bar(app: &mut App, ctx: &egui::Context) -> egui::Rect {
         // The end: recording, wet paint, then the panel buttons.
         let mut right = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::right_to_left(egui::Align::Center)));
         let view = screen;
+        if app.custom_title {
+            window_controls(&mut right, ctx);
+            widgets::vline(&mut right, 24.0);
+        }
         if widgets::icon_label_button(&mut right, "layers", "Layers", dock::showing(app, Popover::Layers, view), labelled).clicked() {
             dock::toggle(app, Popover::Layers, view);
         }
@@ -215,6 +231,53 @@ fn top_bar(app: &mut App, ctx: &egui::Context) -> egui::Rect {
         crate::menus::run(app, id, ctx);
     }
     bar.union(egui::Rect::from_min_size(bar.left_bottom(), vec2(screen.width(), ROW2_H)))
+}
+
+/// Minimise, maximise or restore, and close, at the header's end (laid
+/// out right to left: close first).
+fn window_controls(ui: &mut Ui, ctx: &egui::Context) {
+    let max = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+    if icons::button(ui, "x", 28.0, false, "Close").clicked() {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+    let (icon, label) = if max { ("copy", "Restore") } else { ("square", "Maximize") };
+    if icons::button(ui, icon, 28.0, false, label).clicked() {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
+    }
+    if icons::button(ui, "minus", 28.0, false, "Minimize").clicked() {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+    }
+}
+
+/// Without the system's frame, the window's edges resize it (5 px strips,
+/// corners first), unless it is maximised.
+fn resize_edges(app: &App, ctx: &egui::Context) {
+    use egui::{CursorIcon as C, ResizeDirection as D};
+    if !app.custom_title || ctx.input(|i| i.viewport().maximized.unwrap_or(false)) {
+        return;
+    }
+    let w = ctx.content_rect();
+    const E: f32 = 5.0;
+    let (l, r, tp, b) = (w.left(), w.right(), w.top(), w.bottom());
+    let strip = |x0: f32, y0: f32, x1: f32, y1: f32| egui::Rect::from_min_max(pos2(x0, y0), pos2(x1, y1));
+    let zones = [
+        (strip(l, tp, l + E * 2.0, tp + E * 2.0), D::NorthWest, C::ResizeNorthWest),
+        (strip(r - E * 2.0, tp, r, tp + E * 2.0), D::NorthEast, C::ResizeNorthEast),
+        (strip(l, b - E * 2.0, l + E * 2.0, b), D::SouthWest, C::ResizeSouthWest),
+        (strip(r - E * 2.0, b - E * 2.0, r, b), D::SouthEast, C::ResizeSouthEast),
+        (strip(l, tp, r, tp + E), D::North, C::ResizeNorth),
+        (strip(l, b - E, r, b), D::South, C::ResizeSouth),
+        (strip(l, tp, l + E, b), D::West, C::ResizeWest),
+        (strip(r - E, tp, r, b), D::East, C::ResizeEast),
+    ];
+    Area::new(Id::new("resize-edges")).order(Order::Foreground).fixed_pos(w.min).show(ctx, |ui| {
+        for (i, (rect, dir, cursor)) in zones.into_iter().enumerate() {
+            let resp = ui.interact(rect, Id::new(("resize-edge", i)), Sense::drag()).on_hover_cursor(cursor);
+            if resp.drag_started() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
+            }
+        }
+    });
 }
 
 /// Row 2 (spec 65): the options, scrolling sideways, and the zoom menu.

@@ -61,16 +61,27 @@ use std::path::PathBuf;
 fn main() -> eframe::Result {
     env_logger::init();
     let open = std::env::args().nth(1).map(PathBuf::from);
+    // The header is the title bar (spec 65), except on macOS or by choice.
+    let custom_title = !cfg!(target_os = "macos") && !settings::Settings::load(settings::default_path()).system_title_bar;
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
             .with_title("onepaint")
+            .with_decorations(!custom_title)
             .with_inner_size([1440.0, 920.0])
             .with_min_inner_size([720.0, 480.0]),
         wgpu_options: wgpu_options(),
         ..Default::default()
     };
-    eframe::run_native("onepaint", options, Box::new(move |cc| Ok(Box::new(App::new(cc, open)))))
+    eframe::run_native(
+        "onepaint",
+        options,
+        Box::new(move |cc| {
+            let mut app = App::new(cc, open);
+            app.custom_title = custom_title;
+            Ok(Box::new(app))
+        }),
+    )
 }
 
 /// egui's device asks for 8192 px textures; ask for what the adapter allows,
@@ -207,6 +218,9 @@ pub struct App {
     /// Where a popover opened from the options row sits (under its control).
     pub row_anchor: Option<(Popover, egui::Pos2)>,
     pub hide_ui: bool,
+    /// The header stands in for the system title bar: it drags and
+    /// maximises the window, and has the window controls (spec 65).
+    pub custom_title: bool,
     pub path: Option<PathBuf>,
     pub saved_history_len: Option<usize>,
     pub hsv: Hsv,
@@ -336,6 +350,7 @@ impl App {
             popover: None,
             row_anchor: None,
             hide_ui: false,
+            custom_title: false,
             path: None,
             saved_history_len: Some(0),
             hsv: Hsv { h: 0.0, s: 0.0, v: 0.0 },
