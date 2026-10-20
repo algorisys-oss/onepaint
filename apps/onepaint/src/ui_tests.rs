@@ -72,27 +72,7 @@ fn every_tool_is_reachable_from_the_tool_bar() {
         h.state_mut().set_tool(Tool::Brush);
         h.run();
     }
-    // The selection shapes: the Select button, then its popover.
-    for (tool, _) in toolbar::NO_BUTTON {
-        h.get_by_label(toolbar::SELECT_LABEL).click();
-        h.run();
-        if h.state().popover != Some(Popover::Selection) {
-            h.get_by_label(toolbar::SELECT_LABEL).click();
-            h.run();
-        }
-        let name = match tool {
-            Tool::SelectRect => "Rectangle (M)",
-            Tool::SelectEllipse => "Ellipse",
-            Tool::SelectLasso => "Lasso (L)",
-            Tool::SelectPoly => "Polygon",
-            _ => "Magic wand (W)",
-        };
-        h.get_by_label(name).click();
-        h.run();
-        assert_eq!(h.state().session.tool(), *tool, "{name}");
-        h.state_mut().popover = None;
-        h.run();
-    }
+    assert!(toolbar::NO_BUTTON.is_empty(), "every tool has its own button (spec 65)");
 }
 
 #[test]
@@ -110,6 +90,9 @@ fn the_pan_button_pans_without_painting() {
 #[test]
 fn dragging_the_layers_popover_to_the_edge_docks_it() {
     let mut h = harness();
+    // Layers docks by default (spec 65): start it from its popover.
+    h.state_mut().layout.set_placement(PanelId::Layers, Placement::Home, None);
+    h.state_mut().layout.set_open(PanelId::Layers, false);
     h.run();
     h.get_by_label("Layers").click();
     h.run();
@@ -146,24 +129,29 @@ fn the_tool_bar_docks_as_a_rail_and_flips() {
         .with_max_steps(400)
         .build_eframe(|cc| App::new(cc, None));
     h.run();
-    let grip = h.get_by_label(toolbar::GRIP_LABEL).rect().center();
-    // Double-click flips it to vertical.
-    double_click(&mut h, grip);
-    assert_eq!(h.state().layout.toolbar.orientation, Orientation::Vertical);
-    // Drag it to the left edge: a rail that takes room from the canvas.
-    let grip = h.get_by_label(toolbar::GRIP_LABEL).rect().center();
-    drag(&mut h, grip, pos2(20.0, 400.0));
+    // A rail on the left by default (spec 65), taking room from the canvas.
     let app = h.state();
     assert_eq!(app.layout.tools_dock, Some(DockSide::Left));
     assert!(app.canvas.stage.left() >= toolbar::rail_width(app), "{:?}", app.canvas.stage);
-    // Tools still work from the rail.
     h.get_by_label("Eraser (E)").click();
     h.run();
     assert_eq!(h.state().session.tool(), Tool::Eraser);
-    // Pull it off again.
+    // Pull it off: it floats, vertical; a double-click flips it.
     let grip = h.get_by_label(toolbar::GRIP_LABEL).rect().center();
     drag(&mut h, grip, pos2(600.0, 300.0));
     assert_eq!(h.state().layout.tools_dock, None);
+    assert_eq!(h.state().layout.toolbar.orientation, Orientation::Vertical);
+    // Let the drag's release age out of the double-click window first.
+    for _ in 0..40 {
+        h.step();
+    }
+    let grip = h.get_by_label(toolbar::GRIP_LABEL).rect().center();
+    double_click(&mut h, grip);
+    assert_eq!(h.state().layout.toolbar.orientation, Orientation::Horizontal);
+    // Dropped at the left edge, it docks again.
+    let grip = h.get_by_label(toolbar::GRIP_LABEL).rect().center();
+    drag(&mut h, grip, pos2(20.0, 400.0));
+    assert_eq!(h.state().layout.tools_dock, Some(DockSide::Left));
 }
 
 #[test]
@@ -181,8 +169,7 @@ fn ctrl_click_picks_layers_and_align_moves_them() {
         let _ = s.execute(onepaint_engine::Command::Deselect);
         ids.push(s.active().to_string());
     }
-    h.run();
-    h.get_by_label("Layers").click();
+    // Layers is docked and open.
     h.run();
     let names: Vec<String> = ids.iter().map(|id| h.state().session.doc().find(id).unwrap().name().to_string()).collect();
     // The second block's layer is active; Ctrl-clicking the first picks both.
@@ -198,8 +185,6 @@ fn ctrl_click_picks_layers_and_align_moves_them() {
     let left = |id: &str| s.doc().layer(id).unwrap().pixels.content_bounds().unwrap().x;
     assert_eq!((left(&ids[0]), left(&ids[1])), (0, 0));
     // A plain click clears the picks.
-    h.get_by_label("Layers").click();
-    h.run();
     let at = h.get_by_label(&names[0]).rect().center();
     click_with(&mut h, at, Default::default());
     assert!(h.state().layer_picks.is_empty());
@@ -265,6 +250,8 @@ fn properties_edit_the_layer_style() {
     let mut h = harness();
     h.state_mut().layout.set_placement(PanelId::Properties, Placement::Dock { side: DockSide::Right }, None);
     dock::set_panel_open(h.state_mut(), PanelId::Properties, true);
+    // Properties gets the dock's height to itself.
+    dock::set_panel_open(h.state_mut(), PanelId::Layers, false);
     h.run();
     let id = h.state().session.active().to_string();
     let styles = |h: &Harness<'_, App>| h.state().session.doc().find(&id).and_then(|n| n.as_layer()).and_then(|l| l.styles());
@@ -298,6 +285,8 @@ fn a_style_saves_as_a_preset_and_applies() {
     let mut h = harness();
     h.state_mut().layout.set_placement(PanelId::Properties, Placement::Dock { side: DockSide::Right }, None);
     dock::set_panel_open(h.state_mut(), PanelId::Properties, true);
+    // Properties gets the dock's height to itself.
+    dock::set_panel_open(h.state_mut(), PanelId::Layers, false);
     h.run();
     let id = h.state().session.active().to_string();
     let styles = |h: &Harness<'_, App>| h.state().session.doc().find(&id).and_then(|n| n.as_layer()).and_then(|l| l.styles());
@@ -329,6 +318,8 @@ fn gradient_overlay_stops_edit_on_the_bar() {
     let mut h = harness();
     h.state_mut().layout.set_placement(PanelId::Properties, Placement::Dock { side: DockSide::Right }, None);
     dock::set_panel_open(h.state_mut(), PanelId::Properties, true);
+    // Properties gets the dock's height to itself.
+    dock::set_panel_open(h.state_mut(), PanelId::Layers, false);
     h.run();
     let id = h.state().session.active().to_string();
     let stops = |h: &Harness<'_, App>| {
@@ -474,9 +465,9 @@ fn the_options_row_drives_the_brush_the_tool_and_the_zoom() {
     assert!(h.state().canvas.options.fill_wash);
     assert!(h.query_by_role_and_label(Role::Slider, "Water").is_some());
     // The zoom menu at the end of the row.
+    let z = h.get_by_label("Zoom").rect();
     h.get_by_label("Zoom").click();
     h.run();
-    h.get_by_label("100%").click();
-    h.run();
+    crate::tests::click_near(&mut h, "100%", z);
     assert!((h.state().canvas.view.scale - 1.0).abs() < 1e-9);
 }

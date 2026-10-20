@@ -1179,10 +1179,6 @@ fn tool_options(app: &mut App, ui: &mut Ui) {
     }
 }
 
-pub fn is_select_tool(t: Tool) -> bool {
-    matches!(t, Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectPoly | Tool::SelectWand)
-}
-
 pub(crate) fn select_icon(t: Tool) -> &'static str {
     match t {
         Tool::SelectEllipse => "circle-dashed",

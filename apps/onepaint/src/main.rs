@@ -1581,22 +1581,33 @@ pub(crate) mod tests {
         assert!(h.state().toast.is_none(), "handled once");
     }
 
+    /// Click the node labelled `label` nearest `near` (a label can show in
+    /// a menu and in a docked panel at once).
+    pub(crate) fn click_near(h: &mut Harness<'_, App>, label: &str, near: egui::Rect) {
+        let mut all: Vec<_> = h.query_all_by_label(label).collect();
+        assert!(!all.is_empty(), "no {label:?}");
+        let d = |r: egui::Rect| (r.left() - near.left()).abs() + (r.top() - near.bottom()).abs();
+        all.sort_by(|a, b| d(a.rect()).total_cmp(&d(b.rect())));
+        all[0].click();
+        h.run();
+    }
+
     /// Open the menu `title` in the menu bar and pick its row `item`.
     pub(crate) fn menu_pick(h: &mut Harness<'_, App>, title: &str, item: &str) {
+        let t = h.get_by_label(title).rect();
         h.get_by_label(title).click();
         h.run();
-        h.get_by_label(item).click();
-        h.run();
+        click_near(h, item, t);
     }
 
     /// The same, through a submenu.
     pub(crate) fn menu_pick_sub(h: &mut Harness<'_, App>, title: &str, sub: &str, item: &str) {
+        let t = h.get_by_label(title).rect();
         h.get_by_label(title).click();
         h.run();
-        h.get_by_label(sub).click();
-        h.run();
-        h.get_by_label(item).click();
-        h.run();
+        click_near(h, sub, t);
+        let s = h.query_all_by_label(sub).next().map(|n| n.rect()).unwrap_or(t);
+        click_near(h, item, egui::Rect::from_min_max(s.right_top(), s.right_top()));
     }
 
     fn press(h: &mut Harness<'_, App>, p: egui::Pos2, pressed: bool) {
@@ -1645,7 +1656,7 @@ pub(crate) mod tests {
             h.output().platform_output.cursor_icon
         };
         assert_eq!(cursor(&mut h, pos2(640.0, 420.0)), egui::CursorIcon::Crosshair);
-        let over_bar = h.get_by_label("Layers").rect().center();
+        let over_bar = h.get_by_role_and_label(egui::accesskit::Role::Button, "Layers").rect().center();
         assert_ne!(cursor(&mut h, over_bar), egui::CursorIcon::Crosshair, "a toolbar over the canvas keeps its own cursor");
     }
 
@@ -1749,7 +1760,7 @@ pub(crate) mod tests {
     fn blend_if_unfolds_and_reset_clears_it() {
         let mut h = harness();
         h.run();
-        h.get_by_label("Layers").click();
+        // Layers is docked and open (spec 65).
         h.run();
         assert!(h.query_by_label("This Layer — Gray").is_none());
         h.get_by_label("Blend If").click();
@@ -1787,7 +1798,10 @@ pub(crate) mod tests {
         let v = onepaint_doc::VectorMask { paths: vec![onepaint_doc::VectorPath { knots, ..Default::default() }], ..Default::default() };
         let props = onepaint_engine::LayerProps { vector_mask: Some(Some(v)), ..Default::default() };
         h.state_mut().session.execute(Command::SetLayerProps { id: id.clone(), props }).unwrap();
-        h.get_by_label("Layers").click();
+        // The Layers popover, full height.
+        h.state_mut().layout.set_placement(layout::PanelId::Layers, layout::Placement::Home, None);
+        h.run();
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Layers").click();
         h.run();
         let vm = |h: &Harness<'_, App>| h.state().session.doc().layer(&id).unwrap().vector_mask();
         h.get_by_label("Invert").click();
@@ -1831,12 +1845,13 @@ pub(crate) mod tests {
     fn top_bar_buttons_open_popovers_and_add_layers() {
         let mut h = harness();
         h.run();
-        h.get_by_label("Layers").click();
-        h.run();
-        assert_eq!(h.state().popover, Some(Popover::Layers));
+        // Layers is docked and open; the header button hides and shows it.
         h.get_by_label("New layer").click();
         h.run();
         assert_eq!(h.state().session.doc().root.len(), 3);
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Layers").click();
+        h.run();
+        assert!(!dock::panel_open(h.state(), layout::PanelId::Layers));
         h.get_by_label("Brushes").click();
         h.run();
         assert_eq!(h.state().popover, Some(Popover::Brushes));
@@ -1960,8 +1975,7 @@ pub(crate) mod tests {
         let mut h = harness();
         h.run();
         drag_stroke(&mut h, pos2(560.0, 420.0), pos2(720.0, 440.0));
-        h.get_by_label("Layers").click();
-        h.run();
+        // Layers is docked and open (spec 65).
         h.get_by_role_and_label(egui::accesskit::Role::Slider, "Bevel").click();
         h.run();
         let s = &h.state().session;
@@ -2424,7 +2438,7 @@ pub(crate) mod tests {
     fn layers_reorder_by_drag_and_drop() {
         let mut h = harness();
         h.run();
-        h.get_by_label("Layers").click();
+        // Layers is docked and open (spec 65).
         h.run();
         let bg = h.state().session.doc().root[0].id().to_string();
         let from = h.get_by_label("Background").rect().center();
@@ -2448,19 +2462,13 @@ pub(crate) mod tests {
         h.run();
         let bg = h.state().session.doc().root[0].id().to_string();
         let _ = h.state_mut().session.execute(Command::SetActiveLayer { id: bg });
-        h.get_by_label("Adjustments").click();
-        h.run();
-        h.get_by_label("Invert").click();
-        h.run();
+        menu_pick_sub(&mut h, "Adjust", "Color", "Invert");
         assert_eq!(h.state().popover, Some(Popover::Filter));
         h.get_by_label("Apply").click();
         h.run();
         let c = h.state().session.pick_color(10, 10);
         assert!(c.r < 0.01, "white background inverted to black {c:?}");
-        h.get_by_label("Adjustments").click();
-        h.run();
-        h.get_by_label("Invert").click();
-        h.run();
+        menu_pick_sub(&mut h, "Adjust", "Color", "Invert");
         h.get_by_label("As adjustment layer").click();
         h.run();
         let app = h.state();
@@ -2473,12 +2481,7 @@ pub(crate) mod tests {
         let mut h = harness();
         h.run();
         let layers = h.state().session.doc().layer_ids().len();
-        h.get_by_label("Adjustments").click();
-        h.run();
-        h.get_by_label("Clouds").scroll_to_me();
-        h.run();
-        h.get_by_label("Clouds").click();
-        h.run();
+        menu_pick_sub(&mut h, "Adjust", "Render", "Clouds");
         assert_eq!(h.state().popover, Some(Popover::Filter));
         h.get_by_label("Re-roll").click();
         h.run();
@@ -2486,12 +2489,7 @@ pub(crate) mod tests {
         h.get_by_label("Apply").click();
         h.run();
         assert_eq!(h.state().session.doc().layer_ids().len(), layers + 1, "clouds land on a new layer");
-        h.get_by_label("Adjustments").click();
-        h.run();
-        h.get_by_label("Solid Color Fill").scroll_to_me();
-        h.run();
-        h.get_by_label("Solid Color Fill").click();
-        h.run();
+        menu_pick_sub(&mut h, "Adjust", "Fill", "Solid Color Fill");
         let app = h.state();
         assert_eq!(app.popover, None, "the settings open in the Properties panel, docked right");
         assert!(dock::panel_open(app, layout::PanelId::Properties));
@@ -2838,7 +2836,10 @@ pub(crate) mod tests {
         assert!(h.state().ask.is_none() && h.state().palettes.palettes.iter().any(|p| p.id == id), "kept");
         h.state_mut().ask = Some(ask);
         h.run();
-        h.get_by_label("Delete").click();
+        // The dialog's Delete (the docked Layers panel on the right has one too).
+        let mut dels: Vec<_> = h.query_all_by_label("Delete").collect();
+        dels.sort_by(|a, b| a.rect().left().total_cmp(&b.rect().left()));
+        dels[0].click();
         h.run();
         assert!(!h.state().palettes.palettes.iter().any(|p| p.id == id), "deleted");
     }
@@ -2970,8 +2971,7 @@ pub(crate) mod tests {
     fn animation_timeline_adds_frames_and_steps() {
         let mut h = harness();
         h.run();
-        h.get_by_label("Animation").click();
-        h.run();
+        menu_pick_sub(&mut h, "View", "Panels", "Animation");
         assert!(h.state().session.anim_settings().enabled);
         let frames = h.state().session.anim_frames().len();
         h.get_by_label("Add frame").click();
@@ -3001,8 +3001,7 @@ pub(crate) mod tests {
     fn frames_retime_in_a_batch_and_ghosts_slide_off_their_pegs() {
         let mut h = harness();
         h.run();
-        h.get_by_label("Animation").click();
-        h.run();
+        menu_pick_sub(&mut h, "View", "Panels", "Animation");
         for _ in 0..2 {
             h.get_by_label("Add frame").click();
             h.run();
@@ -3043,8 +3042,7 @@ pub(crate) mod tests {
     fn markers_and_the_play_range_from_the_keyboard() {
         let mut h = harness();
         h.run();
-        h.get_by_label("Animation").click();
-        h.run();
+        menu_pick_sub(&mut h, "View", "Panels", "Animation");
         for _ in 0..3 {
             h.get_by_label("Add frame").click();
             h.run();
@@ -3085,8 +3083,7 @@ pub(crate) mod tests {
         use onepaint_engine::anim::tracks_of;
         let mut h = harness();
         h.run();
-        h.get_by_label("Animation").click();
-        h.run();
+        menu_pick_sub(&mut h, "View", "Panels", "Animation");
         for _ in 0..2 {
             h.get_by_label("Add frame").click();
             h.run();

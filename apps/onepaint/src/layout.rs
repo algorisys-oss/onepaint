@@ -211,7 +211,10 @@ pub struct Layout {
     /// Open docked or floating panels (popovers keep their own state).
     #[serde(deserialize_with = "lenient_map")]
     pub open: BTreeMap<PanelId, bool>,
-    /// The tool bar docked as a rail on this side.
+    /// The tool bar docked as a rail on this side; `None` floats it. Stored
+    /// as "left", "right" or "float"; missing or null reads as left
+    /// (happypaint `dock-store.ts`: the rail is the default).
+    #[serde(serialize_with = "tools_dock_ser", deserialize_with = "tools_dock_de")]
     pub tools_dock: Option<DockSide>,
     pub tabbed: [bool; 2],
     pub active_tab: [Option<PanelId>; 2],
@@ -227,17 +230,21 @@ pub struct Layout {
 impl Default for Layout {
     fn default() -> Self {
         let mut placements = BTreeMap::new();
-        // Properties docks right, under Layers (dock-store.ts:119-139).
+        // Layers docks right and shows; Properties docks under it, closed
+        // (dock-store.ts:119-139).
+        placements.insert(PanelId::Layers, Placement::Dock { side: DockSide::Right });
         placements.insert(PanelId::Properties, Placement::Dock { side: DockSide::Right });
+        let mut open = BTreeMap::new();
+        open.insert(PanelId::Layers, true);
         Self {
             placements,
             width: [DOCK_DEFAULT_W; 2],
-            order: [Vec::new(), Vec::new()],
+            order: [Vec::new(), vec![PanelId::Layers, PanelId::Properties]],
             weights: BTreeMap::new(),
             collapsed: BTreeMap::new(),
             float_collapsed: BTreeMap::new(),
-            open: BTreeMap::new(),
-            tools_dock: None,
+            open,
+            tools_dock: Some(DockSide::Left),
             tabbed: [false; 2],
             active_tab: [None; 2],
             sizes: BTreeMap::new(),
@@ -246,6 +253,23 @@ impl Default for Layout {
             path: None,
         }
     }
+}
+
+fn tools_dock_ser<S: serde::Serializer>(v: &Option<DockSide>, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(match v {
+        Some(DockSide::Left) => "left",
+        Some(DockSide::Right) => "right",
+        None => "float",
+    })
+}
+
+fn tools_dock_de<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<DockSide>, D::Error> {
+    let v = Option::<String>::deserialize(d)?;
+    Ok(match v.as_deref() {
+        Some("float") => None,
+        Some("right") => Some(DockSide::Right),
+        _ => Some(DockSide::Left),
+    })
 }
 
 /// A map keyed by panel id, dropping entries a newer or damaged file has
@@ -825,5 +849,27 @@ mod tests {
         assert_eq!(float_target_at(pos2(60.0, 10.0), &t), Some(2));
         assert_eq!(float_target_at(pos2(10.0, 10.0), &t), Some(1));
         assert_eq!(float_target_at(pos2(10.0, 50.0), &t), None);
+    }
+
+    /// happypaint `tools-dock-default.test.ts`: the rail docks left by
+    /// default; a stored null reads as left; float and right are kept.
+    #[test]
+    fn the_tool_rail_defaults_left_and_keeps_float_and_right() {
+        assert_eq!(Layout::default().tools_dock, Some(DockSide::Left));
+        for (json, want) in [
+            (r#"{}"#, Some(DockSide::Left)),
+            (r#"{"toolsDock": null}"#, Some(DockSide::Left)),
+            (r#"{"toolsDock": "float"}"#, None),
+            (r#"{"toolsDock": "right"}"#, Some(DockSide::Right)),
+        ] {
+            let l: Layout = serde_json::from_str(json).unwrap();
+            assert_eq!(l.tools_dock, want, "{json}");
+            let back: Layout = serde_json::from_str(&serde_json::to_string(&l).unwrap()).unwrap();
+            assert_eq!(back.tools_dock, want, "round trip of {json}");
+        }
+        // Layers docks right and shows; Properties docks under it, closed.
+        let d = Layout::default();
+        assert_eq!(d.dock_side_of(PanelId::Layers), Some(DockSide::Right));
+        assert!(d.is_open(PanelId::Layers) && !d.is_open(PanelId::Properties));
     }
 }

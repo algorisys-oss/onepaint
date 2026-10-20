@@ -1,8 +1,8 @@
 # 65: Workspace layout (menu bar, options row, left rail)
 
 ## Status
-Agreed (2026-10-20). Phases 1 (the menu bar) and 2 (the options row) are
-built (below); phases 3–6 follow.
+Agreed (2026-10-20). Phases 1 (the menu bar), 2 (the options row) and 3
+(the left rail) are built (below); phases 4–6 follow.
 Replaces onepaint's canvas-first chrome (a "…" menu, a floating tool bar
 top right, the Layers popover) with happypaint's v0.204 workspace.
 Retires divergences 41 and 42, and the View-menu half of 49.
@@ -221,6 +221,20 @@ themes; the old chrome stays usable until phase 3 switches the default.
 - A view still fitted to the window refits when the canvas changes size
   (the header, a dock, the window); a panned or zoomed one stays.
 - Tests: `the_options_row_drives_the_brush_the_tool_and_the_zoom`.
+
+## Phase 3 as built
+- `Layout::default`: the tool rail docked left; Layers docked right and
+  open, Properties under it, closed. `toolsDock` is stored as "left",
+  "right" or "float"; missing or null reads as left (a floating bar saved
+  before this reads as the rail once).
+- The rail in happypaint's order: Brush, Eraser, Fill, Eyedropper, Move,
+  Smudge, Mixer, Gradient, Liquify, Text, Pen, Shape, Panel, Pan; the
+  five selection tools, each its own button; Undo and Redo (when the side
+  sliders are off); Clear layer and Zen mode. The Select, Animation and
+  Adjustments buttons are gone (the menus have them).
+- Tests: `the_tool_rail_defaults_left_and_keeps_float_and_right`,
+  `the_tool_bar_docks_as_a_rail_and_flips`,
+  `every_tool_is_reachable_from_the_tool_bar` (no exemptions now).
 
 ## Divergences
 - 41, 42 retire. 49 narrows to the eyedropper square (side sliders).

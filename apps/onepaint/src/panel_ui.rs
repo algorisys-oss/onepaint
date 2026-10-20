@@ -359,7 +359,9 @@ mod tests {
         let y = (o[0].y + o[2].y) / 2.0;
         h.state_mut().set_tool(Tool::Brush);
         h.run();
-        let (a, b) = (screen(&h, [x0 - 80.0, y]), screen(&h, [x1 + 80.0, y]));
+        // From just outside the frame to just past it (the side sliders
+        // and the rail sit at the canvas's left edge).
+        let (a, b) = (screen(&h, [x0, y]) - vec2(12.0, 0.0), screen(&h, [x1, y]) + vec2(12.0, 0.0));
         drag(&mut h, a, b);
         let s = &h.state().session;
         assert_eq!(s.active(), art, "painting goes to the panel's Art layer");

@@ -24,48 +24,51 @@ const STRIP_H: f32 = 46.0;
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Item {
     Tool(Tool, &'static str, &'static str),
-    /// The five selection tools share one button; its popover picks the shape.
-    Select,
-    Animation,
-    Adjustments,
+    /// Undo and redo, when the side sliders (which carry them) are off.
+    Undo,
+    Redo,
+    ClearLayer,
+    Zen,
     Sep,
 }
 
+/// happypaint's rail (`toolbar.tsx` 1910–2147): the tools, the selection
+/// tools, history, then the canvas.
 const ITEMS: &[Item] = &[
-    Item::Tool(Tool::Move, "move", "Move / transform (V)"),
-    Item::Select,
-    Item::Tool(Tool::Fill, "paint-bucket", "Fill (G)"),
-    Item::Tool(Tool::Gradient, "droplet", "Gradient"),
-    Item::Tool(Tool::Shape, "square", "Shape (U)"),
-    Item::Tool(Tool::Pen, "pen-tool", "Pen (P)"),
-    Item::Tool(Tool::Panel, "layout-panel-top", "Panel (manga)"),
-    Item::Tool(Tool::Text, "type", "Text (T)"),
-    Item::Tool(Tool::Eyedropper, "pipette", "Eyedropper (I)"),
-    Item::Tool(Tool::Hand, "hand", PAN_LABEL),
-    Item::Animation,
-    Item::Adjustments,
-    Item::Sep,
     Item::Tool(Tool::Brush, "brush", "Brush (B)"),
     Item::Tool(Tool::Eraser, "eraser", "Eraser (E)"),
+    Item::Tool(Tool::Fill, "paint-bucket", "Fill (G)"),
+    Item::Tool(Tool::Eyedropper, "pipette", "Eyedropper (I)"),
+    Item::Tool(Tool::Move, "move", "Move / transform (V)"),
     Item::Tool(Tool::Smudge, "fingerprint", "Smudge (S)"),
     Item::Tool(Tool::Mixer, "palette", "Mixer brush (Shift+B)"),
+    Item::Tool(Tool::Gradient, "droplet", "Gradient"),
     Item::Tool(Tool::Liquify, "waves", "Liquify"),
+    Item::Tool(Tool::Text, "type", "Text (T)"),
+    Item::Tool(Tool::Pen, "pen-tool", "Pen (P)"),
+    Item::Tool(Tool::Shape, "square", "Shape (U)"),
+    Item::Tool(Tool::Panel, "layout-panel-top", "Panel (manga)"),
+    Item::Tool(Tool::Hand, "hand", PAN_LABEL),
     Item::Sep,
+    Item::Tool(Tool::SelectRect, "square-dashed", "Rectangle select (M)"),
+    Item::Tool(Tool::SelectEllipse, "circle-dashed", "Ellipse select"),
+    Item::Tool(Tool::SelectLasso, "lasso", "Lasso select (L)"),
+    Item::Tool(Tool::SelectPoly, "pentagon", "Polygon select"),
+    Item::Tool(Tool::SelectWand, "wand", "Magic wand (W)"),
+    Item::Sep,
+    Item::Undo,
+    Item::Redo,
+    Item::Sep,
+    Item::ClearLayer,
+    Item::Zen,
 ];
 
 pub const PAN_LABEL: &str = "Pan (H) — drag to move the canvas. Hold Space with any tool, or drag with the middle mouse button";
-pub const SELECT_LABEL: &str = "Select (M, L, W)";
 pub const GRIP_LABEL: &str = "Drag to move · double-click to flip orientation";
 
-/// Tools without a button of their own, and how they are reached.
+/// Tools without a button of their own, and how they are reached (none now).
 #[cfg(test)]
-pub const NO_BUTTON: &[(Tool, &str)] = &[
-    (Tool::SelectRect, "The Select button; its popover picks the shape (M)."),
-    (Tool::SelectEllipse, "The Select button; its popover picks the shape."),
-    (Tool::SelectLasso, "The Select button; its popover picks the shape (L)."),
-    (Tool::SelectPoly, "The Select button; its popover picks the shape."),
-    (Tool::SelectWand, "The Select button; its popover picks the shape (W)."),
-];
+pub const NO_BUTTON: &[(Tool, &str)] = &[];
 
 /// The tools with their own button, and its accessible label.
 #[cfg(test)]
@@ -79,8 +82,14 @@ pub fn tool_buttons() -> Vec<(Tool, &'static str)> {
         .collect()
 }
 
-fn button_count() -> usize {
-    ITEMS.iter().filter(|i| **i != Item::Sep).count()
+/// The items this frame: undo and redo only when the side sliders are off.
+fn items(app: &App) -> Vec<Item> {
+    let sliders = app.settings.side_sliders;
+    ITEMS.iter().copied().filter(|i| !(sliders && matches!(i, Item::Undo | Item::Redo))).collect()
+}
+
+fn button_count(items: &[Item]) -> usize {
+    items.iter().filter(|i| **i != Item::Sep).count()
 }
 
 /// The rail's width: the user's columns, or two.
@@ -105,7 +114,8 @@ pub fn show(app: &mut App, ctx: &egui::Context, view: Rect, stage_bottom: f32, t
     let rail = app.layout.tools_dock;
     let res = dock::reserved(app, view);
     let vertical = rail.is_some() || app.layout.toolbar.orientation == Orientation::Vertical;
-    let n = button_count();
+    let all = items(app);
+    let n = button_count(&all);
     let user_cols = app.layout.toolbar.size.map(layout::toolbar_cols);
     let mut cols = user_cols.unwrap_or(if vertical { 2 } else { n }).min(n);
     let pos = app.layout.toolbar.pos;
@@ -116,7 +126,7 @@ pub fn show(app: &mut App, ctx: &egui::Context, view: Rect, stage_bottom: f32, t
         view.width() - res.left - res.right - 2.0 * M
     };
     cols = cols.min(layout::toolbar_cols(room.max(layout::toolbar_width(1)))).max(1);
-    let rows = rows_for(cols, vertical);
+    let rows = rows_for(&all, cols, vertical);
     let grid = vec2(cols as f32 * layout::TOOL_CELL - GAP, rows.len() as f32 * layout::TOOL_CELL - GAP);
     let size = if vertical { grid + vec2(12.0, 12.0 + GRIP) } else { grid + vec2(12.0 + GRIP, 12.0) };
     let (at, pivot) = match (rail, pos) {
@@ -191,10 +201,10 @@ pub fn show(app: &mut App, ctx: &egui::Context, view: Rect, stage_bottom: f32, t
 
 /// Rows of items: `cols` per row; a vertical bar starts each group on a
 /// new row, and a one-row bar keeps its separators.
-fn rows_for(cols: usize, vertical: bool) -> Vec<Vec<Item>> {
-    let one_row = !vertical && cols >= button_count();
+fn rows_for(items: &[Item], cols: usize, vertical: bool) -> Vec<Vec<Item>> {
+    let one_row = !vertical && cols >= button_count(items);
     let mut rows: Vec<Vec<Item>> = vec![Vec::new()];
-    for it in ITEMS {
+    for it in items {
         let row = rows.last_mut().expect("rows starts non-empty");
         if *it == Item::Sep {
             if one_row {
@@ -288,7 +298,7 @@ fn resize_handle(app: &mut App, ctx: &egui::Context, rect: Rect, rail: bool) {
             && let Some(p) = r.interact_pointer_pos()
         {
             let w = if app.layout.tools_dock == Some(DockSide::Right) { rect.right() - p.x } else { p.x - rect.left() };
-            let cols = layout::toolbar_cols(w).min(button_count());
+            let cols = layout::toolbar_cols(w).min(button_count(&items(app)));
             app.layout.toolbar.size = Some(layout::toolbar_width(cols));
         }
         if r.drag_stopped() {
@@ -312,7 +322,7 @@ fn strip(app: &mut App, ctx: &egui::Context, view: Rect, stage_bottom: f32) -> R
             egui::ScrollArea::horizontal().id_salt("toolbar-strip").show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = GAP;
-                    for it in ITEMS {
+                    for it in &items(app) {
                         if *it == Item::Sep {
                             widgets::vline(ui, 24.0);
                         } else {
@@ -358,31 +368,24 @@ fn item(app: &mut App, ui: &mut Ui, it: Item, view: Rect) {
                 app.set_tool(t);
             }
         }
-        Item::Select => {
-            let selecting = crate::chrome::is_select_tool(tool);
-            let icon = crate::chrome::select_icon(app.last_select_tool);
-            if icons::button(ui, icon, BTN, selecting, SELECT_LABEL).clicked() {
-                if selecting {
-                    dock::toggle(app, Popover::Selection, view);
-                } else {
-                    let t = app.last_select_tool;
-                    app.set_tool(t);
-                }
+        Item::Undo => {
+            if icons::button(ui, "undo-2", BTN, false, "Undo (Ctrl+Z)").clicked() {
+                let _ = app.session.execute(onepaint_engine::Command::Undo);
             }
         }
-        Item::Animation => {
-            if icons::button(ui, "film", BTN, app.session.anim_settings().enabled, "Animation").clicked() {
-                crate::timeline::toggle(app);
+        Item::Redo => {
+            if icons::button(ui, "redo-2", BTN, false, "Redo (Ctrl+Shift+Z)").clicked() {
+                let _ = app.session.execute(onepaint_engine::Command::Redo);
             }
         }
-        Item::Adjustments => {
-            let on = matches!(app.popover, Some(Popover::Adjustments | Popover::Filter));
-            if icons::button(ui, "sparkles", BTN, on, "Adjustments").clicked() {
-                if app.session.filter_active() {
-                    app.popover = Some(Popover::Filter);
-                } else {
-                    app.popover = if app.popover == Some(Popover::Adjustments) { None } else { Some(Popover::Adjustments) };
-                }
+        Item::ClearLayer => {
+            if icons::button(ui, "brush-cleaning", BTN, false, "Clear layer").clicked() {
+                let _ = app.session.execute(onepaint_engine::Command::ClearSelected);
+            }
+        }
+        Item::Zen => {
+            if icons::button(ui, "eye-off", BTN, app.hide_ui, "Zen mode (Tab)").clicked() {
+                app.hide_ui = !app.hide_ui;
             }
         }
         Item::Sep => {}
@@ -409,14 +412,14 @@ mod tests {
 
     #[test]
     fn rows_wrap_by_columns_and_groups() {
-        let n = button_count();
-        assert_eq!(rows_for(n, false).len(), 1, "one row keeps everything");
-        assert!(rows_for(n, false)[0].contains(&Item::Sep));
-        let two = rows_for(2, true);
+        let n = button_count(ITEMS);
+        assert_eq!(rows_for(ITEMS, n, false).len(), 1, "one row keeps everything");
+        assert!(rows_for(ITEMS, n, false)[0].contains(&Item::Sep));
+        let two = rows_for(ITEMS, 2, true);
         assert!(two.iter().all(|r| r.len() <= 2 && !r.contains(&Item::Sep)));
         let total: usize = two.iter().map(|r| r.len()).sum();
         assert_eq!(total, n, "nothing lost");
-        // The vertical bar starts the brush group on a fresh row.
-        assert!(two.iter().any(|r| r.first() == Some(&Item::Tool(Tool::Brush, "brush", "Brush (B)"))));
+        // The vertical bar starts the selection tools on a fresh row.
+        assert!(two.iter().any(|r| r.first() == Some(&Item::Tool(Tool::SelectRect, "square-dashed", "Rectangle select (M)"))));
     }
 }
