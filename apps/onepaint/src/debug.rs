@@ -1,5 +1,6 @@
 //! Debug automation driven by environment variables, for visual checks:
 //!
+//! - `ONEPAINT_MENU=file|edit|view|…` opens that menu in the menu bar.
 //! - `ONEPAINT_SCREENSHOT=out.png` saves a screenshot of the window after a few frames.
 //! - `ONEPAINT_DEMO=1` paints a small demo scene first.
 //! - `ONEPAINT_POPOVER=layers|brushes|color|mix|menu|new|studio|…` opens a popover (`mix`: Colour on its Mix grid).
@@ -95,7 +96,6 @@ impl Debug {
                 "layers" => Some(Popover::Layers),
                 "brushes" => Some(Popover::Brushes),
                 "color" | "mix" => Some(Popover::Color),
-                "menu" => Some(Popover::Menu),
                 "new" => Some(Popover::NewDoc),
                 "selection" => Some(Popover::Selection),
                 "curves" => Some(Popover::Filter),
@@ -155,6 +155,15 @@ fn wave(app: &mut App, y: f64, amp: f64, color: Rgba, preset: &str, size: f64) {
 pub fn tick(app: &mut App, ctx: &egui::Context) {
     let frame = app.debug.frame;
     app.debug.frame += 1;
+    // ONEPAINT_MENU=view: that menu open in the menu bar (and ONEPAINT_SUBMENU=0..: a submenu of Adjust).
+    if frame >= 2
+        && let Ok(m) = std::env::var("ONEPAINT_MENU")
+        && let Some(i) = ["file", "edit", "view", "image", "layer", "select", "adjust", "help"].iter().position(|t| *t == m)
+        && !onepaint_ui_kit::menu_bar::is_open(ctx)
+        && frame < 4
+    {
+        onepaint_ui_kit::menu_bar::open(ctx, i);
+    }
     if frame == 1
         && let Ok(id) = std::env::var("ONEPAINT_PAPER")
         && let Some(i) = onepaint_doc::PAPER_PRESETS.iter().position(|p| p.id == id)

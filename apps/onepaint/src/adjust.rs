@@ -78,7 +78,7 @@ pub fn effect_lines(app: &mut App, focus: bool) {
     let _ = app.session.execute(Command::CreatePathLayer { spec: Box::new(spec) });
 }
 
-fn pick(app: &mut App, k: Kind) {
+pub fn pick(app: &mut App, k: Kind) {
     app.curve_tab = 0;
     if k.is_layer_only() {
         let params = seeded(k, app.session.color());

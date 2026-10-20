@@ -28,6 +28,7 @@ mod keymap;
 mod layout;
 mod levels;
 mod loading;
+mod menus;
 mod palettes;
 mod panel_ui;
 mod pen;
@@ -92,7 +93,6 @@ fn wgpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Popover {
-    Menu,
     Brushes,
     Layers,
     Color,
@@ -1072,6 +1072,10 @@ impl App {
             self.capture_key(ctx, now);
             return (false, false);
         }
+        // An open menu takes the keys (arrows, Enter, Escape).
+        if onepaint_ui_kit::menu_bar::is_open(ctx) {
+            return (false, false);
+        }
         // Rebindable actions (keymap.rs); hard-wired keys are left for below.
         let fired = keymap::take_actions(ctx, &self.settings.keybindings, typing);
         let on = |a: Action| fired.contains(&a);
@@ -1184,8 +1188,7 @@ impl App {
                 self.canvas.sym_editing = !self.canvas.sym_editing;
             }
             if on(Action::ToggleMeasure) {
-                self.canvas.measuring = !self.canvas.measuring;
-                self.canvas.lines_editing = false;
+                menus::toggle_measure(self);
             }
             if on(Action::ToggleLayersPanel) {
                 dock::toggle(self, Popover::Layers, ctx.content_rect());
@@ -1200,27 +1203,20 @@ impl App {
                 self.popover = if self.popover == Some(Popover::Help) { None } else { Some(Popover::Help) };
             }
             if on(Action::ColorSwap) {
-                let fg = self.session.color();
-                let bg = self.canvas.options.background;
-                self.set_color(bg);
-                self.canvas.options.background = fg;
+                menus::swap_colors(self);
             }
             if on(Action::ColorReset) {
                 self.set_color(Rgba::BLACK);
                 self.canvas.options.background = Rgba::WHITE;
             }
             if on(Action::FillBackground) {
-                let (fg, bg) = (self.session.color(), self.canvas.options.background);
-                let _ = self.session.execute(Command::SetColor { rgba: bg });
-                let _ = self.session.execute(Command::FillSelection);
-                let _ = self.session.execute(Command::SetColor { rgba: fg });
+                menus::fill_background(self);
             }
-            let centre = [self.canvas.view.view_size[0] / 2.0, self.canvas.view.view_size[1] / 2.0];
             if on(Action::ZoomIn) {
-                self.canvas.view.zoom_at(centre, 1.25);
+                menus::zoom(self, 1.25);
             }
             if on(Action::ZoomOut) {
-                self.canvas.view.zoom_at(centre, 0.8);
+                menus::zoom(self, 0.8);
             }
             if on(Action::ZoomFit) {
                 self.canvas.view.fit();
@@ -1229,14 +1225,13 @@ impl App {
                 self.canvas.view.actual_pixels();
             }
             if on(Action::RotateReset) {
-                let r = self.canvas.view.rotation;
-                self.canvas.view.rotate_at(centre, -r);
+                menus::rotate(self, None);
             }
             if on(Action::RotateLeft) {
-                self.canvas.view.rotate_at(centre, -15f64.to_radians());
+                menus::rotate(self, Some(-15.0));
             }
             if on(Action::RotateRight) {
-                self.canvas.view.rotate_at(centre, 15f64.to_radians());
+                menus::rotate(self, Some(15.0));
             }
             if self.session.anim_settings().enabled {
                 if on(Action::AnimPlayPause) {
@@ -1282,9 +1277,7 @@ impl App {
                 self.set_tool(Tool::Hand);
             }
             if on(Action::ToggleFillShape) {
-                self.canvas.options.fill_shape = !self.canvas.options.fill_shape;
-                let msg = if self.canvas.options.fill_shape { "Fill mode on: brush strokes fill their outline" } else { "Fill mode off" };
-                self.notify(msg, now);
+                menus::toggle_fill_mode(self, now);
             }
             if on(Action::FillForeground) {
                 let _ = self.session.execute(Command::FillSelection);
@@ -1296,13 +1289,10 @@ impl App {
                 self.canvas.persp_editing = !self.canvas.persp_editing;
             }
             if on(Action::ToggleRulers) {
-                let mut g = self.session.guides().clone();
-                g.rulers = !g.rulers;
-                let _ = self.session.execute(Command::SetGuides { guides: Box::new(g) });
+                menus::toggle_rulers(self);
             }
             if on(Action::ToggleGuidesEdit) {
-                self.canvas.lines_editing = !self.canvas.lines_editing;
-                self.canvas.measuring = false;
+                menus::toggle_guides_edit(self);
             }
             for (action, tool) in [
                 (Action::ToolSelectRect, Tool::SelectRect),
@@ -1473,6 +1463,7 @@ impl eframe::App for App {
         let rect = if self.hide_ui {
             rect
         } else {
+            let rect = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + chrome::header_h(self)), rect.max);
             let res = dock::reserved(self, rect);
             egui::Rect::from_min_max(
                 egui::pos2(rect.left() + res.left, rect.top()),
@@ -1481,7 +1472,8 @@ impl eframe::App for App {
         };
         let pegging = self.timing.peg_mode && self.session.anim_settings().enabled;
         self.canvas.peg_target = self.timing.peg_target.clone().filter(|_| pegging);
-        self.canvas.swallow_press = self.side.entry_open();
+        // A click that closes a menu doesn't paint.
+        self.canvas.swallow_press = self.side.entry_open() || onepaint_ui_kit::menu_bar::is_open(&ctx);
         self.canvas.scrollbars = self.settings.scrollbars && !self.hide_ui;
         self.canvas.show(ui, rect, &mut self.session, space, r, self.gpu_ok, self.gpu_compose);
         if let Some(msg) = self.canvas.notice.take() {
@@ -1561,7 +1553,7 @@ impl eframe::App for App {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use egui::{Event, PointerButton, pos2, vec2};
     use egui_kittest::Harness;
@@ -1587,6 +1579,24 @@ mod tests {
         h.state_mut().toast = None;
         h.step();
         assert!(h.state().toast.is_none(), "handled once");
+    }
+
+    /// Open the menu `title` in the menu bar and pick its row `item`.
+    pub(crate) fn menu_pick(h: &mut Harness<'_, App>, title: &str, item: &str) {
+        h.get_by_label(title).click();
+        h.run();
+        h.get_by_label(item).click();
+        h.run();
+    }
+
+    /// The same, through a submenu.
+    pub(crate) fn menu_pick_sub(h: &mut Harness<'_, App>, title: &str, sub: &str, item: &str) {
+        h.get_by_label(title).click();
+        h.run();
+        h.get_by_label(sub).click();
+        h.run();
+        h.get_by_label(item).click();
+        h.run();
     }
 
     fn press(h: &mut Harness<'_, App>, p: egui::Pos2, pressed: bool) {
@@ -1716,7 +1726,7 @@ mod tests {
         let app = h.state();
         let layer = app.session.doc().layer(app.session.active()).unwrap();
         assert!(layer.pixels.tile_count() > 0, "the stroke reached the active layer");
-        let d = app.canvas.view.screen_to_doc([640.0, 430.0]);
+        let d = app.canvas.win_to_doc([640.0, 430.0]);
         assert!(layer.pixels.get(d[0] as i32, d[1] as i32)[3] > 0.5, "paint under the stroke");
         assert!(app.dirty());
         h.event(Event::Key { key: egui::Key::Z, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND });
@@ -1827,7 +1837,7 @@ mod tests {
         h.get_by_label("New layer").click();
         h.run();
         assert_eq!(h.state().session.doc().root.len(), 3);
-        h.get_by_label("Brush library").click();
+        h.get_by_label("Brushes").click();
         h.run();
         assert_eq!(h.state().popover, Some(Popover::Brushes));
         h.get_by_label("Eraser (E)").click();
@@ -1839,9 +1849,7 @@ mod tests {
     fn paper_is_chosen_from_the_menu_and_for_new_canvases() {
         let mut h = harness();
         h.run();
-        h.state_mut().popover = Some(Popover::Menu);
-        h.run();
-        h.get_by_label("Paper…").click();
+        menu_pick(&mut h, "File", "Paper…");
         h.run();
         assert_eq!(h.state().popover, Some(Popover::Paper));
         for _ in 0..5 {
@@ -2027,8 +2035,8 @@ mod tests {
         assert_eq!(h.state().session.tool(), Tool::SelectRect);
         drag_stroke(&mut h, pos2(600.0, 300.0), pos2(700.0, 500.0));
         let sel = h.state().session.selection().cloned().expect("a selection");
-        let inside = h.state().canvas.view.screen_to_doc([650.0, 400.0]);
-        let outside = h.state().canvas.view.screen_to_doc([500.0, 400.0]);
+        let inside = h.state().canvas.win_to_doc([650.0, 400.0]);
+        let outside = h.state().canvas.win_to_doc([500.0, 400.0]);
         assert_eq!(sel.get(inside[0] as u32, inside[1] as u32), 255);
         assert_eq!(sel.get(outside[0] as u32, outside[1] as u32), 0);
         key(&mut h, egui::Key::B, egui::Modifiers::NONE);
@@ -2054,7 +2062,7 @@ mod tests {
         }
         assert!(h.state().session.selection().is_none(), "not committed yet");
         key(&mut h, egui::Key::Enter, egui::Modifiers::NONE);
-        let d = h.state().canvas.view.screen_to_doc([660.0, 350.0]);
+        let d = h.state().canvas.win_to_doc([660.0, 350.0]);
         assert_eq!(h.state().session.selection().expect("polygon").get(d[0] as u32, d[1] as u32), 255);
     }
 
@@ -2067,7 +2075,7 @@ mod tests {
         h.state_mut().set_color(Rgba::new(1.0, 0.0, 0.0, 1.0));
         key(&mut h, egui::Key::G, egui::Modifiers::NONE);
         click(&mut h, pos2(600.0, 400.0));
-        let d = h.state().canvas.view.screen_to_doc([600.0, 400.0]);
+        let d = h.state().canvas.win_to_doc([600.0, 400.0]);
         let px = h.state().session.doc().layer(h.state().session.active()).unwrap().pixels.get(d[0] as i32, d[1] as i32);
         assert!(px[0] > 0.99 && px[1] < 0.01, "filled red {px:?}");
         h.state_mut().set_color(Rgba::BLACK);
@@ -2255,7 +2263,7 @@ mod tests {
         h.state_mut().canvas.options.fill_wash = true;
         click(&mut h, pos2(600.0, 400.0));
         assert!(h.state().session.wet_active(), "the wash is wet");
-        let d = h.state().canvas.view.screen_to_doc([600.0, 400.0]);
+        let d = h.state().canvas.win_to_doc([600.0, 400.0]);
         let flat = h.state().session.doc().layer(h.state().session.active()).unwrap().pixels.get(d[0] as i32, d[1] as i32);
         assert!(flat[3] < 0.05, "no flat fill, only what has settled so far: {flat:?}");
     }
@@ -2264,7 +2272,7 @@ mod tests {
     /// rather than the white background at a screen point.
     fn active_alpha(h: &Harness<'_, App>, screen: [f32; 2]) -> f32 {
         let app = h.state();
-        let d = app.canvas.view.screen_to_doc([screen[0] as f64, screen[1] as f64]);
+        let d = app.canvas.win_to_doc([screen[0] as f64, screen[1] as f64]);
         let c = app.session.sample_color(d[0] as i32, d[1] as i32).unwrap();
         1.0 - c.g
     }
@@ -2498,7 +2506,7 @@ mod tests {
         drag_stroke(&mut h, pos2(400.0, 400.0), pos2(800.0, 400.0));
         let app = h.state();
         let at = |x: f32| {
-            let d = app.canvas.view.screen_to_doc([x as f64, 400.0]);
+            let d = app.canvas.win_to_doc([x as f64, 400.0]);
             app.session.doc().layer(app.session.active()).unwrap().pixels.get(d[0] as i32, d[1] as i32)[3]
         };
         assert!(at(300.0) > 0.98 && at(900.0) < 0.02 && at(600.0) > 0.3 && at(600.0) < 0.7, "{} {} {}", at(300.0), at(600.0), at(900.0));
@@ -2509,7 +2517,7 @@ mod tests {
         drag_stroke(&mut h, pos2(500.0, 200.0), pos2(700.0, 300.0));
         assert_eq!(h.state().session.history_len(), n + 1, "one step for fill + outline");
         let app = h.state();
-        let d = app.canvas.view.screen_to_doc([600.0, 250.0]);
+        let d = app.canvas.win_to_doc([600.0, 250.0]);
         assert!(app.session.doc().layer(app.session.active()).unwrap().pixels.get(d[0] as i32, d[1] as i32)[3] > 0.99);
     }
 
@@ -2615,7 +2623,7 @@ mod tests {
         drag_stroke(&mut h, pos2(500.0, 420.0), pos2(560.0, 440.0));
         let app = h.state();
         let layer = app.session.doc().layer(app.session.active()).unwrap();
-        let d = app.canvas.view.screen_to_doc([530.0, 430.0]);
+        let d = app.canvas.win_to_doc([530.0, 430.0]);
         let w = app.session.doc().width as f64;
         assert!(layer.pixels.get(d[0] as i32, d[1] as i32)[3] > 0.5);
         assert!(layer.pixels.get((w - d[0]) as i32, d[1] as i32)[3] > 0.5, "mirrored copy");
@@ -2661,7 +2669,7 @@ mod tests {
 
     fn alpha_at(h: &Harness<'_, App>, screen: [f64; 2]) -> f32 {
         let app = h.state();
-        let d = app.canvas.view.screen_to_doc(screen);
+        let d = app.canvas.win_to_doc(screen);
         app.session.doc().layer(app.session.active()).unwrap().pixels.get(d[0] as i32, d[1] as i32)[3]
     }
 
@@ -2687,7 +2695,7 @@ mod tests {
         drag_stroke(&mut h, pos2(520.0, 300.0), pos2(700.0, 320.0));
         assert_eq!(h.state().session.history_len(), start + 1, "one undo step");
         let app = h.state();
-        let (o, e) = (app.canvas.view.screen_to_doc([520.0, 300.0]), app.canvas.view.screen_to_doc([700.0, 320.0]));
+        let (o, e) = (app.canvas.win_to_doc([520.0, 300.0]), app.canvas.win_to_doc([700.0, 320.0]));
         let (w, hh) = (app.session.doc().width as f64, app.session.doc().height as f64);
         // The line runs from the origin toward a vanishing point, not to the pointer.
         let vp = [1.8 * w, 0.5 * hh];
@@ -2711,7 +2719,7 @@ mod tests {
         assert!(h.state().canvas.persp_editing);
         let app = h.state();
         let (w, hh) = (app.session.doc().width as f64, app.session.doc().height as f64);
-        let s = app.canvas.view.doc_to_screen([0.5 * w, 0.5 * hh]);
+        let s = app.canvas.doc_to_win([0.5 * w, 0.5 * hh]);
         drag_stroke(&mut h, pos2(s[0] as f32, s[1] as f32), pos2(s[0] as f32 + 100.0, s[1] as f32));
         let vp = h.state().session.guides().perspective.points[0];
         assert!(vp.x > 0.55, "moved right: {vp:?}");
@@ -2727,11 +2735,12 @@ mod tests {
         key(&mut h, egui::Key::R, egui::Modifiers::SHIFT);
         assert!(h.state().session.guides().rulers);
         let h0 = h.state().session.history_len();
-        drag_stroke(&mut h, pos2(600.0, 9.0), pos2(600.0, 400.0));
+        // The ruler runs along the canvas's top edge, under the header.
+        drag_stroke(&mut h, pos2(600.0, chrome::HEADER_H + 9.0), pos2(600.0, 400.0));
         let app = h.state();
         assert_eq!(app.session.guides().lines.len(), 1);
         let g = &app.session.guides().lines[0];
-        let want = app.canvas.view.screen_to_doc([600.0, 400.0])[1];
+        let want = app.canvas.win_to_doc([600.0, 400.0])[1];
         assert!(g.angle == 0.0 && (g.y - want).abs() < 1.0, "horizontal guide at the drop: {g:?}");
         assert_eq!(app.session.history_len(), h0 + 1, "one undo step");
         assert_eq!(app.session.doc().layer(app.session.active()).unwrap().pixels.tile_count(), 0, "no paint");
@@ -2755,8 +2764,8 @@ mod tests {
         assert!((g.angle - std::f64::consts::FRAC_PI_4).abs() < 1e-6, "drawn along the drag: {g:?}");
         // Grab it at its anchor and throw it far off the document.
         let app = h.state();
-        let s = app.canvas.view.doc_to_screen([g.x, g.y]);
-        let off = app.canvas.view.doc_to_screen([-50_000.0, g.y]);
+        let s = app.canvas.doc_to_win([g.x, g.y]);
+        let off = app.canvas.doc_to_win([-50_000.0, g.y]);
         drag_stroke(&mut h, pos2(s[0] as f32, s[1] as f32), pos2(off[0].max(-30000.0) as f32, s[1] as f32 - 2000.0));
         assert!(h.state().session.guides().lines.is_empty(), "dragged off the canvas: deleted");
         key(&mut h, egui::Key::Escape, egui::Modifiers::NONE);
@@ -2942,14 +2951,14 @@ mod tests {
         let id = app.session.active().to_string();
         assert!(app.session.is_path_layer(&id), "a path layer was created");
         assert!(app.canvas.pen.building.is_none());
-        let mid = app.canvas.view.screen_to_doc([600.0, 300.0]);
+        let mid = app.canvas.win_to_doc([600.0, 300.0]);
         assert!(app.session.doc().layer(&id).unwrap().pixels.get(mid[0] as i32, mid[1] as i32)[3] > 0.5, "stroked");
         // Drag the corner anchor down.
         let h0 = app.session.history_len();
         drag_stroke(&mut h, pos2(700.0, 450.0), pos2(700.0, 520.0));
         let app = h.state();
         let a = app.session.paths(&id)[0].subpaths[0].anchors[2];
-        let want = app.canvas.view.screen_to_doc([700.0, 520.0]);
+        let want = app.canvas.win_to_doc([700.0, 520.0]);
         assert!((a.y - want[1]).abs() < 1.0, "anchor moved: {a:?}");
         assert_eq!(app.session.history_len(), h0 + 1, "one step per drag");
         assert!(app.session.paths(&id)[0].subpaths[0].anchors.len() == 3);
@@ -3219,9 +3228,7 @@ mod tests {
     fn settings_dialog_drives_the_engine_and_the_tab_cap() {
         let mut h = harness();
         h.run();
-        h.state_mut().popover = Some(Popover::Menu);
-        h.run();
-        h.get_by_label("Settings…").click();
+        menu_pick(&mut h, "Edit", "Settings…");
         h.run();
         assert_eq!(h.state().popover, Some(Popover::Settings));
         // The centred dialog settles over a few frames.
@@ -3273,9 +3280,7 @@ mod tests {
     fn a_recorded_session_replays_on_the_canvas() {
         let mut h = harness();
         h.run();
-        h.state_mut().popover = Some(Popover::Menu);
-        h.run();
-        h.get_by_label("Start recording").click();
+        menu_pick_sub(&mut h, "View", "Capture", "Record drawing (time-lapse)");
         h.run();
         assert!(h.state().session.is_recording());
         drag_stroke(&mut h, pos2(500.0, 420.0), pos2(720.0, 440.0));
@@ -3314,7 +3319,7 @@ mod tests {
         h.state_mut().popover = None;
         h.run();
         // Drag the bottom-right corner down 80 px.
-        let br = h.state().canvas.view.doc_to_screen(q[2]);
+        let br = h.state().canvas.doc_to_win(q[2]);
         drag_stroke(&mut h, pos2(br[0] as f32, br[1] as f32), pos2(br[0] as f32, br[1] as f32 + 80.0));
         let q2 = match h.state().session.transform_warp() {
             Some(onepaint_engine::transform::WarpMode::Quad(q)) => *q,
@@ -3337,7 +3342,7 @@ mod tests {
         let l = app.session.doc().layer(app.session.active()).unwrap();
         let adj = l.adjustment.as_ref().unwrap();
         assert_eq!(adj.kind, "gradient-fill");
-        let a = app.canvas.view.screen_to_doc([400.0, 300.0]);
+        let a = app.canvas.win_to_doc([400.0, 300.0]);
         assert!((adj.params.grad_ax.unwrap() as f64 - a[0] / 2048.0).abs() < 0.01);
         assert!(adj.params.grad_bx.unwrap() > adj.params.grad_ax.unwrap());
     }
@@ -3357,9 +3362,9 @@ mod tests {
         assert!(h.state().canvas.view.scale > s0);
         key(&mut h, egui::Key::H, egui::Modifiers::NONE);
         assert_eq!(h.state().session.tool(), Tool::Hand);
-        let off = h.state().canvas.view.doc_to_screen([0.0, 0.0]);
+        let off = h.state().canvas.doc_to_win([0.0, 0.0]);
         drag_stroke(&mut h, pos2(500.0, 400.0), pos2(560.0, 400.0));
-        let moved = h.state().canvas.view.doc_to_screen([0.0, 0.0]);
+        let moved = h.state().canvas.doc_to_win([0.0, 0.0]);
         assert!((moved[0] - off[0] - 60.0).abs() < 1.0, "hand drag pans");
         assert_eq!(h.state().session.doc().layer(h.state().session.active()).unwrap().pixels.tile_count(), 0);
         key(&mut h, egui::Key::Questionmark, egui::Modifiers::SHIFT);

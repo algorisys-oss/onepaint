@@ -9,13 +9,19 @@ impl Session {
     }
 
     pub(crate) fn add_mask(&mut self) -> Result<(), EngineError> {
+        self.add_mask_from(true)
+    }
+
+    /// A mask from the selection when `from_selection` and there is one,
+    /// else one that shows everything.
+    pub(crate) fn add_mask_from(&mut self, from_selection: bool) -> Result<(), EngineError> {
         let id = self.active.clone();
         let Some(l) = self.doc.layer(&id) else { return Ok(()) };
         if l.mask.is_some() {
             return Ok(());
         }
         let (w, h) = (self.doc.width, self.doc.height);
-        let mask = match &self.clip {
+        let mask = match self.clip.as_ref().filter(|_| from_selection) {
             Some(sel) => {
                 let mut m = Surface::new();
                 let data: Vec<f32> = sel

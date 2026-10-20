@@ -54,3 +54,4 @@ short by fixing entries, not by growing it.
 | 52 | Procedural paper sampling | The paper tile is sampled bilinearly at every zoom and DPI | The physical papers' textures have trilinear mipmaps | The 0.18 mm texel is magnified at 150 dpi and above; only low-DPI documents minify it, where onepaint's tooth aliases slightly. |
 | 53 | 1-bit PSD rows | Each row starts on a byte, as Photoshop stores them | `sampleAt` indexes bits without the row padding | happypaint's bitmaps shear when the width isn't a multiple of 8. |
 | 54 | Mixer patch load | Each of the 64² texels averages 4 × 4 bilinear taps of its footprint | Two bilinear blits: the brush square into 256², then into 64² | Fewer aliasing artefacts from large brushes; the colours agree otherwise (spec 63). |
+| 55 | View menu sections | Guides, Panels, Capture and Workspace open as submenus of View | One long list with section captions | Inline, the View menu is taller than a laptop window (spec 65). |

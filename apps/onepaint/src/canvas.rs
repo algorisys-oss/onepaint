@@ -667,6 +667,17 @@ impl Canvas {
         self.view.screen_to_doc([(p.x - self.screen_origin.x) as f64, (p.y - self.screen_origin.y) as f64])
     }
 
+    /// [`View::screen_to_doc`] for a window point (the canvas sits below the header).
+    pub fn win_to_doc(&self, p: [f64; 2]) -> Pt {
+        self.view.screen_to_doc([p[0] - self.screen_origin.x as f64, p[1] - self.screen_origin.y as f64])
+    }
+
+    /// [`View::doc_to_screen`] as a window point.
+    pub fn doc_to_win(&self, d: Pt) -> [f64; 2] {
+        let s = self.view.doc_to_screen(d);
+        [s[0] + self.screen_origin.x as f64, s[1] + self.screen_origin.y as f64]
+    }
+
     fn doc_pt(&self, p: Pos2) -> Pt {
         self.view.screen_to_doc([p.x as f64, p.y as f64])
     }

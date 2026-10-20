@@ -84,6 +84,10 @@ Overnight (2026-10-18 → 19), all pushed, newest last:
 - Light rays on the GPU (spec 53); imported pattern fills on the GPU
   (spec 46). Spatial layers in Pass Through groups now filter what lies
   below the group too, as happypaint, and plan on the GPU (spec 52).
+- Workspace (spec 65, agreed 2026-10-20): phase 1 done — the header row
+  with the menu bar (`ui_kit::menu_bar`, `menus.rs`), the panel buttons,
+  new engine commands for Group/Ungroup/Merge visible/Flatten/Invert
+  mask. Next: phase 2, the options row.
 - CPU speedups (bit-identical): wand, bucket, feather and grow 2–3×
   (`hot_paths` `regions 4096²`); dab rasteriser 2–4× (row spans, batched
   f16 rows, parallel tiles for big dabs).

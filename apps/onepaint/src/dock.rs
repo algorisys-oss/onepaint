@@ -23,7 +23,7 @@ const GRIP: f32 = 6.0;
 /// A tab must travel this far before it tears off its group.
 const TEAR_OFF: f32 = 6.0;
 /// The top of the docks and rails: below the top bar.
-pub const TOP: f32 = 64.0;
+pub const TOP: f32 = 0.0;
 
 /// What a floating title or tab strip stands for as a drop target.
 #[derive(Clone, Debug, PartialEq)]

@@ -1,7 +1,8 @@
 # 65: Workspace layout (menu bar, options row, left rail)
 
 ## Status
-Proposed (2026-10-20), for the owner's review before any UI work.
+Agreed (2026-10-20). Phase 1, the menu bar, is built (below); phases 2–6
+follow.
 Replaces onepaint's canvas-first chrome (a "…" menu, a floating tool bar
 top right, the Layers popover) with happypaint's v0.204 workspace.
 Retires divergences 41 and 42, and the View-menu half of 49.
@@ -171,6 +172,31 @@ strip hides and popovers become bottom sheets.
 
 Each phase lands on its own, with kittest coverage and screenshots in both
 themes; the old chrome stays usable until phase 3 switches the default.
+
+## Phase 1 as built
+- `ui_kit::menu_bar`: menus as data (items, toggles, separators, headers,
+  one level of submenus), keyboard and pointer as above, `is_open` so the
+  click that closes a menu doesn't paint and the shortcuts pause while
+  one is open.
+- `apps/onepaint/src/menus.rs`: the eight menus built from the app each
+  frame (checks, enabled rows, the live key bindings) and `run`; the
+  keyboard shortcuts share its helpers.
+- The header row: the app mark (the gallery), the menus, the drawing's
+  name centred (several drawings show as chips there until the tab strip
+  lands), REC, the wet-paint controls, Brushes, Brush settings, Guides
+  and Layers. The "…" menu and the tool bar's Guides, Brush library and
+  Layers buttons are gone. The stage, docks and rails start below it.
+- New engine commands for the Layer and Image menus: `GroupLayer`,
+  `Ungroup`, `MergeVisible`, `FlattenImage`, `InvertMask`,
+  `AddRevealMask`.
+- View's Guides, Panels, Capture and Workspace sections are submenus
+  (divergence 55): inline they made the menu taller than the window.
+- Not yet: renaming the drawing in place (no document rename command yet;
+  the name comes from the file), the window controls (phase 4). The
+  transform bar sits at the bottom until phase 2 moves it into the row.
+- Tests: `every_menu_command_is_reachable`,
+  `menus_run_their_command_and_escape_closes`, the engine's
+  `tests/structure.rs`, `menu_bar` focus stepping.
 
 ## Divergences
 - 41, 42 retire. 49 narrows to the eyedropper square (side sliders).

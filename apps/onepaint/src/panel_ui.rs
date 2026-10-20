@@ -253,7 +253,7 @@ mod tests {
     }
 
     fn screen(h: &Harness<'_, App>, d: [f64; 2]) -> Pos2 {
-        let s = h.state().canvas.view.doc_to_screen(d);
+        let s = h.state().canvas.doc_to_win(d);
         pos2(s[0] as f32, s[1] as f32)
     }
 
@@ -302,7 +302,7 @@ mod tests {
         let corner = screen(&h, before[0].to_array());
         drag(&mut h, corner, corner + vec2(30.0, 20.0));
         let after = h.state().session.panel(&id).map(|p| p.outline).unwrap_or_default();
-        let want = h.state().canvas.view.screen_to_doc([corner.x as f64 + 30.0, corner.y as f64 + 20.0]);
+        let want = h.state().canvas.win_to_doc([corner.x as f64 + 30.0, corner.y as f64 + 20.0]);
         assert!((after[0].x - want[0]).abs() < 1.0 && (after[0].y - want[1]).abs() < 1.0, "{:?}", after[0]);
         assert_eq!(after[1..], before[1..], "only the grabbed corner moves");
         assert_eq!(h.state().session.history_len(), h0 + 1, "one step per drag");

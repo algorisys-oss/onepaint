@@ -261,9 +261,9 @@ See `docs/parity-delta-2026-10-10.md`.
 - [x] Wet physics v0.199 (spec 58): paper absorbs, the halo, tip-shaped dabs, wash fill
 - [x] Ten procedural papers, sheet colour, flecks and mottle (spec 57)
 - [~] Workspace: scrollbars, angle dial, in-app dialogs, brush search,
-      gradient editor and filter handles done (2026-10-19). Left: the menu
-      bar, options row and left tool rail (wait for the owner's layout
-      decision), side-slider extras, and Help ▸ Manual (an onepaint manual
-      to write, not a port: happypaint's documents its own UI)
+      gradient editor and filter handles done (2026-10-19). The layout is
+      agreed (spec 65); phase 1, the menu bar and header, done
+      (2026-10-20). Left: the options row, the left rail by default, the
+      title bar, narrow windows, side-slider extras, and Help ▸ Manual
 - [x] Refresh stale divergences (1, 3, 6, 15, 41), spec 15, feature-parity.md
 

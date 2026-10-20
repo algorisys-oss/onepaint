@@ -6,7 +6,7 @@ use crate::{App, Popover, dock, toolbar};
 use egui::{Event, PointerButton, Pos2, pos2, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use onepaint_engine::Tool;
+use onepaint_engine::{Command, Tool};
 
 fn harness_sized(w: f32, h: f32) -> Harness<'static, App> {
     Harness::builder().with_size(vec2(w, h)).with_max_steps(400).build_eframe(|cc| App::new(cc, None))
@@ -209,9 +209,9 @@ fn ctrl_click_picks_layers_and_align_moves_them() {
 fn narrow_windows_keep_the_bars_apart_and_compact_folds_the_docks() {
     let mut h = harness_sized(1000.0, 700.0);
     h.run();
-    let top = h.get_by_label("Menu").rect();
+    let top = h.get_by_label("Help").rect();
     let bar = h.state().toolbar.rect.unwrap();
-    assert!(bar.left() > top.right(), "tool bar {bar:?} clear of the top bar {top:?}");
+    assert!(bar.top() >= top.bottom(), "tool bar {bar:?} below the header {top:?}");
     assert!(bar.right() <= 1000.0);
     // Below 900 px the tool bar is a strip and docked panels go home.
     let mut h = harness_sized(820.0, 700.0);
@@ -359,4 +359,86 @@ fn gradient_overlay_stops_edit_on_the_bar() {
     let s = stops(&h);
     assert!((s[3]["pos"].as_f64().unwrap() - 0.6).abs() < 0.02, "{s:?}");
     assert_eq!(s[1]["pos"].as_f64(), Some(0.5));
+}
+
+/// Every id in `menus`, submenus included.
+fn menu_ids(menus: &[onepaint_ui_kit::menu_bar::Menu]) -> std::collections::HashSet<u32> {
+    use onepaint_ui_kit::menu_bar::MenuEntry;
+    fn walk(e: &[MenuEntry], out: &mut std::collections::HashSet<u32>) {
+        for x in e {
+            match x {
+                MenuEntry::Item(i) => {
+                    out.insert(i.id);
+                }
+                MenuEntry::Sub(_, s) => walk(s, out),
+                _ => {}
+            }
+        }
+    }
+    let mut out = std::collections::HashSet::new();
+    for m in menus {
+        walk(&m.entries, &mut out);
+    }
+    out
+}
+
+/// Spec 65: everything the menus can do shows up, in the state it belongs
+/// to (happypaint `menu-reachability.test.ts`); the old "…" menu is gone.
+#[test]
+fn every_menu_command_is_reachable() {
+    use crate::menus::{Cmd, Picked, build, decode};
+    let mut h = harness();
+    h.run();
+    let mut seen = menu_ids(&build(h.state()));
+    // Print preview, animation, a mask, a smart filter.
+    {
+        let app = h.state_mut();
+        let mut v = app.canvas.view_modes();
+        v.proof = true;
+        app.canvas.set_view_modes(v);
+        crate::timeline::toggle(app);
+        let _ = app.session.execute(Command::AddMask);
+        let id = app.session.active().to_string();
+        let params = onepaint_filters::default_params(onepaint_filters::Kind::Invert);
+        let _ = app.session.execute(Command::AddSmartFilter { id, kind: "invert".into(), params });
+    }
+    seen.extend(menu_ids(&build(h.state())));
+    // A group, then a text layer.
+    let _ = h.state_mut().session.execute(Command::AddGroup);
+    seen.extend(menu_ids(&build(h.state())));
+    let spec = onepaint_text::TextSpec { text: "Hi".into(), ..Default::default() };
+    let _ = h.state_mut().session.execute(Command::AddText { spec });
+    seen.extend(menu_ids(&build(h.state())));
+    let missing: Vec<Cmd> =
+        Cmd::ALL.iter().copied().filter(|c| !seen.iter().any(|id| matches!(decode(*id), Some(Picked::Cmd(x)) if x == *c))).collect();
+    assert!(missing.is_empty(), "not in any menu: {missing:?}");
+    // Every filter and adjustment kind is in Adjust.
+    let kinds = seen.iter().filter(|id| matches!(decode(**id), Some(Picked::Kind(_)))).count();
+    assert_eq!(kinds, onepaint_filters::Kind::ALL.len());
+    assert!(h.query_by_label("Menu").is_none(), "no second action list");
+}
+
+#[test]
+fn menus_run_their_command_and_escape_closes() {
+    let mut h = harness();
+    h.run();
+    let n = h.state().session.doc().root.len();
+    crate::tests::menu_pick(&mut h, "Layer", "New layer");
+    assert_eq!(h.state().session.doc().root.len(), n + 1);
+    assert!(!onepaint_ui_kit::menu_bar::is_open(&h.ctx), "picking closes the menu");
+    // Esc closes an open menu; the canvas keeps its tool.
+    h.get_by_label("Image").click();
+    h.run();
+    assert!(onepaint_ui_kit::menu_bar::is_open(&h.ctx));
+    h.key_press(egui::Key::Escape);
+    h.run();
+    assert!(!onepaint_ui_kit::menu_bar::is_open(&h.ctx));
+    // A click on the canvas that closes a menu doesn't paint.
+    h.get_by_label("Edit").click();
+    h.run();
+    let before = h.state().session.history_len();
+    click_with(&mut h, pos2(640.0, 420.0), Default::default());
+    h.run();
+    assert!(!onepaint_ui_kit::menu_bar::is_open(&h.ctx));
+    assert_eq!(h.state().session.history_len(), before, "no dab");
 }

@@ -372,6 +372,32 @@ fn button_impl(ui: &mut Ui, label: &str, min_width: f32, bg: Color32, fg: Color3
     resp
 }
 
+/// A header button: an icon and, when `labelled`, its label beside it
+/// (happypaint's panel buttons; labels go on narrow windows).
+pub fn icon_label_button(ui: &mut Ui, icon: &str, label: &str, selected: bool, labelled: bool) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let galley = labelled.then(|| ui.painter().layout_no_wrap(label.to_string(), theme::medium(12.5), t.fg));
+    let w = 28.0 + galley.as_ref().map_or(0.0, |g| g.size().x + 6.0);
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, 28.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    let fill = if selected {
+        Some(t.accent_soft)
+    } else if resp.hovered() {
+        Some(t.hover)
+    } else {
+        None
+    };
+    if let Some(f) = fill {
+        ui.painter().rect_filled(rect, t.radius_sm, f);
+    }
+    let fg = if selected { t.accent } else { t.fg_muted };
+    crate::icons::paint(ui, Rect::from_center_size(pos2(rect.left() + 14.0, rect.center().y), Vec2::splat(16.0)), icon, 16.0, fg);
+    if let Some(g) = galley {
+        ui.painter().galley(pos2(rect.left() + 28.0, rect.center().y - g.size().y / 2.0), g, if selected { t.accent } else { t.fg });
+    }
+    if labelled { resp } else { resp.on_hover_text(label) }
+}
+
 /// A list/menu row: full width, hover highlight, optional leading icon.
 pub fn menu_item(ui: &mut Ui, icon: Option<&str>, label: &str, shortcut: &str) -> Response {
     let t = Tokens::get(ui.ctx());

@@ -1,8 +1,7 @@
-//! Floating chrome over the canvas: top bar, side rail, popovers, toasts.
-//! Canvas-first, Procreate-like layout (docs/design-system.md).
+//! The chrome: the header (spec 65), the tool bar, popovers and toasts.
 
 use crate::layout::PanelId;
-use crate::{App, Popover};
+use crate::{App, Popover, dock};
 use egui::{Align2, Area, Id, Order, RichText, Sense, Ui, pos2, vec2};
 use onepaint_doc::{BlendIf, BlendMode, Knockout, Node};
 use onepaint_engine::{Command, LayerProps, Tool};
@@ -15,19 +14,21 @@ const BAR_H: f32 = 44.0;
 pub fn show(app: &mut App, ctx: &egui::Context) {
     let screen = ctx.content_rect();
     let stage_bottom = screen.bottom() - crate::status_bar::HEIGHT;
-    crate::dock::normalise(app, screen);
     let topbar = top_bar(app, ctx);
+    // Everything else lives below the header.
+    let full = screen;
+    let screen = egui::Rect::from_min_max(pos2(full.left(), full.top() + header_h(app)), full.max);
+    crate::dock::normalise(app, screen);
     let res = crate::dock::reserved(app, screen);
     let stage = egui::Rect::from_min_max(pos2(screen.left() + res.left, screen.top()), pos2(screen.right() - res.right, stage_bottom));
     crate::side_sliders::show(app, ctx, stage);
-    crate::status_bar::show(app, ctx, screen);
+    crate::status_bar::show(app, ctx, full);
     crate::dock::show(app, ctx, screen, stage_bottom);
-    let toolbar = crate::toolbar::show(app, ctx, screen, stage_bottom, topbar.right());
+    let toolbar = crate::toolbar::show(app, ctx, screen, stage_bottom, screen.left());
     crate::timeline::show(app, ctx, screen);
     if let Some(p) = app.popover {
         let (anchor, side) = crate::toolbar::popover_anchor(app, screen);
         let rect = match p {
-            Popover::Menu => popover_at(ctx, "menu", pos2(M, M + BAR_H + 8.0), Align2::LEFT_TOP, |ui| menu(app, ui)),
             Popover::Brushes => popover_at(ctx, "brushes", anchor, side, |ui| crate::dock::with_grip(app, ui, PanelId::Brush, brushes)),
             Popover::Layers => popover_at(ctx, "layers", anchor, side, |ui| crate::dock::with_grip(app, ui, PanelId::Layers, layers)),
             Popover::Color => popover_at(ctx, "color", anchor, side, |ui| crate::dock::with_grip(app, ui, PanelId::Color, color)),
@@ -102,9 +103,12 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
 }
 
 fn transform_bar(app: &mut App, ctx: &egui::Context, screen: egui::Rect) {
-    Area::new(Id::new("transform-bar")).order(Order::Middle).pivot(Align2::CENTER_TOP).fixed_pos(pos2(screen.center().x, M)).show(
-        ctx,
-        |ui| {
+    // At the bottom, clear of the tool bar (spec 65 moves these into the options row).
+    Area::new(Id::new("transform-bar"))
+        .order(Order::Middle)
+        .pivot(Align2::CENTER_BOTTOM)
+        .fixed_pos(pos2(screen.center().x, screen.bottom() - crate::status_bar::HEIGHT - M))
+        .show(ctx, |ui| {
             glass_frame(ui).show(ui, |ui| {
                 ui.set_height(BAR_H - 12.0);
                 ui.horizontal_centered(|ui| {
@@ -137,8 +141,7 @@ fn transform_bar(app: &mut App, ctx: &egui::Context, screen: egui::Rect) {
                     }
                 });
             });
-        },
-    );
+        });
 }
 
 fn popover_at(ctx: &egui::Context, id: &str, pos: egui::Pos2, align: Align2, body: impl FnOnce(&mut Ui)) -> egui::Rect {
@@ -150,59 +153,109 @@ fn popover_at(ctx: &egui::Context, id: &str, pos: egui::Pos2, align: Align2, bod
         .inner
 }
 
-fn toggle_popover(app: &mut App, p: Popover) {
-    app.popover = if app.popover == Some(p) { None } else { Some(p) };
+/// Row 1 of the header (spec 65): the app mark and the menu bar, the
+/// drawing's name centred in the window, and the panel buttons.
+pub const HEADER_H: f32 = 40.0;
+
+/// The header's height; none in Zen mode.
+pub fn header_h(app: &App) -> f32 {
+    if app.hide_ui { 0.0 } else { HEADER_H }
 }
 
-/// The top-left bar: menu, name and document tabs; returns its rect.
 fn top_bar(app: &mut App, ctx: &egui::Context) -> egui::Rect {
     let t = Tokens::get(ctx);
-    let r = Area::new(Id::new("topbar-left")).order(Order::Middle).fixed_pos(pos2(M, M)).show(ctx, |ui| {
-        glass_frame(ui).show(ui, |ui| {
-            ui.set_height(BAR_H - 12.0);
-            ui.horizontal_centered(|ui| {
-                if icons::button(ui, "ellipsis", 32.0, app.popover == Some(Popover::Menu), "Menu").clicked() {
-                    toggle_popover(app, Popover::Menu);
-                }
-                ui.label(RichText::new("onepaint").font(theme::semibold(14.0)).color(t.fg));
-                widgets::vline(ui, 24.0);
-                // One chip per open drawing (Ctrl+Alt+← / → to switch).
-                let titles = app.tab_titles();
-                let many = titles.len() > 1 && app.settings.document_tabs;
-                for (i, (name, dirty)) in titles.into_iter().enumerate() {
-                    if !many && i != app.active_tab {
-                        continue;
-                    }
-                    let active = i == app.active_tab;
-                    let label = format!("{name}{}", if dirty { " •" } else { "" });
-                    let text = RichText::new(label).color(if active { t.fg } else { t.fg_muted });
-                    let r = ui.add(egui::Button::new(text).selected(active && many).frame(many));
-                    if r.clicked() {
-                        app.switch_tab(i);
-                    }
-                    if active && many && icons::button(ui, "x", 18.0, false, "Close drawing").clicked() {
-                        app.request(crate::Pending::CloseTab, ui.ctx());
-                    }
-                }
-                // Wet paint keeps moving until it dries; Dry settles it now.
-                if app.session.wet_active() {
-                    widgets::vline(ui, 24.0);
-                    // Canvas tilt: wet paint runs downhill; double-click levels it.
-                    let mut tilt = app.session.wet_tilt();
-                    let r = widgets::tilt_pad(ui, &mut tilt, 28.0, "Canvas tilt")
-                        .on_hover_text("Canvas tilt: drag to make wet paint run downhill; double-click to level");
-                    if r.changed() {
-                        let _ = app.session.execute(Command::SetWetTilt { x: tilt[0], y: tilt[1] });
-                    }
-                    if icons::button(ui, "droplet", 32.0, false, "Dry the wet paint").clicked() {
-                        let _ = app.session.execute(Command::DryWet);
-                    }
-                }
-                ui.add_space(4.0);
-            });
-        });
+    let screen = ctx.content_rect();
+    if app.hide_ui {
+        onepaint_ui_kit::menu_bar::close(ctx);
+        return egui::Rect::from_min_size(screen.min, vec2(0.0, 0.0));
+    }
+    let bar = egui::Rect::from_min_size(screen.min, vec2(screen.width(), HEADER_H));
+    let labelled = screen.width() >= 1180.0;
+    let mut picked = None;
+    Area::new(Id::new("header")).order(Order::Middle).fixed_pos(bar.min).show(ctx, |ui| {
+        ui.painter().rect_filled(bar, 0.0, t.panel);
+        ui.painter().hline(bar.x_range(), bar.bottom() - 0.5, egui::Stroke::new(1.0, t.border));
+        let inner = bar.shrink2(vec2(8.0, 6.0));
+        let mut left = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        // The app mark: back to the gallery.
+        if left
+            .add(egui::Button::new(RichText::new("onepaint").font(theme::semibold(14.0)).color(t.fg)).frame(false))
+            .on_hover_text("Gallery")
+            .clicked()
+        {
+            app.popover = Some(Popover::Gallery);
+        }
+        left.add_space(4.0);
+        picked = onepaint_ui_kit::menu_bar::menu_bar(&mut left, &crate::menus::build(app));
+        let menus_end = left.min_rect().right();
+        // The end: recording, wet paint, then the panel buttons.
+        let mut right = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::right_to_left(egui::Align::Center)));
+        let view = screen;
+        if widgets::icon_label_button(&mut right, "layers", "Layers", dock::showing(app, Popover::Layers, view), labelled).clicked() {
+            dock::toggle(app, Popover::Layers, view);
+        }
+        if widgets::icon_label_button(&mut right, "grid-3x3", "Guides", dock::showing(app, Popover::Guides, view), labelled).clicked() {
+            dock::toggle(app, Popover::Guides, view);
+        }
+        let studio = app.popover == Some(Popover::BrushStudio);
+        if widgets::icon_label_button(&mut right, "sliders-horizontal", "Brush settings", studio, labelled).clicked() {
+            app.popover = if studio { None } else { Some(Popover::BrushStudio) };
+        }
+        if widgets::icon_label_button(&mut right, "brush", "Brushes", dock::showing(app, Popover::Brushes, view), labelled).clicked() {
+            dock::toggle(app, Popover::Brushes, view);
+        }
+        if app.session.wet_active() {
+            widgets::vline(&mut right, 24.0);
+            if icons::button(&mut right, "droplet", 28.0, false, "Dry the wet paint").clicked() {
+                let _ = app.session.execute(Command::DryWet);
+            }
+            // Canvas tilt: wet paint runs downhill; double-click levels it.
+            let mut tilt = app.session.wet_tilt();
+            let r = widgets::tilt_pad(&mut right, &mut tilt, 26.0, "Canvas tilt")
+                .on_hover_text("Canvas tilt: drag to make wet paint run downhill; double-click to level");
+            if r.changed() {
+                let _ = app.session.execute(Command::SetWetTilt { x: tilt[0], y: tilt[1] });
+            }
+        }
+        if app.session.is_recording() {
+            let now = right.input(|i| i.time);
+            if widgets::icon_label_button(&mut right, "circle", "REC", true, true).on_hover_text("Recording: click to stop").clicked() {
+                app.toggle_recording(now);
+            }
+        }
+        let buttons_start = right.min_rect().left();
+        // The name, centred in the window, never under the menus or the buttons.
+        let titles = app.tab_titles();
+        let many = titles.len() > 1 && app.settings.document_tabs;
+        let chips: Vec<(usize, String, bool)> = titles
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| many || *i == app.active_tab)
+            .map(|(i, (name, dirty))| (i, format!("{name}{}", if dirty { " •" } else { "" }), i == app.active_tab))
+            .collect();
+        let est: f32 = chips.iter().map(|c| c.1.chars().count() as f32 * 7.5 + 24.0).sum::<f32>() + if many { 22.0 } else { 0.0 };
+        let room = (buttons_start - menus_end - 16.0).max(0.0);
+        let w = est.min(room);
+        let cx = screen.center().x.clamp(menus_end + 8.0 + w / 2.0, (buttons_start - 8.0 - w / 2.0).max(menus_end + 8.0 + w / 2.0));
+        let name_rect = egui::Rect::from_center_size(pos2(cx, inner.center().y), vec2(w, inner.height()));
+        let mut mid = ui.new_child(egui::UiBuilder::new().max_rect(name_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        mid.set_clip_rect(name_rect);
+        // One chip per open drawing (Ctrl+Alt+← / → to switch).
+        for (i, label, active) in chips {
+            let text = RichText::new(label).color(if active { t.fg } else { t.fg_muted });
+            let r = mid.add(egui::Button::new(text).selected(active && many).frame(many));
+            if r.clicked() {
+                app.switch_tab(i);
+            }
+            if active && many && icons::button(&mut mid, "x", 18.0, false, "Close drawing").clicked() {
+                app.request(crate::Pending::CloseTab, ctx);
+            }
+        }
     });
-    r.response.rect
+    if let Some(id) = picked.and_then(crate::menus::decode) {
+        crate::menus::run(app, id, ctx);
+    }
+    bar
 }
 
 fn toast(app: &mut App, ctx: &egui::Context, screen: egui::Rect) {
@@ -226,136 +279,6 @@ fn toast(app: &mut App, ctx: &egui::Context, screen: egui::Rect) {
         .show(ctx, |ui| {
             popover_frame(ui).show(ui, |ui| ui.label(msg));
         });
-}
-
-fn menu(app: &mut App, ui: &mut Ui) {
-    let now = ui.input(|i| i.time);
-    ui.set_width(240.0);
-    if widgets::menu_item(ui, Some("image"), "Gallery…", "").clicked() {
-        app.popover = Some(Popover::Gallery);
-        return;
-    }
-    if widgets::menu_item(ui, Some("file-plus"), "New canvas…", "Ctrl+N").clicked() {
-        app.popover = Some(Popover::NewDoc);
-        return;
-    }
-    if widgets::menu_item(ui, Some("folder-open"), "Open…", "Ctrl+O").clicked() {
-        app.request(crate::Pending::Open, ui.ctx());
-    }
-    if widgets::menu_item(ui, Some("image"), "Place image…", "").clicked() {
-        app.popover = None;
-        app.place_dialog(ui.ctx());
-    }
-    if widgets::menu_item(ui, Some("check"), "Save", "Ctrl+S").clicked() {
-        app.popover = None;
-        app.save(false, now);
-    }
-    if widgets::menu_item(ui, Some("copy"), "Save as…", "Ctrl+Shift+S").clicked() {
-        app.popover = None;
-        app.save(true, now);
-    }
-    if widgets::menu_item(ui, Some("layers"), "Save drawings as book…", "").clicked() {
-        app.popover = None;
-        app.save_book(now);
-    }
-    if widgets::menu_item(ui, Some("image"), "Export…", "Ctrl+Shift+E").clicked() {
-        app.popover = Some(Popover::Export);
-        return;
-    }
-    // Panels: one row of toggles, and a reset.
-    ui.horizontal(|ui| {
-        ui.label(RichText::new("Panels").font(theme::medium(11.5)).color(Tokens::get(ui.ctx()).fg_muted));
-        ui.add_space(4.0);
-        for (id, icon, label) in [
-            (PanelId::Align, "align-center-horizontal", "Align & distribute layers"),
-            (PanelId::Properties, "sliders-horizontal", "Properties panel"),
-            (PanelId::ToolOptions, "settings", "Tool options panel"),
-            (PanelId::Palettes, "palette", "Palettes panel"),
-        ] {
-            let open = crate::dock::panel_open(app, id);
-            if icons::button(ui, icon, 28.0, open, label).clicked() {
-                crate::dock::set_panel_open(app, id, !open);
-            }
-        }
-        if icons::button(ui, "rotate-ccw", 28.0, false, "Reset panel layout").clicked() {
-            app.layout.reset();
-            app.layout.save();
-        }
-    });
-    if widgets::menu_item(ui, Some("image"), "Reference window", "Alt+R").clicked() {
-        app.popover = None;
-        app.reference.open = !app.reference.open;
-    }
-    widgets::hairline(ui);
-    let rec_label = if app.session.is_recording() { "Stop recording…" } else { "Start recording" };
-    if widgets::menu_item(ui, Some("film"), rec_label, "").clicked() {
-        app.popover = None;
-        app.toggle_recording(now);
-    }
-    if widgets::menu_item(ui, Some("play"), "Replay recording…", "").clicked() {
-        app.popover = None;
-        app.replay_recording(now);
-    }
-    if widgets::menu_item(ui, Some("film"), "Export timelapse…", "").clicked() {
-        app.popover = None;
-        app.export_timelapse(now);
-    }
-    if app.session.anim_settings().enabled {
-        use crate::AnimFormat as F;
-        let items = [(F::Mp4, "MP4 video"), (F::Gif, "animated GIF"), (F::PngZip, "PNG sequence (.zip)")];
-        for (f, what) in items {
-            if widgets::menu_item(ui, Some("film"), &format!("Export {what}…"), "").clicked() {
-                app.popover = None;
-                app.export_animation(f, false, now);
-            }
-        }
-        // What you marked to review is what you hand over (`buildFrameSource`).
-        if app.session.anim_settings().has_mark_range() {
-            for (f, what) in [(F::Mp4, "MP4"), (F::Gif, "GIF"), (F::PngZip, "PNG .zip")] {
-                if widgets::menu_item(ui, Some("film"), &format!("Export marked range ({what})…"), "").clicked() {
-                    app.popover = None;
-                    app.export_animation(f, true, now);
-                }
-            }
-        }
-    }
-    widgets::hairline(ui);
-    if widgets::menu_item(ui, Some("maximize-2"), "Canvas size…", "").clicked() {
-        app.size_dialog = ([app.session.doc().width, app.session.doc().height], (1, 1), true);
-        app.popover = Some(Popover::CanvasSize);
-        return;
-    }
-    if widgets::menu_item(ui, Some("image"), "Image size…", "").clicked() {
-        app.size_dialog = ([app.session.doc().width, app.session.doc().height], (1, 1), true);
-        app.popover = Some(Popover::ImageSize);
-        return;
-    }
-    if widgets::menu_item(ui, Some("layers"), "Paper…", "").clicked() {
-        app.popover = Some(Popover::Paper);
-        return;
-    }
-    widgets::hairline(ui);
-    if widgets::menu_item(ui, Some("maximize-2"), "Fit to screen", "Ctrl+0").clicked() {
-        app.canvas.view.fit();
-    }
-    if widgets::menu_item(ui, Some("zoom-in"), "Actual pixels", "Ctrl+1").clicked() {
-        app.canvas.view.actual_pixels();
-    }
-    if widgets::menu_item(ui, Some("settings"), "Settings…", "").clicked() {
-        app.popover = Some(Popover::Settings);
-        return;
-    }
-    let (icon, label) = if app.theme == onepaint_ui_kit::ThemeKind::Dark { ("sun", "Light theme") } else { ("moon", "Dark theme") };
-    if widgets::menu_item(ui, Some(icon), label, "").clicked() {
-        app.toggle_theme(ui.ctx());
-    }
-    widgets::hairline(ui);
-    let t = Tokens::get(ui.ctx());
-    ui.label(
-        RichText::new("Space-drag pan · Ctrl+wheel zoom · R-drag rotate · Alt-click pick · Tab hides UI")
-            .font(theme::medium(10.5))
-            .color(t.fg_faint),
-    );
 }
 
 fn new_doc(app: &mut App, ui: &mut Ui) {

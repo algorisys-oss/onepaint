@@ -30,6 +30,23 @@ pub enum Command {
     MergeDown {
         id: NodeId,
     },
+    /// Put a layer or group in a new group in its place.
+    GroupLayer {
+        id: NodeId,
+    },
+    /// Lift a group's children into its place.
+    Ungroup {
+        id: NodeId,
+    },
+    /// The visible image on a new layer above the active one.
+    MergeVisible,
+    /// Every layer replaced by one of what shows.
+    FlattenImage,
+    InvertMask {
+        id: NodeId,
+    },
+    /// A mask that shows the whole layer, whatever is selected.
+    AddRevealMask,
     /// An opaque colour over the whole layer, relief and off-canvas pixels
     /// gone (happypaint `fillLayerSolid`; Apply paper colour, spec 57).
     FillLayerSolid {

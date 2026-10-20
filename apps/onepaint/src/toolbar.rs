@@ -26,11 +26,8 @@ enum Item {
     Tool(Tool, &'static str, &'static str),
     /// The five selection tools share one button; its popover picks the shape.
     Select,
-    Guides,
     Animation,
     Adjustments,
-    BrushLibrary,
-    Layers,
     Color,
     Sep,
 }
@@ -46,7 +43,6 @@ const ITEMS: &[Item] = &[
     Item::Tool(Tool::Text, "type", "Text (T)"),
     Item::Tool(Tool::Eyedropper, "pipette", "Eyedropper (I)"),
     Item::Tool(Tool::Hand, "hand", PAN_LABEL),
-    Item::Guides,
     Item::Animation,
     Item::Adjustments,
     Item::Sep,
@@ -55,9 +51,7 @@ const ITEMS: &[Item] = &[
     Item::Tool(Tool::Smudge, "fingerprint", "Smudge (S)"),
     Item::Tool(Tool::Mixer, "palette", "Mixer brush (Shift+B)"),
     Item::Tool(Tool::Liquify, "waves", "Liquify"),
-    Item::BrushLibrary,
     Item::Sep,
-    Item::Layers,
     Item::Color,
 ];
 
@@ -133,7 +127,7 @@ pub fn show(app: &mut App, ctx: &egui::Context, view: Rect, stage_bottom: f32, t
         (Some(DockSide::Right), _) => (pos2(view.right(), view.top() + dock::TOP), Align2::RIGHT_TOP),
         (None, Some(p)) => (clamp(pos2(p[0], p[1]), size, view, stage_bottom), Align2::LEFT_TOP),
         (None, None) => {
-            let y = if vertical { view.top() + dock::TOP } else { view.top() + M };
+            let y = view.top() + M;
             (pos2(view.right() - res.right - M, y), Align2::RIGHT_TOP)
         }
     };
@@ -379,12 +373,6 @@ fn item(app: &mut App, ui: &mut Ui, it: Item, view: Rect) {
                 }
             }
         }
-        Item::Guides => {
-            let on = app.session.guides().symmetry.is_on() || dock::showing(app, Popover::Guides, view);
-            if icons::button(ui, "grid-3x3", BTN, on, "Guides: symmetry (Y)").clicked() {
-                dock::toggle(app, Popover::Guides, view);
-            }
-        }
         Item::Animation => {
             if icons::button(ui, "film", BTN, app.session.anim_settings().enabled, "Animation").clicked() {
                 crate::timeline::toggle(app);
@@ -398,16 +386,6 @@ fn item(app: &mut App, ui: &mut Ui, it: Item, view: Rect) {
                 } else {
                     app.popover = if app.popover == Some(Popover::Adjustments) { None } else { Some(Popover::Adjustments) };
                 }
-            }
-        }
-        Item::BrushLibrary => {
-            if icons::button(ui, "sliders-horizontal", BTN, dock::showing(app, Popover::Brushes, view), "Brush library").clicked() {
-                dock::toggle(app, Popover::Brushes, view);
-            }
-        }
-        Item::Layers => {
-            if icons::button(ui, "layers", BTN, dock::showing(app, Popover::Layers, view), "Layers").clicked() {
-                dock::toggle(app, Popover::Layers, view);
             }
         }
         Item::Color => {

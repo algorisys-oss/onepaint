@@ -28,6 +28,7 @@ mod saved_selection_ops;
 mod selection_ops;
 pub mod smart_filter_ops;
 mod smudge_ops;
+mod structure_ops;
 mod styles_ops;
 mod text_ops;
 mod track_ops;
@@ -1273,6 +1274,12 @@ impl Session {
             Command::SetFrameRole { id, role } => self.set_frame_meta(&id, "animRole", role.map(serde_json::Value::String)),
             Command::SetLayerProps { id, props } => self.set_props(&id, props),
             Command::MergeDown { id } => self.merge_down(&id),
+            Command::GroupLayer { id } => self.group_node(&id),
+            Command::Ungroup { id } => self.ungroup(&id),
+            Command::MergeVisible => self.merge_visible(),
+            Command::FlattenImage => self.flatten_image(),
+            Command::InvertMask { id } => self.invert_mask(&id),
+            Command::AddRevealMask => self.add_mask_from(false),
             Command::BakeStyles { id } => self.bake_styles(&id),
             Command::FillLayerSolid { id, rgba } => self.fill_layer_solid(&id, rgba),
             Command::ApplyGlobalLight { angle, altitude } => self.apply_global_light(angle, altitude),
