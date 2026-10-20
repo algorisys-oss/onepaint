@@ -190,9 +190,12 @@ screentone are added as live layers.
 ## Workspace and panels
 Source: `components/toolbar/toolbar.tsx`, `components/dock/`, `state/dock-store.ts`.
 
+- [x] The workspace (spec 65): the header with the menu bar and the
+  options row, the tool rail docked left, Layers docked right, the header
+  as the title bar, narrow windows
 - [x] Movable toolbar: drag it by its grip, double-click the grip to switch
   between horizontal and vertical, dock it to the left or right edge as a
-  rail, resize it by whole columns (divergence 41)
+  rail, resize it by whole columns
 - [x] Dockable panels (layers, properties, brushes, reference, colour,
   palettes, align, plus guides and tool options): float, dock left or right,
   stack or tab, collapse, resize, fold, and tab floating windows together;
@@ -213,6 +216,7 @@ Source: `components/toolbar/toolbar.tsx`, `components/dock/`, `state/dock-store.
   hold to lock the seed and slide to set the threshold; one undo step
 
 ## Help
+- [x] Help ▸ Manual: the onepaint manual in the app (spec 65; no screenshots yet)
 - [x] Shortcuts and gestures reference
 - [x] Guide (happypaint's help sections): tool bar, status bar, ColorDrop,
   panels and docking, Panel (manga), manga and comics, Properties, align and

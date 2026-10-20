@@ -91,7 +91,8 @@ Overnight (2026-10-18 → 19), all pushed, newest last:
   `ui_kit::inline`). Phase 3, the left rail and Layers docked right by
   default, done. Phase 4, the header as the title bar (no system
   decorations unless Settings says so), done but not yet tried on a live
-  desktop. Phase 5, narrow windows, done. Next: phase 6, Help ▸ Manual.
+  desktop. Phase 5, narrow windows, done. Phase 6, Help ▸ Manual
+  (`assets/manual.md`, `manual.rs`), done: spec 65 complete.
   Screenshots: a Wayland window gets no frames while the session is
   idle or locked, so `ONEPAINT_SCREENSHOT` runs stall at frame 0 then.
 - CPU speedups (bit-identical): wand, bucket, feather and grow 2–3×

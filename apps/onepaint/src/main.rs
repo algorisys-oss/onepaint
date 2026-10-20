@@ -28,6 +28,7 @@ mod keymap;
 mod layout;
 mod levels;
 mod loading;
+mod manual;
 mod menus;
 mod options_row;
 mod palettes;
@@ -105,6 +106,7 @@ fn wgpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Popover {
+    Manual,
     Brushes,
     Layers,
     Color,
@@ -221,6 +223,8 @@ pub struct App {
     /// The header stands in for the system title bar: it drags and
     /// maximises the window, and has the window controls (spec 65).
     pub custom_title: bool,
+    /// The manual's open section.
+    pub manual_section: usize,
     pub path: Option<PathBuf>,
     pub saved_history_len: Option<usize>,
     pub hsv: Hsv,
@@ -351,6 +355,7 @@ impl App {
             row_anchor: None,
             hide_ui: false,
             custom_title: false,
+            manual_section: 0,
             path: None,
             saved_history_len: Some(0),
             hsv: Hsv { h: 0.0, s: 0.0, v: 0.0 },

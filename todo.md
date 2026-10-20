@@ -260,10 +260,10 @@ See `docs/parity-delta-2026-10-10.md`.
 - [x] PSD codec parity (modes, 32-bit, round trip, live adjustments, fills, styles; own mode and depth, PSB: spec 64)
 - [x] Wet physics v0.199 (spec 58): paper absorbs, the halo, tip-shaped dabs, wash fill
 - [x] Ten procedural papers, sheet colour, flecks and mottle (spec 57)
-- [~] Workspace: scrollbars, angle dial, in-app dialogs, brush search,
-      gradient editor and filter handles done (2026-10-19). The layout is
-      agreed (spec 65); phase 1, the menu bar and header, done
-      (2026-10-20). Left: the options row, the left rail by default, the
-      title bar, narrow windows, side-slider extras, and Help ▸ Manual
+- [x] Workspace: scrollbars, angle dial, in-app dialogs, brush search,
+      gradient editor and filter handles (2026-10-19); the layout of spec 65
+      — menu bar, options row, left rail, title bar, narrow windows, Help ▸
+      Manual (2026-10-20). Left: the manual's screenshots, side-slider
+      extras, and trying the custom title bar on a live desktop
 - [x] Refresh stale divergences (1, 3, 6, 15, 41), spec 15, feature-parity.md
 

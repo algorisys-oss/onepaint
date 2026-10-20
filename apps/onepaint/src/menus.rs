@@ -580,7 +580,7 @@ pub fn run(app: &mut App, picked: Picked, ctx: &Context) {
         Cmd::FocusLines => crate::adjust::effect_lines(app, true),
         Cmd::SpeedLines => crate::adjust::effect_lines(app, false),
         Cmd::Shortcuts | Cmd::Guide => app.popover = if app.popover == Some(Popover::Help) { None } else { Some(Popover::Help) },
-        Cmd::Manual => app.notify("The manual is on its way (spec 65, phase 6)", now),
+        Cmd::Manual => app.popover = Some(Popover::Manual),
         Cmd::About => app.popover = Some(Popover::Help),
     }
 }

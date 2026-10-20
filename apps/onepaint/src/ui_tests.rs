@@ -506,3 +506,21 @@ fn narrow_windows_fold_the_menus_and_the_zoom() {
     h.run();
     assert!(h.query_by_label("Menu").is_none() && h.query_by_label("File").is_some());
 }
+
+/// Spec 65 phase 6: Help ▸ Manual opens the manual; Next and the contents
+/// move between its sections.
+#[test]
+fn help_opens_the_manual() {
+    let mut h = harness();
+    h.run();
+    crate::tests::menu_pick(&mut h, "Help", "Manual");
+    assert_eq!(h.state().popover, Some(Popover::Manual));
+    assert_eq!(h.state().manual_section, 0);
+    h.get_by_label("Next").click();
+    h.run();
+    assert_eq!(h.state().manual_section, 1);
+    h.get_by_label("Comic panels").click();
+    h.run();
+    let want = crate::manual::sections().iter().position(|s| s.title == "Comic panels").unwrap();
+    assert_eq!(h.state().manual_section, want);
+}

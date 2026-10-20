@@ -67,6 +67,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             }
             Popover::Gallery => popover_at(ctx, "gallery", screen.center(), Align2::CENTER_CENTER, |ui| crate::gallery::show(app, ui)),
             Popover::Help => popover_at(ctx, "help", screen.center(), Align2::CENTER_CENTER, |ui| crate::help::show(app, ui)),
+            Popover::Manual => popover_at(ctx, "manual", screen.center(), Align2::CENTER_CENTER, |ui| crate::manual::show(app, ui)),
             Popover::Settings => popover_at(ctx, "settings", screen.center(), Align2::CENTER_CENTER, |ui| crate::settings::dialog(app, ui)),
             Popover::Paper => popover_at(ctx, "paper", screen.center(), Align2::CENTER_CENTER, |ui| paper_dialog(app, ui)),
             Popover::MoveOptions => {

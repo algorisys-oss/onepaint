@@ -1,9 +1,7 @@
 # 65: Workspace layout (menu bar, options row, left rail)
 
 ## Status
-Agreed (2026-10-20). Phases 1–5 (the menu bar, the options row, the left
-rail, the title bar, narrow windows) are built (below); phase 6, the
-manual, follows.
+Built (2026-10-20): all six phases (below).
 Replaces onepaint's canvas-first chrome (a "…" menu, a floating tool bar
 top right, the Layers popover) with happypaint's v0.204 workspace.
 Retires divergences 41 and 42, and the View-menu half of 49.
@@ -259,6 +257,15 @@ themes; the old chrome stays usable until phase 3 switches the default.
 - The ≤600 px rules (brush strip hidden, bottom sheets) don't apply: the
   window's minimum width is 720 px.
 - Test: `narrow_windows_fold_the_menus_and_the_zoom`.
+
+## Phase 6 as built
+- `assets/manual.md`: the onepaint manual, written for its users, in
+  happypaint's order of topics (22 sections), describing onepaint's own
+  workspace. `manual.rs` shows it from Help ▸ Manual: the contents on the
+  left, one section at a time, Previous and Next. A small Markdown subset
+  (headings, paragraphs, lists, bold, key names), so no new dependency.
+- Tests: `the_manual_parses_into_its_sections`, `help_opens_the_manual`.
+- happypaint's manual has screenshots; this one doesn't yet.
 
 ## Divergences
 - 41, 42 retire. 49 narrows to the eyedropper square (side sliders).
