@@ -182,7 +182,11 @@ impl StrokeEngine {
     }
 
     pub fn new(brush: BrushPreset, color_linear: [f32; 3], seed: u32) -> Self {
-        let stabilizer = brush.stabilizer.as_ref().filter(|s| s.enabled && s.strength > 0.0).map(|s| Stabilizer::new(s.strength));
+        let stabilizer = brush
+            .stabilizer
+            .as_ref()
+            .filter(|s| s.enabled && s.strength > 0.0)
+            .map(|s| Stabilizer::new(s.strength, s.view_scale.unwrap_or(1.0)));
         Self {
             smoother: Smoother::new(brush.smoothing),
             stabilizer,

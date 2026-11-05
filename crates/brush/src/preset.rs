@@ -8,6 +8,11 @@ use serde::{Deserialize, Serialize};
 pub struct StabilizerSettings {
     pub enabled: bool,
     pub strength: f64,
+    /// The zoom the stroke was drawn at, stamped at stroke start and never
+    /// stored in presets: the string is measured on screen, so it is divided
+    /// into doc px by the zoom (happypaint v0.204.17).
+    #[serde(rename = "viewScale", default, skip_serializing_if = "Option::is_none")]
+    pub view_scale: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]

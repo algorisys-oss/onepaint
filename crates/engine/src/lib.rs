@@ -365,6 +365,9 @@ pub struct Preferences {
     pub force_flow_pressure: bool,
     /// Brush size is in screen px: strokes divide it by the zoom (`Some(zoom)`).
     pub screen_zoom: Option<f64>,
+    /// The canvas zoom (screen px per doc px). The stabilizer's string is
+    /// measured on screen, so strokes take it at their start.
+    pub view_zoom: f64,
     /// Undo steps kept (5..=1000; default 200).
     pub max_history_steps: usize,
 }
@@ -378,6 +381,7 @@ impl Default for Preferences {
             force_size_pressure: false,
             force_flow_pressure: false,
             screen_zoom: None,
+            view_zoom: 1.0,
             max_history_steps: onepaint_history::DEFAULT_MAX_ENTRIES,
         }
     }
@@ -387,6 +391,11 @@ impl Preferences {
     /// The brush a stroke actually paints with.
     pub fn stroke_brush(&self, b: &BrushPreset) -> BrushPreset {
         let mut out = b.clone();
+        // Pin the stabilizer's string to the zoom it is drawn at; a brush
+        // that already carries one (a happypaint replay) keeps it.
+        if let Some(s) = out.stabilizer.as_mut().filter(|s| s.enabled && s.view_scale.is_none()) {
+            s.view_scale = Some(self.view_zoom);
+        }
         if let Some(z) = self.screen_zoom.filter(|z| *z > 0.0) {
             out.size = (out.size / z).max(0.5);
         }
@@ -844,7 +853,8 @@ impl Session {
     // ── Strokes (happypaint PaintSink) ──
 
     pub fn stroke_begin(&mut self, p: StrokePoint) {
-        self.rec(|t| recording::RecEvent::Begin { t, p });
+        let zoom = self.prefs.view_zoom;
+        self.rec(|t| recording::RecEvent::Begin { t, p, zoom: Some(zoom) });
         self.commit_filter();
         self.commit_transform();
         if !self.mask_target() {

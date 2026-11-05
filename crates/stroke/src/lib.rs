@@ -143,11 +143,17 @@ pub struct Stabilizer {
     last: Option<StrokePoint>,
 }
 
+/// Max string length in SCREEN px, at full strength. Measured on screen, as
+/// in Krita and Procreate: the leash is felt by the hand, so it must not grow
+/// with zoom (happypaint v0.204.17).
 pub const MAX_STRING_PX: f64 = 120.0;
 
 impl Stabilizer {
-    pub fn new(strength: f64) -> Self {
-        Self { len: strength.clamp(0.0, 1.0) * MAX_STRING_PX, anchor: None, last: None }
+    /// `view_scale` is the zoom (screen px per doc px) the stroke is drawn
+    /// at; a bad one falls back to 100% rather than an endless string.
+    pub fn new(strength: f64, view_scale: f64) -> Self {
+        let z = if view_scale > 0.0 && view_scale.is_finite() { view_scale } else { 1.0 };
+        Self { len: strength.clamp(0.0, 1.0) * MAX_STRING_PX / z, anchor: None, last: None }
     }
 
     pub fn next(&mut self, p: StrokePoint) -> Option<StrokePoint> {

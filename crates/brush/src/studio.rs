@@ -344,7 +344,7 @@ impl Param {
             Smoothing => b.smoothing = clamp01(v),
             // Amount > 0 turns the stabilizer on; 0 turns it off and keeps the strength.
             StabilizerAmount => {
-                let s = b.stabilizer.get_or_insert(crate::StabilizerSettings { enabled: false, strength: 0.5 });
+                let s = b.stabilizer.get_or_insert(crate::StabilizerSettings { enabled: false, strength: 0.5, view_scale: None });
                 if v > 0.0 {
                     s.enabled = true;
                     s.strength = v.min(1.0);
@@ -622,7 +622,7 @@ pub fn set_grain(b: &mut BrushPreset, id: Option<&str>) {
 }
 
 pub fn set_stabilizer(b: &mut BrushPreset, on: bool) {
-    let s = b.stabilizer.get_or_insert(crate::StabilizerSettings { enabled: false, strength: 0.5 });
+    let s = b.stabilizer.get_or_insert(crate::StabilizerSettings { enabled: false, strength: 0.5, view_scale: None });
     s.enabled = on;
     if on && s.strength <= 0.0 {
         s.strength = 0.5;

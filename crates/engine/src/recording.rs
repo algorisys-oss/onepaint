@@ -13,6 +13,10 @@ pub enum RecEvent {
     Begin {
         t: f64,
         p: StrokePoint,
+        /// The canvas zoom at stroke start (the stabilizer's string is
+        /// measured on screen). Absent in older recordings: 100%.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        zoom: Option<f64>,
     },
     Extend {
         t: f64,
@@ -250,7 +254,12 @@ impl Session {
             RecEvent::Cmd { cmd, .. } => {
                 let _ = self.execute((**cmd).clone());
             }
-            RecEvent::Begin { p, .. } => self.stroke_begin(*p),
+            RecEvent::Begin { p, zoom, .. } => {
+                let live = self.prefs.view_zoom;
+                self.prefs.view_zoom = zoom.unwrap_or(1.0);
+                self.stroke_begin(*p);
+                self.prefs.view_zoom = live;
+            }
             RecEvent::Extend { pts, .. } => self.stroke_extend(pts),
             RecEvent::End { .. } => self.stroke_end(),
             RecEvent::Cancel { .. } => self.stroke_cancel(),

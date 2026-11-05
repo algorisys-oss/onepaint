@@ -164,6 +164,7 @@ impl Settings {
             force_size_pressure: self.force_size_pressure,
             force_flow_pressure: self.force_opacity_pressure,
             screen_zoom: (self.brush_size_scaling == SizeScaling::Screen).then_some(zoom),
+            view_zoom: zoom,
             max_history_steps: self.max_history_steps,
         }
     }

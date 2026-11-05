@@ -29,7 +29,7 @@ artist round 32.
       `crates/engine/tests/live_tail.rs`; bench `g-pen 14px stroke`. With a
       stabilizer, lifting still adds the string's catch-up point, as in
       happypaint.
-- [ ] **2. Stabilizer string measured on screen (0.204.17).**
+- [x] **2. Stabilizer string measured on screen (0.204.17).**
       `Stabilizer::new(strength)` (`crates/stroke/src/lib.rs:148`) measures
       the string in canvas px, so Studio Pen and Millipen trail 4× further
       at 400% and swallow small strokes at 800%. happypaint:
@@ -38,6 +38,16 @@ artist round 32.
       begin, so recordings replay the same. Same at 100%. Port
       `stabilizer.test.ts`; carry `viewScale` in `.happyrec` and stroke
       commands.
+      Done 2026-11-05: `Stabilizer::new(strength, view_scale)`;
+      `StabilizerSettings::view_scale` (serde `viewScale`, so happypaint
+      recordings carry theirs); `Preferences::view_zoom`, which the app sets
+      every frame and `stroke_brush` stamps into the stroke's copy of the
+      brush (never the preset); `RecEvent::Begin { zoom }`, so onepaint
+      recordings replay with the zoom they were drawn at (older ones: 100%).
+      Tests: `crates/stroke/tests/stabilizer.rs`,
+      `crates/engine/tests/stabilizer_zoom.rs`. Smoothing and exit taper
+      still lag in doc px, so the on-screen trail creeps up a little when
+      zoomed in, as in happypaint.
 - [ ] **3. Ctrl zoom keys zoom the canvas (0.204.12).** eframe's
       `zoom_with_keyboard` is on by default, so Ctrl+= / Ctrl+− / Ctrl+0
       (what tablet express keys send) scale the whole UI. Turn it off, add

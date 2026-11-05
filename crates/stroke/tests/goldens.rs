@@ -46,7 +46,7 @@ fn g3_smoother() {
 
 #[test]
 fn g4_stabilizer() {
-    let mut s = Stabilizer::new(0.5);
+    let mut s = Stabilizer::new(0.5, 1.0);
     let a = s.next(pt(0.0, 0.0, 0.5, 0.0));
     assert_eq!(a.map(|p| (p.x, p.y, p.pressure)), Some((0.0, 0.0, 0.5)));
     assert!(s.next(pt(30.0, 0.0, 0.6, 1.0)).is_none());
