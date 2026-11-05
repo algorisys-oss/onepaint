@@ -433,7 +433,9 @@ pub fn swatch(ui: &mut Ui, color: Rgba, size: f32, selected: bool) -> Response {
     let c = rect.center();
     let r = size / 2.0 - 2.0;
     ui.painter().circle_filled(c, r, to_color32(color));
-    ui.painter().circle_stroke(c, r, Stroke::new(1.0, Color32::from_white_alpha(40)));
+    // The theme's border rim keeps a swatch the colour of the bar visible
+    // (white on the light theme, black on the dark).
+    ui.painter().circle_stroke(c, r, Stroke::new(1.0, t.border));
     if selected || resp.hovered() {
         ui.painter().circle_stroke(c, r + 2.0, Stroke::new(2.0, if selected { t.fg } else { t.fg_muted }));
     }
@@ -455,7 +457,7 @@ pub fn patch_swatch(ui: &mut Ui, cells: &[Rgba], n: usize, size: f32, label: &st
         let r = Rect::from_min_size(inner.min + Vec2::new(i * cell, j * cell), Vec2::splat(cell + 0.5));
         painter.rect_filled(r, 0.0, to_color32(*c));
     }
-    let stroke = if resp.hovered() { Stroke::new(1.0, t.fg) } else { Stroke::new(1.0, Color32::from_white_alpha(40)) };
+    let stroke = if resp.hovered() { Stroke::new(1.0, t.fg) } else { Stroke::new(1.0, t.border) };
     ui.painter().rect_stroke(inner, 3.0, stroke, StrokeKind::Outside);
     resp
 }
@@ -702,6 +704,29 @@ mod toggle_tests {
             assert_eq!(off, t.fg_muted, "{kind:?}: off label");
             let (on, t) = label_color(kind, true);
             assert_eq!(on, t.fg, "{kind:?}: on label");
+        }
+    }
+}
+
+#[cfg(test)]
+mod swatch_tests {
+    use super::*;
+    use crate::theme::{self, ThemeKind};
+
+    #[test]
+    fn a_swatch_has_a_theme_rim() {
+        for (kind, color) in [(ThemeKind::Light, Rgba::WHITE), (ThemeKind::Dark, Rgba::BLACK)] {
+            let ctx = egui::Context::default();
+            theme::apply(&ctx, kind);
+            let mut border = Color32::TRANSPARENT;
+            let mut full = ctx.run_ui(egui::RawInput::default(), |ui| {
+                border = Tokens::get(ui.ctx()).border;
+                swatch(ui, color, 20.0, false);
+            });
+            full.textures_delta.clear();
+            let rim =
+                full.shapes.iter().any(|c| matches!(&c.shape, egui::Shape::Circle(s) if s.stroke.color == border && s.stroke.width > 0.0));
+            assert!(rim, "{kind:?}: a {color:?} swatch is ringed in the theme border");
         }
     }
 }
