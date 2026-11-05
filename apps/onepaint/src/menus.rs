@@ -39,7 +39,7 @@ cmds! {
     FillSolid, FillGradient, FillPattern, ConvertToPaint,
     SelectAll, Deselect, InvertSelection, Expand, Contract, Smooth,
     SmartFilters, FocusLines, SpeedLines,
-    Shortcuts, Guide, Manual, About,
+    Shortcuts, Guide, Manual, About, CommandPalette,
 }
 
 /// Filters and adjustments by their place in [`Kind::ALL`]: row ids from here up.
@@ -62,6 +62,11 @@ fn id(c: Cmd) -> u32 {
     Cmd::ALL.iter().position(|x| *x == c).unwrap_or(0) as u32
 }
 
+/// The Command palette row's id (the palette leaves itself out).
+pub fn palette_id() -> u32 {
+    id(Cmd::CommandPalette)
+}
+
 fn item(c: Cmd, label: &str) -> MenuItem {
     MenuItem::new(id(c), label)
 }
@@ -71,7 +76,7 @@ fn row(c: Cmd, label: &str) -> MenuEntry {
 }
 
 /// A rebindable action's first binding, as shown in menus.
-fn key(app: &App, a: Action) -> String {
+pub(crate) fn key(app: &App, a: Action) -> String {
     keymap::combos_for(a, &app.settings.keybindings).first().map(|c| keymap::format_combo(c)).unwrap_or_default()
 }
 
@@ -125,6 +130,7 @@ pub fn build(app: &App) -> Vec<Menu> {
         Item(item(Cmd::FillBackground, "Fill with background colour").shortcut(key(app, Action::FillBackground))),
         Item(item(Cmd::Clear, "Clear").shortcut("Delete")),
         Sep,
+        Item(item(Cmd::CommandPalette, "Command palette…").shortcut(key(app, Action::ToggleCommandPalette))),
         Item(item(Cmd::Settings, "Settings…").shortcut(key(app, Action::ToggleSettings))),
     ];
     let mut view = vec![
@@ -294,6 +300,7 @@ pub fn build(app: &App) -> Vec<Menu> {
         Item(
             item(Cmd::Shortcuts, "Shortcuts & gestures").shortcut(key(app, Action::ToggleHelp)).checked(app.popover == Some(Popover::Help)),
         ),
+        Item(item(Cmd::CommandPalette, "Command palette…").shortcut(key(app, Action::ToggleCommandPalette))),
         row(Cmd::Guide, "Guide"),
         row(Cmd::Manual, "Manual"),
         row(Cmd::About, "About onepaint"),
@@ -582,5 +589,6 @@ pub fn run(app: &mut App, picked: Picked, ctx: &Context) {
         Cmd::Shortcuts | Cmd::Guide => app.popover = if app.popover == Some(Popover::Help) { None } else { Some(Popover::Help) },
         Cmd::Manual => app.popover = Some(Popover::Manual),
         Cmd::About => app.popover = Some(Popover::Help),
+        Cmd::CommandPalette => crate::palette::toggle(app, ctx),
     }
 }

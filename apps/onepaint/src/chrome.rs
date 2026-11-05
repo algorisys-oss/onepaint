@@ -83,6 +83,11 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             Popover::Confirm => popover_at(ctx, "confirm", screen.center(), Align2::CENTER_CENTER, |ui| confirm(app, ui)),
             Popover::BrushStudio => crate::brush_studio::show(app, ctx, screen),
             Popover::StatusMore => egui::Rect::NOTHING,
+            // It closes itself on a press outside.
+            Popover::CommandPalette => {
+                crate::palette::show(app, ctx, egui::pos2(screen.center().x, screen.top() + header_h(app) + 24.0));
+                screen
+            }
         };
         // Click outside closes the popover (the top bar handles its own toggles).
         let pressed = ctx.input(|i| i.pointer.any_pressed().then(|| i.pointer.interact_pos()).flatten());

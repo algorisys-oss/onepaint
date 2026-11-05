@@ -220,6 +220,7 @@ Source: `components/toolbar/toolbar.tsx`, `components/dock/`, `state/dock-store.
 ## Help
 - [x] Help ▸ Manual: the onepaint manual in the app (spec 65; no screenshots yet)
 - [x] Shortcuts and gestures reference
+- [x] Command palette (Ctrl/⌘+K): search and run every tool and menu command
 - [x] Guide (happypaint's help sections): tool bar, status bar, ColorDrop,
   panels and docking, Panel (manga), manga and comics, Properties, align and
   distribute

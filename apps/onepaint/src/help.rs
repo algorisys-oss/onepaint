@@ -200,6 +200,7 @@ fn shortcuts(ui: &mut Ui, keys: &crate::keymap::Overrides) {
                 ("Shift+R / G / P / D", "Rulers, guides, perspective, measure"),
                 ("Alt+L / Alt+B / Alt+R", "Layers / brushes / reference"),
                 ("Ctrl+Y", "Grayscale value check"),
+                ("Ctrl+K", "Command palette: search every tool and command"),
                 ("Tab", "Hide the interface"),
             ],
         ),

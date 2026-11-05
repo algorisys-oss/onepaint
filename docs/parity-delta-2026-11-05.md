@@ -101,12 +101,20 @@ artist round 32.
       replay cancelled the new stroke instead. Tests:
       `crates/engine/tests/shift_line.rs`, app
       `shift_click_draws_a_line_from_the_last_stroke`.
-- [ ] **7. Command palette, Ctrl/⌘+K (0.204.11).** A searchable dialog over
+- [x] **7. Command palette, Ctrl/⌘+K (0.204.11).** A searchable dialog over
       every tool, edit command, adjustment, filter, layer command,
       animation step and view option: substring and keyword matching
       ("bucket" finds Fill), category badges, shortcut tags, ↑/↓/Enter/Esc.
       Also under Edit ▸ and Help ▸ Command palette…, and rebindable. Build
       it on the `keymap` action registry with `ui_kit` components.
+      Done 2026-11-05: `ui_kit::command_palette` (search and the overlay)
+      and `palette.rs` in the app. Divergence: happypaint keeps a
+      hand-written command dictionary; onepaint lists every enabled menu row
+      (the menus are the registry, so new rows appear by themselves) plus
+      the rebindable actions, with a short synonym table. Edit ▸ and Help ▸
+      Command palette…, rebindable as `toggle-command-palette`. Tests:
+      `command_palette::tests`, app `the_command_palette_finds_and_runs_commands`
+      (both themes) and `the_palette_lists_tools_and_menu_rows_once`.
 
 ## Low priority
 

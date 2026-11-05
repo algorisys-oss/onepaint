@@ -31,6 +31,7 @@ mod loading;
 mod manual;
 mod menus;
 mod options_row;
+mod palette;
 mod palettes;
 mod panel_ui;
 mod pen;
@@ -140,6 +141,8 @@ pub enum Popover {
     BrushStudio,
     /// The status bar's "…" details on narrow windows.
     StatusMore,
+    /// Ctrl/⌘+K: search and run any tool or command.
+    CommandPalette,
 }
 
 /// What a file opens as.
@@ -217,6 +220,8 @@ pub struct App {
     pub canvas: Canvas,
     pub theme: ThemeKind,
     pub popover: Option<Popover>,
+    /// Actions the command palette ran, fired with the next frame's keys.
+    pub queued_actions: Vec<Action>,
     /// Where a popover opened from the options row sits (under its control).
     pub row_anchor: Option<(Popover, egui::Pos2)>,
     pub hide_ui: bool,
@@ -355,6 +360,7 @@ impl App {
             canvas: Canvas::new(size),
             theme,
             popover: None,
+            queued_actions: Vec::new(),
             row_anchor: None,
             hide_ui: false,
             custom_title: false,
@@ -1100,8 +1106,17 @@ impl App {
             return (false, false);
         }
         // Rebindable actions (keymap.rs); hard-wired keys are left for below.
-        let fired = keymap::take_actions(ctx, &self.settings.keybindings, typing);
+        // The command palette runs actions by queueing them for this frame.
+        let mut fired = keymap::take_actions(ctx, &self.settings.keybindings, typing);
+        fired.append(&mut self.queued_actions);
         let on = |a: Action| fired.contains(&a);
+        if on(Action::ToggleCommandPalette) {
+            palette::toggle(self, ctx);
+        }
+        // The palette's search field has the keyboard.
+        if self.popover == Some(Popover::CommandPalette) {
+            return (false, false);
+        }
         if sc(cmd | Modifiers::SHIFT, Key::Z) {
             let _ = self.session.execute(Command::Redo);
         }

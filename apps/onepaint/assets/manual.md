@@ -3,7 +3,7 @@
 ## Overview
 onepaint is a painting app for drawing with a pen, a mouse or a touch screen. It paints in layers, mixes colour like real paint, and opens and saves Photoshop files as well as its own.
 
-This manual walks through the app area by area. For a list of every shortcut, open **Help ▸ Shortcuts & gestures** (or press `?`).
+This manual walks through the app area by area. For a list of every shortcut, open **Help ▸ Shortcuts & gestures** (or press `?`). To find any tool or command by name, press `Ctrl+K` (`⌘K` on a Mac) for the **command palette**: type a few letters, move with the arrow keys and press `Enter` to run it.
 
 ## The workspace
 The window has four parts:

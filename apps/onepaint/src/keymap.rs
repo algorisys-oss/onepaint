@@ -103,6 +103,7 @@ actions! {
     ToggleReference = "toggle-reference", "Reference window", View, ["alt+r"];
     ToggleHelp = "toggle-help", "Shortcuts & gestures", View, ["?"];
     ToggleSettings = "toggle-settings", "Settings", View, ["ctrl+,"];
+    ToggleCommandPalette = "toggle-command-palette", "Command palette", View, ["ctrl+k"];
     AnimToggle = "anim-toggle", "Animation mode on/off", Animation, ["shift+a"];
     AnimPlayPause = "anim-play-pause", "Play / pause", Animation, ["k"];
     AnimPrevFrame = "anim-prev-frame", "Previous frame (flip back)", Animation, [","];

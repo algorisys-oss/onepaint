@@ -524,3 +524,75 @@ fn help_opens_the_manual() {
     let want = crate::manual::sections().iter().position(|s| s.title == "Comic panels").unwrap();
     assert_eq!(h.state().manual_section, want);
 }
+
+fn key(h: &mut Harness<'_, App>, key: egui::Key, modifiers: egui::Modifiers) {
+    h.event(Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
+    h.step();
+    h.event(Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers });
+    h.step();
+}
+
+/// Ctrl/⌘+K opens the command palette over every tool and menu command;
+/// typing ranks them, Enter runs the first, Esc closes (happypaint v0.204.11).
+/// Both themes.
+#[test]
+fn the_command_palette_finds_and_runs_commands() {
+    for light in [false, true] {
+        let mut h = harness();
+        h.run();
+        if light {
+            let ctx = h.ctx.clone();
+            h.state_mut().toggle_theme(&ctx);
+            h.run();
+        }
+        let open = |h: &mut Harness<'_, App>, query: &str| {
+            key(h, egui::Key::K, egui::Modifiers::COMMAND);
+            assert_eq!(h.state().popover, Some(Popover::CommandPalette));
+            h.event(Event::Text(query.into()));
+            h.step();
+            h.step();
+        };
+        // A tool, by an artist's word for it.
+        open(&mut h, "bucket");
+        key(&mut h, egui::Key::Enter, egui::Modifiers::NONE);
+        h.run();
+        assert_eq!(h.state().popover, None);
+        assert_eq!(h.state().session.tool(), Tool::Fill);
+        // A menu command.
+        let layers = h.state().session.doc().root.len();
+        open(&mut h, "new layer");
+        key(&mut h, egui::Key::Enter, egui::Modifiers::NONE);
+        h.run();
+        assert_eq!(h.state().session.doc().root.len(), layers + 1);
+        // ↓ moves to the next match; Esc closes without running anything.
+        open(&mut h, "blur");
+        assert!(h.query_by_label("Gaussian Blur").is_some(), "filters are listed");
+        key(&mut h, egui::Key::ArrowDown, egui::Modifiers::NONE);
+        key(&mut h, egui::Key::Escape, egui::Modifiers::NONE);
+        h.run();
+        assert_eq!(h.state().popover, None);
+        // The menus open it too, and Ctrl+K closes it again.
+        crate::tests::menu_pick(&mut h, "Edit", "Command palette…");
+        assert_eq!(h.state().popover, Some(Popover::CommandPalette));
+        assert!(h.query_by_label("Eraser").is_some(), "an empty query lists everything");
+        key(&mut h, egui::Key::K, egui::Modifiers::COMMAND);
+        assert_eq!(h.state().popover, None);
+    }
+}
+
+#[test]
+fn the_palette_lists_tools_and_menu_rows_once() {
+    let mut h = harness();
+    h.run();
+    let app = h.state();
+    assert!(matches!(crate::palette::find(app, "Eraser"), Some(crate::palette::Target::Action(_))));
+    assert!(matches!(crate::palette::find(app, "New layer"), Some(crate::palette::Target::Menu(_))));
+    assert_eq!(crate::palette::find(app, "Command palette"), None, "it leaves itself out");
+    let (items, _) = crate::palette::items(app);
+    let mut titles: Vec<_> = items.iter().map(|i| (i.category.clone(), i.path.clone(), i.title.clone())).collect();
+    let n = titles.len();
+    titles.sort();
+    titles.dedup();
+    assert_eq!(titles.len(), n, "no row twice");
+    assert!(n > 100, "{n} commands");
+}
