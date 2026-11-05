@@ -333,6 +333,9 @@ impl App {
         let scripted = debug.scripted();
         let theme = if debug.light { ThemeKind::Light } else { ThemeKind::Dark };
         onepaint_ui_kit::install(&cc.egui_ctx, theme);
+        // Ctrl/⌘ with = + − 0 zoom the canvas (`shortcuts`), never the whole
+        // UI: tablet express keys send them for zoom (happypaint v0.204.12).
+        cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
         let (gpu_ok, gpu_compose) = canvas::init_gpu(cc);
         let wet_gpu = canvas::init_wet_gpu(cc);
         let tablet = tablet::connect(cc);
@@ -3362,6 +3365,45 @@ pub(crate) mod tests {
         let a = app.canvas.win_to_doc([400.0, 300.0]);
         assert!((adj.params.grad_ax.unwrap() as f64 - a[0] / 2048.0).abs() < 0.01);
         assert!(adj.params.grad_bx.unwrap() > adj.params.grad_ax.unwrap());
+    }
+
+    /// Tablet zoom keys send Ctrl+= / Ctrl+−, zoom rings Ctrl+scroll: both
+    /// zoom the canvas, never the whole UI (happypaint v0.204.12).
+    #[test]
+    fn ctrl_zoom_keys_and_wheel_zoom_the_canvas_not_the_ui() {
+        let mut h = harness();
+        h.run();
+        let s0 = h.state().canvas.view.scale;
+        key(&mut h, egui::Key::Equals, egui::Modifiers::COMMAND);
+        assert!(h.state().canvas.view.scale > s0, "Ctrl+= zooms the canvas in");
+        key(&mut h, egui::Key::Minus, egui::Modifiers::COMMAND);
+        key(&mut h, egui::Key::Minus, egui::Modifiers::COMMAND);
+        assert!(h.state().canvas.view.scale < s0, "Ctrl+− zooms it out");
+        // With a menu open the app leaves the keys alone; egui must not take them.
+        onepaint_ui_kit::menu_bar::open(&h.ctx, 0);
+        h.step();
+        assert!(onepaint_ui_kit::menu_bar::is_open(&h.ctx));
+        key(&mut h, egui::Key::Equals, egui::Modifiers::COMMAND);
+        assert_eq!(h.ctx.zoom_factor(), 1.0, "the UI never scales");
+        onepaint_ui_kit::menu_bar::close(&h.ctx);
+        h.run();
+        // Ctrl+scroll over the docked Layers panel zooms the canvas.
+        let s1 = h.state().canvas.view.scale;
+        let over_panel = pos2(1150.0, 300.0);
+        h.event(Event::PointerMoved(over_panel));
+        h.step();
+        let wheel = |up: bool| Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(0.0, if up { 120.0 } else { -120.0 }),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+        for _ in 0..4 {
+            h.event(wheel(true));
+            h.step();
+        }
+        assert!(h.state().canvas.view.scale > s1, "Ctrl+scroll over a panel zooms the canvas");
+        assert_eq!(h.ctx.zoom_factor(), 1.0);
     }
 
     #[test]

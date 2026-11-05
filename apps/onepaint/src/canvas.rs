@@ -1465,6 +1465,14 @@ impl Canvas {
             if rot != 0.0 {
                 self.view.rotate_at([at.x as f64, at.y as f64], rot as f64);
             }
+        } else {
+            // Ctrl/⌘+scroll (a tablet's zoom ring; egui turns it into zoom)
+            // over the panels zooms the canvas about its centre (happypaint
+            // v0.204.12).
+            let zoom = ui.input(|i| i.zoom_delta());
+            if zoom != 1.0 {
+                self.view.zoom_at([rect.width() as f64 / 2.0, rect.height() as f64 / 2.0], zoom as f64);
+            }
         }
         let hover = ui.input(|i| i.pointer.hover_pos()).filter(|p| rect.contains(*p));
         self.hover_doc = hover.map(|p| self.doc_pt(local(p)));

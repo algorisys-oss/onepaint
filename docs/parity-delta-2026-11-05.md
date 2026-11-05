@@ -48,13 +48,19 @@ artist round 32.
       `crates/engine/tests/stabilizer_zoom.rs`. Smoothing and exit taper
       still lag in doc px, so the on-screen trail creeps up a little when
       zoomed in, as in happypaint.
-- [ ] **3. Ctrl zoom keys zoom the canvas (0.204.12).** eframe's
+- [x] **3. Ctrl zoom keys zoom the canvas (0.204.12).** eframe's
       `zoom_with_keyboard` is on by default, so Ctrl+= / Ctrl+− / Ctrl+0
       (what tablet express keys send) scale the whole UI. Turn it off, add
       the Ctrl/⌘ variants (main row and numpad) to `ZoomIn` / `ZoomOut` /
       `ZoomFit` in `apps/onepaint/src/keymap.rs`, and make Ctrl+scroll zoom
       the canvas about its centre anywhere in the window, not only over the
       canvas. happypaint: `browserZoomAction` in `input/keybindings.ts`.
+      Done 2026-11-05. onepaint already hard-wired Ctrl/⌘ with = + − 0 1 to
+      the canvas (`App::shortcuts`), but egui's own keyboard zoom still
+      scaled the UI whenever the app left the keys alone (a menu open, a
+      shortcut being captured): `zoom_with_keyboard` is now off. Ctrl+scroll
+      away from the canvas zooms it about its centre. Shortcut help lists
+      the Ctrl variants. Test: `ctrl_zoom_keys_and_wheel_zoom_the_canvas_not_the_ui`.
 - [ ] **4. Pen: cut the last point's handle (0.204.13).** `pen_press`
       (`apps/onepaint/src/canvas.rs:562`) stacks a duplicate anchor when
       you click the point just placed. Photoshop behaviour: click or

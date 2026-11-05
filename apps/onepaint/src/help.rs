@@ -190,8 +190,9 @@ fn shortcuts(ui: &mut Ui, keys: &crate::keymap::Overrides) {
         (
             "View",
             &[
-                ("= / −", "Zoom in / out"),
-                ("0 / 1", "Fit / 100%"),
+                ("= / −, Ctrl+= / Ctrl+−", "Zoom in / out (tablet zoom keys too)"),
+                ("0 / 1, Ctrl+0 / Ctrl+1", "Fit / 100%"),
+                ("Ctrl+scroll", "Zoom (a tablet's zoom ring), anywhere in the window"),
                 ("Ctrl+[ / ]", "Rotate 15°"),
                 ("R-drag, 5", "Rotate / reset rotation"),
                 ("Y, Shift+Y", "Symmetry, move axis"),
