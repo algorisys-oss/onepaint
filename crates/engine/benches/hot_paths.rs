@@ -69,6 +69,23 @@ fn stroke(c: &mut Criterion) {
             s.stroke_end();
         })
     });
+    // Exit taper: each frame also redraws the live tail (34 px) into the
+    // preview. A frame every 4 events: a 240 Hz pen at 60 fps.
+    c.bench_function("g-pen 14px stroke, 100 events in 25 frames + end", |b| {
+        let gpen = onepaint_brush::preset("manga-g-pen").expect("built-in preset");
+        b.iter(|| {
+            let mut s = Session::new(1024, 1024, None);
+            let _ = s.execute(Command::SetBrushPreset { preset: Box::new(gpen.clone()) });
+            s.stroke_begin(StrokePoint::at(10.0, 500.0, 0.5, 0.0));
+            for i in 1..=100 {
+                s.stroke_extend(&[StrokePoint::at(10.0 + i as f64 * 9.0, 500.0, 0.8, i as f64 * 8.0)]);
+                if i % 4 == 0 {
+                    black_box(s.take_dirty_tiles());
+                }
+            }
+            s.stroke_end();
+        })
+    });
     // Impasto: the same stroke also stamps and records the height field.
     c.bench_function("thick-paint 24px stroke, 100 events + end", |b| {
         let thick = onepaint_brush::preset("thick-paint").expect("built-in preset");

@@ -9,7 +9,7 @@ What happypaint shipped after `parity-delta-2026-10-18.md` (2026-10-21 →
 Ordered by priority. 1–3 are the latency and zoom complaints from happypaint's
 artist round 32.
 
-- [ ] **1. Live taper tail (0.204.15).** Brushes with an exit taper hold the
+- [x] **1. Live taper tail (0.204.15).** Brushes with an exit taper hold the
       last `exit` px of dabs back until lift (`crates/brush/src/lib.rs:484`),
       so the ink stops short of the nib: 26 px on Comic Inker, 34 px on G-Pen.
       happypaint now draws that stretch live, tapered toward the pen, and
@@ -18,6 +18,17 @@ artist round 32.
       `engine/brush/taper-tail.ts` (`tailFactor`, `buildTail`, shared by
       the live and the final tail) and `taper-tail.test.ts`; show the tail
       as a stroke overlay.
+      Done 2026-11-05: `brush::taper_tail`, `StrokeEngine::live_tail`, and
+      `ActiveStroke::live` in the engine (a display surface sharing the
+      stroke buffer's COW tiles). Unlike happypaint, which redraws the tail
+      on every move, onepaint redraws it once per frame in
+      `take_dirty_tiles`: about 48 dabs (≈70 µs) for G-pen, against ~4 pen
+      events a frame. Tail tiles are overwritten in place
+      (`Tile::clone_from` reuses the buffer), so the stroke buffer's tiles
+      are never shared and never copied by the next body dab. Tests:
+      `crates/engine/tests/live_tail.rs`; bench `g-pen 14px stroke`. With a
+      stabilizer, lifting still adds the string's catch-up point, as in
+      happypaint.
 - [ ] **2. Stabilizer string measured on screen (0.204.17).**
       `Stabilizer::new(strength)` (`crates/stroke/src/lib.rs:148`) measures
       the string in canvas px, so Studio Pen and Millipen trail 4× further

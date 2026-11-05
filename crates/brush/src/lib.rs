@@ -14,6 +14,7 @@ pub mod settle;
 pub mod smudge;
 pub mod studio;
 pub mod symmetry;
+pub mod taper_tail;
 pub mod tip_outline;
 mod tips;
 mod user;
@@ -340,16 +341,30 @@ impl StrokeEngine {
             let stamps = self.sampler.add(fin, &mut |s, _| jittered_gap(&b, s, rng));
             out.extend(self.emit(&stamps));
         }
-        if !self.pending.is_empty() {
-            let total = self.cum_dist;
-            let degenerate = total <= 1.0;
-            for (cd, mut d) in std::mem::take(&mut self.pending) {
-                let f = if degenerate { 1.0 } else { self.entry_factor(cd) * self.exit_factor(cd, total) };
-                d.radius *= f;
-                out.push(d);
-            }
-        }
+        // The same tail the live preview last drew, so lifting changes nothing.
+        out.extend(self.tail_now());
+        self.pending.clear();
         self.replicate(out)
+    }
+
+    /// The deferred tail as it would land if the pen lifted now: tapered to a
+    /// point at the current end, symmetry copies included. Display only;
+    /// nothing is consumed. Empty without exit taper.
+    pub fn live_tail(&self) -> Vec<Dab> {
+        if self.pending.is_empty() {
+            return Vec::new();
+        }
+        self.replicate(self.tail_now())
+    }
+
+    /// Whether this stroke holds an exit-taper tail back.
+    pub fn defers_tail(&self) -> bool {
+        self.taper().1 > 0.0
+    }
+
+    fn tail_now(&self) -> Vec<Dab> {
+        let ((entry, exit), total) = (self.taper(), self.cum_dist);
+        taper_tail::build_tail(&self.pending, |cd| taper_tail::tail_factor(entry, exit, cd, total))
     }
 
     fn taper(&self) -> (f64, f64) {
@@ -359,11 +374,6 @@ impl StrokeEngine {
     fn entry_factor(&self, cd: f64) -> f64 {
         let (e, _) = self.taper();
         if e > 0.0 { clamp01(cd / e) } else { 1.0 }
-    }
-
-    fn exit_factor(&self, cd: f64, total: f64) -> f64 {
-        let (_, x) = self.taper();
-        if x > 0.0 { clamp01((total - cd) / x) } else { 1.0 }
     }
 
     fn emit(&mut self, stamps: &[StrokePoint]) -> Vec<Dab> {

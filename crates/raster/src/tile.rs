@@ -18,15 +18,44 @@ pub enum Store {
     Unorm8,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(PartialEq)]
 enum Data {
     F16(Vec<f16>),
     Unorm8(Vec<u8>),
 }
 
-#[derive(Clone, PartialEq)]
+impl Clone for Data {
+    fn clone(&self) -> Self {
+        match self {
+            Data::F16(v) => Data::F16(v.clone()),
+            Data::Unorm8(v) => Data::Unorm8(v.clone()),
+        }
+    }
+
+    /// Reuses this tile's buffer when the stores match: an overwrite with no
+    /// allocation (the live taper tail restores tiles this way every move).
+    fn clone_from(&mut self, src: &Self) {
+        match (self, src) {
+            (Data::F16(a), Data::F16(b)) => a.clone_from(b),
+            (Data::Unorm8(a), Data::Unorm8(b)) => a.clone_from(b),
+            (a, b) => *a = b.clone(),
+        }
+    }
+}
+
+#[derive(PartialEq)]
 pub struct Tile {
     data: Data,
+}
+
+impl Clone for Tile {
+    fn clone(&self) -> Self {
+        Self { data: self.data.clone() }
+    }
+
+    fn clone_from(&mut self, src: &Self) {
+        self.data.clone_from(&src.data);
+    }
 }
 
 impl Default for Tile {

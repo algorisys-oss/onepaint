@@ -337,6 +337,21 @@ struct ActiveStroke {
     height: Option<height_ops::HeightEdit>,
     /// Document paper and the brush's response to it (paint strokes only).
     paper: Option<(onepaint_doc::Paper, f64)>,
+    /// Live exit-taper preview: `buffer` plus the deferred tail drawn tapered
+    /// toward the current end, shown in its place while the stroke is live
+    /// so the ink reaches the nib. Shares the buffer's COW tiles; never
+    /// flattened (the real tail lands in `buffer` on lift, identically).
+    live: Option<LiveTail>,
+}
+
+struct LiveTail {
+    surface: Surface,
+    /// Where the last tail was drawn, restored from `buffer` next redraw.
+    rect: Rect,
+    /// Body drawn into `buffer` since the last redraw.
+    body: Rect,
+    /// The stroke moved since the last redraw.
+    stale: bool,
 }
 
 /// App preferences the engine honours (happypaint `settings-store.ts`); not
@@ -647,6 +662,7 @@ impl Session {
 
     /// Composite tiles that changed since the last call.
     pub fn take_dirty_tiles(&mut self) -> Vec<(i32, i32)> {
+        self.redraw_live_tail();
         std::mem::take(&mut self.dirty).into_iter().collect()
     }
 
@@ -657,7 +673,7 @@ impl Session {
         self.stroke.as_ref().filter(|s| !s.noop).map(|s| StrokeOverlay {
             mask: s.mask,
             layer_id: &s.layer,
-            stroke: &s.buffer,
+            stroke: s.live.as_ref().map_or(&s.buffer, |l| &l.surface),
             opacity: s.opacity,
             mode: s.mode,
         })
@@ -904,10 +920,12 @@ impl Session {
             impasto,
             height,
             paper,
+            live: None,
         };
         let dabs = st.engine.begin(p);
         self.stroke = Some(st);
-        self.draw_dabs(dabs);
+        let body = self.draw_dabs(dabs);
+        self.refresh_live_tail(body);
     }
 
     pub fn stroke_extend(&mut self, pts: &[StrokePoint]) {
@@ -934,27 +952,79 @@ impl Session {
         for p in pts {
             dabs.extend(st.engine.add(*p));
         }
-        self.draw_dabs(dabs);
+        let body = self.draw_dabs(dabs);
+        self.refresh_live_tail(body);
     }
 
-    fn draw_dabs(&mut self, dabs: Vec<onepaint_brush::Dab>) {
-        let Some(st) = self.stroke.as_mut() else {
-            return;
-        };
-        if st.noop || dabs.is_empty() {
+    /// Note that the stroke moved, for the live exit-taper preview: the tail
+    /// is redrawn once per frame, in [`Self::take_dirty_tiles`], not per pen
+    /// event (a taper-length of dabs each time). A no-op unless the brush has
+    /// exit taper.
+    fn refresh_live_tail(&mut self, body: Rect) {
+        let Some(st) = self.stroke.as_mut() else { return };
+        if st.noop || !st.engine.defers_tail() {
             return;
         }
-        // The tooth bites bare paper; paint and relief already on the layer fill it.
-        let tooth = st.paper.as_ref().and_then(|(p, response)| {
-            let layer = self.doc.layer(&st.layer);
-            onepaint_brush::paper::PaperTooth::new(
-                p,
-                self.doc.dpi,
-                *response,
-                layer.map(|l| &l.pixels),
-                layer.and_then(|l| l.height.as_ref()),
-            )
+        let live = st.live.get_or_insert_with(|| LiveTail {
+            surface: st.buffer.clone(),
+            rect: Rect::default(),
+            body: Rect::default(),
+            stale: false,
         });
+        live.body = live.body.union(&body);
+        live.stale = true;
+        // The tail's tiles change on screen; they're redrawn before anyone composites them.
+        let old = live.rect;
+        self.mark_dirty(old);
+    }
+
+    /// Redraw the live exit-taper preview: restore the tiles the last tail and
+    /// the new body touched from `buffer`, then draw the deferred tail tapered
+    /// toward the current end.
+    fn redraw_live_tail(&mut self) {
+        let Some(st) = self.stroke.as_mut() else { return };
+        if !st.live.as_ref().is_some_and(|l| l.stale) {
+            return;
+        }
+        let tooth = paper_tooth(&self.doc, st);
+        let tail = st.engine.live_tail();
+        let Some(live) = st.live.as_mut() else { return };
+        let (old, body) = (live.rect, std::mem::take(&mut live.body));
+        live.stale = false;
+        let reach = tail.iter().fold(Rect::default(), |r, d| r.union(&onepaint_brush::dab_bounds(d)));
+        for (tx, ty) in old.union(&body).union(&reach).tiles() {
+            let src = st.buffer.tile(tx, ty);
+            let mine = live.surface.tile(tx, ty);
+            // The tail is about to land here: overwrite the preview's own copy
+            // in place, so the buffer's tile is never shared, and never copied
+            // on the next body dab. Elsewhere, share the buffer's tile.
+            match src {
+                Some(src) if reach.intersect(&Rect::from_tile(tx, ty)).is_some() => {
+                    if !mine.is_some_and(|m| Arc::ptr_eq(m, src)) {
+                        live.surface.tile_mut(tx, ty).clone_from(src);
+                    }
+                }
+                _ => live.surface.set_tile(tx, ty, src.cloned()),
+            }
+        }
+        let mut r = Rect::default();
+        for d in &tail {
+            r = r.union(&st.engine.rasterize_on_paper(&mut live.surface, d, st.clip.as_deref(), tooth.as_ref()));
+        }
+        live.rect = r;
+        drop(tooth);
+        self.mark_dirty(old.union(&r));
+    }
+
+    /// Draw dabs into the stroke buffer; returns the box they touched.
+    fn draw_dabs(&mut self, dabs: Vec<onepaint_brush::Dab>) -> Rect {
+        let Some(st) = self.stroke.as_mut() else {
+            return Rect::default();
+        };
+        if st.noop || dabs.is_empty() {
+            return Rect::default();
+        }
+        let tooth = paper_tooth(&self.doc, st);
         let mut r = Rect::default();
         for d in &dabs {
             r = r.union(&st.engine.rasterize_on_paper(&mut st.buffer, d, st.clip.as_deref(), tooth.as_ref()));
@@ -966,6 +1036,7 @@ impl Session {
         if let Some(layer) = layer {
             self.height_stamp(&layer, &relief);
         }
+        r
     }
 
     /// Advance time-based brush effects (airbrush) while a stroke is held.
@@ -975,7 +1046,8 @@ impl Session {
         }
         let Some(st) = self.stroke.as_mut() else { return };
         let dabs = st.engine.airbrush_tick(now_ms);
-        self.draw_dabs(dabs);
+        let body = self.draw_dabs(dabs);
+        self.refresh_live_tail(body);
     }
 
     /// Whether the current stroke wants frames while the pointer is still (airbrush).
@@ -994,6 +1066,9 @@ impl Session {
         if let Some(st) = self.stroke.take() {
             for (tx, ty) in st.buffer.tile_keys() {
                 self.mark_dirty(Rect::from_tile(tx, ty));
+            }
+            if let Some(live) = &st.live {
+                self.mark_dirty(live.rect);
             }
             if let Some(h) = st.height {
                 self.height_cancel(h);
@@ -1016,6 +1091,9 @@ impl Session {
         let Some(mut st) = self.stroke.take() else {
             return;
         };
+        if let Some(live) = st.live.take() {
+            self.mark_dirty(live.rect);
+        }
         if st.noop {
             return;
         }
@@ -1872,4 +1950,13 @@ enum ChangeRef {
     Document(Box<canvas_ops::DocShape>),
     GuideLines(Vec<guides::GuideLine>),
     SavedSelections(Vec<SavedSelection>),
+}
+
+/// The paper tooth a stroke's dabs bite: bare paper only; paint and relief
+/// already on the layer fill it.
+fn paper_tooth<'a>(doc: &'a Document, st: &ActiveStroke) -> Option<onepaint_brush::paper::PaperTooth<'a>> {
+    st.paper.as_ref().and_then(|(p, response)| {
+        let layer = doc.layer(&st.layer);
+        onepaint_brush::paper::PaperTooth::new(p, doc.dpi, *response, layer.map(|l| &l.pixels), layer.and_then(|l| l.height.as_ref()))
+    })
 }

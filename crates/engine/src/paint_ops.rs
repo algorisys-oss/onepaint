@@ -29,6 +29,7 @@ impl Session {
             impasto: 0.0,
             height: None,
             paper: None,
+            live: None,
         });
     }
 
