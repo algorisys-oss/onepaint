@@ -145,6 +145,7 @@ screentone are added as live layers.
   - [ ] X11
   - [x] Wayland (tablet protocol: pressure, tilt, twist, eraser end; spec 07)
 - [x] Coalesced (high-rate) pen samples (Wayland: every tablet sample is a stroke point)
+- [x] Pen dip recovery: a tip that flutters off the surface while tracing slowly doesn't split the stroke (Wayland)
 - [x] Multi-touch gestures with Procreate's vocabulary:
   - pinch to zoom and rotate, two-finger pan
   - two-finger tap to undo (hold two fingers to repeat), three-finger tap to redo

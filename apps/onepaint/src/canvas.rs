@@ -364,12 +364,16 @@ pub struct TextEdit {
     pub spec: onepaint_text::TextSpec,
 }
 
+/// QuickShape fires after the pen has been this still (happypaint `HOLD_MS`).
+const QUICK_SHAPE_HOLD_MS: f64 = 600.0;
+
 /// Raw points of the brush stroke in progress, for quick-shape.
 #[derive(Default)]
 struct HoldTracker {
     points: Vec<Pt>,
     anchor: Pos2,
-    since: f64,
+    /// Still since the last move that travelled (`input::idle_hold`).
+    idle: onepaint_input::idle_hold::IdleHold,
     fired: bool,
     /// Quick-shape applies to brush and eraser strokes only.
     enabled: bool,
@@ -389,6 +393,10 @@ pub struct Canvas {
     pub pen_queue: std::collections::VecDeque<(Pos2, onepaint_input::tablet::PenSample)>,
     /// The tablet nib is down.
     pub pen_down: bool,
+    /// Where the pen last was (points): a lift ends the stroke here.
+    pub pen_at: Pos2,
+    /// A pen stroke's end held back across a tip dip (`tablet::translate`).
+    pub dip: onepaint_input::dip::DipBridge<onepaint_input::tablet::PenSample>,
     /// The canvas rect's top-left on screen (pen samples are screen points).
     screen_origin: Pos2,
     /// The canvas rect on screen, as of the last frame.
@@ -472,6 +480,8 @@ impl Canvas {
             last_pen_force: None,
             pen_queue: Default::default(),
             pen_down: false,
+            pen_at: Pos2::ZERO,
+            dip: Default::default(),
             screen_origin: Pos2::ZERO,
             stage: Rect::NOTHING,
             hover_doc: None,
@@ -705,6 +715,11 @@ impl Canvas {
         StrokePoint { x: at[0], y: at[1], t: None, ..*pen }
     }
 
+    /// A brush, eraser or smudge stroke is in progress.
+    pub fn painting(&self) -> bool {
+        matches!(self.drag, Drag::Paint)
+    }
+
     fn stroke_point(&mut self, pos: Pos2, t: f64, force: Option<f32>) -> StrokePoint {
         let d = self.doc_pt(pos);
         // A tablet sample at this position carries its own pressure, tilt and twist.
@@ -916,7 +931,9 @@ impl Canvas {
                 }
                 session.stroke_begin(sp);
                 let enabled = matches!(tool, Tool::Brush | Tool::Eraser);
-                self.hold = HoldTracker { points: vec![d], anchor: p, since: time_ms, fired: false, enabled };
+                let mut idle = onepaint_input::idle_hold::IdleHold::new(QUICK_SHAPE_HOLD_MS);
+                idle.arm(time_ms);
+                self.hold = HoldTracker { points: vec![d], anchor: p, idle, fired: false, enabled };
                 Drag::Paint
             }
             Tool::Pen => self.pen_press(session, p, d, m, time_ms),
@@ -1203,7 +1220,7 @@ impl Canvas {
                                 self.hold.points.push(d);
                                 if p.distance(self.hold.anchor) >= 3.0 {
                                     self.hold.anchor = p;
-                                    self.hold.since = time_ms;
+                                    self.hold.idle.arm(time_ms);
                                 }
                             }
                         }
@@ -1488,15 +1505,21 @@ impl Canvas {
             session.wet_tick(time_ms);
             ui.ctx().request_repaint();
         }
-        // Quick-shape: hold still for 600 ms while painting to straighten the stroke.
+        // Quick-shape: hold still while painting to straighten the stroke.
+        // Polled after this frame's moves were applied, so moves queued
+        // behind a long frame re-arm it before it can fire (v0.204.10).
         if matches!(self.drag, Drag::Paint) && self.hold.enabled && !self.hold.fired {
-            if time_ms - self.hold.since >= 600.0 {
+            // A pen dip is not a draw-and-hold: the pen is still moving.
+            if self.dip.pending() {
+                self.hold.idle.arm(time_ms);
+            }
+            if self.hold.idle.poll(time_ms) {
                 self.hold.fired = true;
                 if let Some(sh) = recognize(&self.hold.points, shift) {
                     Self::preview_shape(session, &sh);
                 }
-            } else {
-                ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
+            } else if let Some(ms) = self.hold.idle.due_in(time_ms) {
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(ms.clamp(1.0, 60.0) as u64));
             }
         }
         if resp.hovered() {

@@ -118,15 +118,27 @@ artist round 32.
 
 ## Low priority
 
-- [ ] **QuickShape hold from input timestamps (0.204.10).** onepaint
+- [x] **QuickShape hold from input timestamps (0.204.10).** onepaint
       handles each frame's queued events before checking the 600 ms hold
       (`canvas.rs:1446`), so happypaint's frozen-frame race hardly arises.
       Judging stillness from the events' own times would still be cleaner
       (`input/idle-hold.ts`, `idle-hold.test.ts`).
-- [ ] **Pen dip recovery (0.204.9).** happypaint replays the pen's path
+      Done 2026-11-05: `onepaint_input::idle_hold::IdleHold`, armed per
+      move and polled once a frame after the frame's moves; happypaint's
+      cases as tests. Neither egui nor the tablet backend stamps moves, so
+      they are armed with the frame time, which is never early: a stall can
+      only delay a hold, never fake one.
+- [x] **Pen dip recovery (0.204.9).** happypaint replays the pen's path
       through a tip dip into the stroke when tracing slowly. onepaint has
       no dip handling at all; port it with the hover replay buffer
       (`input/pointer-router.ts`).
+      Done 2026-11-05: `onepaint_input::dip::DipBridge` (the grace window,
+      sliding anchor, replay and never-bridge-blind rules, with tests) and
+      `tablet::translate`, which holds a lift back while the canvas paints.
+      The dip's hovers take the re-contact's pressure (they report none).
+      QuickShape's hold pauses during a dip. Tablet backend only: mouse and
+      touch have no dips. App test: `a_pen_dip_does_not_split_the_stroke`.
+      Not yet tried on a real tablet.
 
 ## Checked, nothing to do
 

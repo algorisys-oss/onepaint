@@ -1,5 +1,7 @@
 //! Input normalisation: per-device pressure (happypaint `input/pressure.ts`).
 
+pub mod dip;
+pub mod idle_hold;
 pub mod tablet;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -1733,7 +1733,7 @@ pub(crate) mod tests {
         let mut h = harness();
         h.run();
         let send = |h: &mut Harness<'_, App>, evs: &[PenEvent]| {
-            let out = tablet::translate(h.state_mut(), evs, 1.0, egui::Modifiers::NONE);
+            let out = tablet::translate(h.state_mut(), evs, 1.0, egui::Modifiers::NONE, 0.0);
             for e in out {
                 h.event(e);
             }
@@ -1765,6 +1765,65 @@ pub(crate) mod tests {
         assert_eq!(h.state().session.tool(), Tool::Eraser);
         send(&mut h, &[PenEvent::Out]);
         assert_eq!(h.state().session.tool(), Tool::Brush);
+    }
+
+    /// A tip dip while tracing slowly (happypaint v0.204.9): the pen "lifts"
+    /// for a moment but keeps reporting its path as hover. The stroke goes on
+    /// through that path; a real lift ends it; a tap after a lift is new.
+    #[test]
+    fn a_pen_dip_does_not_split_the_stroke() {
+        use onepaint_engine::recording::RecEvent;
+        use onepaint_input::tablet::{PenEvent, PenSample, PenTool};
+        let mut h = harness();
+        h.run();
+        let send = |h: &mut Harness<'_, App>, evs: &[PenEvent], ms: f64| {
+            let mut out = tablet::translate(h.state_mut(), evs, 1.0, egui::Modifiers::NONE, ms);
+            out.extend(tablet::tick(h.state_mut(), egui::Modifiers::NONE, ms));
+            for e in out {
+                h.event(e);
+            }
+            h.step();
+        };
+        let at = |x: f32, p: f32| PenSample { pos: [x, 420.0], pressure: Some(p), tilt: [0.0; 2], twist: 0.0 };
+        let begins = |h: &mut Harness<'_, App>| {
+            let rec = h.state_mut().session.stop_recording().unwrap();
+            h.state_mut().session.start_recording().unwrap();
+            rec.events.iter().filter(|e| matches!(e, RecEvent::Begin { .. })).count()
+        };
+        let ink = |h: &Harness<'_, App>, x: f64| {
+            let app = h.state();
+            let d = app.canvas.win_to_doc([x, 420.0]);
+            app.session.doc().layer(app.session.active()).unwrap().pixels.get(d[0] as i32, d[1] as i32)[3]
+        };
+        h.state_mut().session.start_recording().unwrap();
+        send(&mut h, &[PenEvent::In(PenTool::Pen), PenEvent::Move(at(400.0, 0.0))], 0.0);
+        send(&mut h, &[PenEvent::Down(at(400.0, 0.6))], 16.0);
+        send(&mut h, &(1..=6).map(|i| PenEvent::Move(at(400.0 + i as f32 * 8.0, 0.6))).collect::<Vec<_>>(), 32.0);
+        // The dip: up at 448, hovering on to 480 (no pressure), down at 488.
+        send(&mut h, &[PenEvent::Up], 48.0);
+        for (i, x) in [456.0, 464.0, 472.0, 480.0].into_iter().enumerate() {
+            send(&mut h, &[PenEvent::Move(PenSample { pressure: Some(0.0), ..at(x, 0.0) })], 64.0 + i as f64 * 16.0);
+        }
+        send(&mut h, &[PenEvent::Down(at(488.0, 0.6))], 140.0);
+        send(&mut h, &(1..=4).map(|i| PenEvent::Move(at(488.0 + i as f32 * 8.0, 0.6))).collect::<Vec<_>>(), 156.0);
+        // A real lift: the hovers stop and the window runs out.
+        send(&mut h, &[PenEvent::Up], 172.0);
+        assert!(h.state().canvas.dip.pending());
+        send(&mut h, &[], 300.0);
+        assert!(!h.state().canvas.dip.pending(), "the end committed");
+        assert_eq!(begins(&mut h), 1, "one stroke across the dip");
+        for x in [430.0, 468.0, 500.0] {
+            assert!(ink(&h, x) > 0.3, "ink at x = {x}, through the dip too");
+        }
+        // A tap right after a lift, with no hover between: a new stroke.
+        send(&mut h, &[PenEvent::Down(at(600.0, 0.6))], 400.0);
+        send(&mut h, &[PenEvent::Move(at(610.0, 0.6))], 416.0);
+        send(&mut h, &[PenEvent::Up], 432.0);
+        send(&mut h, &[PenEvent::Down(at(612.0, 0.6))], 440.0);
+        send(&mut h, &[PenEvent::Up, PenEvent::Out], 456.0);
+        assert_eq!(begins(&mut h), 2, "never bridged blind");
+        assert!(ink(&h, 611.0) > 0.0, "the tap inked");
+        assert_eq!(ink(&h, 560.0), 0.0, "no connector from the last stroke");
     }
 
     #[test]
