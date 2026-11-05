@@ -184,7 +184,9 @@ pub fn tilt_pad(ui: &mut Ui, v: &mut [f32; 2], size: f32, label: &str) -> Respon
 pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     let t = Tokens::get(ui.ctx());
     // One control for the switch and its label: both click, one accessible name.
-    let galley = ui.painter().layout_no_wrap(label.to_string(), egui::TextStyle::Body.resolve(ui.style()), Color32::WHITE);
+    // Laid out in the placeholder colour, so `galley()` below tints it: a
+    // fixed colour here would ignore the theme (white labels on light).
+    let galley = ui.painter().layout_no_wrap(label.to_string(), egui::TextStyle::Body.resolve(ui.style()), Color32::PLACEHOLDER);
     let gap = ui.spacing().item_spacing.x;
     let size = vec2(32.0 + gap + galley.size().x, galley.size().y.max(18.0));
     let (rect, mut resp) = ui.allocate_exact_size(size, Sense::click());
@@ -660,5 +662,46 @@ mod dial_tests {
         assert_eq!((d(10.0, -1.9, false), d(10.0, -1.9, true)), (Some(11.0), Some(15.0)));
         assert_eq!(d(10.0, 0.5, true), Some(0.0), "357° snaps round to 0, not 360");
         assert_eq!(d(0.0, 0.0, false), None);
+    }
+}
+
+#[cfg(test)]
+mod toggle_tests {
+    use super::*;
+    use crate::theme::{self, ThemeKind};
+
+    /// The colour a toggle's label is drawn in, in `kind`.
+    fn label_color(kind: ThemeKind, on: bool) -> (Color32, Tokens) {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx, kind);
+        let mut out = None;
+        let mut full = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let mut v = on;
+            toggle(ui, &mut v, "Alpha lock");
+            out = Some(Tokens::get(ui.ctx()));
+        });
+        full.textures_delta.clear();
+        let shapes = full.shapes;
+        let text = shapes
+            .iter()
+            .find_map(|c| match &c.shape {
+                egui::Shape::Text(t) if t.galley.text() == "Alpha lock" => Some(t.clone()),
+                _ => None,
+            })
+            .expect("the label is drawn");
+        // Text laid out in the placeholder colour takes the shape's fallback.
+        let laid = text.galley.job.sections[0].format.color;
+        let color = if laid == Color32::PLACEHOLDER { text.fallback_color } else { laid };
+        (color, out.expect("tokens"))
+    }
+
+    #[test]
+    fn toggle_labels_follow_the_theme() {
+        for kind in [ThemeKind::Dark, ThemeKind::Light] {
+            let (off, t) = label_color(kind, false);
+            assert_eq!(off, t.fg_muted, "{kind:?}: off label");
+            let (on, t) = label_color(kind, true);
+            assert_eq!(on, t.fg, "{kind:?}: on label");
+        }
     }
 }
