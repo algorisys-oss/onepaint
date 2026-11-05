@@ -21,7 +21,7 @@ In a narrow window the menus fold into a single **Menu**, the zoom moves to the 
 
 ## Canvas and navigation
 - **Pan:** hold `Space` and drag, drag with the middle mouse button, use the Pan tool (`H`), or scroll with two fingers.
-- **Zoom:** `Ctrl` + mouse wheel, `=` and `-`, pinch with two fingers, or the zoom menu at the end of the options row. `0` fits the drawing to the window and `1` shows it at 100%.
+- **Zoom:** `Ctrl` + mouse wheel (anywhere in the window), `=` and `-` (with or without `Ctrl`, so a tablet's zoom keys work), pinch with two fingers, or the zoom menu at the end of the options row. `0` fits the drawing to the window and `1` shows it at 100%.
 - **Rotate:** hold `R` and drag, use `Ctrl+[` and `Ctrl+]` for 15° steps, or twist two fingers. `5` straightens the canvas.
 - **Scrollbars** appear when the drawing runs past the window. Drag them to pan or click the track to jump a page. Turn them off in **View ▸ Guides ▸ Scrollbars**.
 
@@ -113,7 +113,7 @@ Click with the Text tool to add text; turn on **Wrap** in the text panel to wrap
 
 ## Shapes, pens and paths
 - The **Shape** tool draws lines, ellipses, rectangles and polygons with the current brush. `Shift` keeps them square or at 45°, `Alt` draws from the centre, and **Fill** fills them.
-- The **Pen** draws paths: click for corners, drag for curves, and click the first point or press `Enter` to finish. On a path layer, drag its points and handles to reshape it.
+- The **Pen** draws paths: click for corners, drag for curves, and click the first point or press `Enter` to finish. Click the point you just placed to cut its outgoing handle, so the next segment starts straight; drag from it to aim a new outgoing handle on its own. Holding `Alt` while you drag out a new point moves only its outgoing handle. On a path layer, drag its points and handles to reshape it.
 - The pen's **Path** menu makes a selection from the path, fills or strokes it on the layer below, makes a vector mask, transforms it, or turns it into paint.
 
 ## Rulers, guides, symmetry and perspective

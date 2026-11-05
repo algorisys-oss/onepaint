@@ -211,6 +211,24 @@ pub fn set_handle(anchors: &mut [PathAnchor], i: usize, side: HandleSide, h: Pt)
     }
 }
 
+/// Drop anchor `i`'s out-handle and make it a corner, keeping the in-handle:
+/// Photoshop's (Alt+)click on the anchor just drawn, so the next segment
+/// leaves it straight instead of carrying the curve on (happypaint v0.204.13).
+pub fn cut_out_handle(anchors: &mut [PathAnchor], i: usize) {
+    let Some(a) = anchors.get_mut(i) else { return };
+    (a.out_x, a.out_y) = (None, None);
+    a.kind = AnchorKind::Corner;
+}
+
+/// Set anchor `i`'s out-handle alone, as a corner (the in-handle is not
+/// mirrored): Photoshop's Alt+drag, aiming the next segment without bending
+/// the last.
+pub fn set_out_handle_only(anchors: &mut [PathAnchor], i: usize, h: Pt) {
+    let Some(a) = anchors.get_mut(i) else { return };
+    (a.out_x, a.out_y) = (Some(h[0]), Some(h[1]));
+    a.kind = AnchorKind::Corner;
+}
+
 /// Corner ↔ smooth (smoothing derives ⅓-chord handles along the neighbours' tangent).
 pub fn toggle_anchor_kind(anchors: &mut [PathAnchor], i: usize) {
     let n = anchors.len();

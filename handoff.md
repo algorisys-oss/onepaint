@@ -2,7 +2,8 @@
 
 Last updated 2026-11-05. Read this first when picking the work back up,
 then `docs/parity-delta-2026-11-05.md` (happypaint v0.204.7 → v0.204.17:
-seven items to port; 1–3 are done), `docs/parity-delta-2026-10-18.md` (the v0.204.7 run's list and
+seven items to port; 1–5 are done, 6 (Shift+click lines) and 7 (command
+palette) are next), `docs/parity-delta-2026-10-18.md` (the v0.204.7 run's list and
 decisions), `todo.md` and `AGENTS.md`. **Keep this file current after every
 step**, so a dropped session can resume from it.
 

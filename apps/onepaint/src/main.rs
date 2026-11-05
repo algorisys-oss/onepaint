@@ -2990,6 +2990,36 @@ pub(crate) mod tests {
         assert!(app.session.paths(&id)[0].subpaths[0].anchors.len() == 3);
     }
 
+    /// Photoshop's Pen: a press on the anchor just drawn cuts its out-handle
+    /// (the curve drawn stays), a drag from it pulls a new out-handle alone
+    /// (happypaint v0.204.13). It used to stack a duplicate anchor.
+    #[test]
+    fn pen_cuts_the_last_anchors_handle() {
+        let mut h = harness();
+        h.run();
+        key(&mut h, egui::Key::P, egui::Modifiers::NONE);
+        click(&mut h, pos2(500.0, 300.0));
+        drag_stroke(&mut h, pos2(700.0, 300.0), pos2(760.0, 340.0));
+        let anchors = |h: &Harness<'_, App>| h.state().canvas.pen.building.clone().unwrap();
+        let curved = anchors(&h)[1];
+        assert_eq!(curved.kind, onepaint_stroke::bezier::AnchorKind::Smooth);
+        assert!(curved.out_x.is_some() && curved.in_x.is_some());
+        click(&mut h, pos2(700.0, 300.0));
+        let cut = anchors(&h);
+        assert_eq!(cut.len(), 2, "no duplicate anchor");
+        assert_eq!((cut[1].out_x, cut[1].out_y), (None, None), "out-handle cut");
+        assert_eq!((cut[1].in_x, cut[1].in_y), (curved.in_x, curved.in_y), "the curve drawn stays");
+        assert_eq!(cut[1].kind, onepaint_stroke::bezier::AnchorKind::Corner);
+        drag_stroke(&mut h, pos2(700.0, 300.0), pos2(700.0, 380.0));
+        let aimed = anchors(&h);
+        assert_eq!(aimed.len(), 2);
+        let (ox, oy) = (aimed[1].out_x.unwrap(), aimed[1].out_y.unwrap());
+        assert!(ox.abs() < 1.0 && oy > 0.0, "a new out-handle, straight down: {ox}, {oy}");
+        assert_eq!((aimed[1].in_x, aimed[1].in_y), (curved.in_x, curved.in_y), "in-handle untouched");
+        click(&mut h, pos2(800.0, 450.0));
+        assert_eq!(anchors(&h).len(), 3, "the next click places a new anchor");
+    }
+
     #[test]
     fn animation_timeline_adds_frames_and_steps() {
         let mut h = harness();

@@ -333,9 +333,12 @@ enum Drag {
         grab: Pt,
         start: onepaint_engine::transform::WarpMode,
     },
-    /// Pen: pulling the handle of the anchor just placed.
+    /// Pen: pulling the handle of the anchor just placed. `out_only`: the
+    /// out-handle moves alone (pressed on the last anchor, or Alt held), so
+    /// the curve already drawn stays put.
     PenNew {
         index: usize,
+        out_only: bool,
     },
     /// Panel tool: a create, cut, reshape or move gesture (spec 30).
     Panel(crate::panel_ui::PanelDrag),
@@ -559,8 +562,17 @@ impl Canvas {
                 crate::pen::finish(&mut self.pen, session, false, self.options.pen_fill, (time_ms as u32).wrapping_mul(2_654_435_761));
                 return Drag::None;
             }
+            // A press on the anchor just placed (Alt optional, as in
+            // Photoshop) cuts its out-handle, so the next segment leaves it
+            // straight; a drag from it pulls a new out-handle on its own
+            // (happypaint v0.204.13). It used to stack a duplicate anchor.
+            let last = b.len() - 1;
+            if (b[last].x - d[0]).hypot(b[last].y - d[1]) <= tol {
+                onepaint_stroke::bezier::cut_out_handle(b, last);
+                return Drag::PenNew { index: last, out_only: true };
+            }
             b.push(PathAnchor::corner(d[0], d[1]));
-            return Drag::PenNew { index: b.len() - 1 };
+            return Drag::PenNew { index: b.len() - 1, out_only: false };
         }
         let active = session.active().to_string();
         if session.is_path_layer(&active) {
@@ -587,7 +599,7 @@ impl Canvas {
             }
         }
         self.pen.building = Some(vec![PathAnchor::corner(d[0], d[1])]);
-        Drag::PenNew { index: 0 }
+        Drag::PenNew { index: 0, out_only: false }
     }
 
     /// Path outlines, anchors and handles (active path layer and the path being built).
@@ -1082,9 +1094,13 @@ impl Canvas {
                 let out = match phase {
                     TouchPhase::Start => self.gestures.start(id.0, p, time_ms, pen),
                     TouchPhase::Move => self.gestures.moved(id.0, p, time_ms),
-                    TouchPhase::End | TouchPhase::Cancel => {
+                    TouchPhase::End => {
                         self.last_pen_force = None;
                         self.gestures.end(id.0, time_ms)
+                    }
+                    TouchPhase::Cancel => {
+                        self.last_pen_force = None;
+                        self.gestures.cancel(id.0, time_ms)
                     }
                 };
                 self.gesture_queue.extend(out);
@@ -1253,13 +1269,13 @@ impl Canvas {
                             let start = *start;
                             self.measure = Some((start, d));
                         }
-                        Drag::PenNew { index } => {
-                            let index = *index;
+                        Drag::PenNew { index, out_only } => {
+                            let (index, out_only) = (*index, *out_only || ui.input(|i| i.modifiers.alt));
                             let anchor = self.pen.building.as_ref().and_then(|b| b.get(index)).map(|a| [a.x, a.y]);
                             if let (Some(b), Some(a)) = (self.pen.building.as_mut(), anchor)
                                 && (d[0] - a[0]).hypot(d[1] - a[1]) * self.view.scale >= 3.0
                             {
-                                crate::pen::pull_handle(b, index, d, shift);
+                                crate::pen::pull_handle(b, index, d, shift, out_only);
                             }
                         }
                         Drag::PenEdit { obj, sub, anchor, part } => {

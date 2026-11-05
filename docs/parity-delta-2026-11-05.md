@@ -61,7 +61,7 @@ artist round 32.
       shortcut being captured): `zoom_with_keyboard` is now off. Ctrl+scroll
       away from the canvas zooms it about its centre. Shortcut help lists
       the Ctrl variants. Test: `ctrl_zoom_keys_and_wheel_zoom_the_canvas_not_the_ui`.
-- [ ] **4. Pen: cut the last point's handle (0.204.13).** `pen_press`
+- [x] **4. Pen: cut the last point's handle (0.204.13).** `pen_press`
       (`apps/onepaint/src/canvas.rs:562`) stacks a duplicate anchor when
       you click the point just placed. Photoshop behaviour: click or
       Alt+click it cuts its outgoing handle (the curve drawn stays);
@@ -69,11 +69,20 @@ artist round 32.
       mid-drag on a new point moves only the outgoing handle. Port
       `cutOutHandle` / `setOutHandleOnly` (`engine/stroke/bezier-path.ts`)
       and `bezier-path-handles.test.ts`; update the Pen help text.
-- [ ] **5. A cancelled finger is not a tap (0.204.9).**
+      Done 2026-11-05: `bezier::cut_out_handle` / `set_out_handle_only`
+      (tests in `crates/stroke/tests/bezier.rs`), `Drag::PenNew { out_only }`
+      in the canvas, the manual's Pen entry. App test:
+      `pen_cuts_the_last_anchors_handle`. The Alt-mid-drag case has no app
+      test (kittest can't hold a modifier through a drag here).
+- [x] **5. A cancelled finger is not a tap (0.204.9).**
       `apps/onepaint/src/canvas.rs:1085` treats `TouchPhase::Cancel` like
       `End`, so two- to four-finger taps with a cancelled finger still
       undo, redo or hide the UI. Any cancelled finger voids the tap
       (`input/gesture-recognizer.ts`, its tests).
+      Done 2026-11-05: `Gestures::cancel`, which `TouchPhase::Cancel` now
+      takes. onepaint also tapped when the *last* finger was cancelled
+      (happypaint never did); both are voided. Test:
+      `gestures::tests::a_cancelled_finger_voids_the_tap`.
 
 ## Port: new features
 

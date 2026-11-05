@@ -54,13 +54,20 @@ pub fn hit(specs: &[PathSpec], p: Pt, tol: f64) -> Option<(usize, usize, usize, 
     best.map(|b| b.0)
 }
 
-/// Pull the out-handle of the anchor being placed (smooth, in = −out).
-pub fn pull_handle(anchors: &mut [PathAnchor], index: usize, d: Pt, constrain: bool) {
-    let Some(a) = anchors.get_mut(index) else { return };
-    let mut h = [d[0] - a.x, d[1] - a.y];
+/// Pull the out-handle of the anchor being placed: smooth, in = −out; or,
+/// with `out_only`, the out-handle alone on a corner (the curve already drawn
+/// stays put).
+pub fn pull_handle(anchors: &mut [PathAnchor], index: usize, d: Pt, constrain: bool, out_only: bool) {
+    let Some(&PathAnchor { x, y, .. }) = anchors.get(index) else { return };
+    let mut h = [d[0] - x, d[1] - y];
     if constrain {
         h = onepaint_stroke::bezier::constrain_handle(h[0], h[1]);
     }
+    if out_only {
+        onepaint_stroke::bezier::set_out_handle_only(anchors, index, h);
+        return;
+    }
+    let Some(a) = anchors.get_mut(index) else { return };
     a.kind = AnchorKind::Smooth;
     (a.out_x, a.out_y, a.in_x, a.in_y) = (Some(h[0]), Some(h[1]), Some(-h[0]), Some(-h[1]));
 }

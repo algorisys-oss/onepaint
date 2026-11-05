@@ -142,6 +142,15 @@ impl Gestures {
         if self.holding { vec![Gesture::HoldMove(pos)] } else { Vec::new() }
     }
 
+    /// The system cancelled a finger: it ends, and the whole sequence can no
+    /// longer be a tap (happypaint v0.204.9). A three-finger swipe still counts.
+    pub fn cancel(&mut self, id: u64, ms: f64) -> Vec<Gesture> {
+        if self.touches.contains_key(&id) {
+            self.moved = true;
+        }
+        self.end(id, ms)
+    }
+
     pub fn end(&mut self, id: u64, ms: f64) -> Vec<Gesture> {
         let Some(t) = self.touches.remove(&id) else { return Vec::new() };
         if t.pen {
@@ -191,6 +200,36 @@ mod tests {
         g.end(0, 1100.0);
         g.end(1, 1100.0);
         assert_eq!(g.end(2, 1150.0), vec![Gesture::Tap(3)]);
+    }
+
+    #[test]
+    fn a_cancelled_finger_voids_the_tap() {
+        // The first finger cancelled, the second lifted: no undo.
+        let mut g = Gestures::default();
+        g.start(1, [0.0, 0.0], 0.0, false);
+        g.start(2, [40.0, 0.0], 10.0, false);
+        assert!(g.cancel(1, 80.0).is_empty());
+        assert!(g.end(2, 90.0).is_empty());
+        // The last finger cancelled: no undo either.
+        g.start(1, [0.0, 0.0], 1000.0, false);
+        g.start(2, [40.0, 0.0], 1010.0, false);
+        g.end(1, 1080.0);
+        assert!(g.cancel(2, 1090.0).is_empty());
+        // Three and four fingers, one cancelled: no redo, no hidden UI.
+        for n in [3u64, 4] {
+            let t = 2000.0 * n as f64;
+            for i in 0..n {
+                g.start(i, [i as f32 * 40.0, 0.0], t + i as f64 * 5.0, false);
+            }
+            g.cancel(1, t + 60.0);
+            let out: Vec<_> = (0..n).filter(|i| *i != 1).flat_map(|i| g.end(i, t + 80.0)).collect();
+            assert!(out.is_empty(), "{n} fingers: {out:?}");
+        }
+        // A clean two-finger tap still undoes.
+        g.start(1, [0.0, 0.0], 9000.0, false);
+        g.start(2, [40.0, 0.0], 9010.0, false);
+        g.end(1, 9080.0);
+        assert_eq!(g.end(2, 9090.0), vec![Gesture::Tap(2)]);
     }
 
     #[test]

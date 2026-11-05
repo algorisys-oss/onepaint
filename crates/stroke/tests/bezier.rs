@@ -133,3 +133,34 @@ fn json_matches_happypaint_field_names() {
     let back: PathSpec = serde_json::from_value(v).unwrap();
     assert_eq!(back, curve());
 }
+
+// Photoshop's mid-draw Pen gestures (happypaint `bezier-path-handles.test.ts`,
+// v0.204.13): the in-handle (the curve already drawn) never moves.
+fn smooth_pair() -> Vec<PathAnchor> {
+    vec![a(0.0, 0.0, None, AnchorKind::Corner), a(100.0, 0.0, Some(([-30.0, -10.0], [30.0, 10.0])), AnchorKind::Smooth)]
+}
+
+#[test]
+fn cut_out_handle_keeps_the_in_handle_and_makes_a_corner() {
+    let mut v = smooth_pair();
+    cut_out_handle(&mut v, 1);
+    assert_eq!((v[1].out_x, v[1].out_y), (None, None));
+    assert_eq!((v[1].in_x, v[1].in_y), (Some(-30.0), Some(-10.0)));
+    assert_eq!(v[1].kind, AnchorKind::Corner);
+    let before = v.clone();
+    cut_out_handle(&mut v, 5);
+    assert_eq!(v, before, "a bad index is ignored");
+}
+
+#[test]
+fn set_out_handle_only_moves_the_out_handle_alone() {
+    let mut v = smooth_pair();
+    set_out_handle_only(&mut v, 1, [0.0, 50.0]);
+    assert_eq!((v[1].out_x, v[1].out_y), (Some(0.0), Some(50.0)));
+    assert_eq!((v[1].in_x, v[1].in_y), (Some(-30.0), Some(-10.0)));
+    assert_eq!(v[1].kind, AnchorKind::Corner);
+    // An anchor with no in-handle gains just the out-handle.
+    set_out_handle_only(&mut v, 0, [20.0, 5.0]);
+    assert_eq!((v[0].out_x, v[0].out_y), (Some(20.0), Some(5.0)));
+    assert_eq!(v[0].in_x, None);
+}
