@@ -17,6 +17,9 @@ pub enum RecEvent {
         /// measured on screen). Absent in older recordings: 100%.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         zoom: Option<f64>,
+        /// A Shift+click line: no smoothing, stabilizer or taper.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        straight: bool,
     },
     Extend {
         t: f64,
@@ -254,10 +257,12 @@ impl Session {
             RecEvent::Cmd { cmd, .. } => {
                 let _ = self.execute((**cmd).clone());
             }
-            RecEvent::Begin { p, zoom, .. } => {
+            RecEvent::Begin { p, zoom, straight, .. } => {
                 let live = self.prefs.view_zoom;
                 self.prefs.view_zoom = zoom.unwrap_or(1.0);
+                self.straight = *straight;
                 self.stroke_begin(*p);
+                self.straight = false;
                 self.prefs.view_zoom = live;
             }
             RecEvent::Extend { pts, .. } => self.stroke_extend(pts),

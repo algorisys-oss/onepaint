@@ -30,6 +30,7 @@ impl Session {
             height: None,
             paper: None,
             live: None,
+            end_pt: None,
         });
     }
 

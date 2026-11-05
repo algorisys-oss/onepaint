@@ -181,6 +181,7 @@ fn shortcuts(ui: &mut Ui, keys: &crate::keymap::Overrides) {
             "Brush & colour",
             &[
                 ("[ / ]", "Brush size"),
+                ("Shift+click", "Straight line from the last stroke's end (chains)"),
                 ("X", "Swap colours"),
                 ("D", "Black & white"),
                 ("Alt+Backspace", "Fill with colour"),

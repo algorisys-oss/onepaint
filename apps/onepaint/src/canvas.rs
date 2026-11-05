@@ -333,6 +333,11 @@ enum Drag {
         grab: Pt,
         start: onepaint_engine::transform::WarpMode,
     },
+    /// Brush / Eraser Shift+click: a straight line from the last stroke's
+    /// end, re-aimed while the button is down (happypaint v0.204.14).
+    ShiftLine {
+        from: Pt,
+    },
     /// Pen: pulling the handle of the anchor just placed. `out_only`: the
     /// out-handle moves alone (pressed on the last anchor, or Alt held), so
     /// the curve already drawn stays put.
@@ -694,6 +699,12 @@ impl Canvas {
         self.view.screen_to_doc([p.x as f64, p.y as f64])
     }
 
+    /// A Shift+click line's end at `at`: both ends take the press's pressure
+    /// and tilt, with no time, so speed dynamics see a steady line.
+    fn line_point(at: Pt, pen: &StrokePoint) -> StrokePoint {
+        StrokePoint { x: at[0], y: at[1], t: None, ..*pen }
+    }
+
     fn stroke_point(&mut self, pos: Pos2, t: f64, force: Option<f32>) -> StrokePoint {
         let d = self.doc_pt(pos);
         // A tablet sample at this position carries its own pressure, tilt and twist.
@@ -885,6 +896,17 @@ impl Canvas {
                 if matches!(tool, Tool::Brush | Tool::Eraser) && session.guides().hard_perspective(self.persp_editing) {
                     session.stroke_cancel();
                     return Drag::PerspLine { origin: d };
+                }
+                // Shift+click joins the last stroke's end to here with a
+                // straight line (dry brushes and the eraser, as Photoshop).
+                let dry = tool == Tool::Eraser || (tool == Tool::Brush && session.current_brush().wet().is_none());
+                if m.shift
+                    && dry
+                    && let Some(from) = session.last_stroke_end()
+                {
+                    let to = self.stroke_point(p, time_ms, self.last_pen_force);
+                    session.stroke_line(Self::line_point(from, &to), Self::line_point([to.x, to.y], &to));
+                    return Drag::ShiftLine { from };
                 }
                 let cfg = self.snap_config(session);
                 self.snapper = if tool == Tool::Liquify { None } else { onepaint_stroke::snap::Snapper::arm(cfg, d) };
@@ -1115,7 +1137,9 @@ impl Canvas {
             use crate::gestures::Gesture as G;
             if let G::HoldBegin(p) | G::HoldMove(p) = g {
                 // Touch-and-hold eyedropper: the tiny stroke was a pick.
-                if matches!(g, G::HoldBegin(_)) && matches!(self.drag, Drag::Paint | Drag::PerspLine { .. } | Drag::FillShape { .. }) {
+                if matches!(g, G::HoldBegin(_))
+                    && matches!(self.drag, Drag::Paint | Drag::PerspLine { .. } | Drag::FillShape { .. } | Drag::ShiftLine { .. })
+                {
                     session.stroke_cancel();
                 }
                 self.drag = Drag::None;
@@ -1129,7 +1153,7 @@ impl Canvas {
             }
             if g == G::MultiTouchStarted {
                 // The first finger's emulated stroke was really the start of a gesture.
-                if matches!(self.drag, Drag::Paint | Drag::PerspLine { .. } | Drag::FillShape { .. }) {
+                if matches!(self.drag, Drag::Paint | Drag::PerspLine { .. } | Drag::FillShape { .. } | Drag::ShiftLine { .. }) {
                     session.stroke_cancel();
                 }
                 self.drag = Drag::None;
@@ -1182,6 +1206,11 @@ impl Canvas {
                                     self.hold.since = time_ms;
                                 }
                             }
+                        }
+                        Drag::ShiftLine { from } => {
+                            let from = *from;
+                            let to = self.stroke_point(p, time_ms, self.last_pen_force);
+                            session.stroke_line(Self::line_point(from, &to), Self::line_point([to.x, to.y], &to));
                         }
                         Drag::PerspLine { origin } => {
                             let origin = *origin;
@@ -1377,7 +1406,7 @@ impl Canvas {
                 }
                 Event::PointerButton { pressed: false, .. } | Event::PointerGone => {
                     match std::mem::take(&mut self.drag) {
-                        Drag::Paint | Drag::PerspLine { .. } => {
+                        Drag::Paint | Drag::PerspLine { .. } | Drag::ShiftLine { .. } => {
                             self.snapper = None;
                             session.stroke_end();
                         }

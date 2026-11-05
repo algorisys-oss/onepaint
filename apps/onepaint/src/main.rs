@@ -3020,6 +3020,42 @@ pub(crate) mod tests {
         assert_eq!(anchors(&h).len(), 3, "the next click places a new anchor");
     }
 
+    /// Shift+click with the brush: a straight line from the last stroke's
+    /// end, chained, re-aimed while held, one undo step (happypaint v0.204.14).
+    #[test]
+    fn shift_click_draws_a_line_from_the_last_stroke() {
+        let mut h = harness();
+        h.run();
+        key(&mut h, egui::Key::B, egui::Modifiers::NONE);
+        let alpha = |h: &Harness<'_, App>, w: [f64; 2]| {
+            let app = h.state();
+            let d = app.canvas.win_to_doc(w);
+            app.session.doc().layer(app.session.active()).unwrap().pixels.get(d[0] as i32, d[1] as i32)[3]
+        };
+        drag_stroke(&mut h, pos2(400.0, 300.0), pos2(420.0, 300.0));
+        let h0 = h.state().session.history_len();
+        let shift_press = |h: &mut Harness<'_, App>, p: egui::Pos2, pressed: bool| {
+            h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed, modifiers: egui::Modifiers::SHIFT });
+            h.step();
+        };
+        // Press aiming up, drag down before release: only the final aim lands.
+        h.event(Event::PointerMoved(pos2(600.0, 200.0)));
+        h.step();
+        shift_press(&mut h, pos2(600.0, 200.0), true);
+        h.event(Event::PointerMoved(pos2(600.0, 400.0)));
+        h.step();
+        shift_press(&mut h, pos2(600.0, 400.0), false);
+        assert_eq!(h.state().session.history_len(), h0 + 1, "one undo step");
+        assert!(alpha(&h, [510.0, 350.0]) > 0.5, "the line to the final aim");
+        assert_eq!(alpha(&h, [510.0, 250.0]), 0.0, "the first aim is gone");
+        // Chain: the next Shift+click starts where that line ended.
+        h.event(Event::PointerMoved(pos2(800.0, 400.0)));
+        h.step();
+        shift_press(&mut h, pos2(800.0, 400.0), true);
+        shift_press(&mut h, pos2(800.0, 400.0), false);
+        assert!(alpha(&h, [700.0, 400.0]) > 0.5, "chained from (600, 400)");
+    }
+
     #[test]
     fn animation_timeline_adds_frames_and_steps() {
         let mut h = harness();

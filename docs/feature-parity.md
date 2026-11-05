@@ -56,6 +56,7 @@ Sources, all under `../happypaint/frontend/src/`:
 - [x] Airbrush (time-based ticks)
 - [x] Smoothing and the stabilizer (its string measured on screen, the same at every zoom)
 - [x] Entry and exit taper; the exit taper's tail is drawn live up to the pen (happypaint v0.204.15)
+- [x] Shift+click straight lines from the last stroke's end, chained (Brush and Eraser)
 - [x] Symmetry: mirror and radial (angle, centre, 2–24 spokes; Y toggles)
 - [x] Wet/oil media (spec 35): wet presets pick up and drag paint; impasto height with relief lighting, blender levelling, eraser carving and `.happypaint` round trip; Bevel & Emboss from alpha; watercolour settle (dried rim, granulation); live watercolour and live oils that bloom, flow, re-wet and dry after the pen lifts, with the tilt pad and Dry beside the tabs (GPU compute, CPU fallback)
 - [x] Smudge and mixer brushes

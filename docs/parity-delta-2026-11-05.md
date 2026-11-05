@@ -86,13 +86,21 @@ artist round 32.
 
 ## Port: new features
 
-- [ ] **6. Shift+click straight lines (0.204.14).** With the Brush (dry
+- [x] **6. Shift+click straight lines (0.204.14).** With the Brush (dry
       brushes) and the Eraser, Shift+click draws a straight line from where
       the last stroke ended; Shift+click again chains. Dragging before
       release aims the end. Current brush, pressure of the click, no
       smoothing or taper. One undo step per line. The line start is
       remembered per drawing. Shift at the *start* of a stroke now means a
       line; Shift during a stroke (QuickShape constrain) is unchanged.
+      Done 2026-11-05: `Session::stroke_line` / `last_stroke_end` (the end
+      lives on the session, so it is per drawing and travels with its
+      tab); `RecEvent::Begin { straight }` replays the straightened brush;
+      `Drag::ShiftLine` in the canvas; help and manual. Fixed on the way:
+      `stroke_begin` logged its Begin before cancelling a live stroke, so a
+      replay cancelled the new stroke instead. Tests:
+      `crates/engine/tests/shift_line.rs`, app
+      `shift_click_draws_a_line_from_the_last_stroke`.
 - [ ] **7. Command palette, Ctrl/⌘+K (0.204.11).** A searchable dialog over
       every tool, edit command, adjustment, filter, layer command,
       animation step and view option: substring and keyword matching

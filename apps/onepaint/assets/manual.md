@@ -51,6 +51,7 @@ Open the library with the **Brushes** button or by clicking the brush name in th
 - **Pressure ▸ Size** and **Opacity** make pen pressure change size or opacity for every brush, whatever the brush's own settings.
 - `F` turns on **fill mode**: each stroke fills its own outline.
 - Hold the pen still at the end of a stroke to straighten it into a line, ellipse or polygon (**QuickShape**).
+- `Shift`+click draws a straight line from where the last brush or eraser stroke ended; `Shift`+click again to chain the next line from there. Keep the button down and drag to aim the end. Each line is one undo step, drawn with the current brush and the pressure of the click, without smoothing or taper. It works with dry brushes and the eraser.
 
 **Brush settings** opens the brush studio, with every setting of the current brush, a live preview stroke and a pad to try it on. Save your changes, or save them as a new brush. You can import `.abr`, Procreate `.brush` and `.brushset`, and `.happybrush` files from the library.
 

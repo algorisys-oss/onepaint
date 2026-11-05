@@ -342,6 +342,9 @@ struct ActiveStroke {
     /// so the ink reaches the nib. Shares the buffer's COW tiles; never
     /// flattened (the real tail lands in `buffer` on lift, identically).
     live: Option<LiveTail>,
+    /// The pointer's latest point (doc px): where the next Shift+click line
+    /// starts once this stroke lands.
+    end_pt: Option<[f64; 2]>,
 }
 
 struct LiveTail {
@@ -431,6 +434,10 @@ pub struct Session {
     color: Rgba,
     history: History<Change>,
     stroke: Option<ActiveStroke>,
+    /// The stroke being begun is a Shift+click line (`stroke_line`).
+    straight: bool,
+    /// Where the last brush or eraser stroke ended (doc px), for Shift+click.
+    last_stroke_end: Option<[f64; 2]>,
     events: Vec<Event>,
     dirty: BTreeSet<(i32, i32)>,
     seed: u32,
@@ -521,6 +528,8 @@ impl Session {
             history: History::new(),
             prefs: Preferences::default(),
             stroke: None,
+            straight: false,
+            last_stroke_end: None,
             events: Vec::new(),
             dirty: BTreeSet::new(),
             seed: 1,
@@ -853,14 +862,16 @@ impl Session {
     // ── Strokes (happypaint PaintSink) ──
 
     pub fn stroke_begin(&mut self, p: StrokePoint) {
-        let zoom = self.prefs.view_zoom;
-        self.rec(|t| recording::RecEvent::Begin { t, p, zoom: Some(zoom) });
+        // Any live stroke is cancelled first, so a recording logs its Cancel
+        // ahead of this Begin (a replay would otherwise cancel the new one).
+        self.stroke_cancel();
+        let (zoom, straight) = (self.prefs.view_zoom, self.straight);
+        self.rec(|t| recording::RecEvent::Begin { t, p, zoom: Some(zoom), straight });
         self.commit_filter();
         self.commit_transform();
         if !self.mask_target() {
             self.ensure_raster();
         }
-        self.stroke_cancel();
         // Fluid brushes feed the live wet simulation; any other stroke dries it first.
         if self.wet_brush() {
             self.wet_begin(p);
@@ -895,7 +906,14 @@ impl Session {
             (false, false, true) => StrokeMode::AlphaLock(bm),
             (false, false, false) => StrokeMode::Paint(bm),
         };
-        let brush = self.prefs.stroke_brush(self.current_brush());
+        let mut brush = self.prefs.stroke_brush(self.current_brush());
+        if self.straight {
+            // A Shift+click line: smoothing would bow it and stop it short of
+            // the press, and tapered ends would pinch every joint of a chain.
+            brush.smoothing = 0.0;
+            brush.stabilizer = None;
+            brush.taper = None;
+        }
         let lin = if to_mask {
             // Mask coverage = the brush colour's luminance (white for the eraser), no transfer curve.
             let c = self.color;
@@ -931,11 +949,29 @@ impl Session {
             height,
             paper,
             live: None,
+            end_pt: Some([p.x, p.y]),
         };
         let dabs = st.engine.begin(p);
         self.stroke = Some(st);
         let body = self.draw_dabs(dabs);
         self.refresh_live_tail(body);
+    }
+
+    /// Where the last brush or eraser stroke of this document ended (doc
+    /// px): a Shift+click line starts here. A cancelled stroke leaves it.
+    pub fn last_stroke_end(&self) -> Option<[f64; 2]> {
+        self.last_stroke_end
+    }
+
+    /// Stroke a straight line from `a` to `b` with the current brush, without
+    /// smoothing, stabilizer or taper (Photoshop's Shift+click, happypaint
+    /// v0.204.14). Called again while the line is live, it re-aims it: the
+    /// line restarts, so it stays one undo step at [`Self::stroke_end`].
+    pub fn stroke_line(&mut self, a: StrokePoint, b: StrokePoint) {
+        self.straight = true;
+        self.stroke_begin(a);
+        self.straight = false;
+        self.stroke_extend(&[b]);
     }
 
     pub fn stroke_extend(&mut self, pts: &[StrokePoint]) {
@@ -961,6 +997,9 @@ impl Session {
         let mut dabs = Vec::new();
         for p in pts {
             dabs.extend(st.engine.add(*p));
+        }
+        if let Some(p) = pts.last() {
+            st.end_pt = Some([p.x, p.y]);
         }
         let body = self.draw_dabs(dabs);
         self.refresh_live_tail(body);
@@ -1103,6 +1142,9 @@ impl Session {
         };
         if let Some(live) = st.live.take() {
             self.mark_dirty(live.rect);
+        }
+        if st.end_pt.is_some() {
+            self.last_stroke_end = st.end_pt;
         }
         if st.noop {
             return;
