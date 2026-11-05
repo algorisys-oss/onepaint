@@ -1,7 +1,8 @@
 # Handoff
 
-Last updated 2026-10-19. Read this first when picking the work back up,
-then `docs/parity-delta-2026-10-18.md` (the v0.204.7 run's list and
+Last updated 2026-11-05. Read this first when picking the work back up,
+then `docs/parity-delta-2026-11-05.md` (happypaint v0.204.7 → v0.204.17:
+seven items to port, none started), `docs/parity-delta-2026-10-18.md` (the v0.204.7 run's list and
 decisions), `todo.md` and `AGENTS.md`. **Keep this file current after every
 step**, so a dropped session can resume from it.
 
