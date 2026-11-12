@@ -64,6 +64,31 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// A file's size: "340 KB", "12.4 MB", "1.2 GB".
+pub fn format_file_size(bytes: u64) -> String {
+    if bytes < MIB {
+        format!("{} KB", bytes.div_ceil(1024).max(1))
+    } else if bytes < GIB {
+        format!("{:.1} MB", bytes as f64 / MIB as f64)
+    } else {
+        format!("{:.1} GB", bytes as f64 / GIB as f64)
+    }
+}
+
+/// The Storage row of Document Properties (happypaint's stored size,
+/// v0.208.2, review F25): the saved file's real size, and the recovery copy.
+pub fn storage_text(file: Option<u64>, unsaved: bool, copy: Option<u64>) -> String {
+    let mut out = match file {
+        Some(n) if unsaved => format!("The saved file is {}; unsaved changes aren't in it yet.", format_file_size(n)),
+        Some(n) => format!("The saved file is {}.", format_file_size(n)),
+        None => "Not saved to a file yet.".to_string(),
+    };
+    if let Some(n) = copy {
+        out.push_str(&format!(" Recovery copy: {}.", format_file_size(n)));
+    }
+    out
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
     Ok,
@@ -139,6 +164,19 @@ mod tests {
         assert_eq!(format_bytes(GIB + GIB / 2), "1.5 GB");
         assert_eq!(format_bytes(12 * GIB), "12 GB");
         assert_eq!(format_bytes(10), "1 MB");
+    }
+
+    #[test]
+    fn storage_row() {
+        assert_eq!(format_file_size(1), "1 KB");
+        assert_eq!(format_file_size(340 * 1024), "340 KB");
+        assert_eq!(format_file_size(12 * MIB + MIB / 2), "12.5 MB");
+        assert_eq!(storage_text(None, true, None), "Not saved to a file yet.");
+        assert_eq!(storage_text(Some(2048), false, None), "The saved file is 2 KB.");
+        assert_eq!(
+            storage_text(Some(2048), true, Some(4096)),
+            "The saved file is 2 KB; unsaved changes aren't in it yet. Recovery copy: 4 KB."
+        );
     }
 
     #[test]

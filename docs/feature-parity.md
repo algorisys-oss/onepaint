@@ -175,7 +175,7 @@ screentone are added as live layers.
 ## Files
 - [x] `.happypaint` v9–v11: read and write (v1–v11 read; written as v9, v10 with exact float tiles for 16/32-bit drawings, v11 with tiled impasto relief; size budgets; one bad tile costs only that tile; happypaint v0.205.2–v0.208.0)
 - [x] Autosave and the gallery (crash-recovery autosave when you pause, every 2–15 minutes or Manual, re-encoding only changed tiles; a gallery of recent drawings with thumbnails, shown at launch; happypaint v0.205.0)
-- [x] Memory estimates: per-layer cost and layers that fit in New Canvas, memory held in Document Properties, a one-time notice past the budget (half the RAM; happypaint v0.208.1)
+- [x] Memory estimates: per-layer cost and layers that fit in New Canvas, memory held in Document Properties, a one-time notice past the budget (half the RAM; happypaint v0.208.1); the saved file's size and the recovery copy's in Document Properties (v0.208.2)
 - [x] Brush library: Recent brushes per tool, foldable sections, actions above the list (happypaint v0.205.1)
 - [x] `.happypaint-book` (open as tabs; save all tabs as a book)
 - [~] `.happypaint-rec`: read and replay, export as a timelapse (spec 62); onepaint records in its own format

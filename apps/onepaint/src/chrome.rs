@@ -2256,6 +2256,13 @@ fn paper_dialog(app: &mut App, ui: &mut Ui) {
             crate::memory::format_bytes(used.pixels as u64),
             crate::memory::format_bytes(used.history as u64)
         ));
+    // Storage (happypaint's stored size, v0.208.2): the file's real size.
+    ui.add_space(6.0);
+    let file = app.path.as_ref().and_then(|p| std::fs::metadata(p).ok()).map(|m| m.len());
+    let copy = app.autosave.copy_size(&app.session.doc().id);
+    ui.label(RichText::new("Storage").font(theme::medium(12.5)).color(t.fg));
+    let text = crate::memory::storage_text(file, app.dirty(), copy);
+    ui.add(egui::Label::new(RichText::new(text).font(theme::medium(11.0)).color(t.fg_faint)).wrap());
     ui.add_space(10.0);
     if widgets::primary_button(ui, "Done", 90.0).clicked() {
         app.popover = None;

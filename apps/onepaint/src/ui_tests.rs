@@ -627,3 +627,30 @@ fn the_brushes_panel_keeps_its_header_while_scrolling() {
         assert!(h.get_by_label("Brush studio…").rect().top() < studio.top(), "{placement:?}: the body scrolled");
     }
 }
+
+/// Document Properties gives the saved file's real size (happypaint v0.208.2,
+/// review F25), and says when unsaved work isn't in it.
+#[test]
+fn document_properties_report_the_stored_size() {
+    let mut h = harness();
+    h.run();
+    h.state_mut().popover = Some(Popover::Paper);
+    h.run();
+    assert!(h.query_by_label("Not saved to a file yet.").is_some());
+
+    let path = std::env::temp_dir().join(format!("onepaint-stored-size-{}.happypaint", std::process::id()));
+    let bytes = onepaint_formats::write_happypaint(h.state().session.doc(), None, "t").unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+    let len = h.state().session.history_len();
+    let app = h.state_mut();
+    app.path = Some(path.clone());
+    app.saved_history_len = Some(len);
+    h.run();
+    let size = crate::memory::format_file_size(bytes.len() as u64);
+    assert!(h.query_by_label(&format!("The saved file is {size}.")).is_some(), "{size}");
+
+    h.state_mut().saved_history_len = None;
+    h.run();
+    assert!(h.query_by_label(&format!("The saved file is {size}; unsaved changes aren't in it yet.")).is_some());
+    let _ = std::fs::remove_file(&path);
+}

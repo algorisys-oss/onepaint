@@ -185,6 +185,11 @@ impl Autosave {
         self.pending_since = None;
     }
 
+    /// The size of this document's recovery copy on disk, if there is one.
+    pub fn copy_size(&self, doc_id: &str) -> Option<u64> {
+        std::fs::metadata(self.path_for(doc_id)?).ok().map(|m| m.len())
+    }
+
     /// The newest leftover autosave, if any.
     pub fn leftover(&self) -> Option<PathBuf> {
         let rd = std::fs::read_dir(self.dir.as_ref()?).ok()?;
@@ -220,8 +225,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let mut a = Autosave::new(Some(dir.clone()));
         let doc = onepaint_doc::Document::new(64, 64, None);
+        assert_eq!(a.copy_size(&doc.id), None, "no copy yet");
         let path = a.save_now(&doc).unwrap();
         assert!(path.exists(), "written before it returns");
+        assert_eq!(a.copy_size(&doc.id), Some(std::fs::metadata(&path).unwrap().len()));
         assert!(Autosave::new(None).save_now(&doc).is_err(), "no folder, no save");
         let _ = std::fs::remove_dir_all(&dir);
     }

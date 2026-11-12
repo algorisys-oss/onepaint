@@ -85,9 +85,11 @@ Fold each item into `feature-parity.md` as it lands.
       dock now lets the Brushes panel scroll itself (`scrolls_itself`): its
       search and actions stay pinned, and the list and sliders scroll under
       them. As a popover, only the list scrolls, as before.
-- [ ] **11. Stored size in Document Properties (0.208.2, F25).** Counts every
-      saved part once: tiles, masks, relief, overflow, PSD data and the
-      reference image.
+- [x] **11. Stored size in Document Properties (0.208.2, F25).** A
+      Storage row gives the saved file's real size from the disk, says when
+      unsaved changes aren't in it yet, and gives the recovery copy's size
+      when there is one. happypaint has to add up its IndexedDB parts; a
+      desktop file has one exact size.
 
 ## Blocked on a missing feature (pre-existing gap)
 
