@@ -596,3 +596,34 @@ fn the_palette_lists_tools_and_menu_rows_once() {
     assert_eq!(titles.len(), n, "no row twice");
     assert!(n > 100, "{n} commands");
 }
+
+/// Scrolling the Brushes panel leaves its search and library actions in
+/// place, docked and floating (happypaint v0.204.18); the sliders scroll up
+/// with the list.
+#[test]
+fn the_brushes_panel_keeps_its_header_while_scrolling() {
+    for placement in [Placement::Dock { side: DockSide::Right }, Placement::Float { x: 500.0, y: 90.0 }] {
+        let mut h = harness_sized(1400.0, 640.0);
+        h.state_mut().layout.set_placement(PanelId::Brush, placement.clone(), None);
+        h.state_mut().layout.set_open(PanelId::Brush, true);
+        h.run();
+        let pinned = h.get_by_label("Import brushes…").rect();
+        let studio = h.get_by_label("Brush studio…").rect();
+        // Wheel over the list, well below the header.
+        let over = pinned.center() + vec2(0.0, 160.0);
+        h.event(Event::PointerMoved(over));
+        for _ in 0..20 {
+            h.event(Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: vec2(0.0, -400.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.step();
+        }
+        h.run();
+        let after = h.get_by_label("Import brushes…").rect();
+        assert_eq!(after.top(), pinned.top(), "{placement:?}: the actions stay put");
+        assert!(h.get_by_label("Brush studio…").rect().top() < studio.top(), "{placement:?}: the body scrolled");
+    }
+}

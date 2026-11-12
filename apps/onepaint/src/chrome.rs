@@ -506,7 +506,16 @@ fn brushes(app: &mut App, ui: &mut Ui) {
     let folded = |key: &str| app.settings.brush_folded.iter().any(|k| k == key);
     let (recent_open, list_open) =
         (!folded(&crate::brush_library::section_key("Recent")), !folded(&crate::brush_library::section_key(&section)));
-    egui::ScrollArea::vertical().max_height(room).show(ui, |ui| {
+    // Docked or floating, the panel scrolls below its search and actions,
+    // which stay pinned (happypaint v0.204.18); as a popover, only the list
+    // scrolls and the sliders sit under it.
+    let hosted = crate::dock::is_hosted(ui);
+    let scroll = if hosted {
+        egui::ScrollArea::vertical().id_salt("brush-panel-body").max_height(ui.available_height()).auto_shrink([false, false])
+    } else {
+        egui::ScrollArea::vertical().max_height(room)
+    };
+    scroll.show(ui, |ui| {
         // A search shows every match, folded sections included.
         if !recent.is_empty() {
             if widgets::fold_header(ui, "Recent", recent_open).clicked() {
@@ -531,6 +540,9 @@ fn brushes(app: &mut App, ui: &mut Ui) {
                 brush_row(app, ui, p, &current, &mut picked, &mut delete);
             }
         }
+        if hosted {
+            brush_footer(app, ui);
+        }
     });
     if let Some(name) = fold {
         let key = crate::brush_library::section_key(&name);
@@ -554,6 +566,13 @@ fn brushes(app: &mut App, ui: &mut Ui) {
             Err(e) => app.notify(format!("Couldn't save the brush library: {e}"), now),
         }
     }
+    if !hosted {
+        brush_footer(app, ui);
+    }
+}
+
+/// Size, Opacity, Flow, Angle and the studio, under the library.
+fn brush_footer(app: &mut App, ui: &mut Ui) {
     widgets::hairline(ui);
     let b = app.session.current_brush().clone();
     let mut size = b.size as f32;

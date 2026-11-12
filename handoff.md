@@ -2,10 +2,11 @@
 
 Last updated 2026-11-12. Read this first when picking the work back up,
 then `docs/parity-delta-2026-11-12.md` (happypaint v0.204.17 → v0.208.4:
-items 1–6 done — float tiles v10, tiled relief v11, file budgets, per-tile
-damage, dip travel/speed limits, hidden groups; next are 7 autosave modes,
-8 memory estimate, 9–11 brush library and Document Properties; multi-layer
-Move is a pre-existing gap that blocks group Move and scattered merge),
+items 1–10 done and committed — float tiles v10, tiled relief v11, file
+budgets, per-tile damage, dip limits, hidden groups, autosave modes with a
+tile chunk cache, RAM-based memory estimates, Recent brushes and folds, pinned
+Brushes header; left: 11 stored size, and multi-layer Move, a pre-existing gap
+that blocks group Move and scattered merge),
 `docs/parity-delta-2026-11-05.md` (happypaint v0.204.7 → v0.204.17:
 all done, the low-priority ones too; dip recovery still wants a real-tablet try), `docs/parity-delta-2026-10-18.md` (the v0.204.7 run's list and
 decisions), `todo.md` and `AGENTS.md`. **Keep this file current after every

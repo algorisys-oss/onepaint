@@ -79,9 +79,12 @@ Fold each item into `feature-parity.md` as it lands.
       shows matches whatever is folded. Import and Export sit under the search
       box. onepaint shows one category at a time through its chips, so only
       Recent and that category have headers.
-- [ ] **10. Brushes panel: header pinned while scrolling (0.204.18).** The
-      title bar and search stay at the top when floating, centred and docked.
-      Check ours, which probably needs the header outside the `ScrollArea`.
+- [x] **10. Brushes panel: header pinned while scrolling (0.204.18).** Our
+      title bars were already outside the body scroll, docked and floating,
+      but the search box and library actions scrolled away with the list. The
+      dock now lets the Brushes panel scroll itself (`scrolls_itself`): its
+      search and actions stay pinned, and the list and sliders scroll under
+      them. As a popover, only the list scrolls, as before.
 - [ ] **11. Stored size in Document Properties (0.208.2, F25).** Counts every
       saved part once: tiles, masks, relief, overflow, PSD data and the
       reference image.

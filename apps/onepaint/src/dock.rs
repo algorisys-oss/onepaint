@@ -360,10 +360,21 @@ fn section_header(app: &mut App, ui: &mut Ui, side: DockSide, id: PanelId, head:
     drag.on_hover_cursor(egui::CursorIcon::Grab);
 }
 
+/// Panels that keep a header pinned and scroll the rest themselves (the
+/// Brushes panel's search and actions, happypaint v0.204.18).
+fn scrolls_itself(id: PanelId) -> bool {
+    id == PanelId::Brush
+}
+
 fn section_body(app: &mut App, ui: &mut Ui, id: PanelId, body: Rect) {
     let mut child =
         ui.new_child(egui::UiBuilder::new().max_rect(body.shrink2(vec2(10.0, 6.0))).layout(egui::Layout::top_down(egui::Align::Min)));
     child.set_clip_rect(body);
+    if scrolls_itself(id) {
+        child.spacing_mut().item_spacing = vec2(8.0, 6.0);
+        host_body(app, &mut child, id);
+        return;
+    }
     egui::ScrollArea::vertical().id_salt(("dock-body", id)).auto_shrink([false, false]).max_height(body.height() - 12.0).show(
         &mut child,
         |ui| {
@@ -530,6 +541,10 @@ fn float_window(
             app.dock.titles.push((target.clone(), head));
             if !folded {
                 ui.add_space(4.0);
+                if scrolls_itself(active) {
+                    ui.allocate_ui(vec2(ui.available_width(), body_h), |ui| host_body(app, ui, active));
+                    return;
+                }
                 egui::ScrollArea::vertical()
                     .id_salt(("float-body", active))
                     .max_height(body_h)
