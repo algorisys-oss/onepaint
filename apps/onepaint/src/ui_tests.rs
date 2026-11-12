@@ -822,3 +822,70 @@ fn the_move_tool_moves_every_picked_layer() {
         assert!(l.pixels.get(x, 150)[3] < 0.5 && l.pixels.get(x, 260)[3] > 0.99, "{id} moved down");
     }
 }
+
+/// happypaint's multi-select bar: Ctrl/⌘-clicked layers get Group, Merge
+/// (scattered picks too, v0.208.3), Hide and a colour label, each one step.
+#[test]
+fn the_layers_bar_acts_on_the_picked_layers() {
+    for light in [false, true] {
+        let mut h = harness();
+        h.run();
+        if light {
+            let ctx = h.ctx.clone();
+            h.state_mut().toggle_theme(&ctx);
+        }
+        let mut ids = Vec::new();
+        for x in [100.0, 300.0, 500.0] {
+            let s = &mut h.state_mut().session;
+            s.execute(Command::AddLayer).unwrap();
+            let poly = onepaint_selection::rect_polygon([x, 100.0], [x + 100.0, 200.0]);
+            s.execute(Command::SelectShape { contours: vec![poly], mode: onepaint_selection::Mode::Replace, antialias: false }).unwrap();
+            s.execute(Command::FillSelection).unwrap();
+            s.execute(Command::Deselect).unwrap();
+            ids.push(s.active().to_string());
+        }
+        h.run();
+        assert!(h.query_by_label("Merge").is_none(), "no bar without picks");
+        // The top layer is active; Ctrl-click the bottom one: a scattered pair.
+        let name = h.state().session.doc().find(&ids[0]).unwrap().name().to_string();
+        let at = h.get_by_label(&name).rect().center();
+        click_with(&mut h, at, egui::Modifiers::COMMAND);
+        assert_eq!(h.state().layer_picks.len(), 2);
+        assert!(h.query_by_label("2 selected").is_some());
+
+        let n = h.state().session.history_len();
+        h.get_by_label("Hide").click();
+        h.run();
+        let shown = |h: &Harness<'_, App>, id: &str| h.state().session.doc().find(id).unwrap().visible();
+        assert!(!shown(&h, &ids[0]) && !shown(&h, &ids[2]) && shown(&h, &ids[1]));
+        assert_eq!(h.state().session.history_len(), n + 1, "one step");
+        h.get_by_label("Show").click();
+        h.run();
+        assert!(shown(&h, &ids[0]) && shown(&h, &ids[2]));
+        // The bar's swatch, not the Properties panel's.
+        let y = h.get_by_label("2 selected").rect().center().y;
+        let at = h.get_all_by_label("green").map(|n| n.rect().center()).min_by(|a, b| (a.y - y).abs().total_cmp(&(b.y - y).abs())).unwrap();
+        click_with(&mut h, at, Default::default());
+        assert_eq!(h.state().session.color_label(&ids[2]).as_deref(), Some("green"));
+        assert_eq!(h.state().session.color_label(&ids[0]).as_deref(), Some("green"));
+
+        if light {
+            h.get_by_label("Group").click();
+            h.run();
+            let g = h.state().session.active().to_string();
+            assert_eq!(h.state().session.doc().parent_of(&ids[0]).flatten(), Some(g.clone()));
+            assert_eq!(h.state().session.doc().parent_of(&ids[2]).flatten(), Some(g));
+            assert_eq!(h.state().session.doc().parent_of(&ids[1]).flatten(), None, "the layer between stays out");
+        } else {
+            h.get_by_label("Merge").click();
+            h.run();
+            let s = &h.state().session;
+            assert!(s.doc().find(&ids[2]).is_none(), "the top pick merged down");
+            let l = s.doc().layer(&ids[0]).unwrap();
+            assert!(l.pixels.get(150, 150)[3] > 0.99 && l.pixels.get(550, 150)[3] > 0.99);
+            assert_eq!(l.pixels.get(350, 150)[3], 0.0, "the layer between stays its own");
+            assert!(s.doc().layer(&ids[1]).is_some());
+        }
+        assert!(h.state().layer_picks.is_empty(), "the picks clear");
+    }
+}

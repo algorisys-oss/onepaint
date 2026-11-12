@@ -66,6 +66,7 @@ pub static ICONS: &[(&str, &[u8])] = icons![
     "check",
     "link-2",
     "link-2-off",
+    "merge",
     "settings",
     "sliders-horizontal",
     "fingerprint",

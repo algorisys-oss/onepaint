@@ -25,6 +25,7 @@ mod gestures;
 mod gradient_ui;
 mod help;
 mod keymap;
+mod layer_bar;
 mod layout;
 mod levels;
 mod loading;

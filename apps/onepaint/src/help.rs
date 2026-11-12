@@ -109,6 +109,11 @@ pub const GUIDE: &[(&str, &[(&str, &str)])] = &[
             ("Link", "The chain button keeps the aspect ratio when you change W or H"),
             ("Distort, Warp", "Have no numbers; the fields grey out until you apply them"),
             ("Pick layers", "In the Layers panel: Ctrl/⌘-click adds or removes a layer, Shift-click picks a range, a plain click clears"),
+            (
+                "Picked layers",
+                "A bar over the list: Group, Merge (even when not next to each other), Duplicate, Lock, Hide, a colour label and Delete, each one undo step",
+            ),
+            ("Move them", "The Move tool moves every picked layer under one box; with none picked, an active group moves its children"),
             ("What moves", "The picked layers; hidden and locked ones sit it out, a picked group means its children"),
             ("Measured by", "Each layer's artwork: the tight box around its painted pixels"),
             ("Align (six buttons)", "Left, centre, right, then top, middle, bottom"),

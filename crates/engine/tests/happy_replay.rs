@@ -113,3 +113,20 @@ fn select_shape_replays_its_anti_alias() {
     assert_eq!(soft(json!({"points": tri, "mode": "replace"})), 0);
     assert!(soft(json!({"points": tri, "mode": "replace", "antialias": true})) > 50);
 }
+
+/// Grouping picked layers replays, and the new group answers to its happypaint id.
+#[test]
+fn group_layers_replays() {
+    let bytes = rec(json!([
+        {"t": 0, "op": "addLayer", "args": {"id": "b"}},
+        {"t": 10, "op": "addLayer", "args": {"id": "c"}},
+        {"t": 20, "op": "groupLayers", "args": {"ids": ["b", "c"], "groupId": "g"}},
+        {"t": 30, "op": "setLayerProps", "args": {"id": "g", "props": {"name": "Inks"}}},
+    ]));
+    let (mut r, skipped) = Replay::from_happypaint(&bytes).unwrap();
+    assert!(skipped.is_empty(), "{skipped:?}");
+    r.step(r.len());
+    let d = r.session.doc();
+    let g = d.root.iter().find(|n| n.name() == "Inks").expect("the group, renamed through its happypaint id");
+    assert_eq!(g.as_group().unwrap().children.len(), 2);
+}

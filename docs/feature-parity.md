@@ -209,6 +209,9 @@ Source: `components/toolbar/toolbar.tsx`, `components/dock/`, `state/dock-store.
   the layout persists as `layout.json` (divergences 42, 43)
 - [x] Properties panel: the selected adjustment or fill layer's settings in a
   panel of their own, docked right by default
+- [x] Picked layers bar in the Layers panel: Group, Merge (scattered picks
+  too), Duplicate, Lock, Hide, colour label and Delete, each one undo step
+  (happypaint v0.208.3)
 - [x] Move several layers at once: the layers picked in the Layers panel, or
   an active group's children, under one box, one undo step (happypaint v0.168,
   v0.205.1)

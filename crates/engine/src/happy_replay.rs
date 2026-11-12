@@ -313,6 +313,17 @@ impl Session {
                     self.run(Command::MergeDown { id });
                 }
             }
+            "groupLayers" => {
+                let ids: Vec<String> =
+                    a.get("ids").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(|i| self.hid(i)).collect();
+                self.run(Command::GroupLayers { ids });
+                self.adopt(a, "groupId");
+            }
+            "ungroupLayer" => {
+                if let Some(id) = self.hid_of(a, "id") {
+                    self.run(Command::Ungroup { id });
+                }
+            }
             "setLayerProps" => {
                 let id = self.hid_of(a, "id");
                 let p = a.get("props").cloned().unwrap_or(Value::Null);
@@ -572,6 +583,8 @@ const HANDLED: &[&str] = &[
     "moveNodeTo",
     "moveLayer",
     "mergeDown",
+    "groupLayers",
+    "ungroupLayer",
     "setLayerProps",
     "toggleClipped",
     "toggleAlphaLock",

@@ -74,3 +74,17 @@ fn top_mut_for_coalescing() {
     *h.top_mut().unwrap() = 5;
     assert_eq!(h.undo().unwrap(), vec![&5]);
 }
+
+#[test]
+fn nested_transactions_make_one_step() {
+    let mut h = History::new();
+    h.begin_transaction();
+    h.push(1, 1);
+    h.begin_transaction();
+    h.push(2, 1);
+    h.end_transaction();
+    h.push(3, 1);
+    h.end_transaction();
+    assert_eq!(h.undo_len(), 1);
+    assert_eq!(h.undo().unwrap(), vec![&3, &2, &1]);
+}

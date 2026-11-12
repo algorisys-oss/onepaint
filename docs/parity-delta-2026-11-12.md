@@ -109,12 +109,14 @@ and `feature-parity.md` doesn't list that gap. These depend on it:
       step for all; Cancel restores all. A selection lifts the same part of
       every layer; text and paths stay vector. Picking layers while the Move
       box is untouched re-lifts them.
-- [ ] **Merge non-adjacent picked layers (0.208.3).** The lower picks are
+- [x] **Merge non-adjacent picked layers (0.208.3).** The lower picks are
       gathered under the topmost one and merged there; layers in between stay.
-      One undo step. We have only Merge Down and Merge Visible. Not blocked
-      any more: it needs happypaint's multi-selection action bar on the
-      Layers panel (Group, Merge, Duplicate, Lock, Hide the picks), which
-      onepaint doesn't have yet.
+      One undo step. Done 2026-11-13 with happypaint's multi-select bar on
+      the Layers panel (`layer_bar.rs`): Group (`Command::GroupLayers`,
+      replayed from `groupLayers`), Merge (`Command::MergeLayers`), Duplicate,
+      Lock, Hide, colour label and Delete, each one undo step
+      (`Command::Batch`, happypaint's `batchHistory`; history transactions
+      now nest).
 
 ## Low priority
 

@@ -34,6 +34,22 @@ pub enum Command {
     GroupLayer {
         id: NodeId,
     },
+    /// Put several layers or groups into one new group, at the topmost one's
+    /// place; picks under a different parent from the first are left out
+    /// (happypaint `groupLayers`).
+    GroupLayers {
+        ids: Vec<NodeId>,
+    },
+    /// Merge picked paint layers into the bottom-most one. Scattered picks are
+    /// gathered under the topmost first; layers between them keep their place
+    /// (happypaint v0.208.3 `mergeSelected`). One undo step.
+    MergeLayers {
+        ids: Vec<NodeId>,
+    },
+    /// Run commands as one undo step (happypaint `batchHistory`).
+    Batch {
+        commands: Vec<Command>,
+    },
     /// Lift a group's children into its place.
     Ungroup {
         id: NodeId,

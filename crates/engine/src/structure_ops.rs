@@ -19,6 +19,105 @@ impl Session {
         })
     }
 
+    /// Every node id in the Layers panel's order: the top of the stack
+    /// first, a group just before its children.
+    pub fn panel_order(&self) -> Vec<NodeId> {
+        fn walk(nodes: &[Node], out: &mut Vec<NodeId>) {
+            for n in nodes.iter().rev() {
+                out.push(n.id().to_string());
+                if let Node::Group(g) = n {
+                    walk(&g.children, out);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&self.doc.root, &mut out);
+        out
+    }
+
+    /// `ids` as a mergeable run, top-first: two or more paint layers, every
+    /// one below the top able to take pixels (not an adjustment layer).
+    pub fn mergeable_run(&self, ids: &[NodeId]) -> Option<Vec<NodeId>> {
+        let run: Vec<NodeId> = self.panel_order().into_iter().filter(|id| ids.contains(id)).collect();
+        let layer = |id: &NodeId| self.doc.layer(id);
+        let ok = run.len() >= 2
+            && run.iter().all(|id| layer(id).is_some())
+            && run[1..].iter().all(|id| layer(id).is_some_and(|l| l.adjustment.is_none()));
+        ok.then_some(run)
+    }
+
+    /// Group `ids` that share the first one's parent into a new group, at the
+    /// topmost one's place, keeping their stacking order; the group becomes
+    /// active (PE `groupLayers`).
+    pub(crate) fn group_nodes(&mut self, ids: &[NodeId]) -> Result<(), EngineError> {
+        let found: Vec<&NodeId> = ids.iter().filter(|id| self.doc.find(id).is_some()).collect();
+        let Some(first) = found.first() else { return Ok(()) };
+        let parent = self.doc.parent_of(first).flatten();
+        let mut picks: Vec<(usize, NodeId)> = found
+            .iter()
+            .filter(|id| self.doc.parent_of(id).flatten() == parent)
+            .filter_map(|id| Some((*self.doc.path_of(id)?.last()?, (*id).clone())))
+            .collect();
+        picks.sort();
+        picks.dedup();
+        if picks.len() < 2 {
+            return Ok(());
+        }
+        let top = picks.iter().map(|p| p.0).max().unwrap_or(0);
+        let at = top + 1 - picks.len();
+        let name = self.next_group_name();
+        self.tree_edit(None, |s| {
+            let mut g = Group::new(&name);
+            // Bottom to top, as they stacked.
+            for (_, id) in &picks {
+                let (node, _, _) = s.doc.remove(id).ok_or_else(|| EngineError::NoSuchLayer(id.clone()))?;
+                g.children.push(node);
+            }
+            s.active = g.id.clone();
+            s.doc.insert(parent.as_deref(), at, Node::Group(g));
+            Ok(())
+        })
+    }
+
+    /// Merge picked paint layers (see [`Command::MergeLayers`]).
+    pub(crate) fn merge_layers(&mut self, ids: &[NodeId]) -> Result<(), EngineError> {
+        let run = self.mergeable_run(ids).ok_or_else(|| EngineError::Invalid("Merge needs two or more paint layers".into()))?;
+        self.history.begin_transaction();
+        let r = self.merge_run(&run);
+        self.history.end_transaction();
+        r
+    }
+
+    fn merge_run(&mut self, run: &[NodeId]) -> Result<(), EngineError> {
+        let parent = self.doc.parent_of(&run[0]).flatten();
+        let at = |s: &Self, id: &str| (s.doc.parent_of(id).flatten(), s.doc.path_of(id).and_then(|p| p.last().copied()).unwrap_or(0));
+        // Gather: each pick goes directly under the one above it.
+        for w in run.windows(2) {
+            let ((pp, pi), (cp, ci)) = (at(self, &w[0]), at(self, &w[1]));
+            if cp == pp && ci + 1 == pi {
+                continue;
+            }
+            // MoveLayer's index counts after the move's own removal.
+            let index = if cp == pp && ci < pi { pi - 1 } else { pi };
+            self.move_layer(&w[1], parent.clone(), index)?;
+        }
+        for id in &run[..run.len() - 1] {
+            self.merge_down(id)?;
+        }
+        Ok(())
+    }
+
+    /// Run `commands` as one undo step; stops at the first error.
+    pub(crate) fn batch(&mut self, commands: Vec<Command>) -> Result<(), EngineError> {
+        if commands.iter().any(|c| matches!(c, Command::Undo | Command::Redo)) {
+            return Err(EngineError::Invalid("undo inside a batch".into()));
+        }
+        self.history.begin_transaction();
+        let r = commands.into_iter().try_for_each(|c| self.execute(c).map(|_| ()));
+        self.history.end_transaction();
+        r
+    }
+
     /// Lift a group's children into its place (the group's own opacity,
     /// mode and styles go with it); its top child becomes active.
     pub(crate) fn ungroup(&mut self, id: &str) -> Result<(), EngineError> {

@@ -929,6 +929,7 @@ fn layers(app: &mut App, ui: &mut Ui) {
             }
         });
     });
+    crate::layer_bar::show(app, ui);
     let mut list = Vec::new();
     rows(&app.session.doc().root, 0, &mut list);
     let doc_size = [app.session.doc().width, app.session.doc().height];
@@ -1194,27 +1195,8 @@ fn layers(app: &mut App, ui: &mut Ui) {
     ui.horizontal(|ui| {
         ui.label(RichText::new("Label").color(t.fg_muted));
         let current = app.session.color_label(&active);
-        if ui
-            .add(egui::Button::new(RichText::new("∅").color(t.fg_muted)).min_size(vec2(20.0, 20.0)).fill(if current.is_none() {
-                t.hover
-            } else {
-                t.field
-            }))
-            .on_hover_text("No label")
-            .clicked()
-        {
-            let _ = app.session.execute(Command::SetColorLabel { id: active.clone(), label: None });
-        }
-        for name in onepaint_engine::Session::COLOR_LABELS {
-            let Some(c) = label_color(name, t.dark()) else { continue };
-            let (r, resp) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::click());
-            ui.painter().circle_filled(r.center(), 7.0, c);
-            if current.as_deref() == Some(name) {
-                ui.painter().circle_stroke(r.center(), 9.0, egui::Stroke::new(2.0, t.fg));
-            }
-            if resp.on_hover_text(name).clicked() {
-                let _ = app.session.execute(Command::SetColorLabel { id: active.clone(), label: Some(name.to_string()) });
-            }
+        if let Some(label) = label_swatches(ui, Some(current.as_deref())) {
+            let _ = app.session.execute(Command::SetColorLabel { id: active.clone(), label });
         }
     });
     ui.add_space(4.0);
@@ -2472,4 +2454,33 @@ fn mix_section(app: &mut App, ui: &mut Ui) {
     if changed {
         app.settings.save();
     }
+}
+
+/// The colour-label swatches: "no label" and each colour. `current` is the
+/// label shown as chosen (`Some(None)`: no label; `None`: mixed, nothing
+/// marked). Returns the one clicked.
+pub(crate) fn label_swatches(ui: &mut Ui, current: Option<Option<&str>>) -> Option<Option<String>> {
+    let t = Tokens::get(ui.ctx());
+    let mut picked = None;
+    let none = current == Some(None);
+    if ui
+        .add(egui::Button::new(RichText::new("∅").color(t.fg_muted)).min_size(vec2(20.0, 20.0)).fill(if none { t.hover } else { t.field }))
+        .on_hover_text("No label")
+        .clicked()
+    {
+        picked = Some(None);
+    }
+    for name in onepaint_engine::Session::COLOR_LABELS {
+        let Some(c) = label_color(name, t.dark()) else { continue };
+        let (r, resp) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::click());
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, current == Some(Some(name)), name));
+        ui.painter().circle_filled(r.center(), 7.0, c);
+        if current == Some(Some(name)) {
+            ui.painter().circle_stroke(r.center(), 9.0, egui::Stroke::new(2.0, t.fg));
+        }
+        if resp.on_hover_text(name).clicked() {
+            picked = Some(Some(name.to_string()));
+        }
+    }
+    picked
 }

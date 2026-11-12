@@ -20,6 +20,8 @@ pub struct History<E> {
     bytes: usize,
     memory_limited: bool,
     txn: Option<Step<E>>,
+    /// Open [`History::begin_transaction`] calls; the step closes at zero.
+    txn_depth: usize,
 }
 
 impl<E> Default for History<E> {
@@ -50,6 +52,7 @@ impl<E> History<E> {
             bytes: 0,
             memory_limited: false,
             txn: None,
+            txn_depth: 0,
         }
     }
 
@@ -129,13 +132,19 @@ impl<E> History<E> {
     }
 
     /// Start collecting pushes into one step until [`History::end_transaction`].
+    /// Transactions nest: an inner pair joins the outer step.
     pub fn begin_transaction(&mut self) {
         if self.txn.is_none() {
             self.txn = Some(Step { entries: Vec::new(), bytes: 0 });
         }
+        self.txn_depth += 1;
     }
 
     pub fn end_transaction(&mut self) {
+        self.txn_depth = self.txn_depth.saturating_sub(1);
+        if self.txn_depth > 0 {
+            return;
+        }
         if let Some(s) = self.txn.take() {
             self.push_step(s);
         }
