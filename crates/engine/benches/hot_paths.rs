@@ -166,7 +166,7 @@ fn regions(c: &mut Criterion) {
         })
     });
     let oval = vec![ellipse_polygon([500.0, 500.0], [3600.0, 3600.0])];
-    s.execute(Command::SelectShape { contours: oval, mode: Mode::Replace }).unwrap();
+    s.execute(Command::SelectShape { contours: oval, mode: Mode::Replace, antialias: false }).unwrap();
     g.bench_function("feather 30 px", |b| {
         b.iter(|| {
             s.execute(black_box(Command::SetFeather { radius: 30.0 })).unwrap();

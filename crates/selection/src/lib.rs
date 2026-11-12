@@ -159,29 +159,56 @@ impl Mask {
         if r == 0 { self.clone() } else { self.sliding(r.min(200), false) }
     }
 
-    /// Separable box blur, applied once, clamp-to-edge (S:377-411).
-    pub fn feathered(&self, radius: f32) -> Mask {
-        let r = (radius.round() as i64).max(1) as usize;
-        let (w, h) = (self.w as usize, self.h as usize);
-        let win = (2 * r + 1) as f32;
-        let a: Vec<f32> = self.data.iter().map(|&v| v as f32 / 255.0).collect();
-        let line = |src: &[f32], dst: &mut [f32]| {
-            let len = src.len();
-            let at = |i: i64| src[i.clamp(0, len as i64 - 1) as usize];
-            let mut sum: f32 = (-(r as i64)..=r as i64).map(at).sum();
-            for (i, d) in dst.iter_mut().enumerate() {
-                *d = sum / win;
-                sum += at(i as i64 + r as i64 + 1) - at(i as i64 - r as i64);
-            }
+    /// A Gaussian feather whose `sigma` is in doc px: Photoshop's meaning of
+    /// a feather radius (v0.209.0, S:446-505). Three box passes per axis
+    /// ([`gauss_box_radii`]), clamp-to-edge, over the selection's bounds grown
+    /// by the blur's reach only; outside that every window is all zero.
+    pub fn feathered(&self, sigma: f32) -> Mask {
+        let mut out = Mask::new(self.w, self.h);
+        let Some((bx, by, bw, bh)) = self.bounds() else {
+            return out;
         };
-        let out = separable(&a, w, h, line);
-        Mask { w: self.w, h: self.h, data: out.iter().map(|v| (v.min(1.0) * 255.0).round() as u8).collect() }
+        let radii = gauss_box_radii(f64::from(sigma.max(0.5)));
+        let reach = (radii[0] + radii[1] + radii[2]) as u32;
+        let x0 = bx.saturating_sub(reach);
+        let y0 = by.saturating_sub(reach);
+        let cw = ((bx + bw - 1 + reach).min(self.w - 1) - x0 + 1) as usize;
+        let ch = ((by + bh - 1 + reach).min(self.h - 1) - y0 + 1) as usize;
+        let mut a = vec![0f32; cw * ch];
+        for (y, row) in a.chunks_exact_mut(cw).enumerate() {
+            let src = (y0 as usize + y) * self.w as usize + x0 as usize;
+            for (d, &v) in row.iter_mut().zip(&self.data[src..src + cw]) {
+                *d = f32::from(v) / 255.0;
+            }
+        }
+        let line = |src: &[f32], dst: &mut [f32]| {
+            let mut tmp = vec![0f32; src.len()];
+            box_line(src, dst, radii[0]);
+            box_line(dst, &mut tmp, radii[1]);
+            box_line(&tmp, dst, radii[2]);
+        };
+        let blurred = separable(&a, cw, ch, line);
+        for (y, row) in blurred.chunks_exact(cw).enumerate() {
+            let dst = (y0 as usize + y) * self.w as usize + x0 as usize;
+            for (d, &v) in out.data[dst..dst + cw].iter_mut().zip(row) {
+                *d = if v <= 0.0 {
+                    0
+                } else if v >= 1.0 {
+                    255
+                } else {
+                    (v * 255.0).round() as u8
+                };
+            }
+        }
+        out
     }
 
-    /// Feather then threshold at 128 → a hard mask (S:467-472).
+    /// Feather then threshold at 128 → a hard mask (S:560-569). Smooth by `r`
+    /// keeps the strength of the single box blur it always used: the Gaussian
+    /// gets that box's variance, r(r+1)/3.
     pub fn smoothed(&self, px: f32) -> Mask {
-        let r = px.round().clamp(0.0, 100.0);
-        let f = self.feathered(r);
+        let r = px.round().clamp(1.0, 100.0);
+        let f = self.feathered((r * (r + 1.0) / 3.0).sqrt());
         Mask { w: self.w, h: self.h, data: f.data.iter().map(|&v| if v >= 128 { 255 } else { 0 }).collect() }
     }
 
@@ -209,6 +236,39 @@ impl Mask {
             cur = next;
         }
         cur
+    }
+}
+
+/// Radii of three successive box blurs whose combined variance matches a
+/// Gaussian of standard deviation `sigma` (a box of radius r has variance
+/// r(r+1)/3, and variances add). Mixes two neighbouring radii so the match
+/// holds at small sigmas too (S:386-400).
+pub fn gauss_box_radii(sigma: f64) -> [usize; 3] {
+    let target = sigma * sigma;
+    let lo = ((target + 0.25).sqrt() - 0.5).floor().max(0.0);
+    let v_lo = lo * (lo + 1.0) / 3.0;
+    let v_hi = (lo + 1.0) * (lo + 2.0) / 3.0;
+    // m passes at `lo`, the rest at `lo + 1`: m·vLo + (3 − m)·vHi ≈ target.
+    let m = ((3.0 * v_hi - target) / (v_hi - v_lo)).round().clamp(0.0, 3.0) as usize;
+    let lo = lo as usize;
+    [0, 1, 2].map(|i| if i < m { lo } else { lo + 1 })
+}
+
+/// A running-sum box blur of radius `r` along one line, edge samples extended.
+fn box_line(src: &[f32], dst: &mut [f32], r: usize) {
+    if r == 0 {
+        dst.copy_from_slice(src);
+        return;
+    }
+    let last = src.len() as i64 - 1;
+    let at = |i: i64| f64::from(src[i.clamp(0, last) as usize]);
+    let win = (2 * r + 1) as f64;
+    let r = r as i64;
+    let mut sum: f64 = (-r..=r).map(at).sum();
+    for (i, d) in dst.iter_mut().enumerate() {
+        *d = (sum / win) as f32;
+        let i = i as i64;
+        sum += at(i + r + 1) - at(i - r);
     }
 }
 
@@ -272,13 +332,22 @@ pub fn rect_polygon(a: Pt, b: Pt) -> Vec<Pt> {
     vec![a, [b[0], a[1]], b, [a[0], b[1]]]
 }
 
-/// Ellipse inscribed in the box from `a` to `b`, 64 segments (S:359-370).
+/// Ellipse inscribed in the box from `a` to `b` (S:362-383). The segment
+/// count follows the size so each flat strays at most ~0.1 px from the true
+/// curve: a chord of angle 2π/n on radius r bows by r(1 − cos π/n) ≈ rπ²/2n².
 pub fn ellipse_polygon(a: Pt, b: Pt) -> Vec<Pt> {
+    let (rx, ry) = ((b[0] - a[0]).abs() / 2.0, (b[1] - a[1]).abs() / 2.0);
+    let n = (std::f64::consts::PI * (rx.max(ry) / 0.2).sqrt()).ceil().clamp(64.0, 2048.0) as usize;
+    ellipse_polygon_n(a, b, n)
+}
+
+/// [`ellipse_polygon`] with an explicit segment count.
+pub fn ellipse_polygon_n(a: Pt, b: Pt, segments: usize) -> Vec<Pt> {
     let (cx, cy) = ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0);
     let (rx, ry) = ((b[0] - a[0]).abs() / 2.0, (b[1] - a[1]).abs() / 2.0);
-    (0..64)
+    (0..segments)
         .map(|i| {
-            let t = i as f64 / 64.0 * std::f64::consts::TAU;
+            let t = i as f64 / segments as f64 * std::f64::consts::TAU;
             [cx + rx * t.cos(), cy + ry * t.sin()]
         })
         .collect()

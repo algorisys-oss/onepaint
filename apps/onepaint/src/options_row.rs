@@ -7,7 +7,7 @@
 use crate::{App, Popover, dock};
 use egui::{Pos2, Rect, Ui};
 use onepaint_engine::{Command, Tool};
-use onepaint_ui_kit::inline::{chip, dropdown, dropdown_shown, inline_slider, menu_chip};
+use onepaint_ui_kit::inline::{chip, dropdown, dropdown_shown, inline_number, inline_slider, menu_chip};
 use onepaint_ui_kit::{icons, widgets};
 
 const SLIDER_W: f32 = 84.0;
@@ -356,6 +356,12 @@ fn select(app: &mut App, ui: &mut Ui, view: Rect, tool: Tool) {
             o.wand_sample_all = !o.wand_sample_all;
         }
     }
+    if matches!(tool, Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectPoly) {
+        let o = &mut app.canvas.options;
+        if chip(ui, "Anti-alias", o.select_antialias).on_hover_text("Smooth, partly selected edges").clicked() {
+            o.select_antialias = !o.select_antialias;
+        }
+    }
     widgets::vline(ui, 24.0);
     let has = app.session.selection().is_some();
     let r = crate::menus::REFINE_PX;
@@ -385,9 +391,11 @@ fn select(app: &mut App, ui: &mut Ui, view: Rect, tool: Tool) {
         if icons::button(ui, "layers", 26.0, false, "Cut to new layer (Ctrl+Shift+J)").clicked() {
             let _ = app.session.execute(Command::LayerViaCopy { cut: true });
         }
-        let mut feather = app.session.feather();
-        if inline_slider(ui, "Feather", &mut feather, 0.0..=50.0, SLIDER_W, |v| format!("{v:.0} px")).changed() {
-            let _ = app.session.execute(Command::SetFeather { radius: feather.round() });
-        }
     });
+    // Set before or after drawing: it softens the selection as it applies.
+    let mut feather = f64::from(app.session.feather());
+    let r = inline_number(ui, "Feather", &mut feather, 0.0..=f64::from(onepaint_engine::FEATHER_MAX), " px", 0);
+    if r.on_hover_text("Soft edge, px (a Gaussian radius, as in Photoshop)").changed() {
+        let _ = app.session.execute(Command::SetFeather { radius: feather as f32 });
+    }
 }

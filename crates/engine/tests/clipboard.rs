@@ -6,7 +6,8 @@ use onepaint_selection::{Mode, rect_polygon};
 
 fn session() -> Session {
     let mut s = Session::new(200, 100, Some(Rgba::WHITE));
-    s.execute(Command::SelectShape { contours: vec![rect_polygon([10.0, 10.0], [30.0, 20.0])], mode: Mode::Replace }).unwrap();
+    s.execute(Command::SelectShape { contours: vec![rect_polygon([10.0, 10.0], [30.0, 20.0])], mode: Mode::Replace, antialias: false })
+        .unwrap();
     s.execute(Command::SetColor { rgba: Rgba::new(0.0, 0.0, 1.0, 1.0) }).unwrap();
     s.execute(Command::FillSelection).unwrap();
     s

@@ -131,6 +131,7 @@ fn bevel_from_alpha_replaces_the_field_and_undoes() {
     s.execute(Command::SelectShape {
         contours: vec![onepaint_selection::rect_polygon([50.0, 20.0], [150.0, 100.0])],
         mode: onepaint_selection::Mode::Replace,
+        antialias: false,
     })
     .unwrap();
     s.execute(Command::FillSelection).unwrap();

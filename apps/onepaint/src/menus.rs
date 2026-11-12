@@ -187,7 +187,7 @@ pub fn build(app: &App) -> Vec<Menu> {
                 .checked(app.popover == Some(Popover::BrushStudio)),
         ),
         Item(item(Cmd::PanelReference, "Reference image").shortcut(key(app, Action::ToggleReference)).checked(app.reference.open)),
-        on(Cmd::PanelAlign, "Align & distribute", dock::panel_open(app, PanelId::Align)),
+        on(Cmd::PanelAlign, "Transform & align", dock::panel_open(app, PanelId::Align)),
         Item(item(Cmd::PanelAnimation, "Animation").shortcut(key(app, Action::AnimToggle)).checked(anim)),
         on(Cmd::PanelPalettes, "Palettes", dock::panel_open(app, PanelId::Palettes)),
         on(Cmd::PanelToolOptions, "Tool options", dock::panel_open(app, PanelId::ToolOptions)),

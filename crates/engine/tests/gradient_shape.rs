@@ -30,7 +30,8 @@ fn linear_gradient_fg_to_transparent_with_preview_and_undo() {
 #[test]
 fn gradient_respects_selection() {
     let mut s = Session::new(100, 50, None);
-    s.execute(Command::SelectShape { contours: vec![rect_polygon([0.0, 0.0], [50.0, 50.0])], mode: Mode::Replace }).unwrap();
+    s.execute(Command::SelectShape { contours: vec![rect_polygon([0.0, 0.0], [50.0, 50.0])], mode: Mode::Replace, antialias: false })
+        .unwrap();
     s.gradient_begin();
     s.gradient_update([0.0, 0.0], [100.0, 0.0], GShape::Linear, &onepaint_filters::gradient::fg_bg([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]));
     s.gradient_end();

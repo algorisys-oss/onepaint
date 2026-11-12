@@ -13,7 +13,8 @@ fn rect_polygon(a: [f64; 2], b: [f64; 2]) -> Vec<[f64; 2]> {
 /// A new raster layer holding a filled rectangle.
 fn block(s: &mut Session, x: f64, y: f64, w: f64, h: f64) -> String {
     s.execute(Command::AddLayer).unwrap();
-    s.execute(Command::SelectShape { contours: vec![rect_polygon([x, y], [x + w, y + h])], mode: Mode::Replace }).unwrap();
+    s.execute(Command::SelectShape { contours: vec![rect_polygon([x, y], [x + w, y + h])], mode: Mode::Replace, antialias: false })
+        .unwrap();
     s.execute(Command::FillSelection).unwrap();
     s.execute(Command::Deselect).unwrap();
     s.active().to_string()

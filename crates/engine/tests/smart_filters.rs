@@ -76,6 +76,7 @@ fn blur_adjustment_layers_render_live() {
     s.execute(Command::SelectShape {
         contours: vec![onepaint_selection::rect_polygon([0.0, 0.0], [32.0, 64.0])],
         mode: onepaint_selection::Mode::Replace,
+        antialias: false,
     })
     .unwrap();
     s.execute(Command::SetColor { rgba: Rgba::new(1.0, 0.0, 0.0, 1.0) }).unwrap();

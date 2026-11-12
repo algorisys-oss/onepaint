@@ -22,7 +22,7 @@ fn alpha(s: &Session, x: i32, y: i32) -> f32 {
 }
 
 fn select_rect(s: &mut Session, x0: f64, y0: f64, x1: f64, y1: f64, mode: Mode) {
-    s.execute(Command::SelectShape { contours: vec![rect_polygon([x0, y0], [x1, y1])], mode }).unwrap();
+    s.execute(Command::SelectShape { contours: vec![rect_polygon([x0, y0], [x1, y1])], mode, antialias: false }).unwrap();
 }
 
 #[test]
@@ -89,6 +89,48 @@ fn feather_softens_the_clip_mask_only() {
     let edge = clip.get(100, 125);
     assert!(edge > 0 && edge < 255, "{edge}");
     assert_eq!(s.selection().unwrap().get(100, 125), 255, "base stays hard");
+}
+
+/// happypaint v0.209.0 (artist round 35): a bucket fill inside a feathered
+/// selection fades out across the feather; it used to fill hard-edged.
+#[test]
+fn a_bucket_fill_follows_the_feather() {
+    let mut s = session();
+    select_rect(&mut s, 64.0, 64.0, 192.0, 192.0, Mode::Replace);
+    s.execute(Command::SetFeather { radius: 8.0 }).unwrap();
+    s.execute(Command::SetColor { rgba: Rgba::new(0.0, 0.0, 1.0, 1.0) }).unwrap();
+    s.execute(Command::Fill { x: 128, y: 128, tolerance: 0.1, grow: 0 }).unwrap();
+    assert!(alpha(&s, 128, 128) > 0.99, "the middle is filled");
+    let edge = alpha(&s, 64, 128);
+    assert!((0.3..0.7).contains(&edge), "about half on the edge: {edge}");
+    let outside = alpha(&s, 56, 128);
+    assert!(outside > 0.05 && outside < 0.3, "the feather reaches outside: {outside}");
+    assert_eq!(alpha(&s, 20, 128), 0.0);
+}
+
+#[test]
+fn feather_goes_up_to_1000_px() {
+    let mut s = session();
+    s.execute(Command::SetFeather { radius: 5000.0 }).unwrap();
+    assert_eq!(s.feather(), FEATHER_MAX);
+    s.execute(Command::SetFeather { radius: f32::NAN }).unwrap();
+    assert_eq!(s.feather(), FEATHER_MAX);
+    s.execute(Command::SetFeather { radius: 250.4 }).unwrap();
+    assert_eq!(s.feather(), 250.0);
+}
+
+/// Anti-alias (happypaint v0.209.0): an ellipse's edge is partly selected;
+/// without it the edge is a 0/255 staircase.
+#[test]
+fn an_anti_aliased_ellipse_has_a_soft_edge() {
+    let ellipse = onepaint_selection::ellipse_polygon([20.0, 30.0], [220.0, 200.0]);
+    let soft = |antialias| {
+        let mut s = session();
+        s.execute(Command::SelectShape { contours: vec![ellipse.clone()], mode: Mode::Replace, antialias }).unwrap();
+        s.selection().unwrap().data().iter().filter(|&&v| v != 0 && v != 255).count()
+    };
+    assert_eq!(soft(false), 0);
+    assert!(soft(true) > 100, "{}", soft(true));
 }
 
 #[test]

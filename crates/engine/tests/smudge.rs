@@ -11,7 +11,8 @@ fn pt(x: f64, y: f64) -> StrokePoint {
 /// A transparent top layer with a red square on it.
 fn session() -> Session {
     let mut s = Session::new(200, 100, None);
-    s.execute(Command::SelectShape { contours: vec![rect_polygon([10.0, 30.0], [50.0, 70.0])], mode: Mode::Replace }).unwrap();
+    s.execute(Command::SelectShape { contours: vec![rect_polygon([10.0, 30.0], [50.0, 70.0])], mode: Mode::Replace, antialias: false })
+        .unwrap();
     s.execute(Command::SetColor { rgba: Rgba::new(1.0, 0.0, 0.0, 1.0) }).unwrap();
     s.execute(Command::FillSelection).unwrap();
     s.execute(Command::Deselect).unwrap();

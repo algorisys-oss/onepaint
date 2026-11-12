@@ -101,9 +101,13 @@ pub const GUIDE: &[(&str, &[(&str, &str)])] = &[
         ],
     ),
     (
-        "Align & distribute",
+        "Transform & align",
         &[
-            ("Open it", "Menu ▸ Panels ▸ align icon; it floats, docks and tabs like any panel"),
+            ("Open it", "Menu ▸ Panels ▸ Transform & align; it floats, docks and tabs like any panel"),
+            ("Transform", "Type X / Y (top-left on the canvas), W / H in px and an angle about the box centre"),
+            ("Typing", "Arms the Move tool; Enter or Apply commits, Esc or Cancel drops it; the numbers follow handle drags"),
+            ("Link", "The chain button keeps the aspect ratio when you change W or H"),
+            ("Distort, Warp", "Have no numbers; the fields grey out until you apply them"),
             ("Pick layers", "In the Layers panel: Ctrl/⌘-click adds or removes a layer, Shift-click picks a range, a plain click clears"),
             ("What moves", "The picked layers; hidden and locked ones sit it out, a picked group means its children"),
             ("Measured by", "Each layer's artwork: the tight box around its painted pixels"),
@@ -275,7 +279,7 @@ mod tests {
     #[test]
     fn the_guide_covers_the_panel_tool_and_docking() {
         let titles: Vec<&str> = GUIDE.iter().map(|(t, _)| *t).collect();
-        for want in ["Panel (manga)", "Panels & docking", "Align & distribute", "ColorDrop", "Status bar", "Tool bar"] {
+        for want in ["Panel (manga)", "Panels & docking", "Transform & align", "ColorDrop", "Status bar", "Tool bar"] {
             assert!(titles.contains(&want), "{want}");
         }
         assert!(GUIDE.iter().all(|(_, rows)| !rows.is_empty()));

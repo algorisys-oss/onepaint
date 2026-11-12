@@ -62,7 +62,7 @@ impl PanelId {
             PanelId::Brush => "Brushes",
             PanelId::Color => "Colour",
             PanelId::Palettes => "Palettes",
-            PanelId::Align => "Align",
+            PanelId::Align => "Transform & Align",
             PanelId::Reference => "Reference",
             PanelId::Guides => "Guides",
             PanelId::ToolOptions => "Tool options",

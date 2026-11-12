@@ -320,6 +320,8 @@ pub struct App {
     pub pick_anchor: Option<String>,
     /// Align to the selection's bounds rather than the canvas.
     pub align_to_selection: bool,
+    /// Transform panel: W and H keep the aspect ratio (happypaint's Uniform).
+    pub xform_link_aspect: bool,
     /// Canvas/image size dialog state: size, anchor (col, row), keep aspect.
     pub size_dialog: ([u32; 2], (u8, u8), bool),
     pub autosave: autosave::Autosave,
@@ -434,6 +436,7 @@ impl App {
             side: Default::default(),
             pick_anchor: None,
             align_to_selection: false,
+            xform_link_aspect: false,
             size_dialog: ([0, 0], (1, 1), true),
             autosave: autosave::Autosave::new(if cfg!(test) { None } else { autosave::dir() }),
             edits: 0,
@@ -2008,7 +2011,7 @@ pub(crate) mod tests {
         let s = &mut h.state_mut().session;
         s.execute(Command::SetColor { rgba: onepaint_color::Rgba::new(1.0, 0.0, 0.0, 1.0) }).unwrap();
         let sel = onepaint_selection::rect_polygon([10.0, 10.0], [40.0, 40.0]);
-        s.execute(Command::SelectShape { contours: vec![sel], mode: onepaint_selection::Mode::Replace }).unwrap();
+        s.execute(Command::SelectShape { contours: vec![sel], mode: onepaint_selection::Mode::Replace, antialias: false }).unwrap();
         s.execute(Command::FillSelection).unwrap();
         s.execute(Command::Deselect).unwrap();
         let id = s.active().to_string();
@@ -2975,6 +2978,7 @@ pub(crate) mod tests {
         let _ = h.state_mut().session.execute(Command::SelectShape {
             contours: vec![onepaint_selection::rect_polygon([100.0, 100.0], [300.0, 300.0])],
             mode: onepaint_selection::Mode::Replace,
+            antialias: false,
         });
         h.state_mut().popover = Some(Popover::Selection);
         h.run_steps(4);

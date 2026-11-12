@@ -3,7 +3,7 @@ use onepaint_engine::*;
 use onepaint_selection::{Mode, rect_polygon};
 
 fn select(s: &mut Session, a: [f64; 2], b: [f64; 2], mode: Mode) {
-    s.execute(Command::SelectShape { contours: vec![rect_polygon(a, b)], mode }).unwrap();
+    s.execute(Command::SelectShape { contours: vec![rect_polygon(a, b)], mode, antialias: false }).unwrap();
 }
 
 fn selected(s: &Session, x: i32, y: i32) -> bool {

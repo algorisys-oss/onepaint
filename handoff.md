@@ -1,8 +1,9 @@
 # Handoff
 
 Last updated 2026-11-12. Read this first when picking the work back up,
-then `docs/parity-delta-2026-11-12.md` (happypaint v0.204.17 → v0.208.4:
-items 1–10 done and committed — float tiles v10, tiled relief v11, file
+then `docs/parity-delta-2026-11-12.md` (happypaint v0.204.17 → v0.209.0:
+items 12–15 (v0.209.0: feather everywhere as a Gaussian, anti-aliased
+selections, typed transform numbers) done; items 1–11 done and committed — float tiles v10, tiled relief v11, file
 budgets, per-tile damage, dip limits, hidden groups, autosave modes with a
 tile chunk cache, RAM-based memory estimates, Recent brushes and folds, pinned
 Brushes header, stored size; left: multi-layer Move, a pre-existing gap

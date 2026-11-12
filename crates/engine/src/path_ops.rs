@@ -227,7 +227,7 @@ impl Session {
     pub(crate) fn fill_path(&mut self) -> Result<(), EngineError> {
         let target = self.path_op_target().ok_or_else(|| EngineError::Invalid("no paint layer below the path".into()))?;
         let Some(cov) = self.path_coverage() else { return Ok(()) };
-        let sel = self.selection.clone();
+        let sel = self.clip.clone();
         let c = self.doc.space().pixel(self.color);
         let (w, h) = (self.doc.width, self.doc.height);
         self.tree_edit(None, |s| {
@@ -351,7 +351,7 @@ impl Session {
             let m = rasterize_polygons(w, h, std::slice::from_ref(poly));
             cov.iter_mut().zip(m.data()).for_each(|(c, &v)| *c = (*c).max(v));
         }
-        let sel = self.selection.clone();
+        let sel = self.clip.clone();
         let c = self.doc.space().pixel(self.color);
         let id = self.active.clone();
         self.tree_edit(None, |s| {

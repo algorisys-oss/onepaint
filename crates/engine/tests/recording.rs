@@ -25,6 +25,7 @@ fn session_recorded() -> (Session, Recording) {
     s.execute(Command::SelectShape {
         contours: vec![onepaint_selection::rect_polygon([0.0, 0.0], [100.0, 90.0])],
         mode: onepaint_selection::Mode::Replace,
+        antialias: false,
     })
     .unwrap();
     s.start_recording().unwrap();

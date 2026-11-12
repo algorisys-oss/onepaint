@@ -382,7 +382,11 @@ impl Session {
             // ── Selection ──
             "selectShape" => {
                 let pts: Vec<[f64; 2]> = a.get("points").and_then(Value::as_array).into_iter().flatten().filter_map(xy).collect();
-                self.run(Command::SelectShape { contours: vec![pts], mode: sel_mode(a.get("mode").unwrap_or(&Value::Null)) });
+                self.run(Command::SelectShape {
+                    contours: vec![pts],
+                    mode: sel_mode(a.get("mode").unwrap_or(&Value::Null)),
+                    antialias: a.get("antialias").and_then(Value::as_bool).unwrap_or(false),
+                });
             }
             "selectAll" => self.run(Command::SelectAll),
             "deselect" => self.run(Command::Deselect),

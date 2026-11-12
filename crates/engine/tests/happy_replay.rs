@@ -99,3 +99,17 @@ fn text_and_paths_replay() {
     assert_eq!((spec.text.as_str(), spec.x, spec.y), ("Hello", 30.0, 25.0));
     assert!(s.doc().root.iter().any(|n| n.name() == "Outline" && s.is_path_layer(n.id())));
 }
+
+/// v0.209.0 records `antialias` on selectShape; older recordings have none
+/// and replay hard-edged.
+#[test]
+fn select_shape_replays_its_anti_alias() {
+    let tri = json!([{"x": 10.5, "y": 10}, {"x": 150, "y": 30.3}, {"x": 60.2, "y": 110}]);
+    let soft = |args: serde_json::Value| {
+        let (mut r, _) = Replay::from_happypaint(&rec(json!([{"t": 0, "op": "selectShape", "args": args}]))).unwrap();
+        r.step(r.len());
+        r.session.selection().unwrap().data().iter().filter(|&&v| v != 0 && v != 255).count()
+    };
+    assert_eq!(soft(json!({"points": tri, "mode": "replace"})), 0);
+    assert!(soft(json!({"points": tri, "mode": "replace", "antialias": true})) > 50);
+}

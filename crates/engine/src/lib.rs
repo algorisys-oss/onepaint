@@ -33,6 +33,7 @@ mod styles_ops;
 mod text_ops;
 mod track_ops;
 pub mod transform;
+pub mod transform_numeric;
 mod wet_ops;
 pub use guides::Guides;
 pub use onepaint_brush::symmetry::{Symmetry, SymmetryMode};
@@ -272,6 +273,9 @@ impl From<onepaint_formats::FormatError> for EngineError {
 
 /// App version written into saved files.
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Largest selection feather, doc px; Photoshop's ceiling too (happypaint v0.209.0).
+pub const FEATHER_MAX: f32 = 1000.0;
 
 pub(crate) type TileChange = ((i32, i32), Option<Arc<Tile>>, Option<Arc<Tile>>);
 

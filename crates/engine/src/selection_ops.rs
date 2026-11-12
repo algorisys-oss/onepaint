@@ -57,8 +57,14 @@ impl Session {
     pub(crate) fn execute_selection(&mut self, cmd: Command) -> Result<(), EngineError> {
         let (w, h) = (self.doc.width, self.doc.height);
         match cmd {
-            Command::SelectShape { contours, mode } => {
-                let region = rasterize_polygons(w, h, &contours);
+            Command::SelectShape { contours, mode, antialias } => {
+                let region = if antialias {
+                    use onepaint_panel::geometry::Pt;
+                    let pts: Vec<Vec<Pt>> = contours.iter().map(|c| c.iter().map(|p| Pt { x: p[0], y: p[1] }).collect()).collect();
+                    Mask::from_vec(w, h, onepaint_panel::coverage::rasterize_coverage(&pts, 0, 0, w, h))
+                } else {
+                    rasterize_polygons(w, h, &contours)
+                };
                 let m = self.region_combined(&region, mode);
                 self.commit_selection(Some(m));
             }
@@ -122,7 +128,7 @@ impl Session {
                 }
             }
             Command::SetFeather { radius } => {
-                self.feather = radius.clamp(0.0, 100.0);
+                self.feather = if radius.is_finite() { radius.round().clamp(0.0, FEATHER_MAX) } else { self.feather };
                 self.refresh_clip();
             }
             Command::Fill { x, y, tolerance, grow } => self.fill(x, y, tolerance, grow.min(8)),
@@ -173,7 +179,7 @@ impl Session {
     pub(crate) fn bucket(&self, id: &str, x: i32, y: i32, tol: f32, grow: u32) -> Option<Bucket> {
         let (w, h) = (self.doc.width, self.doc.height);
         let l = self.doc.layer(id).filter(|l| l.visible && !l.locked)?;
-        let base = self.selection.clone();
+        let base = self.clip.clone();
         let get = |px: u32, py: u32| l.pixels.get(px as i32, py as i32);
         let region = color_match(w, h, &get, x, y, tol, true, base.as_deref())?;
         let region = region.grown4(grow, base.as_deref());

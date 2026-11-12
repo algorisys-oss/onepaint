@@ -27,6 +27,21 @@ pub fn inline_slider(
     r
 }
 
+/// `Label [42 px]`: a number typed or dragged, kept in `range`, shown with
+/// at most `decimals` places. Its change fires while typing.
+pub fn inline_number(
+    ui: &mut Ui,
+    label: &str,
+    value: &mut f64,
+    range: std::ops::RangeInclusive<f64>,
+    suffix: &str,
+    decimals: usize,
+) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let l = ui.label(egui::RichText::new(label).font(theme::medium(12.0)).color(t.fg_muted));
+    ui.add(egui::DragValue::new(value).range(range).suffix(suffix).max_decimals(decimals).speed(1.0)).labelled_by(l.id)
+}
+
 /// A chip that reads pressed when `on`; the caller flips it on click.
 pub fn chip(ui: &mut Ui, label: &str, on: bool) -> Response {
     let t = Tokens::get(ui.ctx());
@@ -134,4 +149,42 @@ pub fn dropdown_shown(ui: &mut Ui, label: &str, shown: &str, options: &[&str], s
     }
     ui.data_mut(|d| d.insert_temp(id, open));
     picked
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::ThemeKind;
+
+    /// One frame of `inline_number` on `v` in `kind`: the label's colour and the value after.
+    fn number(kind: ThemeKind, v: f64) -> (egui::Color32, Tokens, f64) {
+        let ctx = egui::Context::default();
+        theme::install_fonts(&ctx);
+        theme::apply(&ctx, kind);
+        let mut v = v;
+        let mut full = ctx.run_ui(egui::RawInput::default(), |ui| {
+            inline_number(ui, "Feather", &mut v, 0.0..=1000.0, " px", 0);
+        });
+        full.textures_delta.clear();
+        let mut label = None;
+        for c in full.shapes.iter().filter_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.text() == "Feather" => {
+                let laid = t.galley.job.sections[0].format.color;
+                Some(if laid == egui::Color32::PLACEHOLDER { t.fallback_color } else { laid })
+            }
+            _ => None,
+        }) {
+            label = Some(c);
+        }
+        (label.unwrap_or(egui::Color32::TRANSPARENT), Tokens::get(&ctx), v)
+    }
+
+    #[test]
+    fn a_number_field_follows_the_theme_and_keeps_its_value() {
+        for kind in [ThemeKind::Dark, ThemeKind::Light] {
+            let (c, t, v) = number(kind, 12.0);
+            assert_eq!(c, t.fg_muted, "{kind:?}: label");
+            assert_eq!(v, 12.0);
+        }
+    }
 }

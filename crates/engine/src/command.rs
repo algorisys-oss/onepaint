@@ -271,6 +271,11 @@ pub enum Command {
     SelectShape {
         contours: Vec<Vec<[f64; 2]>>,
         mode: onepaint_selection::Mode,
+        /// Soft coverage along the edge (Photoshop's Anti-alias, happypaint
+        /// v0.209.0) instead of a 0/255 staircase. Absent in older recordings,
+        /// which replay hard-edged as they were drawn.
+        #[serde(default)]
+        antialias: bool,
     },
     /// Magic wand.
     SelectByColor {

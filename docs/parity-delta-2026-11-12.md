@@ -1,4 +1,4 @@
-# Parity delta: happypaint v0.204.17 → v0.208.4
+# Parity delta: happypaint v0.204.17 → v0.209.0
 
 What happypaint shipped after `parity-delta-2026-11-05.md` (2026-11-06 →
 11-12, release notes 0.204.18–0.208.4, 18 commits), checked against onepaint
@@ -144,3 +144,33 @@ and `feature-parity.md` doesn't list that gap. These depend on it:
 - **Reference image mix-up, PNG worker failure, desktop CSP (F16, F17,
   F22).** Browser or Tauri only.
 - **0.208.4.** A deterministic browser test, with no app change.
+
+## v0.208.4 → v0.209.0 (artist round 35; checked the same day)
+
+- [x] **12. Feather reaches every in-selection operation.** Bucket fill (and
+      so ColorDrop), wash, path fill and Fill mode read the raw selection, so
+      a feathered rectangle filled hard-edged: the same bug happypaint fixed.
+      They now read the feathered `clip`, as copy/cut, the transform's lift
+      and painting already did. Test `a_bucket_fill_follows_the_feather`
+      fails on the old code.
+- [x] **13. Feather radius is a Gaussian sigma (Photoshop's scale), 0–1000 px.**
+      `Mask::feathered` is three box passes per axis (`gauss_box_radii`), run
+      only over the selection's bounds grown by the blur's reach. Smooth keeps
+      its old strength (σ² = r(r+1)/3). `Command::SetFeather` clamps to
+      `FEATHER_MAX` and ignores non-finite values. The options row and the
+      Select panel take a typed px field (`ui_kit::inline::inline_number`),
+      usable before there is a selection. Old recordings with a feather replay
+      softer, as in happypaint.
+- [x] **14. Anti-aliased Ellipse / Lasso / Polygon selections (on by default).**
+      `Command::SelectShape { antialias }` (serde default false, so older
+      recordings replay hard-edged) rasterizes with 4× coverage
+      (`panel::coverage::rasterize_coverage`); happypaint recordings' `antialias`
+      is read. The rectangle never anti-aliases. The ellipse's segment count now
+      follows its radius (≤ ~0.1 px flats, 64–2048).
+- [x] **15. Transform & Align panel: typed X / Y / W / H / angle.**
+      `engine::transform_numeric` ports `transform-numeric.ts` and its tests
+      onto `TransformParams`. Typing arms the Move tool; Apply / Cancel show
+      while a transform is pending; Distort and Warp grey the fields out.
+      Before a Move session the fields show the active layer's box as it
+      stands. The W–H link lives in the panel only (divergence 61). The panel,
+      its menu entry and its help section are renamed.

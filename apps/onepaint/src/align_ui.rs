@@ -1,11 +1,20 @@
-//! Align & distribute (happypaint `components/align-panel`): line up the
-//! layers picked in the Layers panel (Ctrl/⌘-click, Shift-click) to the
-//! canvas or the selection, space their centres evenly, or even out the gaps.
+//! Transform & Align (happypaint `components/align-panel`). The Transform
+//! section types exact X / Y / W / H and an angle into the Move tool's live
+//! box (v0.209.0; the maths is `engine::transform_numeric`): editing a field
+//! arms the Move tool, so the result is the same pending transform a handle
+//! drag makes, applied with Enter / Apply and dropped with Esc / Cancel.
+//! The Align section lines up the layers picked in the Layers panel
+//! (Ctrl/⌘-click, Shift-click) to the canvas or the selection, spaces their
+//! centres evenly, or evens out the gaps.
 
 use crate::App;
 use egui::{RichText, Ui};
-use onepaint_engine::Command;
 use onepaint_engine::align::{self, AlignMode, Axis};
+use onepaint_engine::transform::TransformParams;
+use onepaint_engine::transform_numeric::FieldsPatch;
+use onepaint_engine::{Command, Tool};
+use onepaint_raster::Rect;
+use onepaint_ui_kit::inline::inline_number;
 use onepaint_ui_kit::{Tokens, icons, theme, widgets};
 
 const ALIGN_BUTTONS: [(AlignMode, &str, &str); 6] = [
@@ -64,6 +73,8 @@ pub fn panel(app: &mut App, ui: &mut Ui) {
     let picks = if using_active { vec![app.session.active().to_string()] } else { app.layer_picks.clone() };
     let subjects = app.session.transformable_ids(&picks);
     let count = subjects.len();
+    transform_section(app, ui);
+    widgets::hairline(ui);
     let mut op = None;
     widgets::section_label(ui, "Align");
     ui.horizontal_wrapped(|ui| {
@@ -148,6 +159,110 @@ pub fn panel(app: &mut App, ui: &mut Ui) {
     if let Some(op) = op {
         run(app, ui, op, &subjects);
     }
+}
+
+/// What a Move session on the active layer would lift: its artwork, inside
+/// the selection when there is one (`Session::begin_transform`).
+fn idle_box(app: &App) -> Option<Rect> {
+    let active = app.session.active().to_string();
+    let (_, content) = app.session.layer_content_bounds(&[active]).into_iter().next()?;
+    match app.session.clip_mask().and_then(|m| m.bounds()) {
+        Some((x, y, w, h)) => content.intersect(&Rect::new(x as i32, y as i32, w as i32, h as i32)),
+        None => Some(content),
+    }
+}
+
+/// Transform: typed position, size and angle for the live box.
+fn transform_section(app: &mut App, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    widgets::section_label(ui, "Transform");
+    let doc = [f64::from(app.session.doc().width), f64::from(app.session.doc().height)];
+    // Distort and Warp move corners freely: there are no such numbers.
+    let busy = app.session.transform_warp().is_some();
+    let live = app.session.transform_state().map(|(_, b)| b).filter(|_| !busy);
+    // Before a Move session the fields show the active layer's box as it stands.
+    let shown = match live {
+        Some(b) => Some(app.canvas.xform.fields(doc, b)),
+        None if !busy => idle_box(app).map(|b| TransformParams::default().fields(doc, b)),
+        None => None,
+    };
+    let mut v = shown.unwrap_or_default();
+    let mut patch = FieldsPatch::default();
+    let far = -1.0e6..=1.0e6;
+    let size = 1.0..=1.0e6;
+    ui.add_enabled_ui(shown.is_some(), |ui| {
+        ui.horizontal(|ui| {
+            if inline_number(ui, "X", &mut v.x, far.clone(), " px", 2).on_hover_text("Left edge of the box on the canvas").changed() {
+                patch.x = Some(v.x);
+            }
+            if inline_number(ui, "Y", &mut v.y, far.clone(), " px", 2).on_hover_text("Top edge of the box on the canvas").changed() {
+                patch.y = Some(v.y);
+            }
+        });
+        ui.horizontal(|ui| {
+            if inline_number(ui, "W", &mut v.w, size.clone(), " px", 2).on_hover_text("Width in pixels").changed() {
+                patch.w = Some(v.w);
+            }
+            if inline_number(ui, "H", &mut v.h, size.clone(), " px", 2).on_hover_text("Height in pixels").changed() {
+                patch.h = Some(v.h);
+            }
+            let linked = app.xform_link_aspect;
+            let (icon, tip) = if linked {
+                ("link-2", "Width and height linked: changing one keeps the aspect ratio")
+            } else {
+                ("link-2-off", "Width and height unlinked: tap to keep the aspect ratio")
+            };
+            if icons::button(ui, icon, 24.0, linked, tip).clicked() {
+                app.xform_link_aspect = !linked;
+            }
+        });
+        ui.horizontal(|ui| {
+            let r = inline_number(ui, "Angle", &mut v.angle, -180.0..=180.0, "°", 1);
+            if r.on_hover_text("Rotation in degrees, about the box centre").changed() {
+                patch.angle = Some(v.angle);
+            }
+        });
+    });
+    if patch != FieldsPatch::default() {
+        set_fields(app, patch);
+    }
+    let pending = app.session.transform_active() && (busy || !app.canvas.xform.is_identity());
+    if pending {
+        ui.horizontal(|ui| {
+            if widgets::primary_button(ui, "Apply", 64.0).on_hover_text("Apply the transform (Enter)").clicked() {
+                app.commit_transform();
+            }
+            if widgets::secondary_button(ui, "Cancel", 64.0).on_hover_text("Cancel the transform (Esc)").clicked() {
+                app.cancel_transform();
+            }
+        });
+    }
+    let hint = if busy {
+        Some("Distort and Warp move corners freely; apply them to type numbers again.")
+    } else if shown.is_none() {
+        Some("Choose a layer with artwork on it to transform.")
+    } else {
+        None
+    };
+    if let Some(h) = hint {
+        ui.label(RichText::new(h).font(theme::medium(10.5)).color(t.fg_faint));
+    }
+}
+
+/// Typing is a transform: it arms the Move tool, whose session the numbers then edit.
+pub fn set_fields(app: &mut App, patch: FieldsPatch) {
+    if app.session.tool() != Tool::Move {
+        app.set_tool(Tool::Move);
+    } else if !app.session.transform_active() {
+        app.begin_transform();
+    }
+    if app.session.transform_warp().is_some() {
+        return;
+    }
+    let Some((_, b)) = app.session.transform_state() else { return };
+    let doc = [f64::from(app.session.doc().width), f64::from(app.session.doc().height)];
+    let next = app.canvas.xform.with_fields(doc, b, patch, app.xform_link_aspect);
+    app.canvas.set_xform(&mut app.session, next);
 }
 
 fn run(app: &mut App, ui: &Ui, op: Op, subjects: &[String]) {

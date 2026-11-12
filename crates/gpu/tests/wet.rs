@@ -161,7 +161,7 @@ fn a_wash_fill_dries_the_same_on_the_gpu() {
             s.set_wet_backend(Some(Box::new(WetGpu::new(&device, &queue))));
         }
         let left = vec![[0.0, 0.0], [100.0, 0.0], [100.0, 160.0], [0.0, 160.0]];
-        s.execute(Command::SelectShape { contours: vec![left], mode: onepaint_engine::SelectMode::Replace }).unwrap();
+        s.execute(Command::SelectShape { contours: vec![left], mode: onepaint_engine::SelectMode::Replace, antialias: false }).unwrap();
         s.execute(Command::SetColor { rgba: onepaint_color::Rgba::new(0.0, 0.0, 0.0, 1.0) }).unwrap();
         s.execute(Command::FillSelection).unwrap();
         s.execute(Command::Deselect).unwrap();

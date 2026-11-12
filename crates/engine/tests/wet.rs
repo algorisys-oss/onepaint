@@ -154,7 +154,7 @@ fn wash_opts(pigment: f32) -> WashFillOptions {
 fn half_black() -> Session {
     let mut s = session();
     let left = onepaint_selection::rect_polygon([0.0, 0.0], [120.0, 160.0]);
-    s.execute(Command::SelectShape { contours: vec![left], mode: onepaint_selection::Mode::Replace }).unwrap();
+    s.execute(Command::SelectShape { contours: vec![left], mode: onepaint_selection::Mode::Replace, antialias: false }).unwrap();
     s.execute(Command::SetColor { rgba: Rgba::new(0.0, 0.0, 0.0, 1.0) }).unwrap();
     s.execute(Command::FillSelection).unwrap();
     s.execute(Command::Deselect).unwrap();

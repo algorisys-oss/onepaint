@@ -58,7 +58,7 @@ fn square_session() -> (Session, String) {
     let id = s.active().to_string();
     s.execute(Command::SetColor { rgba: onepaint_color::Rgba::new(1.0, 0.0, 0.0, 1.0) }).unwrap();
     let rect = onepaint_selection::rect_polygon([100.0, 100.0], [240.0, 240.0]);
-    s.execute(Command::SelectShape { contours: vec![rect], mode: onepaint_selection::Mode::Replace }).unwrap();
+    s.execute(Command::SelectShape { contours: vec![rect], mode: onepaint_selection::Mode::Replace, antialias: false }).unwrap();
     s.execute(Command::FillSelection).unwrap();
     s.execute(Command::Deselect).unwrap();
     (s, id)

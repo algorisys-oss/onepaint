@@ -52,7 +52,8 @@ fn white_mask_changes_nothing_and_black_paint_hides() {
 fn mask_from_selection_apply_and_delete() {
     let mut s = red_layer();
     let id = s.active().to_string();
-    s.execute(Command::SelectShape { contours: vec![rect_polygon([0.0, 0.0], [64.0, 64.0])], mode: Mode::Replace }).unwrap();
+    s.execute(Command::SelectShape { contours: vec![rect_polygon([0.0, 0.0], [64.0, 64.0])], mode: Mode::Replace, antialias: false })
+        .unwrap();
     s.execute(Command::AddMask).unwrap();
     assert!(is_red(&s, 10, 10));
     assert!(!is_red(&s, 100, 10));

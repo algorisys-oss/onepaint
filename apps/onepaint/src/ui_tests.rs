@@ -164,7 +164,11 @@ fn ctrl_click_picks_layers_and_align_moves_them() {
         let s = &mut h.state_mut().session;
         let _ = s.execute(onepaint_engine::Command::AddLayer);
         let poly = vec![[x, 100.0], [x + 200.0, 100.0], [x + 200.0, 300.0], [x, 300.0]];
-        let _ = s.execute(onepaint_engine::Command::SelectShape { contours: vec![poly], mode: onepaint_selection::Mode::Replace });
+        let _ = s.execute(onepaint_engine::Command::SelectShape {
+            contours: vec![poly],
+            mode: onepaint_selection::Mode::Replace,
+            antialias: false,
+        });
         let _ = s.execute(onepaint_engine::Command::FillSelection);
         let _ = s.execute(onepaint_engine::Command::Deselect);
         ids.push(s.active().to_string());
@@ -222,7 +226,7 @@ fn panels_join_into_a_floating_tab_group() {
     l.set_open(PanelId::Palettes, true);
     h.run();
     let from = h.get_by_label("Close Palettes").rect().center() - vec2(120.0, 0.0);
-    let onto = h.get_by_label("Close Align").rect().center() - vec2(100.0, 0.0);
+    let onto = h.get_by_label("Close Transform & Align").rect().center() - vec2(100.0, 0.0);
     drag(&mut h, from, onto);
     let app = h.state();
     assert_eq!(app.layout.groups.len(), 1, "{:?}", app.layout.placements);
@@ -653,4 +657,123 @@ fn document_properties_report_the_stored_size() {
     h.run();
     assert!(h.query_by_label(&format!("The saved file is {size}; unsaved changes aren't in it yet.")).is_some());
     let _ = std::fs::remove_file(&path);
+}
+
+/// happypaint v0.209.0: Ellipse has an Anti-alias chip (on by default) that
+/// gives the committed selection a soft edge; off, the edge is hard. The
+/// Feather field takes any radius up to 1000 px, with or without a selection.
+#[test]
+fn ellipse_selection_anti_alias_and_the_feather_field() {
+    for light in [false, true] {
+        let mut h = harness();
+        h.run();
+        if light {
+            let ctx = h.ctx.clone();
+            h.state_mut().toggle_theme(&ctx);
+        }
+        h.state_mut().set_tool(Tool::SelectEllipse);
+        h.run();
+        assert!(h.query_by_label("Feather").is_some(), "the feather field shows before any selection");
+        assert!(h.query_by_label("Anti-alias").is_some());
+        assert!(h.state().canvas.options.select_antialias, "on by default");
+        let screen = |h: &Harness<'_, App>, d: [f64; 2]| {
+            let (rect, v) = (h.state().canvas.screen_rect, h.state().canvas.view);
+            let s = v.doc_to_screen(d);
+            pos2(rect.left() + s[0] as f32, rect.top() + s[1] as f32)
+        };
+        let soft =
+            |h: &Harness<'_, App>| h.state().session.selection().map_or(0, |m| m.data().iter().filter(|&&v| v != 0 && v != 255).count());
+        let (a, b) = (screen(&h, [100.0, 100.0]), screen(&h, [400.0, 300.0]));
+        // Marching ants keep repainting once there is a selection: fixed steps.
+        let drag = |h: &mut Harness<'_, App>| {
+            h.event(Event::PointerMoved(a));
+            h.step();
+            press(h, a, true, Default::default());
+            for i in 1..=12 {
+                h.event(Event::PointerMoved(a + (b - a) * (i as f32 / 12.0)));
+                h.step();
+            }
+            press(h, b, false, Default::default());
+            h.run_steps(3);
+        };
+        drag(&mut h);
+        assert!(soft(&h) > 50, "anti-aliased edge: {}", soft(&h));
+
+        h.get_by_label("Anti-alias").click();
+        h.run_steps(3);
+        assert!(!h.state().canvas.options.select_antialias);
+        drag(&mut h);
+        assert!(h.state().session.selection().is_some());
+        assert_eq!(soft(&h), 0, "hard edge");
+
+        h.state_mut().set_tool(Tool::SelectRect);
+        h.run_steps(3);
+        assert!(h.query_by_label("Anti-alias").is_none(), "the rectangle has no such option");
+        h.state_mut().session.execute(Command::SetFeather { radius: 750.0 }).unwrap();
+        assert_eq!(h.state().session.feather(), 750.0);
+    }
+}
+
+/// happypaint v0.209.0: the Transform & Align panel types exact numbers into
+/// the Move tool's box. Typing arms the Move tool; Apply commits one step.
+#[test]
+fn the_transform_fields_edit_the_move_box() {
+    for light in [false, true] {
+        let mut h = harness();
+        h.run();
+        if light {
+            let ctx = h.ctx.clone();
+            h.state_mut().toggle_theme(&ctx);
+        }
+        let s = &mut h.state_mut().session;
+        s.execute(Command::AddLayer).unwrap();
+        let poly = onepaint_selection::rect_polygon([100.0, 100.0], [300.0, 200.0]);
+        s.execute(Command::SelectShape { contours: vec![poly], mode: onepaint_selection::Mode::Replace, antialias: false }).unwrap();
+        s.execute(Command::FillSelection).unwrap();
+        s.execute(Command::Deselect).unwrap();
+        let id = s.active().to_string();
+        let undo = s.history_len();
+        let l = &mut h.state_mut().layout;
+        l.set_placement(PanelId::Align, Placement::Float { x: 300.0, y: 120.0 }, None);
+        l.set_open(PanelId::Align, true);
+        h.run();
+        // Before any move the fields read the layer's box.
+        let spin = egui::accesskit::Role::SpinButton;
+        assert!(h.query_by_role_and_label(spin, "W").is_some(), "a W field");
+        assert_ne!(h.state().session.tool(), Tool::Move);
+
+        // Typing W (aspect linked) arms the Move tool and scales both sides.
+        h.get_by_label("Width and height unlinked: tap to keep the aspect ratio").click();
+        h.run();
+        assert!(h.state().xform_link_aspect);
+        let patch = onepaint_engine::transform_numeric::FieldsPatch { w: Some(400.0), ..Default::default() };
+        crate::align_ui::set_fields(h.state_mut(), patch);
+        h.run();
+        assert_eq!(h.state().session.tool(), Tool::Move);
+        let (_, b) = h.state().session.transform_state().unwrap();
+        let doc = [f64::from(h.state().session.doc().width), f64::from(h.state().session.doc().height)];
+        let f = h.state().canvas.xform.fields(doc, b);
+        assert!((f.w - 400.0).abs() < 1e-6 && (f.h - 200.0).abs() < 1e-6, "{f:?}");
+        assert!((f.x - 100.0).abs() < 1e-6 && (f.y - 100.0).abs() < 1e-6, "the top-left stays: {f:?}");
+
+        // Apply commits it as one step.
+        h.get_all_by_label("Apply").last().unwrap().click();
+        h.run();
+        let s = &h.state().session;
+        assert_eq!(s.history_len(), undo + 1);
+        let r = s.doc().layer(&id).unwrap().pixels.content_bounds().unwrap();
+        assert_eq!((r.x, r.y, r.w, r.h), (100, 100, 400, 200));
+
+        // Typed into the field itself: X moves the box.
+        h.get_by_role_and_label(spin, "X").click();
+        h.run();
+        h.event(Event::Key { key: egui::Key::A, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND });
+        h.event(Event::Text("40".into()));
+        h.event(Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
+        h.run();
+        let (_, b) = h.state().session.transform_state().unwrap();
+        let f = h.state().canvas.xform.fields(doc, b);
+        assert!((f.x - 40.0).abs() < 1e-6, "{f:?}");
+        assert!((f.w - 400.0).abs() < 1e-6, "{f:?}");
+    }
 }

@@ -1410,6 +1410,10 @@ fn selection(app: &mut App, ui: &mut Ui) {
             widgets::toggle(ui, &mut app.canvas.options.wand_sample_all, "All layers");
         });
     }
+    if matches!(app.session.tool(), Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectPoly) {
+        ui.add_space(4.0);
+        widgets::toggle(ui, &mut app.canvas.options.select_antialias, "Anti-alias");
+    }
     if app.session.tool() == Tool::SelectPoly {
         ui.label(
             RichText::new("Click to add points · click the first point or Enter to close · Esc cancels")
@@ -1418,9 +1422,15 @@ fn selection(app: &mut App, ui: &mut Ui) {
         );
     }
     widgets::hairline(ui);
-    let mut feather = app.session.feather();
-    if widgets::slider_row(ui, "Feather", &mut feather, 0.0..=50.0, |v| format!("{v:.0} px")).changed() {
-        let _ = app.session.execute(Command::SetFeather { radius: feather.round() });
+    let mut feather = f64::from(app.session.feather());
+    let changed = ui
+        .horizontal(|ui| {
+            let max = f64::from(onepaint_engine::FEATHER_MAX);
+            onepaint_ui_kit::inline::inline_number(ui, "Feather", &mut feather, 0.0..=max, " px", 0).changed()
+        })
+        .inner;
+    if changed {
+        let _ = app.session.execute(Command::SetFeather { radius: feather as f32 });
     }
     let has = app.session.selection().is_some();
     let mut act = |ui: &mut Ui, icon: &str, label: &str, key: &str, cmd: Command, enabled: bool| {

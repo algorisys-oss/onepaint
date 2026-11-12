@@ -9,7 +9,8 @@ const BLUE: Rgba = Rgba { r: 0.0, g: 0.0, b: 1.0, a: 1.0 };
 fn session() -> Session {
     let mut s = Session::new(200, 200, Some(Rgba::WHITE));
     s.execute(Command::AddLayer).unwrap();
-    s.execute(Command::SelectShape { contours: vec![rect_polygon([20.0, 20.0], [40.0, 30.0])], mode: Mode::Replace }).unwrap();
+    s.execute(Command::SelectShape { contours: vec![rect_polygon([20.0, 20.0], [40.0, 30.0])], mode: Mode::Replace, antialias: false })
+        .unwrap();
     s.execute(Command::SetColor { rgba: Rgba::new(1.0, 0.0, 0.0, 1.0) }).unwrap();
     s.execute(Command::FillSelection).unwrap();
     s.execute(Command::Deselect).unwrap();

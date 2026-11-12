@@ -64,6 +64,8 @@ pub static ICONS: &[(&str, &[u8])] = icons![
     "blend",
     "folder-plus",
     "check",
+    "link-2",
+    "link-2-off",
     "settings",
     "sliders-horizontal",
     "fingerprint",

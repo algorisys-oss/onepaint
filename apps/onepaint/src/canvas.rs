@@ -198,6 +198,9 @@ pub struct ToolOptions {
     pub wand_tolerance: f32,
     pub wand_contiguous: bool,
     pub wand_sample_all: bool,
+    /// Ellipse / lasso / polygon: commit a soft, anti-aliased edge
+    /// (Photoshop's Anti-alias, on by default; happypaint v0.209.0).
+    pub select_antialias: bool,
     pub fill_tolerance: f32,
     pub fill_grow: u32,
     /// Fill as a watercolour wash (spec 58 C).
@@ -225,6 +228,7 @@ impl Default for ToolOptions {
             wand_tolerance: 0.15,
             wand_contiguous: true,
             wand_sample_all: false,
+            select_antialias: true,
             fill_tolerance: 0.15,
             fill_grow: 1,
             fill_wash: false,
@@ -749,7 +753,8 @@ impl Canvas {
         if let Some((pts, mode)) = self.poly.take()
             && pts.len() > 2
         {
-            let _ = session.execute(Command::SelectShape { contours: vec![pts], mode });
+            let antialias = self.options.select_antialias;
+            let _ = session.execute(Command::SelectShape { contours: vec![pts], mode, antialias });
         }
     }
 
@@ -1479,10 +1484,13 @@ impl Canvas {
                         }
                         Drag::Shape { start, end, mode } => {
                             let contour = Self::shape_contour(session.tool(), start, end);
-                            let _ = session.execute(Command::SelectShape { contours: vec![contour], mode });
+                            // The rectangle's edges are axis-aligned: nothing to smooth.
+                            let antialias = self.options.select_antialias && session.tool() == Tool::SelectEllipse;
+                            let _ = session.execute(Command::SelectShape { contours: vec![contour], mode, antialias });
                         }
                         Drag::Lasso { points, mode } => {
-                            let _ = session.execute(Command::SelectShape { contours: vec![points], mode });
+                            let antialias = self.options.select_antialias;
+                            let _ = session.execute(Command::SelectShape { contours: vec![points], mode, antialias });
                         }
                         _ => {}
                     }

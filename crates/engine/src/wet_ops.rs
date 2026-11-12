@@ -357,7 +357,7 @@ impl Session {
         if self.wet.as_ref().is_some_and(|s| s.layer != id || s.sim.oil) {
             self.dry_wet();
         }
-        let base = self.selection.clone();
+        let base = self.clip.clone();
         let region = if o.sample_all {
             let flat = self.flatten();
             let get = |px: u32, py: u32| {

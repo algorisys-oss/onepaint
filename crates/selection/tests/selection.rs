@@ -67,15 +67,95 @@ fn dilate_erode_match_naive() {
     assert_eq!(m(9, &[0, 0, 0, 64, 128, 255, 255, 255, 255]).dilated(1).data(), &[0, 0, 64, 128, 255, 255, 255, 255, 255]);
 }
 
+// Photoshop's feather radius is a Gaussian's sigma (happypaint v0.209.0): a
+// hard edge feathered by R follows the normal CDF, 50% on the edge, ~16% at R
+// outside it, ~2% at 2R and nothing left by 4R.
 #[test]
-fn feather_and_smooth_goldens() {
+fn feather_radius_is_a_gaussian_sigma() {
+    const W: usize = 1200;
+    const EDGE: usize = 600;
+    let mut d = vec![0u8; W];
+    d[EDGE..].fill(255);
+    let mask = m(W as u32, &d);
+    for r in [10usize, 50, 100] {
+        let f = mask.feathered(r as f32);
+        let f = f.data();
+        let at = |i: usize| f32::from(f[i]) / 255.0;
+        assert!(((f32::from(f[EDGE - 1]) + f32::from(f[EDGE])) / 2.0 - 127.5).abs() < 4.0, "r{r} edge");
+        assert!((at(EDGE - r) - 0.159).abs() < 0.03, "r{r} at -R: {}", at(EDGE - r));
+        assert!((at(EDGE + r - 1) - 0.841).abs() < 0.03, "r{r} at +R");
+        assert!(at(EDGE - 2 * r) < 0.05, "r{r} at -2R");
+        assert_eq!(f[EDGE - 4 * r], 0, "r{r} at -4R");
+        assert_eq!(f[EDGE + 4 * r], 255, "r{r} at +4R");
+    }
+}
+
+#[test]
+fn a_large_feather_is_visibly_soft() {
+    let mut d = vec![0u8; 400 * 400];
+    for y in 100..300 {
+        d[y * 400 + 100..y * 400 + 300].fill(255);
+    }
+    let f = m(400, &d).feathered(50.0);
+    assert!(f.get(200, 200) > 200, "centre still mostly selected");
+    assert!(f.get(100, 200) < 160, "on the edge: about half");
+    assert!(f.get(60, 200) > 20, "40 px outside still catches some");
+}
+
+#[test]
+fn a_1000_px_feather_is_monotone_across_an_edge() {
+    let mut d = vec![0u8; 3000];
+    d[1500..].fill(255);
+    let f = m(3000, &d).feathered(1000.0);
+    assert!(f.data().windows(2).all(|p| p[1] >= p[0]));
+}
+
+#[test]
+fn cropping_to_the_selection_does_not_change_the_feather() {
+    let blob = |w: usize, h: usize, ox: usize, oy: usize| {
+        let mut d = vec![0u8; w * h];
+        for y in 0..12 {
+            for x in 0..9 {
+                d[(oy + y) * w + ox + x] = ((x * 31 + y * 17) % 256) as u8;
+            }
+        }
+        Mask::from_vec(w as u32, h as u32, d)
+    };
+    let big = blob(300, 200, 140, 90).feathered(6.0);
+    let small = blob(80, 80, 30, 30).feathered(6.0);
+    for y in 0..80 {
+        for x in 0..80 {
+            assert_eq!(big.get(x + 110, y + 60), small.get(x, y), "({x},{y})");
+        }
+    }
+}
+
+#[test]
+fn feather_keeps_flat_soft_coverage_and_smooth_is_hard() {
+    assert_eq!(m(9, &[102; 9]).feathered(2.0).data(), &[102; 9]);
+    assert!(!Mask::new(9, 9).feathered(4.0).has_content());
     let mut d = vec![0u8; 15];
     d[5..10].fill(255);
-    let f = m(15, &d).feathered(2.0);
-    assert_eq!((f.data()[7], f.data()[5], f.data()[2]), (255, 153, 0));
-    assert_eq!(m(9, &[102; 9]).feathered(2.0).data(), &[102; 9]);
     let s = m(15, &d).smoothed(3.0);
     assert!(s.data().iter().all(|&v| v == 0 || v == 255));
+}
+
+#[test]
+fn box_radii_match_the_gaussian_variance() {
+    for sigma in [0.5f64, 1.0, 2.0, 3.7, 10.0, 50.0, 1000.0] {
+        let v: f64 = gauss_box_radii(sigma).iter().map(|&r| (r * (r + 1)) as f64 / 3.0).sum();
+        assert!((v - sigma * sigma).abs() <= (sigma * sigma * 0.1).max(1.0), "sigma {sigma}: variance {v}");
+    }
+}
+
+#[test]
+fn ellipse_segment_count_follows_the_size() {
+    let sagitta = |r: f64, n: usize| r * (1.0 - (std::f64::consts::PI / n as f64).cos());
+    for r in [10.0, 100.0, 1000.0, 4000.0] {
+        let n = ellipse_polygon([0.0, 0.0], [2.0 * r, 2.0 * r]).len();
+        assert!(n >= 64 && sagitta(r, n) < 0.15, "r{r}: {n} segments");
+    }
+    assert_eq!(ellipse_polygon_n([0.0, 0.0], [10.0, 10.0], 12).len(), 12);
 }
 
 #[test]
@@ -202,29 +282,8 @@ fn ref_sliding(m: &Mask, r: usize, max: bool) -> Vec<u8> {
     out
 }
 
-fn ref_feather(m: &Mask, r: usize) -> Vec<u8> {
-    let (w, h) = (m.width() as usize, m.height() as usize);
-    let win = (2 * r + 1) as f32;
-    let mut a: Vec<f32> = m.data().iter().map(|&v| v as f32 / 255.0).collect();
-    let mut b = vec![0.0f32; w * h];
-    let blur = |src: &[f32], dst: &mut [f32], len: usize, stride: usize, count: usize, outer: usize| {
-        for o in 0..count {
-            let base = o * outer;
-            let at = |i: i64| src[base + (i.clamp(0, len as i64 - 1) as usize) * stride];
-            let mut sum: f32 = (-(r as i64)..=r as i64).map(at).sum();
-            for i in 0..len {
-                dst[base + i * stride] = sum / win;
-                sum += at(i as i64 + r as i64 + 1) - at(i as i64 - r as i64);
-            }
-        }
-    };
-    blur(&a, &mut b, w, 1, h, w);
-    blur(&b, &mut a, h, w, w, 1);
-    a.iter().map(|v| (v.min(1.0) * 255.0).round() as u8).collect()
-}
-
 #[test]
-fn grow_shrink_and_feather_match_the_strided_passes() {
+fn grow_and_shrink_match_the_strided_passes() {
     for (w, h, seed) in [(131u32, 77u32, 1u64), (64, 200, 2), (300, 3, 3)] {
         let mut s = seed;
         let data: Vec<u8> = (0..w * h)
@@ -237,7 +296,6 @@ fn grow_shrink_and_feather_match_the_strided_passes() {
         for r in [1u32, 4, 9] {
             assert_eq!(m.dilated(r).data(), ref_sliding(&m, r as usize, true).as_slice(), "dilate {w}x{h} r{r}");
             assert_eq!(m.eroded(r).data(), ref_sliding(&m, r as usize, false).as_slice(), "erode {w}x{h} r{r}");
-            assert_eq!(m.feathered(r as f32).data(), ref_feather(&m, r as usize).as_slice(), "feather {w}x{h} r{r}");
         }
     }
 }

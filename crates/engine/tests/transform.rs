@@ -8,7 +8,8 @@ const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
 
 fn session_with_block() -> Session {
     let mut s = Session::new(200, 200, Some(Rgba::WHITE));
-    s.execute(Command::SelectShape { contours: vec![rect_polygon([20.0, 20.0], [40.0, 30.0])], mode: Mode::Replace }).unwrap();
+    s.execute(Command::SelectShape { contours: vec![rect_polygon([20.0, 20.0], [40.0, 30.0])], mode: Mode::Replace, antialias: false })
+        .unwrap();
     s.execute(Command::SetColor { rgba: Rgba::new(1.0, 0.0, 0.0, 1.0) }).unwrap();
     s.execute(Command::FillSelection).unwrap();
     s.execute(Command::Deselect).unwrap();
@@ -81,7 +82,8 @@ fn scale_doubles_the_block() {
 #[test]
 fn transform_lifts_only_the_selection() {
     let mut s = session_with_block();
-    s.execute(Command::SelectShape { contours: vec![rect_polygon([20.0, 20.0], [30.0, 30.0])], mode: Mode::Replace }).unwrap();
+    s.execute(Command::SelectShape { contours: vec![rect_polygon([20.0, 20.0], [30.0, 30.0])], mode: Mode::Replace, antialias: false })
+        .unwrap();
     s.execute(Command::BeginTransform).unwrap();
     s.execute(Command::SetTransform { matrix: Affine::translate(0.0, 100.0) }).unwrap();
     s.execute(Command::CommitTransform).unwrap();
@@ -197,7 +199,8 @@ mod distort_and_warp {
     /// A 40×40 red square at (20, 20) on a transparent layer.
     fn square() -> Session {
         let mut s = Session::new(120, 100, None);
-        s.execute(Command::SelectShape { contours: vec![rect_polygon([20.0, 20.0], [60.0, 60.0])], mode: Mode::Replace }).unwrap();
+        s.execute(Command::SelectShape { contours: vec![rect_polygon([20.0, 20.0], [60.0, 60.0])], mode: Mode::Replace, antialias: false })
+            .unwrap();
         s.execute(Command::SetColor { rgba: Rgba::new(1.0, 0.0, 0.0, 1.0) }).unwrap();
         s.execute(Command::FillSelection).unwrap();
         s.execute(Command::Deselect).unwrap();
@@ -254,7 +257,8 @@ mod overflow {
     #[test]
     fn content_moved_off_canvas_comes_back_and_survives_saving() {
         let mut s = Session::new(100, 80, None);
-        s.execute(Command::SelectShape { contours: vec![rect_polygon([10.0, 10.0], [40.0, 40.0])], mode: Mode::Replace }).unwrap();
+        s.execute(Command::SelectShape { contours: vec![rect_polygon([10.0, 10.0], [40.0, 40.0])], mode: Mode::Replace, antialias: false })
+            .unwrap();
         s.execute(Command::SetColor { rgba: Rgba::new(1.0, 0.0, 0.0, 1.0) }).unwrap();
         s.execute(Command::FillSelection).unwrap();
         s.execute(Command::Deselect).unwrap();
@@ -308,13 +312,15 @@ fn an_untouched_transform_under_a_soft_selection_changes_nothing() {
     let mut s = session_with_block();
     let id = s.active().to_string();
     let before = s.doc().layer(&id).unwrap().pixels.clone();
-    s.execute(Command::SelectShape { contours: vec![rect_polygon([15.0, 15.0], [45.0, 35.0])], mode: Mode::Replace }).unwrap();
+    s.execute(Command::SelectShape { contours: vec![rect_polygon([15.0, 15.0], [45.0, 35.0])], mode: Mode::Replace, antialias: false })
+        .unwrap();
     s.execute(Command::SetFeather { radius: 6.0 }).unwrap();
     let n = s.history_len();
     s.execute(Command::BeginTransform).unwrap();
     assert_eq!(s.flatten(), {
         let mut t = session_with_block();
-        t.execute(Command::SelectShape { contours: vec![rect_polygon([15.0, 15.0], [45.0, 35.0])], mode: Mode::Replace }).unwrap();
+        t.execute(Command::SelectShape { contours: vec![rect_polygon([15.0, 15.0], [45.0, 35.0])], mode: Mode::Replace, antialias: false })
+            .unwrap();
         t.flatten()
     });
     s.execute(Command::SetTransform { matrix: Affine::translate(5.0, 0.0) }).unwrap();

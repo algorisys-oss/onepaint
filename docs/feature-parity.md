@@ -119,9 +119,11 @@ screentone are added as live layers.
 - [x] Smart-filter stacks (`layer.filters`)
 
 ## Selection
-- [x] Rect, ellipse, lasso, polygon and magic wand
+- [x] Rect, ellipse, lasso, polygon and magic wand; Anti-alias for ellipse,
+  lasso and polygon (on by default; happypaint v0.209.0)
 - [x] Add, subtract and intersect
-- [x] Feather, grow and smooth
+- [x] Feather (a Gaussian sigma, 0–1000 px, softening fills, wash, path fill,
+  Fill mode, copy and transform as well as painting), grow and smooth
 - [x] Saved selections (save, load with replace/add/subtract, delete; kept in the file; follow canvas/image size)
 - [x] Marching-ants overlay
 - [x] Fill, stroke and adjust within a selection, auto-rasterizing vector layers first (paint, smudge, liquify, fill, gradient, clear and filters rasterize text/path layers; Move keeps them vector)
@@ -207,6 +209,8 @@ Source: `components/toolbar/toolbar.tsx`, `components/dock/`, `state/dock-store.
   the layout persists as `layout.json` (divergences 42, 43)
 - [x] Properties panel: the selected adjustment or fill layer's settings in a
   panel of their own, docked right by default
+- [x] Transform & Align panel: typed X / Y / W / H (with an aspect link) and
+  angle for the Move tool's box (happypaint v0.209.0)
 - [x] Align and distribute layers: align edges and centres to the canvas or
   the selection, distribute centres (3+ layers), equal gaps across and down;
   Ctrl/⌘- and Shift-click pick layers; one undo step; text and paths stay vector

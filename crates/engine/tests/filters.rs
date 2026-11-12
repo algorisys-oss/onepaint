@@ -57,7 +57,8 @@ fn updates_restart_from_the_original() {
 #[test]
 fn filters_respect_the_selection_and_blur_works() {
     let mut s = red_session();
-    s.execute(Command::SelectShape { contours: vec![rect_polygon([0.0, 0.0], [32.0, 64.0])], mode: Mode::Replace }).unwrap();
+    s.execute(Command::SelectShape { contours: vec![rect_polygon([0.0, 0.0], [32.0, 64.0])], mode: Mode::Replace, antialias: false })
+        .unwrap();
     s.execute(Command::BeginFilter { kind: "invert".into() }).unwrap();
     s.execute(Command::UpdateFilter { params: Params::default() }).unwrap();
     s.execute(Command::CommitFilter).unwrap();
@@ -150,7 +151,8 @@ fn lens_flare_lands_on_a_screen_layer() {
 fn line_art_traces_the_source_on_its_own_layer() {
     let mut s = Session::new(64, 64, Some(Rgba::WHITE));
     s.execute(Command::SetColor { rgba: Rgba::BLACK }).unwrap();
-    s.execute(Command::SelectShape { contours: vec![rect_polygon([16.0, 16.0], [48.0, 48.0])], mode: Mode::Replace }).unwrap();
+    s.execute(Command::SelectShape { contours: vec![rect_polygon([16.0, 16.0], [48.0, 48.0])], mode: Mode::Replace, antialias: false })
+        .unwrap();
     s.execute(Command::FillSelection).unwrap();
     s.execute(Command::Deselect).unwrap();
     let src = s.active().to_string();
@@ -169,7 +171,8 @@ fn line_art_traces_the_source_on_its_own_layer() {
 fn global_distorts_run_over_the_whole_canvas() {
     let mut s = Session::new(64, 64, None);
     s.execute(Command::SetColor { rgba: Rgba::new(1.0, 0.0, 0.0, 1.0) }).unwrap();
-    s.execute(Command::SelectShape { contours: vec![rect_polygon([32.0, 0.0], [64.0, 64.0])], mode: Mode::Replace }).unwrap();
+    s.execute(Command::SelectShape { contours: vec![rect_polygon([32.0, 0.0], [64.0, 64.0])], mode: Mode::Replace, antialias: false })
+        .unwrap();
     s.execute(Command::FillSelection).unwrap();
     s.execute(Command::Deselect).unwrap();
     assert!((20..32).all(|x| layer_px(&s, x, 24)[3] == 0.0));
@@ -195,7 +198,8 @@ fn fill_layers_cover_the_backdrop_live() {
 #[test]
 fn selection_masks_generators() {
     let mut s = red_session();
-    s.execute(Command::SelectShape { contours: vec![rect_polygon([0.0, 0.0], [32.0, 64.0])], mode: Mode::Replace }).unwrap();
+    s.execute(Command::SelectShape { contours: vec![rect_polygon([0.0, 0.0], [32.0, 64.0])], mode: Mode::Replace, antialias: false })
+        .unwrap();
     s.execute(Command::BeginFilter { kind: "clouds".into() }).unwrap();
     s.execute(Command::UpdateFilter { params: clouds(8.0, 1.0) }).unwrap();
     s.execute(Command::CommitFilter).unwrap();

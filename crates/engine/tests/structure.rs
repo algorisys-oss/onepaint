@@ -10,6 +10,7 @@ fn painted() -> Session {
     s.execute(Command::SelectShape {
         contours: vec![onepaint_selection::rect_polygon([0.0, 0.0], [32.0, 64.0])],
         mode: onepaint_selection::Mode::Replace,
+        antialias: false,
     })
     .unwrap();
     s.execute(Command::SetColor { rgba: Rgba::new(1.0, 0.0, 0.0, 1.0) }).unwrap();
@@ -64,6 +65,7 @@ fn invert_mask_swaps_hidden_and_shown_everywhere() {
     s.execute(Command::SelectShape {
         contours: vec![onepaint_selection::rect_polygon([0.0, 0.0], [16.0, 16.0])],
         mode: onepaint_selection::Mode::Replace,
+        antialias: false,
     })
     .unwrap();
     s.execute(Command::AddMask).unwrap();

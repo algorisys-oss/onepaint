@@ -74,19 +74,30 @@ and S means `engine/selection/selection.ts`.
   colour at coverage `sel/255`. Alpha lock keeps alpha.
 
 ## Modifiers (S:377-472)
-- **Feather:** a separable **box** blur, applied once.
-  `r = max(1, round(radius))`, window `2r+1`, clamped to the edge, computed in
-  float. Output is `round(min(1, sum/win)·255)`.
+- **Feather** (happypaint v0.209.0, S:386-505): the radius is a Gaussian's
+  **sigma** in doc px (Photoshop's scale), 0–1000, rounded. Three box passes
+  per axis whose variances (r(r+1)/3 each) add up to σ² (`gauss_box_radii`),
+  clamped to the edge, over the selection's bounds grown by the three radii
+  only. Output is 0 at ≤0, 255 at ≥1, else `round(v·255)`.
 - **Grow / shrink:** a separable square max/min filter whose window is
   clipped at the canvas edge. `r = min(200, |round(δ)|)`; δ=0 does nothing.
-- **Smooth:** feather by `r = min(100, round(px))`, then threshold `≥128 → 255`.
+- **Smooth:** `r = clamp(round(px), 1, 100)`, feather by σ = √(r(r+1)/3)
+  (the strength of the single box blur it used before v0.209.0), then
+  threshold `≥128 → 255`.
+- **Anti-alias** (Ellipse, Lasso, Polygon; on by default): the committed
+  shape is rasterized with 4× vertical supersampling into 0..255 coverage.
+  The rectangle never is. The ellipse uses enough segments for ≤ ~0.1 px
+  flats (64–2048).
 
 ## Clipping
 - The dab coverage `a *= mask` uses the **feathered** mask. The eraser is
   clipped the same way.
 - **Clear** (Delete/Backspace): `layer × (1 − mask)`, or the whole layer
   when there is no selection.
-- The CPU fill uses the unfeathered base.
+- Every in-selection operation uses the **feathered** mask (v0.209.0):
+  bucket fill and ColorDrop, wash, Fill mode, path fill, fill selection,
+  clear, copy/cut and the transform's lift. Edits to the selection itself
+  (combine, grow, invert, smooth, save) use the unfeathered base.
 
 ## Marching ants (compositor.ts:290-308)
 - A pixel is on the outline when `m ≥ 0.5` and the minimum of its four
@@ -135,8 +146,10 @@ Feather is not undoable.
   - `dilate([0,0,0,64,128,255,255,255,255], 9×1, r=1)` gives
     `[0,0,64,128,255,255,255,255,255]`.
 - **Feather:**
-  - 15×1 with 255 at indices 5..9, r=2: `f[7]=255`, `f[5]=153`, `f[2]=0`.
-  - 9×1 all 102, r=2: all 102.
+  - A hard edge feathered by R (10, 50, 100) follows the normal CDF: ~50% on
+    the edge, ~16% at R outside it, < 5% at 2R, 0 at 4R, 255 at 4R inside.
+  - Cropping to the selection does not change the result.
+  - 9×1 all 102, σ=2: all 102.
 - Smooth outputs only 0 or 255.
 - **Polygon on an 8×8 canvas:** rect (2,2)-(6,6).
   - Inside: (3,3) and (5,5).
