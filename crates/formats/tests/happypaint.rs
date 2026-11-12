@@ -13,9 +13,9 @@ fn header_bytes() {
 #[test]
 fn rejects_bad_magic_version_and_bounds() {
     assert!(matches!(read_happypaint(b"NOPE00000000"), Err(FormatError::BadMagic)));
-    let mut v10 = header(10, 0).to_vec();
-    v10.extend_from_slice(&[0; 4]);
-    assert!(matches!(read_happypaint(&v10), Err(FormatError::UnsupportedVersion(10))));
+    let mut next = header(VERSION + 1, 0).to_vec();
+    next.extend_from_slice(&[0; 4]);
+    assert!(matches!(read_happypaint(&next), Err(FormatError::UnsupportedVersion(v)) if v == VERSION + 1));
     assert!(read_happypaint(&header(9, 999)).is_err());
     // A manifest whose chunk ref runs past EOF is an error, not a panic.
     let json = br#"{"app":"t","doc":{"id":"d","name":"n","width":4,"height":4,"createdAt":0,"updatedAt":0},
@@ -257,4 +257,264 @@ fn photoshop_modes_and_pass_through_survive_a_round_trip() {
     let flat = vec![1.0f32; 300 * 200 * 4];
     let psd = psd::read_psd(&psd::write_psd(&back, &flat).unwrap()).unwrap();
     assert_eq!(modes(&psd), [BlendMode::PassThrough, BlendMode::VividLight]);
+}
+
+/// A file around a hand-written manifest (no chunks unless given).
+fn file_with(manifest: &serde_json::Value, chunks: &[u8]) -> Vec<u8> {
+    let z = deflate_raw(&serde_json::to_vec(manifest).unwrap());
+    let mut f = header(9, z.len() as u32).to_vec();
+    f.extend_from_slice(&z);
+    f.extend_from_slice(chunks);
+    f
+}
+
+fn too_large(r: Result<Document, FormatError>) -> String {
+    match r {
+        Err(FormatError::TooLarge(m)) => m,
+        other => panic!("expected TooLarge, got {:?}", other.map(|d| d.name)),
+    }
+}
+
+// happypaint `storage/container-guard.ts` (review F10, v0.205.3).
+#[test]
+fn hostile_files_fail_with_a_message() {
+    use serde_json::json;
+    let doc = |w: u64, h: u64| json!({"id": "d", "name": "n", "width": w, "height": h});
+    // An impossible canvas.
+    let m = too_large(read_happypaint(&file_with(&json!({"doc": doc(1_000_000_000, 4), "nodes": []}), &[])));
+    assert!(m.contains("canvas size"), "{m}");
+    assert!(read_happypaint(&file_with(&json!({"doc": doc(0, 4), "nodes": []}), &[])).is_err());
+    assert!(read_happypaint(&file_with(&json!({"doc": doc(limits::MAX_CANVAS_SIDE, 1), "nodes": []}), &[])).is_ok());
+
+    // Groups nested past the depth budget.
+    let mut n = json!({"id": "leaf", "name": "L"});
+    for i in 0..limits::MAX_DEPTH {
+        n = json!({"id": format!("g{i}"), "name": "G", "children": [n]});
+    }
+    let m = too_large(read_happypaint(&file_with(&json!({"doc": doc(4, 4), "nodes": [n]}), &[])));
+    assert!(m.contains("too deeply"), "{m}");
+
+    // Too many layers.
+    let many: Vec<_> = (0..=limits::MAX_NODES).map(|i| json!({"id": format!("l{i}"), "name": "L"})).collect();
+    let m = too_large(read_happypaint(&file_with(&json!({"doc": doc(4, 4), "nodes": many}), &[])));
+    assert!(m.contains("too many layers"), "{m}");
+
+    // Deflated data that unpacks past a budget stops there.
+    let z = deflate_raw(&[b' '; 4096]);
+    assert_eq!(inflate_raw_max(&z, 4096, "file").unwrap().len(), 4096);
+    let m = match inflate_raw_max(&z, 4095, "file") {
+        Err(FormatError::TooLarge(m)) => m,
+        other => panic!("expected TooLarge, got {other:?}"),
+    };
+    assert!(m.contains("too large to open"), "{m}");
+
+    // The recording reader uses the same budgets.
+    let z = deflate_raw(&serde_json::to_vec(&json!({"doc": doc(1 << 20, 4), "nodes": []})).unwrap());
+    let mut rec = b"HPRC".to_vec();
+    rec.extend_from_slice(&[1, 0, 0, 0]);
+    rec.extend_from_slice(&(z.len() as u32).to_le_bytes());
+    rec.extend_from_slice(&z);
+    assert!(matches!(happy_rec::read_happypaint_rec(&rec), Err(FormatError::TooLarge(_))));
+}
+
+// happypaint `storage/tile-decode.ts` (review F03, v0.205.2): one bad tile
+// costs that tile, not the layer or the file.
+#[test]
+fn an_unreadable_tile_is_left_blank_and_its_layer_kept() {
+    let mut d = Document::new_in(512, 256, None, Depth::Rgba8);
+    d.root.clear();
+    let mut ink = Layer::new("ink");
+    // The two tiles differ, so their chunks aren't shared.
+    fill(&mut ink.pixels, 0, 0, 256, 256, [0.5, 0.0, 0.0, 0.5]);
+    fill(&mut ink.pixels, 256, 0, 256, 256, [0.0, 0.5, 0.0, 0.5]);
+    let mut m = Surface::new();
+    fill(&mut m, 0, 0, 256, 256, [0.2, 0.2, 0.2, 1.0]);
+    fill(&mut m, 256, 0, 256, 256, [0.0, 0.0, 0.0, 1.0]);
+    ink.mask = Some(m);
+    d.root.push(Node::Layer(ink));
+    d.root.push(Node::Layer(Layer::new("other")));
+    let mut bytes = write_happypaint(&d, None, "t").unwrap();
+
+    // Break the first colour tile's PNG (its IHDR) and the first mask tile's.
+    let pngs: Vec<usize> = bytes.windows(8).enumerate().filter(|(_, w)| *w == b"\x89PNG\r\n\x1a\n").map(|(i, _)| i).collect();
+    assert_eq!(pngs.len(), 4, "two colour tiles, two mask tiles");
+    for &at in &[pngs[0], pngs[2]] {
+        bytes[at + 16..at + 24].fill(0xff);
+    }
+
+    let p = Progress::default();
+    let back = read_happypaint_with(&bytes, &p).unwrap();
+    assert_eq!(p.damaged_layers(), vec!["ink".to_string()]);
+    assert_eq!(back.root.len(), 2, "the layer is kept");
+    let Node::Layer(l) = &back.root[0] else { panic!() };
+    assert_eq!(l.pixels.get(10, 10)[3], 0.0, "the broken tile is blank");
+    assert!(l.pixels.get(300, 10)[3] > 0.4, "the other tile is intact");
+    let m = l.mask.as_ref().unwrap();
+    assert_eq!(m.get(10, 10)[0], 1.0, "a broken mask tile reveals");
+    assert_eq!(m.get(300, 10)[0], 0.0, "the other mask tile is intact");
+    assert_eq!(p.fraction(), Some(1.0), "every tile still counts");
+
+    // A clean file notes nothing.
+    let p = Progress::default();
+    read_happypaint_with(&write_happypaint(&d, None, "t").unwrap(), &p).unwrap();
+    assert!(p.damaged_layers().is_empty());
+}
+
+// happypaint v0.207.0 (review F07): float drawings keep their exact samples.
+#[test]
+fn float_drawings_round_trip_exactly_as_v10() {
+    for (depth, fmt) in [(Depth::Rgba16F, "f16"), (Depth::Rgba32F, "f32")] {
+        let mut d = Document::new_in(300, 40, None, depth);
+        d.root.clear();
+        let mut l = Layer::new("hdr");
+        // Nearby values 8 bits merged, and one brighter than white.
+        fill(&mut l.pixels, 0, 0, 2, 1, [0.5, 0.5, 0.5, 1.0]);
+        fill(&mut l.pixels, 2, 0, 2, 1, [0.501, 0.501, 0.501, 1.0]);
+        fill(&mut l.pixels, 260, 10, 4, 4, [3.0, 1.5, 0.25, 1.0]);
+        // Off-canvas pixels keep theirs too.
+        fill(&mut l.pixels, -6, 5, 4, 2, [2.0, 0.0, 0.0, 1.0]);
+        let mut m = Surface::new();
+        fill(&mut m, 0, 0, 300, 40, [0.5, 0.5, 0.5, 1.0]);
+        l.mask = Some(m);
+        d.root.push(Node::Layer(l));
+        let bytes = write_happypaint(&d, None, "t").unwrap();
+        assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), VERSION_FLOAT);
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&inflate_raw(&bytes[12..12 + u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize]).unwrap())
+                .unwrap();
+        let node = &manifest["nodes"][0];
+        assert!(node["tiles"].as_array().unwrap().iter().all(|t| t["fmt"] == fmt), "{depth:?}");
+        assert!(node["maskTiles"].as_array().unwrap().iter().all(|t| t.get("fmt").is_none()), "masks stay PNG");
+        assert_eq!(node["overflow"]["fmt"], fmt);
+
+        let back = read_happypaint(&bytes).unwrap();
+        assert_eq!(back.depth, depth);
+        let (Node::Layer(a), Node::Layer(b)) = (&d.root[0], &back.root[0]) else { panic!() };
+        for (x, y) in [(0, 0), (2, 0), (261, 11), (-5, 5), (100, 20)] {
+            assert_eq!(a.pixels.get(x, y), b.pixels.get(x, y), "{depth:?} at {x},{y}");
+        }
+        assert_ne!(b.pixels.get(0, 0), b.pixels.get(2, 0), "0.5 and 0.501 stay apart (one byte in 8 bits)");
+        assert_eq!(b.pixels.get(261, 11)[0], 3.0, "brighter than white survives");
+        assert!((b.mask.as_ref().unwrap().get(5, 5)[0] - 0.5).abs() < 1.0 / 255.0);
+    }
+
+    // An 8-bit drawing still writes v9 PNG tiles, which older readers open.
+    let d = Document::new_in(64, 64, Some(Rgba::WHITE), Depth::Rgba8);
+    let bytes = write_happypaint(&d, None, "t").unwrap();
+    assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), VERSION_PLAIN);
+}
+
+#[test]
+fn unknown_or_broken_float_tiles() {
+    use serde_json::json;
+    let tile = encode_float_tile(&[0.75f32; 4 * 4], 2, 2, FloatFormat::F16).unwrap();
+    let node =
+        |fmt: &str, len: usize| json!({"id": "l", "name": "L", "tiles": [{"key": 0, "fmt": fmt, "chunk": {"offset": 0, "len": len}}]});
+    let doc = json!({"id": "d", "name": "n", "width": 2, "height": 2, "depth": "16-bit-float"});
+
+    let ok = read_happypaint(&file_with(&json!({"doc": doc, "nodes": [node("f16", tile.len())]}), &tile)).unwrap();
+    let Node::Layer(l) = &ok.root[0] else { panic!() };
+    assert_eq!(l.pixels.get(1, 1), [0.75; 4]);
+
+    // An unknown format is a broken file, as in happypaint.
+    assert!(matches!(
+        read_happypaint(&file_with(&json!({"doc": doc, "nodes": [node("f64", tile.len())]}), &tile)),
+        Err(FormatError::Corrupt(_))
+    ));
+
+    // A float tile that won't decode costs that tile only.
+    let mut broken = tile.clone();
+    broken[4] = 7;
+    let p = Progress::default();
+    let back = read_happypaint_with(&file_with(&json!({"doc": doc, "nodes": [node("f16", broken.len())]}), &broken), &p).unwrap();
+    assert_eq!(p.damaged_layers(), vec!["L".to_string()]);
+    let Node::Layer(l) = &back.root[0] else { panic!() };
+    assert!(l.pixels.tile(0, 0).is_none());
+}
+
+// happypaint v0.208.0 (review F14): relief is stored as 256² tiles, only
+// where there is any; the full-canvas `height` PNG is still read.
+#[test]
+fn impasto_relief_is_written_as_tiles_v11() {
+    use serde_json::json;
+    let mut d = Document::new_in(600, 300, None, Depth::Rgba8);
+    d.root.clear();
+    let mut h = Surface::new();
+    h.set(10, 10, [2.0; 4]);
+    h.set(520, 280, [7.5; 4]);
+    let mut l = Layer::new("Thick");
+    l.height = Some(h.clone());
+    d.root.push(Node::Layer(l));
+    let bytes = write_happypaint(&d, None, "t").unwrap();
+    assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), VERSION_RELIEF);
+    let len = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    let manifest: serde_json::Value = serde_json::from_slice(&inflate_raw(&bytes[12..12 + len]).unwrap()).unwrap();
+    let node = &manifest["nodes"][0];
+    assert!(node.get("height").is_none());
+    let keys: Vec<u64> = node["heightTiles"].as_array().unwrap().iter().map(|t| t["key"].as_u64().unwrap()).collect();
+    assert_eq!(keys.len(), 2, "only the two tiles with relief: {keys:?}");
+
+    let back = read_happypaint(&bytes).unwrap();
+    let got = back.root[0].as_layer().unwrap().height.as_ref().unwrap();
+    for (x, y, v) in [(10, 10, 2.0), (520, 280, 7.5), (300, 100, 0.0)] {
+        assert!((got.get(x, y)[0] - v).abs() < 0.01, "({x},{y})");
+    }
+    assert!(back.root[0].as_layer().unwrap().extra.get("heightTiles").is_none(), "not kept as an extra too");
+
+    // An older file's full-canvas PNG reads into the same field.
+    let png = encode_height_png(&h, onepaint_raster::Rect::new(0, 0, 600, 300)).unwrap().unwrap();
+    let doc = json!({"id": "d", "name": "n", "width": 600, "height": 300});
+    let old = file_with(&json!({"doc": doc, "nodes": [{"id": "l", "name": "Thick", "height": {"offset": 0, "len": png.len()}}]}), &png);
+    let back = read_happypaint(&old).unwrap();
+    assert!((back.root[0].as_layer().unwrap().height.as_ref().unwrap().get(520, 280)[0] - 7.5).abs() < 0.01);
+
+    // A relief tile that won't decode stays flat; the rest come back.
+    let good = encode_height_png(&h, onepaint_raster::Rect::new(0, 0, 256, 256)).unwrap().unwrap();
+    let bad = vec![0u8; 20];
+    let mut chunks = good.clone();
+    chunks.extend_from_slice(&bad);
+    let tiles = json!([
+        {"key": 0, "chunk": {"offset": 0, "len": good.len()}},
+        {"key": 2 << 16, "chunk": {"offset": good.len(), "len": bad.len()}}
+    ]);
+    let p = Progress::default();
+    let back =
+        read_happypaint_with(&file_with(&json!({"doc": doc, "nodes": [{"id": "l", "name": "Thick", "heightTiles": tiles}]}), &chunks), &p)
+            .unwrap();
+    assert_eq!(p.damaged_layers(), vec!["Thick".to_string()]);
+    assert!((back.root[0].as_layer().unwrap().height.as_ref().unwrap().get(10, 10)[0] - 2.0).abs() < 0.01);
+}
+
+// Autosave re-encodes only changed tiles (happypaint v0.205.0 reads back only
+// what changed): a cached write must equal a fresh one, byte for byte.
+#[test]
+fn cached_writes_match_fresh_ones_and_pick_up_changes() {
+    for depth in [Depth::Rgba8, Depth::Rgba16F] {
+        let mut d = Document::new_in(600, 300, Some(Rgba::WHITE), depth);
+        let Node::Layer(l) = d.root.last_mut().unwrap() else { panic!() };
+        fill(&mut l.pixels, 10, 10, 500, 200, [0.3, 0.1, 0.0, 0.6]);
+        l.mask = Some(Surface::new());
+        let mut h = Surface::new();
+        h.set(20, 20, [3.0; 4]);
+        l.height = Some(h);
+        let mut cache = ChunkCache::default();
+        let first = write_happypaint_cached(&d, None, "t", &mut cache).unwrap();
+        assert_eq!(first, write_happypaint(&d, None, "t").unwrap());
+        assert!(!cache.is_empty());
+
+        // One tile changes; the rest come from the cache.
+        let Node::Layer(l) = d.root.last_mut().unwrap() else { panic!() };
+        l.pixels.set(300, 100, [0.0, 0.0, 0.9, 1.0]);
+        let second = write_happypaint_cached(&d, None, "t", &mut cache).unwrap();
+        assert_eq!(second, write_happypaint(&d, None, "t").unwrap(), "{depth:?}");
+        let back = read_happypaint(&second).unwrap();
+        let Node::Layer(b) = back.root.last().unwrap() else { panic!() };
+        assert!(b.pixels.get(300, 100)[2] > 0.8, "the changed tile was re-encoded");
+
+        // A layer that's gone leaves the cache.
+        let n = cache.len();
+        d.root.pop();
+        write_happypaint_cached(&d, None, "t", &mut cache).unwrap();
+        assert!(cache.len() < n);
+    }
 }

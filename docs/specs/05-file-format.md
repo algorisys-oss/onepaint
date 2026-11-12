@@ -1,4 +1,4 @@
-# 05: `.happypaint` v9 and PNG export
+# 05: `.happypaint` v9–v11 and PNG export
 
 The source is `storage/happypaint-file.ts` (F).
 
@@ -6,15 +6,18 @@ The source is `storage/happypaint-file.ts` (F).
 | Offset | Size | Field |
 |---|---|---|
 | 0 | 4 | magic `HPNT` |
-| 4 | 2 | u16 LE version. Write 9; reject anything above 9. |
+| 4 | 2 | u16 LE version. Write the lowest version that can read the file: 9, 10 if it holds float tiles, 11 if it holds tiled relief. Reject anything above 11. |
 | 6 | 2 | u16 LE flags. Write 0; ignore on read. |
 | 8 | 4 | u32 LE `manifestLen` |
 | 12 | manifestLen | **raw DEFLATE** (RFC 1951, no zlib header) of the UTF-8 JSON manifest |
 | 12+manifestLen | … | chunks, concatenated with no padding |
 
 - Chunk refs `{offset, len}` are relative to the start of the chunk section.
-- **Validate the bounds.** happypaint doesn't check them, but onepaint
-  must.
+- **Validate the bounds.** Every chunk ref must lie inside the file.
+- **Budgets** (happypaint `container-guard.ts`, v0.205.3): the manifest
+  inflates to at most 256 MiB; each canvas side is 1–32768; the tree holds at
+  most 50 000 nodes, nested at most 64 deep. Past one, the read fails with
+  `FormatError::TooLarge` and a message for the user.
 
 ## Manifest
 The top level is `{app, doc, thumbnail?, nodes}`.
@@ -31,7 +34,7 @@ The top level is `{app, doc, thumbnail?, nodes}`.
 
 **Nodes:**
 - A node is a group if `children` is present. Read all versions
-  (v1–v9) by checking which keys are present. Never branch on the version
+  (v1–v11) by checking which keys are present. Never branch on the version
   number.
 - Leaf keys:
   - `id, name, visible, opacity, blendMode`
@@ -39,12 +42,13 @@ The top level is `{app, doc, thumbnail?, nodes}`.
   - `maskEnabled` (default true)
   - pixels as `tiles` (v7+) **or** `bbox` + `chunk` (v1–v6)
   - mask as `maskTiles` (v8+) **or** `mask` (full canvas)
+  - impasto relief as `heightTiles` (v11+) **or** `height` (full canvas)
 - **Preserve these as opaque JSON, in order:**
   - Keys: `texts`, `text` (v3, read only), `paths`, `adjustmentKind`,
     `adjustmentParams`, `filters`, `metallic`, `holdFrames`, `animTrack`,
     `animStart`, `animRole`, `colorLabel`, `collapsed`, `panel`.
-  - Chunk refs: `height` and `overflow`. Keep their bytes and re-emit them
-    on write.
+  - Chunk refs: a `height` PNG onepaint can't decode keeps its bytes and is
+    re-emitted on write. `overflow` is decoded and re-encoded.
 - Keep unknown keys too. Writes use the key order of F:265-294.
 
 ## Tiles
@@ -60,6 +64,27 @@ The top level is `{app, doc, thumbnail?, nodes}`.
     - `b = 0xcbf29ce4`, prime `0x01000197`
     - The result is `hex(a)-hex(b)` in lowercase, with no padding.
   - Dedup keys on the PNG bytes, which avoids a latent bug in happypaint.
+
+- **Damage:** a tile that won't decode is left blank (a mask tile reveals,
+  coverage 1; a relief tile stays flat) and its layer is listed on
+  `Progress::damaged_layers`. The layer and the file still open.
+
+## Float tiles (v10, happypaint `tile-float.ts`, v0.207.0)
+- A 16- or 32-bit drawing writes its colour tiles and its `overflow` with
+  `fmt: "f16"` or `"f32"`. Masks stay PNG. A `fmt` of any other value fails
+  the read.
+- The chunk is a 16-byte header (`HPFT`, u8 format 1 = f16 / 2 = f32, 3
+  reserved bytes, u32 LE width, u32 LE height), then raw DEFLATE of the
+  premultiplied linear RGBA samples, rows top to bottom. The samples are
+  little-endian bytes split into byte planes, and each byte is stored as the
+  difference from the previous one.
+- onepaint holds 32-bit drawings in f16 (divergence 2), so their f32 tiles
+  are exact widenings of f16 values.
+
+## Tiled relief (v11, happypaint v0.208.0)
+- `heightTiles: [{key, hash?, chunk}]`, only for tiles that hold relief.
+  Each chunk is a PNG of that tile's clipped rect, in the full-canvas
+  `height` encoding: `q = h/16·65535`, with R the high byte and G the low.
 
 ## Pixel encoding of chunks
 - **Layer PNGs:** 8-bit RGBA, **straight alpha, sRGB**.
@@ -78,7 +103,7 @@ The top level is `{app, doc, thumbnail?, nodes}`.
 ## Acceptance tests
 - The header bytes for version 6 with a manifest of 1234 bytes are
   `48 50 4E 54 06 00 00 00 D2 04 00 00`.
-- A bad magic number is rejected, and so is a version of 10.
+- A bad magic number is rejected, and so is a version of 12.
 - Out-of-bounds chunk refs give an error, not a panic.
 - **Round trip:** write a document with groups, a clipped layer, a mask,
   a sparse tile and opaque extras. Reading it back gives an equal tree,

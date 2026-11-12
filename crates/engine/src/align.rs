@@ -128,12 +128,14 @@ pub fn spacing_offsets(items: &[Item], axis: Axis) -> Vec<LayerMove> {
 
 impl Session {
     /// The leaf layers an align acts on: picked layers and every layer inside
-    /// a picked group, visible and unlocked (`transformableIds`). As in
-    /// happypaint, a hidden or locked group does not exclude its children.
+    /// a picked group, visible and unlocked (`transformableIds`). A hidden
+    /// group hides everything in it, so none of its children move
+    /// (happypaint v0.205.3, review N8); a locked group doesn't lock them.
     pub fn transformable_ids(&self, picked: &[NodeId]) -> Vec<NodeId> {
         fn walk(nodes: &[Node], picked: &[NodeId], inside: bool, out: &mut Vec<NodeId>) {
             for n in nodes {
                 match n {
+                    Node::Group(g) if !g.visible => {}
                     Node::Group(g) => walk(&g.children, picked, inside || picked.contains(&g.id), out),
                     Node::Layer(l) => {
                         if (inside || picked.contains(&l.id)) && l.visible && !l.locked {

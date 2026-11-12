@@ -1,5 +1,6 @@
-//! File formats: the native `.happypaint` container (v1–v9 read, v9 write) and
-//! PNG/JPEG helpers. See `docs/specs/05-file-format.md`.
+//! File formats: the native `.happypaint` container (v1–v11 read; written as
+//! v9, v10 with float tiles or v11 with tiled relief) and PNG/JPEG helpers.
+//! See `docs/specs/05-file-format.md`.
 
 pub mod asl;
 pub mod book;
@@ -19,6 +20,8 @@ pub mod psd_fill;
 pub mod psd_source;
 mod psd_write;
 pub mod tiff_cmyk;
+mod tile_float;
+pub use tile_float::{FloatFormat, FloatTile, decode as decode_float_tile, encode as encode_float_tile};
 pub mod video;
 pub mod zip;
 
@@ -27,13 +30,23 @@ pub use progress::Progress;
 
 use onepaint_color::Space;
 use onepaint_doc::{BlendMode, Depth, Document, Extra, Group, Layer, Node};
-use onepaint_raster::{Rect, Surface, TILE, pack_key, unpack_key};
+use onepaint_raster::{Rect, Surface, TILE, Tile, pack_key, unpack_key};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::sync::Arc;
 
 pub const MAGIC: &[u8; 4] = b"HPNT";
-pub const VERSION: u16 = 9;
+/// The newest version read. Writes are stamped with the lowest version that
+/// can read them: 9; 10 once a float tile is written (happypaint v0.207.0);
+/// 11 once relief is written as tiles (v0.208.0).
+pub const VERSION: u16 = 11;
+/// Files with no float tile.
+pub const VERSION_PLAIN: u16 = 9;
+/// Files holding float tiles (`fmt: "f16" | "f32"`).
+pub const VERSION_FLOAT: u16 = 10;
+/// Files holding tiled impasto relief (`heightTiles`).
+pub const VERSION_RELIEF: u16 = 11;
 pub const HEADER_BYTES: usize = 12;
 pub const MIME: &str = "application/x-happypaint";
 pub const EXTENSION: &str = "happypaint";
@@ -54,6 +67,9 @@ pub enum FormatError {
     Json(#[from] serde_json::Error),
     #[error("cancelled")]
     Cancelled,
+    /// Past a budget in [`limits`]: the message is for the user as-is.
+    #[error("{0}")]
+    TooLarge(String),
 }
 
 fn corrupt(s: impl Into<String>) -> FormatError {
@@ -83,6 +99,88 @@ pub fn inflate_raw(data: &[u8]) -> Result<Vec<u8>, FormatError> {
     Ok(out)
 }
 
+/// Budgets a file must fit before its manifest is trusted (happypaint
+/// `storage/container-guard.ts`, review F10): generous for any real drawing,
+/// small enough that a broken or hostile file fails with a message instead of
+/// a huge allocation.
+pub mod limits {
+    /// Largest manifest, inflated. A 300-layer tiled drawing is a few MB.
+    pub const MAX_MANIFEST_BYTES: usize = 256 * 1024 * 1024;
+    /// Largest canvas side.
+    pub const MAX_CANVAS_SIDE: u64 = 32_768;
+    /// Layer-tree budgets.
+    pub const MAX_NODES: usize = 50_000;
+    pub const MAX_DEPTH: usize = 64;
+}
+
+/// [`inflate_raw`] that gives up once the output passes `max` bytes.
+pub fn inflate_raw_max(data: &[u8], max: usize, what: &str) -> Result<Vec<u8>, FormatError> {
+    let mut out = Vec::new();
+    flate2::read::DeflateDecoder::new(data)
+        .take(max as u64 + 1)
+        .read_to_end(&mut out)
+        .map_err(|_| corrupt(format!("this {what} is damaged (its contents would not unpack)")))?;
+    if out.len() > max {
+        return Err(FormatError::TooLarge(format!("This {what} is too large to open (its contents unpack past {} MB).", max >> 20)));
+    }
+    Ok(out)
+}
+
+/// Inflate and parse a manifest within [`limits::MAX_MANIFEST_BYTES`].
+fn read_manifest(deflated: &[u8], what: &str) -> Result<Value, FormatError> {
+    let v: Value = serde_json::from_slice(&inflate_raw_max(deflated, limits::MAX_MANIFEST_BYTES, what)?).map_err(|e| {
+        // serde_json stops at 128 levels of JSON, about 64 of groups.
+        if e.to_string().contains("recursion limit") {
+            FormatError::TooLarge(format!("This {what} nests groups too deeply to open."))
+        } else {
+            FormatError::Json(e)
+        }
+    })?;
+    if !v.is_object() {
+        return Err(corrupt(format!("this {what} has no document inside")));
+    }
+    Ok(v)
+}
+
+/// The canvas size from a manifest's `doc`: whole numbers in 1 ..= [`limits::MAX_CANVAS_SIDE`].
+fn canvas_size(d: &Map<String, Value>, what: &str) -> Result<(u32, u32), FormatError> {
+    let get = |k: &str| d.get(k).and_then(Value::as_u64);
+    let (w, h) = (get("width"), get("height"));
+    match (w, h) {
+        (Some(w), Some(h)) if (1..=limits::MAX_CANVAS_SIDE).contains(&w) && (1..=limits::MAX_CANVAS_SIDE).contains(&h) => {
+            Ok((w as u32, h as u32))
+        }
+        (None, _) | (_, None) => Err(corrupt(format!("{what} without a canvas size"))),
+        _ => Err(FormatError::TooLarge(format!(
+            "This {what} has an impossible canvas size ({} × {}).",
+            d.get("width").unwrap_or(&Value::Null),
+            d.get("height").unwrap_or(&Value::Null)
+        ))),
+    }
+}
+
+/// The layer tree fits [`limits::MAX_NODES`] and [`limits::MAX_DEPTH`].
+/// Iterative, so checking a deep tree can't overflow the stack.
+fn check_nodes(nodes: &[Value], what: &str) -> Result<(), FormatError> {
+    let mut stack: Vec<(&[Value], usize)> = vec![(nodes, 1)];
+    let mut count = 0usize;
+    while let Some((list, depth)) = stack.pop() {
+        if depth > limits::MAX_DEPTH {
+            return Err(FormatError::TooLarge(format!("This {what} nests groups too deeply to open.")));
+        }
+        count += list.len();
+        if count > limits::MAX_NODES {
+            return Err(FormatError::TooLarge(format!("This {what} has too many layers to open.")));
+        }
+        for n in list {
+            if let Some(children) = n.get("children").and_then(Value::as_array) {
+                stack.push((children, depth + 1));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// happypaint's dedup hash: two FNV-1a passes, `hex(a)-hex(b)` unpadded.
 pub fn fnv_pair(bytes: &[u8]) -> String {
     let (mut a, mut b) = (0x811c_9dc5u32, 0xcbf2_9ce4u32);
@@ -108,7 +206,7 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>, FormatError> {
     }
     let len = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
     let end = HEADER_BYTES.checked_add(len).filter(|&e| e <= bytes.len()).ok_or_else(|| corrupt("manifest past end of file"))?;
-    let manifest = serde_json::from_slice(&inflate_raw(&bytes[HEADER_BYTES..end])?)?;
+    let manifest = read_manifest(&bytes[HEADER_BYTES..end], "file")?;
     Ok(Parsed { manifest, chunks: &bytes[end..] })
 }
 
@@ -145,6 +243,7 @@ const LEAF_KNOWN: &[&str] = &[
     "maskTiles",
     "mask",
     "height",
+    "heightTiles",
     "overflow",
 ];
 const GROUP_KNOWN: &[&str] = &["id", "name", "visible", "opacity", "blendMode", "collapsed", "children"];
@@ -184,7 +283,7 @@ fn paste_color(s: &mut Surface, x: i32, y: i32, w: u32, h: u32, rgba: &[u8], cli
 
 /// The layer's pixels outside the canvas as a trimmed straight-sRGB PNG (zero
 /// inside the canvas), or `None` when everything is on the canvas.
-fn overflow_png(s: &Surface, doc: Rect, space: Space) -> Result<Option<(Rect, Vec<u8>)>, FormatError> {
+fn overflow_chunk(s: &Surface, doc: Rect, space: Space, float: Option<FloatFormat>) -> Result<Option<(Rect, Vec<u8>)>, FormatError> {
     let Some(cb) = s.content_bounds() else { return Ok(None) };
     if cb.x >= doc.x && cb.y >= doc.y && cb.right() <= doc.right() && cb.bottom() <= doc.bottom() {
         return Ok(None);
@@ -203,13 +302,33 @@ fn overflow_png(s: &Surface, doc: Rect, space: Space) -> Result<Option<(Rect, Ve
         return Ok(None);
     }
     let r = Rect::new(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
-    let data = s.read_rect(r);
+    let mut data = s.read_rect(r);
+    if let Some(fmt) = float {
+        // Exact samples, zero inside the canvas (review F07).
+        for (i, p) in data.chunks_exact_mut(4).enumerate() {
+            if doc.contains(r.x + (i as i32 % r.w), r.y + (i as i32 / r.w)) {
+                p.fill(0.0);
+            }
+        }
+        return Ok(Some((r, tile_float::encode(&data, r.w as u32, r.h as u32, fmt)?)));
+    }
     let mut rgba = Vec::with_capacity(data.len());
     for (i, p) in data.chunks_exact(4).enumerate() {
         let (x, y) = (r.x + (i as i32 % r.w), r.y + (i as i32 / r.w));
         rgba.extend_from_slice(&if doc.contains(x, y) { [0; 4] } else { space.to_srgb8([p[0], p[1], p[2], p[3]]) });
     }
     Ok(Some((r, encode_png_rgba8(r.w as u32, r.h as u32, &rgba)?)))
+}
+
+/// A tile's or overflow's `fmt`: absent for PNG; an unknown one fails the
+/// read (happypaint `floatFmtOf`).
+fn float_fmt(v: &Value) -> Result<Option<FloatFormat>, FormatError> {
+    match v.get("fmt") {
+        None | Some(Value::Null) => Ok(None),
+        Some(f) => {
+            f.as_str().and_then(FloatFormat::parse).map(Some).ok_or_else(|| corrupt(format!("pixels stored in an unknown format ({f})")))
+        }
+    }
 }
 
 /// Masks store raw coverage in R (no transfer curve).
@@ -226,7 +345,18 @@ fn paste_mask(s: &mut Surface, x: i32, y: i32, w: u32, h: u32, rgba: &[u8], clip
 }
 
 /// Decode a layer's tile PNGs in parallel (spec 41), counting each on `progress`.
-fn read_tiles(chunks: &[u8], tiles: &[Value], doc: Rect, mask: bool, progress: &Progress, space: Space) -> Result<Surface, FormatError> {
+/// A tile that won't decode is left blank and its layer noted on `progress`
+/// (happypaint v0.205.2, review F03): the rest of the layer, and the file,
+/// still open. A chunk reference outside the file still fails the read.
+fn read_tiles(
+    chunks: &[u8],
+    tiles: &[Value],
+    doc: Rect,
+    mask: bool,
+    progress: &Progress,
+    space: Space,
+    layer: &str,
+) -> Result<Surface, FormatError> {
     use rayon::prelude::*;
     let decoded: Vec<Option<Surface>> = tiles
         .par_iter()
@@ -239,7 +369,34 @@ fn read_tiles(chunks: &[u8], tiles: &[Value], doc: Rect, mask: bool, progress: &
                 return Ok(None);
             };
             let c = chunk(chunks, t.get("chunk").ok_or_else(|| corrupt("tile without chunk"))?)?;
-            let (w, h, rgba) = decode_png_rgba8(c)?;
+            if float_fmt(t)?.is_some() {
+                // Exact samples (v10, review F07); the tile covers `clip`.
+                let s = match tile_float::decode(c) {
+                    Ok(f) if (f.width, f.height) == (clip.w as u32, clip.h as u32) => {
+                        let mut s = Surface::new();
+                        s.write_rect(clip, &f.pixels);
+                        Some(s)
+                    }
+                    _ => {
+                        progress.damaged(layer);
+                        None
+                    }
+                };
+                progress.advance(1);
+                return Ok(s);
+            }
+            let Ok((w, h, rgba)) = decode_png_rgba8(c) else {
+                progress.damaged(layer);
+                progress.advance(1);
+                // A missing mask tile hides (coverage 0); reveal instead, so
+                // the damage can't hide the layer's pixels.
+                if !mask {
+                    return Ok(None);
+                }
+                let mut s = Surface::new();
+                s.write_rect(clip, &[1.0f32; 4].repeat((clip.w * clip.h) as usize));
+                return Ok(Some(s));
+            };
             let mut s = Surface::new();
             if mask {
                 paste_mask(&mut s, tx * TILE, ty * TILE, w, h, &rgba, clip);
@@ -314,22 +471,50 @@ fn read_node(v: &Value, chunks: &[u8], doc: Rect, progress: &Progress, space: Sp
         l.adjustment = Some(Box::new(onepaint_doc::Adjustment { kind, params }));
     }
     if let Some(tiles) = o.get("tiles").and_then(Value::as_array) {
-        l.pixels = read_tiles(chunks, tiles, doc, false, progress, space)?;
+        l.pixels = read_tiles(chunks, tiles, doc, false, progress, space, &l.name)?;
     } else if let (Some(bb), Some(c)) = (o.get("bbox"), o.get("chunk")) {
-        let (w, h, rgba) = decode_png_rgba8(chunk(chunks, c)?)?;
-        let x = bb.get("x").and_then(Value::as_i64).unwrap_or(0) as i32;
-        let y = bb.get("y").and_then(Value::as_i64).unwrap_or(0) as i32;
-        paste_color(&mut l.pixels, x, y, w, h, &rgba, doc, space);
+        match decode_png_rgba8(chunk(chunks, c)?) {
+            Ok((w, h, rgba)) => {
+                let x = bb.get("x").and_then(Value::as_i64).unwrap_or(0) as i32;
+                let y = bb.get("y").and_then(Value::as_i64).unwrap_or(0) as i32;
+                paste_color(&mut l.pixels, x, y, w, h, &rgba, doc, space);
+            }
+            Err(_) => progress.damaged(&l.name),
+        }
     }
     if let Some(tiles) = o.get("maskTiles").and_then(Value::as_array) {
-        l.mask = Some(read_tiles(chunks, tiles, doc, true, progress, space)?);
+        l.mask = Some(read_tiles(chunks, tiles, doc, true, progress, space, &l.name)?);
     } else if let Some(c) = o.get("mask") {
-        let (w, h, rgba) = decode_png_rgba8(chunk(chunks, c)?)?;
-        let mut m = Surface::new();
-        paste_mask(&mut m, 0, 0, w, h, &rgba, doc);
-        l.mask = Some(m);
+        // A mask that won't decode is dropped, revealing the layer
+        // (happypaint does the same); the layer is noted.
+        match decode_png_rgba8(chunk(chunks, c)?) {
+            Ok((w, h, rgba)) => {
+                let mut m = Surface::new();
+                paste_mask(&mut m, 0, 0, w, h, &rgba, doc);
+                l.mask = Some(m);
+            }
+            Err(_) => progress.damaged(&l.name),
+        }
     }
-    if let Some(c) = o.get("height") {
+    if let Some(tiles) = o.get("heightTiles").and_then(Value::as_array) {
+        // Tiled relief (v11): a tile that won't decode stays flat.
+        let mut h = Surface::new();
+        for t in tiles {
+            let key = t.get("key").and_then(Value::as_i64).ok_or_else(|| corrupt("relief tile without key"))?;
+            let (tx, ty) = unpack_key((key & 0xffff_ffff) as u32);
+            let bytes = chunk(chunks, t.get("chunk").ok_or_else(|| corrupt("relief tile without chunk"))?)?;
+            let Some(clip) = doc.intersect(&Rect::from_tile(tx, ty)) else { continue };
+            match decode_png_dims(bytes).filter(|&d| d == (clip.w as u32, clip.h as u32)).map(|_| decode_height_png(bytes, clip)) {
+                Some(Ok(part)) => {
+                    for (kx, ky) in part.tile_keys() {
+                        h.set_tile(kx, ky, part.tile(kx, ky).cloned());
+                    }
+                }
+                _ => progress.damaged(&l.name),
+            }
+        }
+        l.height = (h.tile_count() > 0).then_some(h);
+    } else if let Some(c) = o.get("height") {
         let bytes = chunk(chunks, c)?;
         // A height PNG we can't read is kept verbatim and re-emitted.
         match decode_height_png(bytes, doc) {
@@ -344,8 +529,27 @@ fn read_node(v: &Value, chunks: &[u8], doc: Rect, progress: &Progress, space: Sp
         let c = ov.get("chunk").ok_or_else(|| corrupt("overflow without chunk"))?;
         let r = ov.get("rect").cloned().unwrap_or(Value::Null);
         let n = |k: &str| r.get(k).and_then(Value::as_i64).unwrap_or(0) as i32;
-        let (w, h, rgba) = decode_png_rgba8(chunk(chunks, c)?)?;
         let (x0, y0) = (n("x"), n("y"));
+        let bytes = chunk(chunks, c)?;
+        if float_fmt(ov)?.is_some() {
+            let (w, h) = (n("width"), n("height"));
+            match tile_float::decode(bytes) {
+                Ok(f) if (f.width as i32, f.height as i32) == (w, h) => {
+                    for (i, p) in f.pixels.chunks_exact(4).enumerate() {
+                        let (x, y) = (x0 + i as i32 % w, y0 + i as i32 / w);
+                        if !doc.contains(x, y) && p[3] != 0.0 {
+                            l.pixels.set(x, y, [p[0], p[1], p[2], p[3]]);
+                        }
+                    }
+                }
+                _ => progress.damaged(&l.name),
+            }
+            return Ok(Node::Layer(l));
+        }
+        let Ok((w, h, rgba)) = decode_png_rgba8(bytes) else {
+            progress.damaged(&l.name);
+            return Ok(Node::Layer(l));
+        };
         for yy in 0..h as i32 {
             for xx in 0..w as i32 {
                 let (x, y) = (x0 + xx, y0 + yy);
@@ -372,8 +576,7 @@ pub fn read_happypaint(bytes: &[u8]) -> Result<Document, FormatError> {
 pub fn read_happypaint_with(bytes: &[u8], progress: &Progress) -> Result<Document, FormatError> {
     let p = parse(bytes)?;
     let d = p.manifest.get("doc").and_then(Value::as_object).ok_or_else(|| corrupt("manifest without doc"))?;
-    let width = d.get("width").and_then(Value::as_u64).ok_or_else(|| corrupt("doc without width"))? as u32;
-    let height = d.get("height").and_then(Value::as_u64).ok_or_else(|| corrupt("doc without height"))? as u32;
+    let (width, height) = canvas_size(d, "file")?;
     let mut doc = Document::new(width, height, None);
     doc.root.clear();
     doc.id = s(d, "id");
@@ -390,6 +593,7 @@ pub fn read_happypaint_with(bytes: &[u8], progress: &Progress) -> Result<Documen
     doc.extra = extras(d, &["id", "name", "width", "height", "dpi", "bitDepth", "colorSpace", "depth", "createdAt", "updatedAt"]);
     let bounds = doc.bounds();
     let nodes = p.manifest.get("nodes").and_then(Value::as_array).ok_or_else(|| corrupt("manifest without nodes"))?;
+    check_nodes(nodes, "file")?;
     progress.set_total(count_tiles(nodes));
     for n in nodes {
         doc.root.push(read_node(n, p.chunks, bounds, progress, doc.space())?);
@@ -402,11 +606,65 @@ fn num(v: f64) -> Value {
     if v.fract() == 0.0 && v.abs() < 1e15 { json!(v as i64) } else { json!((v * 1e6).round() / 1e6) }
 }
 
+/// Encoded tile chunks kept between writes of the same document, so a save
+/// re-encodes only the tiles that changed (happypaint v0.205.0 reads back
+/// only what changed). Tiles are copy-on-write `Arc`s: an untouched tile is
+/// the same allocation, so a pointer check finds it. Holding the `Arc` keeps
+/// the address from being reused by a different tile.
+#[derive(Default)]
+pub struct ChunkCache {
+    map: HashMap<(String, u8, i32, i32), Cached>,
+}
+
+struct Cached {
+    tile: Option<Arc<Tile>>,
+    clip: Rect,
+    /// How the bytes were made: [`Variant`] as a number.
+    variant: u8,
+    hash: String,
+    bytes: Arc<[u8]>,
+}
+
+impl ChunkCache {
+    /// Entries held (tests).
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+}
+
+/// What a tile chunk holds and how it is encoded; part of the cache check.
+#[derive(Clone, Copy)]
+enum Variant {
+    ColorGamma = 0,
+    ColorLinear = 1,
+    F16 = 2,
+    F32 = 3,
+    Mask = 4,
+    Height = 5,
+}
+
+/// A chunk's bytes and the ref it was written at.
+type Stored = (Arc<[u8]>, Value);
+
 struct Writer {
-    /// The document's space: colour tiles are saved as straight sRGB (spec 50).
+    /// The document's space: 8-bit colour tiles are saved as straight sRGB (spec 50).
     space: Space,
+    /// A float drawing's colour tiles keep their exact samples (review F07).
+    float: Option<FloatFormat>,
+    /// A float tile was written: the file needs a v10 reader.
+    wrote_float: bool,
+    /// Tiled relief was written: the file needs a v11 reader.
+    wrote_relief: bool,
     chunks: Vec<u8>,
-    dedup: HashMap<Vec<u8>, Value>,
+    /// Identical chunks are stored once: (hash, len) → bytes and their ref.
+    dedup: HashMap<(String, usize), Vec<Stored>>,
+    /// Last write's chunks, and this write's.
+    old: ChunkCache,
+    new: ChunkCache,
 }
 
 impl Writer {
@@ -416,37 +674,114 @@ impl Writer {
         r
     }
 
-    fn push_dedup(&mut self, png: Vec<u8>) -> (String, Value) {
-        let hash = fnv_pair(&png);
-        if let Some(r) = self.dedup.get(&png) {
-            return (hash, r.clone());
+    fn push_dedup(&mut self, hash: &str, bytes: &Arc<[u8]>) -> Value {
+        let k = (hash.to_string(), bytes.len());
+        if let Some((_, r)) = self.dedup.get(&k).and_then(|v| v.iter().find(|(b, _)| b[..] == bytes[..])) {
+            return r.clone();
         }
-        let r = self.push(&png);
-        self.dedup.insert(png, r.clone());
-        (hash, r)
+        let r = self.push(bytes);
+        self.dedup.entry(k).or_default().push((bytes.clone(), r.clone()));
+        r
     }
 
-    fn tiles(&mut self, s: &Surface, doc: Rect, mask: bool) -> Result<Vec<Value>, FormatError> {
+    /// One tile's chunk: reused from the last write when the tile, its clip
+    /// and its encoding are unchanged, else encoded by `enc`. `None` from
+    /// `enc` means nothing to store.
+    fn chunk_for(
+        &mut self,
+        id: &str,
+        (tx, ty, clip): (i32, i32, Rect),
+        tile: Option<&Arc<Tile>>,
+        variant: Variant,
+        enc: impl FnOnce() -> Result<Option<Vec<u8>>, FormatError>,
+    ) -> Result<Option<(String, Value)>, FormatError> {
+        // A layer's colour, mask and relief tiles each have their own slot.
+        let slot = match variant {
+            Variant::Mask => 1,
+            Variant::Height => 2,
+            _ => 0,
+        };
+        let key = (id.to_string(), slot, tx, ty);
+        let hit = self.old.map.remove(&key).filter(|c| {
+            c.variant == variant as u8
+                && c.clip == clip
+                && match (&c.tile, tile) {
+                    (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                    (None, None) => true,
+                    _ => false,
+                }
+        });
+        let c = match hit {
+            Some(c) => c,
+            None => {
+                let Some(bytes) = enc()? else { return Ok(None) };
+                Cached { tile: tile.cloned(), clip, variant: variant as u8, hash: fnv_pair(&bytes), bytes: bytes.into() }
+            }
+        };
+        let r = self.push_dedup(&c.hash, &c.bytes);
+        let hash = c.hash.clone();
+        self.new.map.insert(key, c);
+        Ok(Some((hash, r)))
+    }
+
+    fn tiles(&mut self, id: &str, s: &Surface, doc: Rect, mask: bool) -> Result<Vec<Value>, FormatError> {
         let mut out = Vec::new();
+        let space = self.space;
+        let variant = match (mask, self.float, space) {
+            (true, _, _) => Variant::Mask,
+            (false, Some(FloatFormat::F16), _) => Variant::F16,
+            (false, Some(FloatFormat::F32), _) => Variant::F32,
+            (false, None, Space::Gamma) => Variant::ColorGamma,
+            (false, None, Space::Linear) => Variant::ColorLinear,
+        };
         for (tx, ty) in doc.tiles() {
             let Some(r) = doc.intersect(&Rect::from_tile(tx, ty)) else {
                 continue;
             };
-            if !mask && s.tile(tx, ty).is_none_or(|t| t.is_empty()) {
+            let tile = s.tile(tx, ty);
+            if !mask && tile.is_none_or(|t| t.is_empty()) {
                 continue;
             }
-            let px = s.read_rect(r);
-            let mut rgba = Vec::with_capacity(px.len());
-            for p in px.chunks_exact(4) {
-                if mask {
-                    let m = (p[0].clamp(0.0, 1.0) * 255.0).round_ties_even() as u8;
-                    rgba.extend_from_slice(&[m, m, m, 255]);
-                } else {
-                    rgba.extend_from_slice(&self.space.to_srgb8([p[0], p[1], p[2], p[3]]));
+            let float = if mask { None } else { self.float };
+            let enc = || -> Result<Option<Vec<u8>>, FormatError> {
+                let px = s.read_rect(r);
+                if let Some(fmt) = float {
+                    return tile_float::encode(&px, r.w as u32, r.h as u32, fmt).map(Some);
                 }
+                let mut rgba = Vec::with_capacity(px.len());
+                for p in px.chunks_exact(4) {
+                    if mask {
+                        let m = (p[0].clamp(0.0, 1.0) * 255.0).round_ties_even() as u8;
+                        rgba.extend_from_slice(&[m, m, m, 255]);
+                    } else {
+                        rgba.extend_from_slice(&space.to_srgb8([p[0], p[1], p[2], p[3]]));
+                    }
+                }
+                encode_png_rgba8(r.w as u32, r.h as u32, &rgba).map(Some)
+            };
+            let Some((hash, chunk)) = self.chunk_for(id, (tx, ty, r), tile, variant, enc)? else { continue };
+            match float {
+                Some(fmt) => {
+                    self.wrote_float = true;
+                    out.push(json!({"key": pack_key(tx, ty), "hash": hash, "chunk": chunk, "fmt": fmt.as_str()}));
+                }
+                None => out.push(json!({"key": pack_key(tx, ty), "hash": hash, "chunk": chunk})),
             }
-            let (hash, chunk) = self.push_dedup(encode_png_rgba8(r.w as u32, r.h as u32, &rgba)?);
-            out.push(json!({"key": pack_key(tx, ty), "hash": hash, "chunk": chunk}));
+        }
+        Ok(out)
+    }
+
+    fn height_tiles(&mut self, id: &str, h: &Surface, doc: Rect) -> Result<Vec<Value>, FormatError> {
+        let mut out = Vec::new();
+        for (tx, ty) in doc.tiles() {
+            let tile = h.tile(tx, ty);
+            if tile.is_none_or(|t| t.is_empty()) {
+                continue;
+            }
+            let Some(r) = doc.intersect(&Rect::from_tile(tx, ty)) else { continue };
+            if let Some((hash, chunk)) = self.chunk_for(id, (tx, ty, r), tile, Variant::Height, || encode_height_png(h, r))? {
+                out.push(json!({"key": pack_key(tx, ty), "hash": hash, "chunk": chunk}));
+            }
         }
         Ok(out)
     }
@@ -493,25 +828,34 @@ impl Writer {
                 }
                 // Adjustment layers carry no pixels of their own (PE:7403-7412).
                 if l.adjustment.is_none() {
-                    let tiles = self.tiles(&l.pixels, doc, false)?;
+                    let tiles = self.tiles(&l.id, &l.pixels, doc, false)?;
                     o.insert("tiles".into(), Value::Array(tiles));
                 }
                 if let Some(m) = &l.mask {
-                    let mt = self.tiles(m, doc, true)?;
+                    let mt = self.tiles(&l.id, m, doc, true)?;
                     o.insert("maskTiles".into(), Value::Array(mt));
                 }
-                if let Some(png) = l.height.as_ref().map(|h| encode_height_png(h, doc)).transpose()?.flatten() {
-                    let r = self.push(&png);
-                    o.insert("height".into(), r);
+                if let Some(h) = &l.height {
+                    // 256² tiles, only where there is relief (v11, review F14).
+                    let tiles = self.height_tiles(&l.id, h, doc)?;
+                    if !tiles.is_empty() {
+                        self.wrote_relief = true;
+                        o.insert("heightTiles".into(), Value::Array(tiles));
+                    }
                 } else if let Some(h) = l.chunks.get("height") {
                     let r = self.push(h);
                     o.insert("height".into(), r);
                 }
                 if l.adjustment.is_none()
-                    && let Some((rect, png)) = overflow_png(&l.pixels, doc, self.space)?
+                    && let Some((rect, bytes)) = overflow_chunk(&l.pixels, doc, self.space, self.float)?
                 {
-                    let r = self.push(&png);
-                    o.insert("overflow".into(), json!({"rect": {"x": rect.x, "y": rect.y, "width": rect.w, "height": rect.h}, "chunk": r}));
+                    let r = self.push(&bytes);
+                    let mut ov = json!({"rect": {"x": rect.x, "y": rect.y, "width": rect.w, "height": rect.h}, "chunk": r});
+                    if let Some(fmt) = self.float {
+                        ov["fmt"] = json!(fmt.as_str());
+                        self.wrote_float = true;
+                    }
+                    o.insert("overflow".into(), ov);
                 }
             }
         }
@@ -519,9 +863,34 @@ impl Writer {
     }
 }
 
-/// Write a v9 `.happypaint`. `thumbnail_jpeg` becomes the first chunk.
+/// Write a `.happypaint`: v9, v10 when it holds float tiles, v11 with tiled relief. `thumbnail_jpeg` becomes the first chunk.
 pub fn write_happypaint(doc: &Document, thumbnail_jpeg: Option<&[u8]>, app_version: &str) -> Result<Vec<u8>, FormatError> {
-    let mut w = Writer { space: doc.space(), chunks: Vec::new(), dedup: HashMap::new() };
+    write_happypaint_cached(doc, thumbnail_jpeg, app_version, &mut ChunkCache::default())
+}
+
+/// [`write_happypaint`], reusing `cache`'s chunks for tiles unchanged since
+/// the last write with it, and leaving this write's chunks there for the next.
+pub fn write_happypaint_cached(
+    doc: &Document,
+    thumbnail_jpeg: Option<&[u8]>,
+    app_version: &str,
+    cache: &mut ChunkCache,
+) -> Result<Vec<u8>, FormatError> {
+    let float = match doc.depth {
+        Depth::Rgba8 => None,
+        Depth::Rgba16F => Some(FloatFormat::F16),
+        Depth::Rgba32F => Some(FloatFormat::F32),
+    };
+    let mut w = Writer {
+        space: doc.space(),
+        float,
+        wrote_float: false,
+        wrote_relief: false,
+        chunks: Vec::new(),
+        dedup: HashMap::new(),
+        old: std::mem::take(cache),
+        new: ChunkCache::default(),
+    };
     let thumb = thumbnail_jpeg.map(|t| w.push(t));
     let bounds = doc.bounds();
     let nodes = doc.root.iter().map(|n| w.node(n, bounds)).collect::<Result<Vec<_>, _>>()?;
@@ -547,9 +916,17 @@ pub fn write_happypaint(doc: &Document, thumbnail_jpeg: Option<&[u8]>, app_versi
     }
     m.insert("nodes".into(), Value::Array(nodes));
     let manifest = deflate_raw(&serde_json::to_vec(&Value::Object(m))?);
-    let mut out = header(VERSION, manifest.len() as u32).to_vec();
+    let version = if w.wrote_relief {
+        VERSION_RELIEF
+    } else if w.wrote_float {
+        VERSION_FLOAT
+    } else {
+        VERSION_PLAIN
+    };
+    let mut out = header(version, manifest.len() as u32).to_vec();
     out.extend_from_slice(&manifest);
     out.extend_from_slice(&w.chunks);
+    *cache = w.new;
     Ok(out)
 }
 
@@ -586,7 +963,14 @@ pub fn encode_height_png(field: &Surface, doc: Rect) -> Result<Option<Vec<u8>>, 
     Ok(Some(out))
 }
 
-/// The inverse of [`encode_height_png`]; pixels outside the document are dropped.
+/// A PNG's size from its header, without decoding it.
+fn decode_png_dims(bytes: &[u8]) -> Option<(u32, u32)> {
+    let info = png::Decoder::new(std::io::Cursor::new(bytes)).read_info().ok()?;
+    let i = info.info();
+    Some((i.width, i.height))
+}
+
+/// The inverse of [`encode_height_png`]; pixels outside `doc` are dropped.
 pub fn decode_height_png(bytes: &[u8], doc: Rect) -> Result<Surface, FormatError> {
     let (w, h, rgba) = decode_png_rgba8(bytes)?;
     let mut s = Surface::new();

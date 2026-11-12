@@ -6,7 +6,7 @@
 //! length, the manifest as raw-deflated JSON, then the PNG chunks the
 //! manifest's nodes point into (offsets from the end of the manifest).
 
-use crate::{FormatError, corrupt, inflate_raw, read_node};
+use crate::{FormatError, canvas_size, check_nodes, corrupt, read_manifest, read_node};
 use onepaint_doc::Document;
 use serde_json::Value;
 
@@ -37,14 +37,17 @@ pub fn read_happypaint_rec(bytes: &[u8]) -> Result<HappyRecording, FormatError> 
     }
     let len = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
     let end = 12usize.checked_add(len).filter(|e| *e <= bytes.len()).ok_or_else(|| corrupt("recording manifest past the end"))?;
-    let manifest: Value = serde_json::from_slice(&inflate_raw(&bytes[12..end])?)?;
+    let manifest = read_manifest(&bytes[12..end], "recording")?;
     let chunks = &bytes[end..];
-    let d = manifest.get("doc").ok_or_else(|| corrupt("recording without doc"))?;
-    let dim = |k: &str| d.get(k).and_then(Value::as_u64).filter(|v| *v > 0).ok_or_else(|| corrupt("recording without a size"));
-    let mut doc = Document::new(dim("width")? as u32, dim("height")? as u32, None);
+    let d = manifest.get("doc").and_then(Value::as_object).ok_or_else(|| corrupt("recording without doc"))?;
+    let (width, height) = canvas_size(d, "recording")?;
+    let mut doc = Document::new(width, height, None);
     doc.root.clear();
     doc.name = "Replay".into();
     let bounds = doc.bounds();
+    if let Some(nodes) = manifest.get("nodes").and_then(Value::as_array) {
+        check_nodes(nodes, "recording")?;
+    }
     for n in manifest.get("nodes").and_then(Value::as_array).into_iter().flatten() {
         doc.root.push(read_node(n, chunks, bounds, &crate::Progress::default(), doc.space())?);
     }

@@ -155,6 +155,17 @@ pub enum FileKind {
 }
 
 /// How a file opens, by extension: `.happypaint`, PSD/PSB, or any other image.
+/// What opening a partly unreadable file says (happypaint v0.205.2).
+fn damaged_notice(layers: &[String]) -> String {
+    let names = match layers {
+        [one] => format!("“{one}”"),
+        [first @ .., last] => format!("{} and “{last}”", first.iter().map(|n| format!("“{n}”")).collect::<Vec<_>>().join(", ")),
+        [] => String::new(),
+    };
+    let s = if layers.len() == 1 { "" } else { "s" };
+    format!("Parts of layer{s} {names} couldn't be read and are blank. Save under a new name to keep the original file.")
+}
+
 pub fn kind_of(p: &std::path::Path) -> FileKind {
     match p.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
         Some("happypaint") => FileKind::Native,
@@ -605,6 +616,19 @@ impl App {
                 let d = self.session.doc();
                 self.canvas.reset_for([d.width, d.height]);
                 self.thumbs.clear();
+                let damaged = l.progress.damaged_layers();
+                if !damaged.is_empty() {
+                    // Parts of the file wouldn't decode and open blank. Keep
+                    // the file on disk intact: Save asks for a new location
+                    // (happypaint copies the original to the gallery instead).
+                    self.notify(damaged_notice(&damaged), now);
+                    if !l.recovered {
+                        self.gallery.touch(&l.path);
+                    }
+                    self.path = None;
+                    self.saved_history_len = None;
+                    return;
+                }
                 if l.recovered {
                     // Recovered work is unsaved: Save asks for a location.
                     self.path = None;
@@ -1799,20 +1823,21 @@ pub(crate) mod tests {
         send(&mut h, &[PenEvent::In(PenTool::Pen), PenEvent::Move(at(400.0, 0.0))], 0.0);
         send(&mut h, &[PenEvent::Down(at(400.0, 0.6))], 16.0);
         send(&mut h, &(1..=6).map(|i| PenEvent::Move(at(400.0 + i as f32 * 8.0, 0.6))).collect::<Vec<_>>(), 32.0);
-        // The dip: up at 448, hovering on to 480 (no pressure), down at 488.
+        // The dip: up at 448, hovering slowly on to 460 (no pressure), down
+        // at 463. A dip is slow tracing; a fast hover is a hop (v0.204.19).
         send(&mut h, &[PenEvent::Up], 48.0);
-        for (i, x) in [456.0, 464.0, 472.0, 480.0].into_iter().enumerate() {
+        for (i, x) in [451.0, 454.0, 457.0, 460.0].into_iter().enumerate() {
             send(&mut h, &[PenEvent::Move(PenSample { pressure: Some(0.0), ..at(x, 0.0) })], 64.0 + i as f64 * 16.0);
         }
-        send(&mut h, &[PenEvent::Down(at(488.0, 0.6))], 140.0);
-        send(&mut h, &(1..=4).map(|i| PenEvent::Move(at(488.0 + i as f32 * 8.0, 0.6))).collect::<Vec<_>>(), 156.0);
+        send(&mut h, &[PenEvent::Down(at(463.0, 0.6))], 140.0);
+        send(&mut h, &(1..=4).map(|i| PenEvent::Move(at(463.0 + i as f32 * 8.0, 0.6))).collect::<Vec<_>>(), 156.0);
         // A real lift: the hovers stop and the window runs out.
         send(&mut h, &[PenEvent::Up], 172.0);
         assert!(h.state().canvas.dip.pending());
         send(&mut h, &[], 300.0);
         assert!(!h.state().canvas.dip.pending(), "the end committed");
         assert_eq!(begins(&mut h), 1, "one stroke across the dip");
-        for x in [430.0, 468.0, 500.0] {
+        for x in [430.0, 455.0, 490.0] {
             assert!(ink(&h, x) > 0.3, "ink at x = {x}, through the dip too");
         }
         // A tap right after a lift, with no hover between: a new stroke.
@@ -1824,6 +1849,22 @@ pub(crate) mod tests {
         assert_eq!(begins(&mut h), 2, "never bridged blind");
         assert!(ink(&h, 611.0) > 0.0, "the tap inked");
         assert_eq!(ink(&h, 560.0), 0.0, "no connector from the last stroke");
+
+        // Lift, a quick hop through the air and a tap: the hover path is not
+        // ink (happypaint v0.204.19, field video 2026-11-06).
+        send(&mut h, &[PenEvent::In(PenTool::Pen), PenEvent::Move(at(620.0, 0.0))], 500.0);
+        send(&mut h, &[PenEvent::Down(at(620.0, 0.6))], 516.0);
+        send(&mut h, &[PenEvent::Move(at(630.0, 0.6))], 532.0);
+        send(&mut h, &[PenEvent::Up], 548.0);
+        for (i, x) in [640.0, 660.0, 680.0].into_iter().enumerate() {
+            send(&mut h, &[PenEvent::Move(PenSample { pressure: Some(0.0), ..at(x, 0.0) })], 556.0 + i as f64 * 8.0);
+        }
+        send(&mut h, &[PenEvent::Down(at(680.0, 0.6))], 580.0);
+        send(&mut h, &[PenEvent::Up, PenEvent::Out], 596.0);
+        send(&mut h, &[], 800.0);
+        assert_eq!(begins(&mut h), 2, "the hop starts a new stroke");
+        assert_eq!(ink(&h, 655.0), 0.0, "the hover path is not inked");
+        assert!(ink(&h, 680.0) > 0.0, "the tap inked");
     }
 
     #[test]
@@ -1955,6 +1996,15 @@ pub(crate) mod tests {
         h.get_by_label("Eraser (E)").click();
         h.run();
         assert_eq!(h.state().session.tool(), Tool::Eraser);
+    }
+
+    #[test]
+    fn damaged_notice_names_the_layers() {
+        assert_eq!(
+            super::damaged_notice(&["Ink".into()]),
+            "Parts of layer “Ink” couldn't be read and are blank. Save under a new name to keep the original file."
+        );
+        assert!(super::damaged_notice(&["A".into(), "B".into(), "C".into()]).starts_with("Parts of layers “A”, “B” and “C” "));
     }
 
     #[test]

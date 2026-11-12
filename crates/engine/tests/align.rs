@@ -82,7 +82,12 @@ fn a_picked_group_aligns_its_children() {
     let group = s.active().to_string();
     s.execute(Command::MoveLayer { id: a.clone(), parent: Some(group.clone()), index: 0 }).unwrap();
     assert_eq!(s.doc().parent_of(&a), Some(Some(group.clone())));
-    assert_eq!(s.transformable_ids(&[group]), vec![a]);
+    assert_eq!(s.transformable_ids(std::slice::from_ref(&group)), vec![a]);
+
+    // A hidden group hides its children whatever their own flags say, so
+    // they don't move (happypaint review N8, v0.205.3).
+    s.execute(Command::SetLayerProps { id: group.clone(), props: LayerProps { visible: Some(false), ..Default::default() } }).unwrap();
+    assert!(s.transformable_ids(&[group]).is_empty());
 }
 
 #[test]

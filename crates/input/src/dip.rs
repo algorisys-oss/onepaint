@@ -9,6 +9,11 @@
 //! A real lift (the hovers stop, or the window's hard cap passes) commits the
 //! end and drops the buffer, so no phantom ink is left. A re-contact with
 //! nothing buffered is a new stroke: the end is never bridged blind.
+//!
+//! Sliding alone would follow a lifted pen anywhere, since hovers arrive
+//! every few points. So a dip is also bounded in distance from the lift and in
+//! speed (v0.204.19): a hop to the next stroke commits the lift instead of
+//! being replayed as ink.
 
 /// Commit this long after the hover stream stops (a real lift).
 pub const RECONNECT_MS: f64 = 110.0;
@@ -18,6 +23,12 @@ pub const RECONNECT_MAX_MS: f64 = 500.0;
 pub const RECONNECT_DIST: f32 = 24.0;
 /// A single dip's buffered path is capped.
 pub const MAX_DIP_POINTS: usize = 256;
+/// A dip stays this near (points) the lift point, not the sliding anchor.
+pub const DIP_MAX_TRAVEL: f32 = 40.0;
+/// A dip moves slower than this (points per ms, 350 pt/s) over the last
+/// [`DIP_SPEED_WINDOW_MS`].
+pub const DIP_MAX_SPEED: f32 = 0.35;
+pub const DIP_SPEED_WINDOW_MS: f64 = 40.0;
 
 #[derive(Clone, Debug)]
 struct Pending<T> {
@@ -27,6 +38,8 @@ struct Pending<T> {
     started: f64,
     last: f64,
     path: Vec<([f32; 2], T)>,
+    /// When each `path` point arrived.
+    stamps: Vec<f64>,
 }
 
 /// What a hover during the grace window does.
@@ -60,6 +73,27 @@ impl<T> Default for DipBridge<T> {
     }
 }
 
+impl<T> Pending<T> {
+    /// A hover too far from the lift, or moving too fast, is the pen leaving
+    /// for a new stroke, not a tip dip (`leftTheDip`).
+    fn left_the_dip(&self, at: [f32; 2], ms: f64) -> bool {
+        if (at[0] - self.lift[0]).hypot(at[1] - self.lift[1]) > DIP_MAX_TRAVEL {
+            return true;
+        }
+        // Speed against the newest point at least a window old (else the
+        // lift), over at least the window: one step is too noisy.
+        let (from, t) = self
+            .path
+            .iter()
+            .zip(&self.stamps)
+            .rev()
+            .find(|(_, t)| ms - **t >= DIP_SPEED_WINDOW_MS)
+            .map_or((self.lift, self.started), |((p, _), t)| (*p, *t));
+        let d = (at[0] - from[0]).hypot(at[1] - from[1]);
+        d / (ms - t).max(DIP_SPEED_WINDOW_MS) as f32 > DIP_MAX_SPEED
+    }
+}
+
 fn near(a: [f32; 2], b: [f32; 2]) -> bool {
     (a[0] - b[0]).hypot(a[1] - b[1]) <= RECONNECT_DIST
 }
@@ -72,7 +106,7 @@ impl<T: Clone> DipBridge<T> {
 
     /// The pen lifted at `at` mid-stroke: hold the end back.
     pub fn lift(&mut self, at: [f32; 2], ms: f64) {
-        self.pending = Some(Pending { lift: at, anchor: at, started: ms, last: ms, path: Vec::new() });
+        self.pending = Some(Pending { lift: at, anchor: at, started: ms, last: ms, path: Vec::new(), stamps: Vec::new() });
     }
 
     /// The pen hovered at `at` while the end is held back.
@@ -85,8 +119,14 @@ impl<T: Clone> DipBridge<T> {
         }
         // Wandered off: left for the timer, which a real lift lets run out.
         if near(at, p.anchor) {
+            if p.left_the_dip(at, ms) {
+                let lift = p.lift;
+                self.pending = None;
+                return Hover::Commit { lift };
+            }
             if p.path.len() < MAX_DIP_POINTS {
                 p.path.push((at, sample));
+                p.stamps.push(ms);
             }
             (p.anchor, p.last) = (at, ms);
         }
@@ -132,13 +172,49 @@ mod tests {
 
     #[test]
     fn the_anchor_slides_with_the_hovers() {
-        // A long flutter wanders well past 24 points from the lift.
+        // A slow trace (~0.1 pt/ms) drifts past 24 points from the lift.
+        let mut b = DipBridge::default();
+        b.lift([10.0, 0.0], 1000.0);
+        for (i, (x, t)) in [(20.0, 1100.0), (30.0, 1200.0), (40.0, 1300.0)].into_iter().enumerate() {
+            assert_eq!(b.hover([x, 0.0], i, t), Hover::Held);
+        }
+        assert!(matches!(b.contact([40.0, 0.0]), Contact::Resume(p) if p.len() == 3));
+    }
+
+    // happypaint v0.204.19: a lift, a quick hop and a tap inked the hover
+    // path, joining each new stroke to the last (field video 2026-11-06).
+    #[test]
+    fn a_fast_hop_after_a_lift_is_a_new_stroke() {
+        let mut b = DipBridge::default();
+        b.lift([10.0, 0.0], 1000.0);
+        // Speed is taken over at least 40 ms: 10 points is 0.25 pt/ms, 20 is 0.5.
+        assert_eq!(b.hover([20.0, 0.0], 0u8, 1008.0), Hover::Held);
+        assert_eq!(b.hover([30.0, 0.0], 0, 1016.0), Hover::Commit { lift: [10.0, 0.0] });
+        assert!(!b.pending());
+    }
+
+    #[test]
+    fn a_slow_hover_that_wanders_too_far_is_a_new_stroke() {
+        let mut b = DipBridge::default();
+        b.lift([10.0, 0.0], 1000.0);
+        let mut out = Vec::new();
+        for i in 1..=7 {
+            out.push(b.hover([10.0 + i as f32 * 10.0, 0.0], i, 1000.0 + i as f64 * 60.0));
+        }
+        // 0.17 pt/ms is slow enough; the fifth hover is 50 points from the lift.
+        assert_eq!(out[..4], [Hover::Held, Hover::Held, Hover::Held, Hover::Held]);
+        assert_eq!(out[4], Hover::Commit { lift: [10.0, 0.0] });
+        assert!(!b.pending());
+    }
+
+    #[test]
+    fn speed_is_measured_over_the_window_not_one_step() {
+        // Jitter: one 6-point step in 4 ms (1.5 pt/ms) inside a slow trace.
         let mut b = DipBridge::default();
         b.lift([0.0, 0.0], 0.0);
-        for i in 1..=10 {
-            b.hover([i as f32 * 10.0, 0.0], i, i as f64 * 16.0);
-        }
-        assert!(matches!(b.contact([105.0, 0.0]), Contact::Resume(p) if p.len() == 10));
+        assert_eq!(b.hover([2.0, 0.0], 0u8, 40.0), Hover::Held);
+        assert_eq!(b.hover([4.0, 0.0], 0, 80.0), Hover::Held);
+        assert_eq!(b.hover([10.0, 0.0], 0, 84.0), Hover::Held, "8 points over 44 ms");
     }
 
     #[test]

@@ -1,8 +1,9 @@
 //! Progress and cancellation for long reads (spec 41). A reader on a worker
 //! thread counts its steps; the UI thread shows the fraction and may cancel.
+//! The reader also lists the layers it could only read in part.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// A cloneable handle shared by the reader and the UI.
 #[derive(Clone, Debug, Default)]
@@ -13,6 +14,7 @@ struct Inner {
     done: AtomicU64,
     total: AtomicU64,
     cancel: AtomicBool,
+    damaged: Mutex<Vec<String>>,
 }
 
 impl Progress {
@@ -38,6 +40,20 @@ impl Progress {
 
     pub fn is_cancelled(&self) -> bool {
         self.0.cancel.load(Ordering::Relaxed)
+    }
+
+    /// Note a layer that lost some of its pixels to a part that wouldn't
+    /// decode (happypaint v0.205.2, review F03). Each name is kept once.
+    pub fn damaged(&self, layer: &str) {
+        let mut d = self.0.damaged.lock().unwrap_or_else(|e| e.into_inner());
+        if !d.iter().any(|n| n == layer) {
+            d.push(layer.to_string());
+        }
+    }
+
+    /// The layers noted by [`Progress::damaged`], in the order first noted.
+    pub fn damaged_layers(&self) -> Vec<String> {
+        self.0.damaged.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// `Err(Cancelled)` once cancelled, for readers to `?` between steps.
