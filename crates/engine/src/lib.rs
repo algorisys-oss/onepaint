@@ -482,6 +482,19 @@ pub struct Session {
     mixer_patch_gen: u64,
 }
 
+/// What [`Session::memory_use`] reports, in bytes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MemoryUse {
+    pub pixels: usize,
+    pub history: usize,
+}
+
+impl MemoryUse {
+    pub fn total(&self) -> usize {
+        self.pixels + self.history
+    }
+}
+
 fn tile_bytes(t: &Option<Arc<Tile>>) -> usize {
     t.as_ref().map_or(0, |t| t.byte_size())
 }
@@ -643,6 +656,21 @@ impl Session {
 
     pub fn history_len(&self) -> usize {
         self.history.undo_len()
+    }
+
+    /// Memory the drawing holds now: its painted tiles (layers, masks and
+    /// relief) and its undo history (happypaint's Document Properties
+    /// Memory row, v0.208.1). Tiles are sparse, so a blank layer costs nothing.
+    pub fn memory_use(&self) -> MemoryUse {
+        let surf = |s: &onepaint_raster::Surface| s.tiles().map(|(_, t)| t.byte_size()).sum::<usize>();
+        let pixels = self
+            .doc
+            .layer_ids()
+            .iter()
+            .filter_map(|id| self.doc.layer(id))
+            .map(|l| surf(&l.pixels) + l.mask.as_ref().map_or(0, surf) + l.height.as_ref().map_or(0, surf))
+            .sum();
+        MemoryUse { pixels, history: self.history.bytes() }
     }
 
     pub fn can_undo(&self) -> bool {

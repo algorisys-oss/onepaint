@@ -384,6 +384,14 @@ fn new_doc(app: &mut App, ui: &mut Ui) {
     }
     let hint = depths.iter().find(|d| d.0 == app.new_depth).map_or("", |d| d.2);
     ui.label(RichText::new(hint).font(theme::medium(10.5)).color(t.fg_faint));
+    // What the size costs (happypaint v0.208.1): a warning, never a refusal.
+    let (level, advice) = crate::memory::size_advice(app.new_doc[0], app.new_doc[1], app.new_depth, crate::memory::budget());
+    let color = match level {
+        crate::memory::Level::Ok => t.fg_faint,
+        crate::memory::Level::Tight => t.warning,
+        crate::memory::Level::Over => t.danger,
+    };
+    ui.add(egui::Label::new(RichText::new(advice).font(theme::medium(10.5)).color(color)).wrap());
     ui.add_space(12.0);
     ui.horizontal(|ui| {
         if widgets::primary_button(ui, "Create", 120.0).clicked() {
@@ -2157,6 +2165,18 @@ fn paper_dialog(app: &mut App, ui: &mut Ui) {
             let _ = app.session.execute(Command::SetPaper { paper: Some(onepaint_doc::Paper { scale: Some(scale), ..p }) });
         }
     }
+    // Memory (happypaint's Document Properties row, v0.208.1).
+    ui.add_space(8.0);
+    let d = app.session.doc();
+    let used = app.session.memory_use();
+    let (over, text) = crate::memory::document_memory(d.width, d.height, d.depth, used.total() as u64, crate::memory::budget());
+    ui.label(RichText::new("Memory").font(theme::medium(12.5)).color(t.fg));
+    ui.add(egui::Label::new(RichText::new(text).font(theme::medium(11.0)).color(if over { t.danger } else { t.fg_faint })).wrap())
+        .on_hover_text(format!(
+            "Layers, masks and relief: {}. Undo: {}. Blank areas cost nothing.",
+            crate::memory::format_bytes(used.pixels as u64),
+            crate::memory::format_bytes(used.history as u64)
+        ));
     ui.add_space(10.0);
     if widgets::primary_button(ui, "Done", 90.0).clicked() {
         app.popover = None;

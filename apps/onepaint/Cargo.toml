@@ -20,6 +20,7 @@ onepaint-brush = { workspace = true }
 onepaint-stroke = { workspace = true }
 onepaint-input = { workspace = true }
 onepaint-raster = { workspace = true }
+sysinfo = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
 # Only to turn on winit's Adwaita window frame on Wayland: eframe builds winit
 # without it, and the fallback frame draws the close button as a plain square.

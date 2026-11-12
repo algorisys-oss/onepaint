@@ -61,6 +61,8 @@ pub struct Settings {
     /// Trace the brush tip's shape (image tips; round and square are exact already).
     pub cursor_tip_shape: bool,
     pub max_history_steps: usize,
+    /// When the recovery copy is written (happypaint `autosave`, v0.205.0).
+    pub autosave: crate::autosave::Mode,
     pub timeline_metric: TimelineMetric,
     /// Shortcut overrides: action id → combo (`keymap.rs`).
     pub keybindings: crate::keymap::Overrides,
@@ -97,6 +99,7 @@ impl Default for Settings {
             cursor_thickness: 1,
             cursor_tip_shape: true,
             max_history_steps: DEFAULT_HISTORY_STEPS,
+            autosave: crate::autosave::Mode::Pause,
             keybindings: Default::default(),
             timeline_metric: TimelineMetric::Frames,
             side_sliders: true,
@@ -187,6 +190,16 @@ pub fn dialog(app: &mut App, ui: &mut Ui) {
         ui.columns(2, |cols| {
             let ui = &mut cols[0];
             widgets::section_label(ui, "Documents");
+            row(
+                ui,
+                "Auto-save",
+                "When a recovery copy of unsaved work is written, for after a crash. It runs alongside painting. On Manual, only Save writes anything.",
+            );
+            egui::ComboBox::from_id_salt("autosave-mode").selected_text(s.autosave.label()).width(180.0).show_ui(ui, |ui| {
+                for m in crate::autosave::Mode::ALL {
+                    ui.selectable_value(&mut s.autosave, m, m.label());
+                }
+            });
             row(ui, "Document tabs", "One tab per open drawing in the top bar.");
             widgets::toggle(ui, &mut s.document_tabs, "Show document tabs");
             row(ui, "Maximum open tabs", "Opening past this closes the least recently used saved tab.");

@@ -10,6 +10,7 @@ publish = false
 rust-version = "1.95"
 
 [workspace.dependencies]
+sysinfo = { version = "0.40", default-features = false, features = ["system"] }
 openh264 = "0.9"
 onepaint-raster = { path = "crates/raster" }
 onepaint-color = { path = "crates/color" }

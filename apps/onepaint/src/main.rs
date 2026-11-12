@@ -29,6 +29,7 @@ mod layout;
 mod levels;
 mod loading;
 mod manual;
+mod memory;
 mod menus;
 mod options_row;
 mod palette;
@@ -322,6 +323,10 @@ pub struct App {
     /// Canvas/image size dialog state: size, anchor (col, row), keep aspect.
     pub size_dialog: ([u32; 2], (u8, u8), bool),
     pub autosave: autosave::Autosave,
+    /// History changes seen, for the autosave's timing.
+    edits: u64,
+    /// Drawings already warned about memory.
+    memory_warned: std::collections::HashSet<String>,
     /// A leftover autosave offered for recovery at launch.
     pub recover: Option<PathBuf>,
     /// A file being opened in the background (spec 41).
@@ -431,6 +436,8 @@ impl App {
             align_to_selection: false,
             size_dialog: ([0, 0], (1, 1), true),
             autosave: autosave::Autosave::new(if cfg!(test) { None } else { autosave::dir() }),
+            edits: 0,
+            memory_warned: Default::default(),
             recover: None,
             loading: None,
             curve_tab: 0,
@@ -484,6 +491,22 @@ impl App {
             Err(e) => format!("The graphics card stopped responding, and the work couldn't be saved ({e}). Save it now, then restart."),
         };
         self.toast = Some((msg, now + 30.0));
+    }
+
+    /// Past the memory budget: say so, once per drawing (happypaint's
+    /// one-time warning on adding layers, v0.208.1).
+    fn check_memory(&mut self, now: f64) {
+        let d = self.session.doc();
+        if self.memory_warned.contains(&d.id) {
+            return;
+        }
+        let held = self.session.memory_use().total() as u64;
+        let (over, text) = memory::document_memory(d.width, d.height, d.depth, held, memory::budget());
+        if over {
+            self.memory_warned.insert(d.id.clone());
+            let msg = format!("{text} Merge or delete layers you no longer need, or lower Undo steps in Settings.");
+            self.toast = Some((msg, now + 10.0));
+        }
     }
 
     pub fn set_color(&mut self, c: Rgba) {
@@ -1556,22 +1579,35 @@ impl eframe::App for App {
         if was_stroking && !self.session.is_stroking() {
             self.push_recent();
         }
+        let mut memory_check = false;
         for e in self.session.drain_events() {
             match e {
-                Event::LayersChanged | Event::DocumentReplaced => self.thumbs.clear(),
-                Event::HistoryChanged { .. } => self.thumbs.invalidate_active(self.session.active()),
+                Event::LayersChanged | Event::DocumentReplaced => {
+                    self.thumbs.clear();
+                    memory_check = true;
+                }
+                Event::HistoryChanged { .. } => {
+                    self.thumbs.invalidate_active(self.session.active());
+                    self.edits += 1;
+                }
                 _ => {}
             }
         }
         let now = ctx.input(|i| i.time);
         self.check_gpu(now);
+        if memory_check {
+            self.check_memory(now);
+        }
         let (dirty, busy) = (self.dirty(), self.session.is_stroking() || self.session.transform_active());
         let doc = &self.session;
+        let mode = self.settings.autosave;
         if !self.debug.scripted() {
-            self.autosave.tick(now, dirty, || (!busy).then(|| doc.doc().clone()));
+            self.autosave.tick(now, mode, dirty, self.edits, || (!busy).then(|| doc.doc().clone()));
         }
-        if dirty {
-            ctx.request_repaint_after(std::time::Duration::from_secs_f64(autosave::INTERVAL_S));
+        // Wake when the save falls due. One held back by a stroke or a
+        // transform runs on the frame that ends it.
+        if let Some(at) = self.autosave.due_at(mode).filter(|&at| at > now) {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(at - now));
         }
         let doc_size = [self.session.doc().width, self.session.doc().height];
         if self.canvas.doc_size != doc_size {
@@ -1956,6 +1992,15 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn damaged_notice_names_the_layers() {
+        assert_eq!(
+            super::damaged_notice(&["Ink".into()]),
+            "Parts of layer “Ink” couldn't be read and are blank. Save under a new name to keep the original file."
+        );
+        assert!(super::damaged_notice(&["A".into(), "B".into(), "C".into()]).starts_with("Parts of layers “A”, “B” and “C” "));
+    }
+
+    #[test]
     fn align_acts_on_the_active_layer_when_nothing_is_picked() {
         let mut h = harness();
         h.run();
@@ -1996,15 +2041,6 @@ pub(crate) mod tests {
         h.get_by_label("Eraser (E)").click();
         h.run();
         assert_eq!(h.state().session.tool(), Tool::Eraser);
-    }
-
-    #[test]
-    fn damaged_notice_names_the_layers() {
-        assert_eq!(
-            super::damaged_notice(&["Ink".into()]),
-            "Parts of layer “Ink” couldn't be read and are blank. Save under a new name to keep the original file."
-        );
-        assert!(super::damaged_notice(&["A".into(), "B".into(), "C".into()]).starts_with("Parts of layers “A”, “B” and “C” "));
     }
 
     #[test]

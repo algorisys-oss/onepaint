@@ -356,3 +356,18 @@ fn an_opened_psd_saves_back_unchanged_until_edited() {
     draw_line(&mut s, 20.0);
     assert!(s.export_psd().unwrap() != bytes);
 }
+
+// happypaint v0.208.1 (Document Properties ▸ Memory): onepaint counts the
+// tiles a drawing holds, so blank layers cost nothing and paint does.
+#[test]
+fn memory_use_counts_painted_tiles_and_undo() {
+    let mut s = new_session();
+    let base = s.memory_use();
+    s.execute(Command::AddLayer).unwrap();
+    assert_eq!(s.memory_use().pixels, base.pixels, "a blank layer holds no tiles");
+    draw_line(&mut s, 60.0);
+    let after = s.memory_use();
+    assert!(after.pixels > base.pixels, "the stroke's tiles count");
+    assert!(after.history > base.history, "and so does its undo step");
+    assert_eq!(after.total(), after.pixels + after.history);
+}
