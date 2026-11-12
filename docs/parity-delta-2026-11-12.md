@@ -71,12 +71,14 @@ Fold each item into `feature-parity.md` as it lands.
       ported: refusing a layer the GPU can't allocate. onepaint's layers live
       on the CPU, and tiles that can't be GPU-resident already fall back to
       the CPU compositor (spec 54). Divergence 60.
-- [ ] **9. Brush library: Recent, folds, actions on top (0.205.1).** The last
-      eight brushes picked, newest first, with separate lists for brush,
-      eraser and smudge. Sections (Recent, groups, categories, My brushes)
-      fold, and folds persist; a search still shows matches inside folded
-      sections. Export / Save current / Capture / Import sit under the search
-      box. Port `state/brush-library-prefs.ts` and its test.
+- [x] **9. Brush library: Recent, folds, actions on top (0.205.1).** A
+      Recent section holds the last eight brushes picked, newest first. Brush,
+      eraser and smudge keep separate lists, stored in Settings
+      (`brush_recent`). Recent and the shown category fold under a
+      `widgets::fold_header`, folds persist (`brush_folded`), and a search
+      shows matches whatever is folded. Import and Export sit under the search
+      box. onepaint shows one category at a time through its chips, so only
+      Recent and that category have headers.
 - [ ] **10. Brushes panel: header pinned while scrolling (0.204.18).** The
       title bar and search stay at the top when floating, centred and docked.
       Check ours, which probably needs the header outside the `ScrollArea`.

@@ -63,6 +63,11 @@ pub struct Settings {
     pub max_history_steps: usize,
     /// When the recovery copy is written (happypaint `autosave`, v0.205.0).
     pub autosave: crate::autosave::Mode,
+    /// Brushes picked from the library, newest first, per tool (happypaint
+    /// `happypaint-brush-recent`, v0.205.1).
+    pub brush_recent: std::collections::BTreeMap<String, Vec<String>>,
+    /// Folded brush-library sections (`happypaint-brush-sections-collapsed`).
+    pub brush_folded: Vec<String>,
     pub timeline_metric: TimelineMetric,
     /// Shortcut overrides: action id → combo (`keymap.rs`).
     pub keybindings: crate::keymap::Overrides,
@@ -100,6 +105,8 @@ impl Default for Settings {
             cursor_tip_shape: true,
             max_history_steps: DEFAULT_HISTORY_STEPS,
             autosave: crate::autosave::Mode::Pause,
+            brush_recent: Default::default(),
+            brush_folded: Vec::new(),
             keybindings: Default::default(),
             timeline_metric: TimelineMetric::Frames,
             side_sliders: true,
@@ -138,6 +145,7 @@ impl Settings {
         self.max_open_tabs = self.max_open_tabs.clamp(MIN_OPEN_TABS, MAX_OPEN_TABS);
         self.cursor_thickness = self.cursor_thickness.clamp(1, 4);
         self.max_history_steps = self.max_history_steps.clamp(5, 1000);
+        crate::brush_library::tidy_recent(&mut self.brush_recent);
         self.mix = std::mem::take(&mut self.mix).sanitized();
         self.side_sliders_float = self.side_sliders_float.coerced();
         if !self.side_sliders_offset.is_finite() {

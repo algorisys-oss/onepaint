@@ -420,6 +420,10 @@ fn brushes(app: &mut App, ui: &mut Ui) {
     }
     let query = app.brush_query.trim().to_lowercase();
     let searching = !query.is_empty();
+    // Library actions sit under the search box (happypaint v0.205.1).
+    if !eraser {
+        brush_files(app, ui);
+    }
     // The Eraser's scope: its own brushes, or any brush (it stays an eraser);
     // back to its own whenever another tool shows the library.
     if !eraser {
@@ -483,53 +487,72 @@ fn brushes(app: &mut App, ui: &mut Ui) {
     if searching && list.is_empty() {
         ui.label(RichText::new(format!("No brushes match “{}”.", app.brush_query.trim())).color(t.fg_muted));
     }
+    // Recent picks for this tool (happypaint v0.205.1); missing ids are skipped.
+    let recent_key = crate::brush_library::recent_key(app.session.tool());
+    let recent: Vec<_> = if searching {
+        Vec::new()
+    } else {
+        let every: Vec<_> = onepaint_brush::presets().into_iter().chain(onepaint_brush::user_presets()).collect();
+        let ids = app.settings.brush_recent.get(recent_key).cloned().unwrap_or_default();
+        ids.iter().filter_map(|id| every.iter().find(|p| &p.id == id).cloned()).collect()
+    };
+    let section = if eraser { if all { "All brushes" } else { "Erasers" }.to_string() } else { category.clone() };
     let mut delete = None;
+    let mut picked = None;
+    let mut fold = None;
     // Fit the list below the top bar so the popover never overlaps it: the
-    // footer below takes ~330 px (files, Size, Opacity, Flow, Angle, studio).
-    let room = (ui.ctx().content_rect().height() - ui.cursor().top() - 330.0).clamp(120.0, 360.0);
+    // footer below takes ~260 px (Size, Opacity, Flow, Angle, studio).
+    let room = (ui.ctx().content_rect().height() - ui.cursor().top() - 260.0).clamp(120.0, 420.0);
+    let folded = |key: &str| app.settings.brush_folded.iter().any(|k| k == key);
+    let (recent_open, list_open) =
+        (!folded(&crate::brush_library::section_key("Recent")), !folded(&crate::brush_library::section_key(&section)));
     egui::ScrollArea::vertical().max_height(room).show(ui, |ui| {
-        for p in list {
-            let sel = p.id == current;
-            let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 62.0), Sense::click());
-            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, sel, &p.name));
-            if sel {
-                ui.painter().rect_filled(rect, t.radius, t.accent_soft);
-            } else if resp.hovered() {
-                ui.painter().rect_filled(rect, t.radius, t.hover);
+        // A search shows every match, folded sections included.
+        if !recent.is_empty() {
+            if widgets::fold_header(ui, "Recent", recent_open).clicked() {
+                fold = Some("Recent".to_string());
             }
-            ui.painter().text(
-                rect.left_top() + vec2(10.0, 8.0),
-                Align2::LEFT_TOP,
-                &p.name,
-                theme::medium(12.5),
-                if sel { t.accent } else { t.fg },
-            );
-            ui.painter().text(rect.right_top() + vec2(-10.0, 9.0), Align2::RIGHT_TOP, &p.category, theme::medium(10.5), t.fg_faint);
-            let tex = app.thumbs.brush(ui.ctx(), &p);
-            let img = egui::Rect::from_min_size(rect.left_top() + vec2(6.0, 18.0), vec2(rect.width() - 12.0, 44.0));
-            egui::Image::new(&tex).tint(t.fg).paint_at(ui, img);
-            if resp.clicked() {
-                let _ = app.session.execute(Command::SetBrush { preset_id: p.id.clone() });
+            if recent_open {
+                for p in &recent {
+                    brush_row(app, ui, p, &current, &mut picked, &mut delete);
+                }
             }
-            if onepaint_brush::is_user_preset(&p.id) {
-                resp.context_menu(|ui| {
-                    if ui.button("Delete brush").clicked() {
-                        delete = Some(p.clone());
-                        ui.close();
-                    }
-                });
+        }
+        let open = if searching {
+            true
+        } else {
+            if widgets::fold_header(ui, &section, list_open).clicked() {
+                fold = Some(section.clone());
+            }
+            list_open
+        };
+        if open {
+            for p in &list {
+                brush_row(app, ui, p, &current, &mut picked, &mut delete);
             }
         }
     });
+    if let Some(name) = fold {
+        let key = crate::brush_library::section_key(&name);
+        let f = &mut app.settings.brush_folded;
+        if let Some(i) = f.iter().position(|k| *k == key) {
+            f.remove(i);
+        } else {
+            f.push(key);
+        }
+        app.settings.save();
+    }
+    if let Some(id) = picked {
+        let _ = app.session.execute(Command::SetBrush { preset_id: id.clone() });
+        crate::brush_library::push_recent(app.settings.brush_recent.entry(recent_key.to_string()).or_default(), &id);
+        app.settings.save();
+    }
     if let Some(p) = delete {
         let now = ui.input(|i| i.time);
         match app.brush_library.remove(&p.id) {
             Ok(_) => app.notify(format!("Deleted {}", p.name), now),
             Err(e) => app.notify(format!("Couldn't save the brush library: {e}"), now),
         }
-    }
-    if !eraser {
-        brush_files(app, ui);
     }
     widgets::hairline(ui);
     let b = app.session.current_brush().clone();
@@ -551,6 +574,43 @@ fn brushes(app: &mut App, ui: &mut Ui) {
     if widgets::secondary_button(ui, "Brush studio…", ui.available_width()).on_hover_text("Edit every setting and try the brush").clicked()
     {
         app.popover = Some(Popover::BrushStudio);
+    }
+}
+
+/// One brush in the library: name, category and a stroke preview. A click
+/// picks it; a user brush has Delete on its context menu.
+fn brush_row(
+    app: &mut App,
+    ui: &mut Ui,
+    p: &onepaint_brush::BrushPreset,
+    current: &str,
+    picked: &mut Option<String>,
+    delete: &mut Option<onepaint_brush::BrushPreset>,
+) {
+    let t = Tokens::get(ui.ctx());
+    let sel = p.id == current;
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 62.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, sel, &p.name));
+    if sel {
+        ui.painter().rect_filled(rect, t.radius, t.accent_soft);
+    } else if resp.hovered() {
+        ui.painter().rect_filled(rect, t.radius, t.hover);
+    }
+    ui.painter().text(rect.left_top() + vec2(10.0, 8.0), Align2::LEFT_TOP, &p.name, theme::medium(12.5), if sel { t.accent } else { t.fg });
+    ui.painter().text(rect.right_top() + vec2(-10.0, 9.0), Align2::RIGHT_TOP, &p.category, theme::medium(10.5), t.fg_faint);
+    let tex = app.thumbs.brush(ui.ctx(), p);
+    let img = egui::Rect::from_min_size(rect.left_top() + vec2(6.0, 18.0), vec2(rect.width() - 12.0, 44.0));
+    egui::Image::new(&tex).tint(t.fg).paint_at(ui, img);
+    if resp.clicked() {
+        *picked = Some(p.id.clone());
+    }
+    if onepaint_brush::is_user_preset(&p.id) {
+        resp.context_menu(|ui| {
+            if ui.button("Delete brush").clicked() {
+                *delete = Some(p.clone());
+                ui.close();
+            }
+        });
     }
 }
 

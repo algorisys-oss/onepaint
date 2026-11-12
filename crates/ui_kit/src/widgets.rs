@@ -33,6 +33,19 @@ pub fn section_label(ui: &mut Ui, text: &str) {
     ui.label(egui::RichText::new(text.to_uppercase()).font(theme::medium(10.5)).color(t.fg_faint));
 }
 
+/// A section label that folds its section: a chevron, then the label, the
+/// whole row clickable. The caller keeps `open` and flips it on a click.
+pub fn fold_header(ui: &mut Ui, text: &str, open: bool) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, open, text));
+    let color = if resp.hovered() { t.fg_muted } else { t.fg_faint };
+    let chevron = Rect::from_min_size(rect.left_top(), vec2(16.0, rect.height()));
+    crate::icons::paint(ui, chevron, if open { "chevron-down" } else { "chevron-right" }, 12.0, color);
+    ui.painter().text(pos2(chevron.right() + 2.0, rect.center().y), Align2::LEFT_CENTER, text.to_uppercase(), theme::medium(10.5), color);
+    resp.on_hover_text(if open { "Fold this section" } else { "Unfold this section" })
+}
+
 pub fn hairline(ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());

@@ -99,6 +99,59 @@ mod tests {
     use egui_kittest::kittest::Queryable;
     use onepaint_brush::IMPORTED_CATEGORY;
 
+    /// Recent picks show above the list, per tool; sections fold; the
+    /// library actions sit above the list (happypaint v0.205.1). Both themes.
+    #[test]
+    fn recent_brushes_and_folding_sections() {
+        for light in [false, true] {
+            let mut h = Harness::builder().with_size(vec2(1200.0, 900.0)).with_max_steps(400).build_eframe(|cc| App::new(cc, None));
+            h.run();
+            if light {
+                let ctx = h.ctx.clone();
+                h.state_mut().toggle_theme(&ctx);
+            }
+            h.state_mut().settings.brush_recent.clear();
+            h.state_mut().settings.brush_folded.clear();
+            h.state_mut().popover = Some(Popover::Brushes);
+            h.run();
+            assert!(h.query_by_label("Recent").is_none(), "no picks yet, no Recent section");
+            let import = h.get_by_label("Import brushes…").rect().min.y;
+            let cat = h.state().brush_category.clone();
+            // The category is a chip above and the section header below.
+            let header = h.get_all_by_label(&cat).last().unwrap().rect().min.y;
+            assert!(import < header, "the actions sit above the list");
+
+            let names: Vec<String> = onepaint_brush::presets().into_iter().filter(|p| p.category == cat).map(|p| p.name).take(2).collect();
+            for n in &names {
+                h.get_all_by_label(n).last().unwrap().click();
+                h.run();
+            }
+            let recent = h.state().settings.brush_recent["brush"].clone();
+            assert_eq!(recent.len(), 2);
+            assert_eq!(h.state().session.current_brush().id, recent[0], "newest first");
+            assert_eq!(h.query_all_by_label(&names[0]).count(), 2, "in Recent and in its category");
+
+            // Fold Recent: its rows go; the category list stays.
+            h.get_by_label("Recent").click();
+            h.run();
+            assert_eq!(h.query_all_by_label(&names[0]).count(), 1);
+            // Fold the category too: a search still finds the brush.
+            h.get_all_by_label(&cat).last().unwrap().click();
+            h.run();
+            assert!(h.query_by_label(&names[0]).is_none());
+            h.state_mut().brush_query = names[0].clone();
+            h.run();
+            assert!(h.query_by_label(&names[0]).is_some(), "a search shows folded matches");
+            h.state_mut().brush_query.clear();
+
+            // The eraser keeps its own list.
+            h.state_mut().set_tool(onepaint_engine::Tool::Eraser);
+            h.state_mut().popover = Some(Popover::Brushes);
+            h.run();
+            assert!(h.query_by_label("Recent").is_none(), "the eraser's list is empty");
+        }
+    }
+
     #[test]
     fn summary_reads_naturally() {
         let imp = |brushes, grains| BrushImport { brushes, grains, ..Default::default() };
@@ -152,5 +205,82 @@ mod search_tests {
         assert!(matches("Soft Round", "Airbrush", "  ROUND "));
         assert!(matches("Soft Round", "Airbrush", "airb"));
         assert!(!matches("Soft Round", "Airbrush", "ink"));
+    }
+}
+
+/// Brushes picked from the library, newest first (happypaint
+/// `brush-library-prefs.ts`, v0.205.1).
+pub const RECENT_MAX: usize = 8;
+
+/// The recent list a tool keeps: erasers and smudges apart from brushes.
+pub fn recent_key(tool: onepaint_engine::Tool) -> &'static str {
+    match tool {
+        onepaint_engine::Tool::Eraser => "eraser",
+        onepaint_engine::Tool::Smudge => "smudge",
+        _ => "brush",
+    }
+}
+
+/// `id` moved to the front of `list`, once, capped at [`RECENT_MAX`].
+pub fn push_recent(list: &mut Vec<String>, id: &str) {
+    list.retain(|x| x != id);
+    list.insert(0, id.to_string());
+    list.truncate(RECENT_MAX);
+}
+
+/// Settings read from disk: each list deduplicated and capped.
+pub fn tidy_recent(map: &mut std::collections::BTreeMap<String, Vec<String>>) {
+    for list in map.values_mut() {
+        let mut seen = std::collections::HashSet::new();
+        list.retain(|x| seen.insert(x.clone()));
+        list.truncate(RECENT_MAX);
+    }
+}
+
+/// The fold key of a library section.
+pub fn section_key(name: &str) -> String {
+    format!("section:{name}")
+}
+
+#[cfg(test)]
+mod recent_tests {
+    use super::*;
+    use onepaint_engine::Tool;
+
+    // brush-library-prefs.test.ts
+    #[test]
+    fn newest_first_no_duplicates() {
+        let mut l = vec!["a".to_string(), "b".into()];
+        push_recent(&mut l, "b");
+        assert_eq!(l, ["b", "a"]);
+        push_recent(&mut l, "c");
+        assert_eq!(l, ["c", "b", "a"]);
+    }
+
+    #[test]
+    fn capped_dropping_the_oldest() {
+        let mut l = Vec::new();
+        for i in 0..10 {
+            push_recent(&mut l, &format!("p{i}"));
+        }
+        assert_eq!(l.len(), RECENT_MAX);
+        assert_eq!((l[0].as_str(), l[7].as_str()), ("p9", "p2"));
+    }
+
+    #[test]
+    fn eraser_and_smudge_keep_their_own_lists() {
+        assert_eq!(recent_key(Tool::Eraser), "eraser");
+        assert_eq!(recent_key(Tool::Smudge), "smudge");
+        assert_eq!(recent_key(Tool::Brush), "brush");
+        assert_eq!(recent_key(Tool::Fill), "brush", "painting tools share one");
+    }
+
+    #[test]
+    fn stored_lists_are_deduped_and_capped() {
+        let mut m = std::collections::BTreeMap::new();
+        m.insert("brush".to_string(), ["a", "a", "b"].iter().map(|s| s.to_string()).chain((0..20).map(|i| format!("x{i}"))).collect());
+        tidy_recent(&mut m);
+        assert_eq!(m["brush"].len(), RECENT_MAX);
+        assert_eq!(&m["brush"][..2], ["a", "b"]);
     }
 }
