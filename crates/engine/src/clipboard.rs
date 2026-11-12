@@ -24,7 +24,9 @@ impl Session {
     /// whole layer; `None` when nothing visible would be copied.
     pub fn copy_region(&self) -> Option<Region> {
         let l = self.doc.layer(&self.active)?;
-        let mut floating = self.transform.as_ref().filter(|f| f.layer == l.id).map(|f| f.preview.clone());
+        // The first lifted layer previews through the overlay; the others
+        // already show their result in their pixels.
+        let mut floating = self.transform.as_ref().and_then(|f| f.lifts.first()).filter(|f| f.layer == l.id).map(|f| f.preview.clone());
         let pixels = match floating.take() {
             // While transforming, copy what is shown.
             Some(p) => {
@@ -95,22 +97,8 @@ impl Session {
         } else {
             let src: Vec<f32> = img.rgba.chunks_exact(4).flat_map(|p| self.doc.space().from_srgb8([p[0], p[1], p[2], p[3]])).collect();
             let bounds = Rect::new(0, 0, img.width as i32, img.height as i32);
-            let mut f = transform::Floating {
-                layer: String::new(),
-                remainder: Surface::new(),
-                original: Surface::new(),
-                src,
-                bounds,
-                matrix: transform::Affine::scale(s, s).then(&transform::Affine::translate(ox, oy)),
-                preview: Surface::new(),
-                preview_bounds: bounds,
-                saved_selection: None,
-                clamp_edges: false,
-                warp: None,
-                vector: false,
-            };
-            f.render(self.transform_clip());
-            f.preview
+            let m = transform::Affine::scale(s, s).then(&transform::Affine::translate(ox, oy));
+            transform::resample(src, bounds, m, self.transform_clip(), false)
         };
         self.insert_layer_with("Image", surface);
     }

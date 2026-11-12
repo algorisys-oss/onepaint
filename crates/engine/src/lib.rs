@@ -1332,7 +1332,7 @@ impl Session {
                 // Undo abandons a pending transform; an untouched box (the
                 // Move tool keeps one open) steps aside and the undo goes ahead.
                 Command::Undo => {
-                    let pending = self.transform.as_ref().is_some_and(|f| f.matrix != transform::Affine::IDENTITY || f.warp.is_some());
+                    let pending = self.transform_pending();
                     self.cancel_transform();
                     if pending {
                         return Ok(());
@@ -1342,7 +1342,7 @@ impl Session {
             }
         }
         match cmd {
-            Command::BeginTransform => self.begin_transform(),
+            Command::BeginTransform { ids } => self.begin_transform(ids),
             Command::AlignLayers { moves } => self.align_layers(moves),
             Command::LayerViaCopy { cut } => self.layer_via_copy(cut),
             Command::ResizeCanvas { width, height, dx, dy } => self.resize_canvas(width, height, dx, dy),

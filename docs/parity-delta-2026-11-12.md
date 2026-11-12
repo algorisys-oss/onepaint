@@ -98,12 +98,23 @@ onepaint's Move tool transforms only the active layer
 exist only for Align. happypaint has moved several layers as one since v0.168,
 and `feature-parity.md` doesn't list that gap. These depend on it:
 
-- [ ] **Multi-layer and group Move (v0.168, 0.205.1).** Move lifts the
+- [x] **Multi-layer and group Move (v0.168, 0.205.1).** Move lifts the
       picks, else the active layer, and an active group means its visible,
-      unlocked children (`selectedTransformableIds`).
+      unlocked children (`selectedTransformableIds`). Done 2026-11-13:
+      `Command::BeginTransform { ids }` (serde default, so older recordings
+      load) resolves them through `transformable_ids`; `transform::Floating`
+      holds one `Lift` per layer under one box, matrix and warp. The active
+      layer previews through the compositor's overlay as before; the others
+      show their result in their own pixels while the box moves. One undo
+      step for all; Cancel restores all. A selection lifts the same part of
+      every layer; text and paths stay vector. Picking layers while the Move
+      box is untouched re-lifts them.
 - [ ] **Merge non-adjacent picked layers (0.208.3).** The lower picks are
       gathered under the topmost one and merged there; layers in between stay.
-      One undo step. We have only Merge Down and Merge Visible.
+      One undo step. We have only Merge Down and Merge Visible. Not blocked
+      any more: it needs happypaint's multi-selection action bar on the
+      Layers panel (Group, Merge, Duplicate, Lock, Hide the picks), which
+      onepaint doesn't have yet.
 
 ## Low priority
 

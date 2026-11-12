@@ -209,6 +209,9 @@ Source: `components/toolbar/toolbar.tsx`, `components/dock/`, `state/dock-store.
   the layout persists as `layout.json` (divergences 42, 43)
 - [x] Properties panel: the selected adjustment or fill layer's settings in a
   panel of their own, docked right by default
+- [x] Move several layers at once: the layers picked in the Layers panel, or
+  an active group's children, under one box, one undo step (happypaint v0.168,
+  v0.205.1)
 - [x] Transform & Align panel: typed X / Y / W / H (with an aspect link) and
   angle for the Move tool's box (happypaint v0.209.0)
 - [x] Align and distribute layers: align edges and centres to the canvas or

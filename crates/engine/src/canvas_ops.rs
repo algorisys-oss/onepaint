@@ -92,22 +92,7 @@ impl Session {
         let src_bounds = self.doc.bounds();
         let dst = Rect::new(0, 0, width as i32, height as i32);
         let resample = |s: &Surface| -> Surface {
-            let mut f = transform::Floating {
-                layer: String::new(),
-                remainder: Surface::new(),
-                original: Surface::new(),
-                src: s.read_rect(src_bounds),
-                bounds: src_bounds,
-                matrix: transform::Affine::scale(sx, sy),
-                preview: Surface::new(),
-                preview_bounds: src_bounds,
-                saved_selection: None,
-                clamp_edges: true,
-                warp: None,
-                vector: false,
-            };
-            f.render(dst);
-            f.preview
+            transform::resample(s.read_rect(src_bounds), src_bounds, transform::Affine::scale(sx, sy), dst, true)
         };
         map_layers(&mut self.doc.root, &mut |l| {
             if let Some(v) = l.vector_mask() {

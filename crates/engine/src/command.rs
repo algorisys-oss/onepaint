@@ -318,8 +318,12 @@ pub enum Command {
     FillSelection,
     /// Clear the active layer inside the selection (or entirely, with none).
     ClearSelected,
-    /// Lift the active layer (or its selected part) for moving/transforming.
-    BeginTransform,
+    /// Lift the active layer (or its selected part) for moving/transforming;
+    /// with `ids`, those layers move as one (a group means its children).
+    BeginTransform {
+        #[serde(default)]
+        ids: Vec<NodeId>,
+    },
     /// Set the transform matrix (doc px → doc px) of the lifted content.
     SetTransform {
         matrix: transform::Affine,

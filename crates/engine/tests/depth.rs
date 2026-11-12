@@ -56,7 +56,7 @@ fn edits_in_an_8bit_document_land_as_8bit_tiles() {
     s.execute(Command::CommitFilter).unwrap();
     s.execute(Command::AddMask).unwrap();
     draw_line(&mut s, 200.0);
-    s.execute(Command::BeginTransform).unwrap();
+    s.execute(Command::BeginTransform { ids: vec![] }).unwrap();
     s.execute(Command::SetTransform { matrix: transform::Affine::translate(17.0, 9.0) }).unwrap();
     s.execute(Command::CommitTransform).unwrap();
     s.execute(Command::MergeDown { id: s.active().to_string() }).unwrap();

@@ -417,7 +417,7 @@ impl Session {
                     rotation: num(t, "rotation").unwrap_or(0.0),
                 };
                 let doc = [f64::from(self.doc.width), f64::from(self.doc.height)];
-                self.run(Command::BeginTransform);
+                self.run(Command::BeginTransform { ids: vec![] });
                 self.run(Command::SetTransform { matrix: p.to_affine(doc) });
                 self.run(Command::CommitTransform);
             }

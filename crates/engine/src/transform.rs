@@ -85,8 +85,8 @@ impl Affine {
     }
 }
 
-/// Lifted content being transformed.
-pub(crate) struct Floating {
+/// One layer's lifted content in a transform.
+pub(crate) struct Lift {
     pub layer: NodeId,
     /// The layer with the lifted part taken out (shown once the box moves).
     pub remainder: Surface,
@@ -94,19 +94,30 @@ pub(crate) struct Floating {
     pub original: Surface,
     /// Dense premultiplied copy of the lifted pixels over `bounds`.
     pub src: Vec<f32>,
+    /// What this layer lifted (inside the shared box).
     pub bounds: Rect,
-    pub matrix: Affine,
     pub preview: Surface,
     pub preview_bounds: Rect,
+    /// A whole path or text layer: an affine commit maps its objects
+    /// (Free Transform Path, PE:2330-2345) instead of baking pixels.
+    pub vector: bool,
+}
+
+/// Lifted content being transformed: one or more layers moving as one
+/// (happypaint `transformState.targets`, v0.168 / v0.205.1), under one box.
+pub(crate) struct Floating {
+    /// The active layer first: it previews through the compositor's overlay;
+    /// the others show their result in their own pixels.
+    pub lifts: Vec<Lift>,
+    /// The handle box: everything that moves.
+    pub bounds: Rect,
+    pub matrix: Affine,
     /// The selection that was lifted (cleared while transforming, restored on cancel).
     pub saved_selection: Option<Arc<onepaint_selection::Mask>>,
     /// Clamp samples to the source edge instead of fading to transparent (image resize).
     pub clamp_edges: bool,
     /// Distort or mesh warp, replacing `matrix` while set.
     pub warp: Option<WarpMode>,
-    /// A whole path or text layer: an affine commit maps its objects
-    /// (Free Transform Path, PE:2330-2345) instead of baking pixels.
-    pub vector: bool,
 }
 
 /// Free 4-corner distort (TL, TR, BR, BL) or a WARP_N² mesh lattice, doc px.
@@ -116,14 +127,31 @@ pub enum WarpMode {
     Mesh(Vec<[f64; 2]>),
 }
 
-impl Floating {
-    fn sample(&self, x: f64, y: f64) -> [f32; 4] {
+/// `top` source-over `base`, tile by tile.
+fn over(base: &Surface, top: &Surface) -> Surface {
+    let mut out = base.clone();
+    for ((tx, ty), t) in top.tiles() {
+        let s = t.to_f32();
+        let mut buf = out.tile(tx, ty).map(|t| t.to_f32()).unwrap_or_else(|| vec![0.0; TILE_PX * 4]);
+        for i in (0..buf.len()).step_by(4) {
+            let k = 1.0 - s[i + 3];
+            for c in 0..4 {
+                buf[i + c] = s[i + c] + buf[i + c] * k;
+            }
+        }
+        let t = Tile::from_f32(&buf);
+        out.set_tile(tx, ty, (!t.is_empty()).then(|| Arc::new(t)));
+    }
+    out
+}
+
+impl Lift {
+    fn sample(&self, x: f64, y: f64, clamp: bool) -> [f32; 4] {
         // Bilinear on texel centres, transparent outside.
         let (fx, fy) = (x - 0.5 - self.bounds.x as f64, y - 0.5 - self.bounds.y as f64);
         let (x0, y0) = (fx.floor(), fy.floor());
         let (tx, ty) = ((fx - x0) as f32, (fy - y0) as f32);
         let (w, h) = (self.bounds.w as i64, self.bounds.h as i64);
-        let clamp = self.clamp_edges;
         let at = |xi: i64, yi: i64| -> [f32; 4] {
             let (xi, yi) = if clamp { (xi.clamp(0, w - 1), yi.clamp(0, h - 1)) } else { (xi, yi) };
             if xi < 0 || yi < 0 || xi >= w || yi >= h {
@@ -143,13 +171,9 @@ impl Floating {
         o
     }
 
-    /// Untouched raster content: the layer shows as it was, with no preview over it.
-    pub(crate) fn at_rest(&self) -> bool {
-        !self.vector && self.warp.is_none() && self.matrix == Affine::IDENTITY
-    }
-
-    /// Map each destination cell back to its source uv rect (perspective-correct).
-    fn render_cells(&mut self, clip: Rect, cells: &[([[f64; 2]; 4], [f64; 4])]) {
+    /// Map each destination cell back to its source uv rect over the shared
+    /// box `b` (perspective-correct).
+    fn render_cells(&mut self, clip: Rect, b: Rect, clamp: bool, cells: &[([[f64; 2]; 4], [f64; 4])]) {
         use crate::warp::{invert, quad_homography};
         self.preview = Surface::new();
         let pts = cells.iter().flat_map(|c| c.0);
@@ -165,7 +189,6 @@ impl Floating {
         let (tw, th) = (target.w as usize, target.h as usize);
         let mut buf = vec![0.0f32; tw * th * 4];
         let mut filled = vec![false; tw * th];
-        let b = self.bounds;
         for (quad, uv) in cells {
             let Some(inv) = invert(&quad_homography(quad)) else { continue };
             let (mut cx0, mut cy0, mut cx1, mut cy1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
@@ -184,7 +207,7 @@ impl Floating {
                         continue;
                     }
                     let (su, sv) = (uv[0] + (uv[2] - uv[0]) * u, uv[1] + (uv[3] - uv[1]) * v);
-                    let p = self.sample(b.x as f64 + su * b.w as f64, b.y as f64 + sv * b.h as f64);
+                    let p = self.sample(b.x as f64 + su * b.w as f64, b.y as f64 + sv * b.h as f64, clamp);
                     filled[k] = true;
                     buf[k * 4..k * 4 + 4].copy_from_slice(&p);
                 }
@@ -195,9 +218,9 @@ impl Floating {
     }
 
     /// Resample the lifted pixels into `preview`, clipped to `clip`.
-    pub(crate) fn render(&mut self, clip: Rect) {
-        match self.warp.clone() {
-            Some(WarpMode::Quad(q)) => return self.render_cells(clip, &[(q, [0.0, 0.0, 1.0, 1.0])]),
+    fn render(&mut self, clip: Rect, b: Rect, matrix: Affine, warp: Option<&WarpMode>, clamp: bool) {
+        match warp {
+            Some(WarpMode::Quad(q)) => return self.render_cells(clip, b, clamp, &[(*q, [0.0, 0.0, 1.0, 1.0])]),
             Some(WarpMode::Mesh(pts)) => {
                 use crate::warp::{WARP_GRID, sample_warp};
                 let g = WARP_GRID as f64;
@@ -205,23 +228,23 @@ impl Floating {
                 for gy in 0..WARP_GRID {
                     for gx in 0..WARP_GRID {
                         let (u0, u1, v0, v1) = (gx as f64 / g, (gx + 1) as f64 / g, gy as f64 / g, (gy + 1) as f64 / g);
-                        let q =
-                            [sample_warp(&pts, u0, v0), sample_warp(&pts, u1, v0), sample_warp(&pts, u1, v1), sample_warp(&pts, u0, v1)];
+                        let q = [sample_warp(pts, u0, v0), sample_warp(pts, u1, v0), sample_warp(pts, u1, v1), sample_warp(pts, u0, v1)];
                         cells.push((q, [u0, v0, u1, v1]));
                     }
                 }
-                return self.render_cells(clip, &cells);
+                return self.render_cells(clip, b, clamp, &cells);
             }
             None => {}
         }
-        let inv = self.matrix.inverse();
-        let target = self.matrix.map_rect(self.bounds).intersect(&clip);
+        let inv = matrix.inverse();
+        let target = matrix.map_rect(self.bounds).intersect(&clip);
         self.preview = Surface::new();
         self.preview_bounds = target.unwrap_or_default();
         let (Some(inv), Some(target)) = (inv, target) else {
             return;
         };
         let keys: Vec<_> = target.tiles().collect();
+        let me = &*self;
         let tiles: Vec<_> = keys
             .par_iter()
             .filter_map(|&(tx, ty)| {
@@ -231,7 +254,7 @@ impl Floating {
                 for y in ix.y..ix.bottom() {
                     for x in ix.x..ix.right() {
                         let s = inv.apply([x as f64 + 0.5, y as f64 + 0.5]);
-                        let p = self.sample(s[0], s[1]);
+                        let p = me.sample(s[0], s[1], clamp);
                         if p[3] > 0.0 {
                             any = true;
                             let i = (((y - ty * TILE) * TILE + (x - tx * TILE)) * 4) as usize;
@@ -244,6 +267,54 @@ impl Floating {
             .collect();
         for ((tx, ty), t) in tiles {
             self.preview.set_tile(tx, ty, Some(t));
+        }
+    }
+}
+
+/// `src` (dense premultiplied pixels over `bounds`) through `matrix`,
+/// bilinear, clipped to `clip`; `clamp` repeats the edge instead of fading
+/// out (an image resize).
+pub(crate) fn resample(src: Vec<f32>, bounds: Rect, matrix: Affine, clip: Rect, clamp: bool) -> Surface {
+    let mut l = Lift {
+        layer: String::new(),
+        remainder: Surface::new(),
+        original: Surface::new(),
+        src,
+        bounds,
+        preview: Surface::new(),
+        preview_bounds: bounds,
+        vector: false,
+    };
+    l.render(clip, bounds, matrix, None, clamp);
+    l.preview
+}
+
+impl Floating {
+    /// Untouched raster content: the layer shows as it was, with no preview over it.
+    fn lift_at_rest(&self, l: &Lift) -> bool {
+        !l.vector && self.warp.is_none() && self.matrix == Affine::IDENTITY
+    }
+
+    /// Nothing anywhere has moved.
+    pub(crate) fn at_rest(&self) -> bool {
+        self.lifts.iter().all(|l| self.lift_at_rest(l))
+    }
+
+    /// The previews' union.
+    pub(crate) fn preview_bounds(&self) -> Rect {
+        self.lifts.iter().fold(Rect::default(), |r, l| r.union(&l.preview_bounds))
+    }
+
+    /// Everything the transform has touched: the lifted and the previewed areas.
+    fn reach(&self) -> Rect {
+        self.lifts.iter().fold(self.bounds, |r, l| r.union(&l.bounds).union(&l.preview_bounds))
+    }
+
+    pub(crate) fn render(&mut self, clip: Rect) {
+        let (b, m, clamp) = (self.bounds, self.matrix, self.clamp_edges);
+        let warp = self.warp.clone();
+        for l in &mut self.lifts {
+            l.render(clip, b, m, warp.as_ref(), clamp);
         }
     }
 }
@@ -261,46 +332,95 @@ impl Session {
         self.transform.is_some()
     }
 
-    /// Current matrix and the lifted content's bounds (doc px), while transforming.
+    /// Current matrix and the box around everything that moves (doc px), while transforming.
     pub fn transform_state(&self) -> Option<(Affine, Rect)> {
         self.transform.as_ref().map(|f| (f.matrix, f.bounds))
     }
 
+    /// A transform is open and its box has moved, distorted or warped.
+    pub fn transform_pending(&self) -> bool {
+        self.transform.as_ref().is_some_and(|f| f.matrix != Affine::IDENTITY || f.warp.is_some())
+    }
+
+    /// The layers the transform in progress moves, the active one first.
+    pub fn transform_layers(&self) -> Vec<NodeId> {
+        self.transform.as_ref().map(|f| f.lifts.iter().map(|l| l.layer.clone()).collect()).unwrap_or_default()
+    }
+
     pub(crate) fn transform_overlay(&self) -> Option<StrokeOverlay<'_>> {
-        self.transform.as_ref().filter(|f| !f.at_rest()).map(|f| StrokeOverlay {
+        let f = self.transform.as_ref()?;
+        let l = f.lifts.first().filter(|l| !f.lift_at_rest(l))?;
+        Some(StrokeOverlay {
             mask: false,
-            layer_id: &f.layer,
-            stroke: &f.preview,
+            layer_id: &l.layer,
+            stroke: &l.preview,
             opacity: 1.0,
             mode: StrokeMode::Paint(BlendMode::Normal),
         })
     }
 
-    pub(crate) fn begin_transform(&mut self) -> Result<(), EngineError> {
+    /// Lift the active layer (or its selected part), or with `ids` the
+    /// layers picked in the Layers panel: they move as one, and a group
+    /// means its children (happypaint `beginTransform(ids)`,
+    /// `selectedTransformableIds`). Hidden and locked layers stay put.
+    pub(crate) fn begin_transform(&mut self, ids: Vec<NodeId>) -> Result<(), EngineError> {
         self.commit_transform();
-        let id = self.active.clone();
-        let clip = self.clip.clone();
-        let vector = clip.is_none() && (self.is_path_layer(&id) || self.is_text_layer(&id));
-        if !vector {
-            self.ensure_raster();
+        let active = self.active.clone();
+        let picked = if ids.is_empty() { vec![active.clone()] } else { ids };
+        let mut targets = self.transformable_ids(&picked);
+        if let Some(i) = targets.iter().position(|t| *t == active) {
+            let a = targets.remove(i);
+            targets.insert(0, a);
         }
+        let clip = self.clip.clone();
+        let region = clip.as_ref().and_then(|m| m.bounds()).map(|(x, y, w, h)| Rect::new(x as i32, y as i32, w as i32, h as i32));
         self.stroke_cancel();
-        let Some(layer) = self.doc.layer_mut(&id).filter(|l| !l.locked) else {
+        let mut lifts = Vec::new();
+        for id in targets {
+            let vector = clip.is_none() && (self.is_path_layer(&id) || self.is_text_layer(&id));
+            if !vector {
+                // A selection lifts pixels: text and paths become pixels first.
+                if self.is_text_layer(&id) {
+                    let _ = self.rasterize_text(&id);
+                }
+                if self.is_path_layer(&id) {
+                    let _ = self.rasterize_path(&id);
+                }
+            }
+            if let Some(l) = self.lift(&id, clip.as_deref(), region, vector) {
+                lifts.push(l);
+            }
+        }
+        if lifts.is_empty() {
             return Ok(());
-        };
+        }
+        let bounds = lifts.iter().fold(Rect::default(), |r, l| r.union(&l.bounds));
+        let saved_selection = self.selection.clone();
+        let mut f = Floating { lifts, bounds, matrix: Affine::IDENTITY, saved_selection, clamp_edges: false, warp: None };
+        f.render(self.transform_clip());
+        let lifted_selection = f.saved_selection.is_some();
+        self.transform = Some(f);
+        self.show_floating();
+        if lifted_selection {
+            // happypaint clears the marquee while transforming (PE:2016).
+            self.set_selection_raw(None);
+        }
+        self.mark_dirty(bounds);
+        Ok(())
+    }
+
+    /// Take layer `id`'s content (× the selection mask, inside `region`) out
+    /// of it; `None` when it has nothing there to move.
+    fn lift(&mut self, id: &str, mask: Option<&onepaint_selection::Mask>, region: Option<Rect>, vector: bool) -> Option<Lift> {
+        let layer = self.doc.layer_mut(id).filter(|l| !l.locked && l.adjustment.is_none())?;
         let original = layer.pixels.clone();
-        let Some(content) = original.content_bounds() else {
-            return Ok(());
-        };
-        let bounds = match clip.as_ref().and_then(|m| m.bounds()) {
-            Some((x, y, w, h)) => match content.intersect(&Rect::new(x as i32, y as i32, w as i32, h as i32)) {
-                Some(b) => b,
-                None => return Ok(()),
-            },
+        let content = original.content_bounds()?;
+        let bounds = match region {
+            Some(r) => content.intersect(&r)?,
             None => content,
         };
         let mut src = original.read_rect(bounds);
-        if let Some(m) = &clip {
+        if let Some(m) = mask {
             // Lift layer × mask; leave layer × (1 − mask).
             for y in bounds.y..bounds.bottom() {
                 for x in bounds.x..bounds.right() {
@@ -319,32 +439,8 @@ impl Session {
         } else {
             layer.pixels.clear();
         }
-        let saved_selection = self.selection.clone();
         let remainder = layer.pixels.clone();
-        let mut f = Floating {
-            layer: id,
-            remainder,
-            original,
-            src,
-            bounds,
-            matrix: Affine::IDENTITY,
-            preview: Surface::new(),
-            preview_bounds: bounds,
-            saved_selection,
-            clamp_edges: false,
-            warp: None,
-            vector,
-        };
-        f.render(self.transform_clip());
-        let lifted_selection = f.saved_selection.is_some();
-        self.transform = Some(f);
-        self.show_floating();
-        if lifted_selection {
-            // happypaint clears the marquee while transforming (PE:2016).
-            self.set_selection_raw(None);
-        }
-        self.mark_dirty(bounds);
-        Ok(())
+        Some(Lift { layer: id.to_string(), remainder, original, src, bounds, preview: Surface::new(), preview_bounds: bounds, vector })
     }
 
     /// The distort or warp in progress, if any.
@@ -366,11 +462,7 @@ impl Session {
             WarpMode::Quad([m.apply([x, y]), m.apply([x + w, y]), m.apply([x + w, y + h]), m.apply([x, y + h])])
         });
         f.matrix = Affine::IDENTITY;
-        let old = f.preview_bounds;
-        f.render(doc);
-        let new = f.preview_bounds;
-        self.show_floating();
-        self.mark_dirty(old.union(&new));
+        self.rerender(doc);
     }
 
     pub(crate) fn set_warp(&mut self, w: WarpMode) {
@@ -384,12 +476,8 @@ impl Session {
         if !ok {
             return;
         }
-        let old = f.preview_bounds;
         f.warp = Some(w);
-        f.render(doc);
-        let new = f.preview_bounds;
-        self.show_floating();
-        self.mark_dirty(old.union(&new));
+        self.rerender(doc);
     }
 
     pub(crate) fn set_transform(&mut self, m: Affine) {
@@ -397,26 +485,45 @@ impl Session {
         let Some(f) = self.transform.as_mut() else {
             return;
         };
-        let old = f.preview_bounds;
         f.matrix = m;
-        f.render(doc);
-        let new = f.preview_bounds;
+        self.rerender(doc);
+    }
+
+    /// Re-render every preview after the box changed, and show it.
+    fn rerender(&mut self, clip: Rect) {
+        let Some(f) = self.transform.as_mut() else { return };
+        let old = f.preview_bounds();
+        f.render(clip);
+        let new = f.preview_bounds();
         self.show_floating();
         self.mark_dirty(old.union(&new));
     }
 
-    /// The layer as the box stands: untouched content shows the layer as it
+    /// Each layer as the box stands: untouched content shows the layer as it
     /// was (a soft selection's lifted part and remainder don't recombine
-    /// exactly), moved content shows the remainder under the preview.
+    /// exactly). Moved, the first layer shows its remainder under the
+    /// compositor's overlay; the others show the result in their pixels.
     fn show_floating(&mut self) {
         let Some(f) = self.transform.as_ref() else { return };
-        if f.vector {
-            return;
-        }
-        let pixels = if f.at_rest() { f.original.clone() } else { f.remainder.clone() };
-        let id = f.layer.clone();
-        if let Some(l) = self.doc.layer_mut(&id) {
-            l.pixels = pixels;
+        let shown: Vec<(NodeId, Option<Surface>)> = f
+            .lifts
+            .iter()
+            .enumerate()
+            .map(|(i, l)| {
+                let px = if f.lift_at_rest(l) {
+                    Some(l.original.clone())
+                } else if i == 0 {
+                    (!l.vector).then(|| l.remainder.clone())
+                } else {
+                    Some(over(&l.remainder, &l.preview))
+                };
+                (l.layer.clone(), px)
+            })
+            .collect();
+        for (id, px) in shown {
+            if let (Some(px), Some(l)) = (px, self.doc.layer_mut(&id)) {
+                l.pixels = px;
+            }
         }
     }
 
@@ -424,145 +531,141 @@ impl Session {
         let Some(f) = self.transform.take() else {
             return;
         };
-        if let Some(l) = self.doc.layer_mut(&f.layer) {
-            l.pixels = f.original;
+        let dirty = f.reach();
+        for l in f.lifts {
+            if let Some(layer) = self.doc.layer_mut(&l.layer) {
+                layer.pixels = l.original;
+            }
         }
         if f.saved_selection.is_some() {
             self.set_selection_raw(f.saved_selection.clone());
         }
-        self.mark_dirty(f.bounds.union(&f.preview_bounds));
+        self.mark_dirty(dirty);
     }
 
+    /// Commit every layer's move as one undo step.
     pub(crate) fn commit_transform(&mut self) {
-        let Some(f) = self.transform.take() else {
+        let Some(mut f) = self.transform.take() else {
             return;
         };
-        if f.vector {
-            self.commit_vector_transform(f);
-            return;
-        }
-        // Nothing moved: the layer is exactly as it was. Recombining the lifted
-        // part with the remainder would lose alpha under a soft selection, with
-        // nothing to undo (happypaint 0.195.1).
+        let dirty = f.reach();
+        self.mark_dirty(dirty);
+        // Nothing moved: every layer is exactly as it was. Recombining the
+        // lifted part with the remainder would lose alpha under a soft
+        // selection, with nothing to undo (happypaint 0.195.1).
         if f.at_rest() {
-            if let Some(l) = self.doc.layer_mut(&f.layer) {
-                l.pixels = f.original;
+            for l in f.lifts {
+                if let Some(layer) = self.doc.layer_mut(&l.layer) {
+                    layer.pixels = l.original;
+                }
             }
-            self.mark_dirty(f.bounds.union(&f.preview_bounds));
             return;
         }
-        let Some(layer) = self.doc.layer_mut(&f.layer) else {
+        let lifts = std::mem::take(&mut f.lifts);
+        let restore = lifts.iter().any(|l| l.vector) && f.saved_selection.is_some();
+        self.history.begin_transaction();
+        for l in lifts {
+            if l.vector {
+                self.commit_vector_lift(&f, l);
+            } else {
+                self.commit_raster_lift(&f, l);
+            }
+        }
+        self.history.end_transaction();
+        if restore {
+            self.set_selection_raw(f.saved_selection.clone());
+        }
+    }
+
+    fn commit_raster_lift(&mut self, f: &Floating, l: Lift) {
+        let result = over(&l.remainder, &l.preview);
+        let mapped = self.mapped_vector_mask(f, &l.layer);
+        let Some(layer) = self.doc.layer_mut(&l.layer) else {
             return;
         };
-        let mut keys: BTreeSet<(i32, i32)> = f.preview.tile_keys().into_iter().collect();
-        keys.extend(f.original.tile_keys());
+        let mut keys: BTreeSet<(i32, i32)> = result.tile_keys().into_iter().collect();
+        keys.extend(l.original.tile_keys());
         let mut changes: Vec<TileChange> = Vec::new();
         let mut bytes = 0;
         for (tx, ty) in keys {
-            let mut buf = layer.pixels.tile(tx, ty).map(|t| t.to_f32()).unwrap_or_else(|| vec![0.0; TILE_PX * 4]);
-            if let Some(p) = f.preview.tile(tx, ty) {
-                let s = p.to_f32();
-                for i in (0..buf.len()).step_by(4) {
-                    let k = 1.0 - s[i + 3];
-                    for c in 0..4 {
-                        buf[i + c] = s[i + c] + buf[i + c] * k;
-                    }
-                }
-            }
-            let t = Tile::from_f32(&buf);
-            let after = (!t.is_empty()).then(|| Arc::new(t));
-            layer.pixels.set_tile(tx, ty, after.clone());
-            let before = f.original.tile(tx, ty).cloned();
+            let after = result.tile(tx, ty).cloned();
+            let before = l.original.tile(tx, ty).cloned();
             if before.as_deref() != after.as_deref() {
                 bytes += tile_bytes(&before) + tile_bytes(&after);
                 changes.push(((tx, ty), before, after));
             }
         }
-        self.mark_dirty(f.bounds.union(&f.preview_bounds));
-        let mapped = self.mapped_vector_mask(&f);
-        if !changes.is_empty() || mapped.is_some() {
-            self.history.begin_transaction();
-            if !changes.is_empty() {
-                self.record(Change::Tiles { layer: f.layer.clone(), plane: Plane::Pixels, tiles: changes }, bytes);
-                self.doc.touch();
-                self.history_changed();
-            }
-            if let Some(v) = mapped {
-                let id = f.layer.clone();
-                let _ = self.tree_edit(None, |s| {
-                    if let Some(l) = s.doc.layer_mut(&id) {
-                        l.set_vector_mask(Some(v));
-                    }
-                    Ok(())
-                });
-            }
-            self.history.end_transaction();
+        layer.pixels = result;
+        if !changes.is_empty() {
+            self.record(Change::Tiles { layer: l.layer.clone(), plane: Plane::Pixels, tiles: changes }, bytes);
+            self.doc.touch();
+            self.history_changed();
+        }
+        if let Some(v) = mapped {
+            let id = l.layer.clone();
+            let _ = self.tree_edit(None, |s| {
+                if let Some(layer) = s.doc.layer_mut(&id) {
+                    layer.set_vector_mask(Some(v));
+                }
+                Ok(())
+            });
         }
     }
 
     /// The layer's vector mask through an affine transform's map: `None`
     /// without one, when it is unlinked, or for a warp or distort, which
     /// leave it in place (happypaint `commitVectorMaskTransform`).
-    fn mapped_vector_mask(&self, f: &Floating) -> Option<onepaint_doc::VectorMask> {
+    fn mapped_vector_mask(&self, f: &Floating, id: &str) -> Option<onepaint_doc::VectorMask> {
         let m = f.matrix;
         if f.warp.is_some() || m == Affine::IDENTITY {
             return None;
         }
-        let v = self.doc.layer(&f.layer)?.vector_mask().filter(|v| !v.unlinked)?;
+        let v = self.doc.layer(id)?.vector_mask().filter(|v| !v.unlinked)?;
         Some(v.transformed([m.a, m.b, m.c, m.d, m.e, m.f]))
     }
-}
 
-impl Session {
-    /// Commit a transform of a whole path or text layer, as one undo step.
-    /// Affine maps keep paths editable; text keeps its objects under a
-    /// rotation plus uniform scale. A distort, warp, stretch or mirror of text
-    /// bakes to pixels (PE:2324-2345).
-    fn commit_vector_transform(&mut self, f: Floating) {
-        let dirty = f.bounds.union(&f.preview_bounds);
+    /// Commit a transform of a whole path or text layer. Affine maps keep
+    /// paths editable; text keeps its objects under a rotation plus uniform
+    /// scale. A distort, warp, stretch or mirror of text bakes to pixels
+    /// (PE:2324-2345).
+    fn commit_vector_lift(&mut self, f: &Floating, l: Lift) {
         let m = f.matrix;
+        // Put the layer back, so the undo step starts from the untouched layer.
+        if let Some(layer) = self.doc.layer_mut(&l.layer) {
+            layer.pixels = l.original.clone();
+        }
         if f.warp.is_none() && m == Affine::IDENTITY {
-            if let Some(l) = self.doc.layer_mut(&f.layer) {
-                l.pixels = f.original;
-            }
-            self.mark_dirty(dirty);
             return;
         }
-        // Put the layer back, so the undo step starts from the untouched layer.
-        if let Some(l) = self.doc.layer_mut(&f.layer) {
-            l.pixels = f.original.clone();
-        }
         let (w, h, space) = (self.doc.width, self.doc.height, self.doc.space());
-        let id = f.layer.clone();
+        let id = l.layer.clone();
         let uniform = (m.a - m.d).abs() < 1e-6 && (m.b + m.c).abs() < 1e-6 && m.a * m.d - m.b * m.c > 0.0;
-        let mapped = self.mapped_vector_mask(&f);
+        let mapped = self.mapped_vector_mask(f, &id);
+        let warped = f.warp.is_some();
+        let preview = l.preview;
         let _ = self.tree_edit(None, move |s| {
-            if let (Some(v), Some(l)) = (mapped, s.doc.layer_mut(&id)) {
-                l.set_vector_mask(Some(v));
+            if let (Some(v), Some(layer)) = (mapped, s.doc.layer_mut(&id)) {
+                layer.set_vector_mask(Some(v));
             }
             let paths = s.paths(&id);
             let texts = s.texts(&id);
-            let Some(l) = s.doc.layer_mut(&id) else { return Ok(()) };
-            if f.warp.is_none() && !paths.is_empty() {
+            let Some(layer) = s.doc.layer_mut(&id) else { return Ok(()) };
+            if !warped && !paths.is_empty() {
                 let pm = onepaint_stroke::bezier::Affine { a: m.a, b: m.b, c: m.c, d: m.d, e: m.e, f: m.f };
                 let mapped: Vec<_> = paths.iter().map(|p| onepaint_stroke::bezier::affine(p, &pm)).collect();
-                path_ops::write_paths(l, &mapped, w, h, space);
-            } else if f.warp.is_none() && !texts.is_empty() && uniform {
+                path_ops::write_paths(layer, &mapped, w, h, space);
+            } else if !warped && !texts.is_empty() && uniform {
                 let mapped: Vec<_> = texts.iter().map(|t| transform_text(t, &m)).collect();
-                text_ops::write_texts(l, &mapped, w, h, space);
+                text_ops::write_texts(layer, &mapped, w, h, space);
             } else {
                 // Bake: the objects can't express this map.
-                l.extra.remove("paths");
-                l.extra.remove("texts");
-                l.extra.remove("text");
-                l.pixels = f.preview.clone();
+                layer.extra.remove("paths");
+                layer.extra.remove("texts");
+                layer.extra.remove("text");
+                layer.pixels = preview;
             }
             Ok(())
         });
-        if f.saved_selection.is_some() {
-            self.set_selection_raw(f.saved_selection.clone());
-        }
-        self.mark_dirty(dirty);
     }
 }
 

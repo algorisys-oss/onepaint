@@ -97,7 +97,7 @@ fn rotating_and_scaling_text_keeps_it_live_but_stretching_bakes() {
     let mut s = Session::new(400, 200, Some(Rgba::WHITE));
     s.execute(Command::AddText { spec: hello(20.0) }).unwrap();
     let id = s.active().to_string();
-    s.execute(Command::BeginTransform).unwrap();
+    s.execute(Command::BeginTransform { ids: vec![] }).unwrap();
     let (k, r) = (1.5f64, 0.3f64);
     let m = transform::Affine { a: k * r.cos(), b: k * r.sin(), c: -k * r.sin(), d: k * r.cos(), e: 5.0, f: 7.0 };
     s.execute(Command::SetTransform { matrix: m }).unwrap();
@@ -108,7 +108,7 @@ fn rotating_and_scaling_text_keeps_it_live_but_stretching_bakes() {
     assert!((t.x - x).abs() < 1e-9 && (t.y - y).abs() < 1e-9);
     s.execute(Command::Undo).unwrap();
     assert_eq!(s.texts(&id)[0].font_size_px, 40.0);
-    s.execute(Command::BeginTransform).unwrap();
+    s.execute(Command::BeginTransform { ids: vec![] }).unwrap();
     s.execute(Command::SetTransform { matrix: transform::Affine { a: 2.0, b: 0.0, c: 0.0, d: 1.0, e: 0.0, f: 0.0 } }).unwrap();
     s.execute(Command::CommitTransform).unwrap();
     assert!(!s.is_text_layer(&id), "a stretch can't be a font size");

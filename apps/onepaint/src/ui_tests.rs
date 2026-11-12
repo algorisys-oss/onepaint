@@ -777,3 +777,48 @@ fn the_transform_fields_edit_the_move_box() {
         assert!((f.w - 400.0).abs() < 1e-6, "{f:?}");
     }
 }
+
+/// happypaint v0.168: layers Ctrl-clicked in the Layers panel move together
+/// with the Move tool, under one box, as one undo step.
+#[test]
+fn the_move_tool_moves_every_picked_layer() {
+    let mut h = harness();
+    h.run();
+    let mut ids = Vec::new();
+    for x in [100.0, 400.0] {
+        let s = &mut h.state_mut().session;
+        s.execute(Command::AddLayer).unwrap();
+        let poly = onepaint_selection::rect_polygon([x, 100.0], [x + 100.0, 200.0]);
+        s.execute(Command::SelectShape { contours: vec![poly], mode: onepaint_selection::Mode::Replace, antialias: false }).unwrap();
+        s.execute(Command::FillSelection).unwrap();
+        s.execute(Command::Deselect).unwrap();
+        ids.push(s.active().to_string());
+    }
+    h.run();
+    let name = h.state().session.doc().find(&ids[0]).unwrap().name().to_string();
+    let at = h.get_by_label(&name).rect().center();
+    click_with(&mut h, at, egui::Modifiers::COMMAND);
+    assert_eq!(h.state().layer_picks.len(), 2);
+    h.state_mut().set_tool(Tool::Move);
+    h.run();
+    let mut moving = h.state().session.transform_layers();
+    moving.sort();
+    let mut want = ids.clone();
+    want.sort();
+    assert_eq!(moving, want, "both picked layers are lifted");
+    let (_, b) = h.state().session.transform_state().unwrap();
+    assert_eq!((b.x, b.w), (100, 400), "one box around both");
+
+    let undo = h.state().session.history_len();
+    let from = h.state().canvas.doc_to_win([150.0, 150.0]);
+    let to = h.state().canvas.doc_to_win([150.0, 250.0]);
+    drag(&mut h, pos2(from[0] as f32, from[1] as f32), pos2(to[0] as f32, to[1] as f32));
+    key(&mut h, egui::Key::Enter, egui::Modifiers::NONE);
+    h.run();
+    let s = &h.state().session;
+    assert_eq!(s.history_len(), undo + 1, "one undo step");
+    for (id, x) in ids.iter().zip([150, 450]) {
+        let l = s.doc().layer(id).unwrap();
+        assert!(l.pixels.get(x, 150)[3] < 0.5 && l.pixels.get(x, 260)[3] > 0.99, "{id} moved down");
+    }
+}

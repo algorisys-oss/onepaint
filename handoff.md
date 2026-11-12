@@ -6,8 +6,8 @@ items 12–15 (v0.209.0: feather everywhere as a Gaussian, anti-aliased
 selections, typed transform numbers) done; items 1–11 done and committed — float tiles v10, tiled relief v11, file
 budgets, per-tile damage, dip limits, hidden groups, autosave modes with a
 tile chunk cache, RAM-based memory estimates, Recent brushes and folds, pinned
-Brushes header, stored size; left: multi-layer Move, a pre-existing gap
-that blocks group Move and scattered merge),
+Brushes header, stored size; multi-layer and group Move done 2026-11-13; left: merging scattered
+picks, which needs a multi-selection action bar on the Layers panel),
 `docs/parity-delta-2026-11-05.md` (happypaint v0.204.7 → v0.204.17:
 all done, the low-priority ones too; dip recovery still wants a real-tablet try), `docs/parity-delta-2026-10-18.md` (the v0.204.7 run's list and
 decisions), `todo.md` and `AGENTS.md`. **Keep this file current after every

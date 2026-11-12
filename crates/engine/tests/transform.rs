@@ -36,7 +36,7 @@ fn affine_basics() {
 fn translate_moves_pixels_exactly_and_commits_once() {
     let mut s = session_with_block();
     let n = s.history_len();
-    s.execute(Command::BeginTransform).unwrap();
+    s.execute(Command::BeginTransform { ids: vec![] }).unwrap();
     assert!(s.transform_active());
     // During the transform the composite shows the moved content, the layer keeps the hole.
     s.execute(Command::SetTransform { matrix: Affine::translate(50.0, 10.0) }).unwrap();
@@ -59,7 +59,7 @@ fn cancel_restores_exactly() {
     let mut s = session_with_block();
     let before = s.doc().layer(s.active()).unwrap().pixels.clone();
     let n = s.history_len();
-    s.execute(Command::BeginTransform).unwrap();
+    s.execute(Command::BeginTransform { ids: vec![] }).unwrap();
     s.execute(Command::SetTransform { matrix: Affine::rotate_about(0.7, [30.0, 25.0]) }).unwrap();
     s.execute(Command::CancelTransform).unwrap();
     let after = &s.doc().layer(s.active()).unwrap().pixels;
@@ -72,7 +72,7 @@ fn cancel_restores_exactly() {
 #[test]
 fn scale_doubles_the_block() {
     let mut s = session_with_block();
-    s.execute(Command::BeginTransform).unwrap();
+    s.execute(Command::BeginTransform { ids: vec![] }).unwrap();
     s.execute(Command::SetTransform { matrix: Affine::scale_about(2.0, 2.0, [20.0, 20.0]) }).unwrap();
     s.execute(Command::CommitTransform).unwrap();
     assert!(px(&s, 58, 38)[3] > 0.99, "{:?}", px(&s, 58, 38));
@@ -84,7 +84,7 @@ fn transform_lifts_only_the_selection() {
     let mut s = session_with_block();
     s.execute(Command::SelectShape { contours: vec![rect_polygon([20.0, 20.0], [30.0, 30.0])], mode: Mode::Replace, antialias: false })
         .unwrap();
-    s.execute(Command::BeginTransform).unwrap();
+    s.execute(Command::BeginTransform { ids: vec![] }).unwrap();
     s.execute(Command::SetTransform { matrix: Affine::translate(0.0, 100.0) }).unwrap();
     s.execute(Command::CommitTransform).unwrap();
     assert_eq!(px(&s, 25, 125), RED, "selected half moved");
@@ -95,7 +95,7 @@ fn transform_lifts_only_the_selection() {
 #[test]
 fn painting_or_undo_commits_or_cancels_a_pending_transform() {
     let mut s = session_with_block();
-    s.execute(Command::BeginTransform).unwrap();
+    s.execute(Command::BeginTransform { ids: vec![] }).unwrap();
     s.execute(Command::SetTransform { matrix: Affine::translate(100.0, 0.0) }).unwrap();
     s.execute(Command::Undo).unwrap();
     assert!(!s.transform_active());
@@ -214,7 +214,7 @@ mod distort_and_warp {
     #[test]
     fn distort_seeds_from_the_affine_and_commits_a_trapezoid() {
         let mut s = square();
-        s.execute(Command::BeginTransform).unwrap();
+        s.execute(Command::BeginTransform { ids: vec![] }).unwrap();
         s.execute(Command::SetTransform { matrix: Affine::translate(10.0, 0.0) }).unwrap();
         s.execute(Command::BeginDistort).unwrap();
         match s.transform_warp().unwrap() {
@@ -234,7 +234,7 @@ mod distort_and_warp {
     #[test]
     fn mesh_warp_bends_the_middle() {
         let mut s = square();
-        s.execute(Command::BeginTransform).unwrap();
+        s.execute(Command::BeginTransform { ids: vec![] }).unwrap();
         s.execute(Command::BeginWarp).unwrap();
         let WarpMode::Mesh(mut pts) = s.transform_warp().unwrap().clone() else { panic!() };
         assert_eq!(pts.len(), 16);
@@ -264,7 +264,7 @@ mod overflow {
         s.execute(Command::Deselect).unwrap();
         let id = s.active().to_string();
         // Push it mostly off the left edge.
-        s.execute(Command::BeginTransform).unwrap();
+        s.execute(Command::BeginTransform { ids: vec![] }).unwrap();
         s.execute(Command::SetTransform { matrix: Affine::translate(-30.0, 0.0) }).unwrap();
         s.execute(Command::CommitTransform).unwrap();
         assert!(s.doc().layer(&id).unwrap().pixels.get(-10, 20)[3] > 0.99, "kept off-canvas");
@@ -275,7 +275,7 @@ mod overflow {
         assert!(t.doc().layer(&id).unwrap().pixels.get(-15, 20)[3] > 0.99, "overflow read back");
         assert!(t.doc().layer(&id).unwrap().pixels.get(5, 20)[3] > 0.99, "on-canvas part intact");
         // Move it back: the whole square returns.
-        t.execute(Command::BeginTransform).unwrap();
+        t.execute(Command::BeginTransform { ids: vec![] }).unwrap();
         t.execute(Command::SetTransform { matrix: Affine::translate(30.0, 0.0) }).unwrap();
         t.execute(Command::CommitTransform).unwrap();
         let l = t.doc().layer(&id).unwrap();
@@ -288,17 +288,17 @@ mod overflow {
 fn undo_with_an_untouched_box_undoes_and_with_a_pending_move_abandons_it() {
     let mut s = session_with_block();
     // A committed move, then a fresh box (the Move tool keeps one open).
-    s.execute(Command::BeginTransform).unwrap();
+    s.execute(Command::BeginTransform { ids: vec![] }).unwrap();
     s.execute(Command::SetTransform { matrix: Affine::translate(100.0, 0.0) }).unwrap();
     s.execute(Command::CommitTransform).unwrap();
-    s.execute(Command::BeginTransform).unwrap();
+    s.execute(Command::BeginTransform { ids: vec![] }).unwrap();
     // A pending move: undo drops it and nothing else.
     s.execute(Command::SetTransform { matrix: Affine::translate(0.0, 50.0) }).unwrap();
     s.execute(Command::Undo).unwrap();
     assert!(!s.transform_active());
     assert_eq!(px(&s, 125, 25), RED, "the committed move survives");
     // An untouched box: undo goes through to the committed move.
-    s.execute(Command::BeginTransform).unwrap();
+    s.execute(Command::BeginTransform { ids: vec![] }).unwrap();
     s.execute(Command::Undo).unwrap();
     assert!(!s.transform_active());
     assert_eq!(px(&s, 25, 25), RED, "back where it started");
@@ -316,7 +316,7 @@ fn an_untouched_transform_under_a_soft_selection_changes_nothing() {
         .unwrap();
     s.execute(Command::SetFeather { radius: 6.0 }).unwrap();
     let n = s.history_len();
-    s.execute(Command::BeginTransform).unwrap();
+    s.execute(Command::BeginTransform { ids: vec![] }).unwrap();
     assert_eq!(s.flatten(), {
         let mut t = session_with_block();
         t.execute(Command::SelectShape { contours: vec![rect_polygon([15.0, 15.0], [45.0, 35.0])], mode: Mode::Replace, antialias: false })
@@ -333,4 +333,131 @@ fn an_untouched_transform_under_a_soft_selection_changes_nothing() {
         }
     }
     assert_eq!(s.history_len(), n, "nothing to undo");
+}
+
+/// A new layer with a red block over `[x0, x1) × [y0, y1)`; returns its id.
+fn layer_block(s: &mut Session, x0: f64, y0: f64, x1: f64, y1: f64) -> String {
+    s.execute(Command::AddLayer).unwrap();
+    s.execute(Command::SelectShape { contours: vec![rect_polygon([x0, y0], [x1, y1])], mode: Mode::Replace, antialias: false }).unwrap();
+    s.execute(Command::SetColor { rgba: Rgba::new(1.0, 0.0, 0.0, 1.0) }).unwrap();
+    s.execute(Command::FillSelection).unwrap();
+    s.execute(Command::Deselect).unwrap();
+    s.active().to_string()
+}
+
+fn alpha_at(s: &Session, id: &str, x: i32, y: i32) -> f32 {
+    s.doc().layer(id).unwrap().pixels.get(x, y)[3]
+}
+
+/// happypaint v0.168: the layers picked in the Layers panel move as one,
+/// under one box, committed as one undo step.
+#[test]
+fn picked_layers_move_together_in_one_step() {
+    let mut s = Session::new(200, 200, Some(Rgba::WHITE));
+    let a = layer_block(&mut s, 10.0, 10.0, 30.0, 30.0);
+    let b = layer_block(&mut s, 100.0, 50.0, 120.0, 70.0);
+    let n = s.history_len();
+    s.execute(Command::BeginTransform { ids: vec![a.clone(), b.clone()] }).unwrap();
+    assert_eq!(s.transform_layers(), vec![b.clone(), a.clone()], "the active layer first");
+    let (_, bx) = s.transform_state().unwrap();
+    assert_eq!((bx.x, bx.y, bx.w, bx.h), (10, 10, 110, 60), "one box around both");
+
+    s.execute(Command::SetTransform { matrix: Affine::translate(30.0, 40.0) }).unwrap();
+    // While moving, the picture shows both moved.
+    let flat = s.flatten();
+    let red = |x: usize, y: usize| flat[(y * 200 + x) * 4 + 1] < 0.01;
+    assert!(red(45, 55) && red(135, 95), "both previewed in their new places");
+    assert!(!red(15, 15) && !red(105, 55), "and gone from the old ones");
+
+    s.execute(Command::CommitTransform).unwrap();
+    assert_eq!(s.history_len(), n + 1, "one undo step");
+    assert!(alpha_at(&s, &a, 45, 55) > 0.99 && alpha_at(&s, &a, 15, 15) == 0.0);
+    assert!(alpha_at(&s, &b, 135, 95) > 0.99 && alpha_at(&s, &b, 105, 55) == 0.0);
+    s.execute(Command::Undo).unwrap();
+    assert!(alpha_at(&s, &a, 15, 15) > 0.99 && alpha_at(&s, &b, 105, 55) > 0.99, "undo puts both back");
+    assert_eq!(alpha_at(&s, &a, 45, 55), 0.0);
+}
+
+#[test]
+fn cancelling_a_multi_layer_move_restores_every_layer() {
+    let mut s = Session::new(200, 200, Some(Rgba::WHITE));
+    let a = layer_block(&mut s, 10.0, 10.0, 30.0, 30.0);
+    let b = layer_block(&mut s, 100.0, 50.0, 120.0, 70.0);
+    let n = s.history_len();
+    s.execute(Command::BeginTransform { ids: vec![a.clone(), b.clone()] }).unwrap();
+    s.execute(Command::SetTransform { matrix: Affine::translate(30.0, 40.0) }).unwrap();
+    s.execute(Command::CancelTransform).unwrap();
+    assert_eq!(s.history_len(), n);
+    assert!(alpha_at(&s, &a, 15, 15) > 0.99 && alpha_at(&s, &a, 45, 55) == 0.0);
+    assert!(alpha_at(&s, &b, 105, 55) > 0.99 && alpha_at(&s, &b, 135, 95) == 0.0);
+}
+
+/// happypaint v0.205.1 / round 34: an active group moves its children;
+/// hidden and locked ones stay put.
+#[test]
+fn an_active_group_moves_its_children() {
+    let mut s = Session::new(200, 200, Some(Rgba::WHITE));
+    let a = layer_block(&mut s, 10.0, 10.0, 30.0, 30.0);
+    let b = layer_block(&mut s, 60.0, 10.0, 80.0, 30.0);
+    let c = layer_block(&mut s, 110.0, 10.0, 130.0, 30.0);
+    s.execute(Command::AddGroup).unwrap();
+    let g = s.active().to_string();
+    for id in [&a, &b, &c] {
+        s.execute(Command::MoveLayer { id: id.clone(), parent: Some(g.clone()), index: 0 }).unwrap();
+    }
+    s.execute(Command::SetLayerProps { id: c.clone(), props: LayerProps { locked: Some(true), ..Default::default() } }).unwrap();
+    s.execute(Command::SetActiveLayer { id: g.clone() }).unwrap();
+    s.execute(Command::BeginTransform { ids: vec![] }).unwrap();
+    let mut moving = s.transform_layers();
+    moving.sort();
+    let mut want = vec![a.clone(), b.clone()];
+    want.sort();
+    assert_eq!(moving, want);
+    s.execute(Command::SetTransform { matrix: Affine::translate(0.0, 100.0) }).unwrap();
+    s.execute(Command::CommitTransform).unwrap();
+    assert!(alpha_at(&s, &a, 15, 115) > 0.99 && alpha_at(&s, &b, 65, 115) > 0.99);
+    assert!(alpha_at(&s, &c, 115, 15) > 0.99, "the locked layer stays");
+}
+
+/// With a selection, each picked layer lifts only its selected part.
+#[test]
+fn a_selection_lifts_the_same_part_of_every_picked_layer() {
+    let mut s = Session::new(200, 200, Some(Rgba::WHITE));
+    let a = layer_block(&mut s, 10.0, 10.0, 50.0, 50.0);
+    let b = layer_block(&mut s, 10.0, 60.0, 50.0, 100.0);
+    s.execute(Command::SelectShape { contours: vec![rect_polygon([0.0, 0.0], [30.0, 200.0])], mode: Mode::Replace, antialias: false })
+        .unwrap();
+    s.execute(Command::BeginTransform { ids: vec![a.clone(), b.clone()] }).unwrap();
+    s.execute(Command::SetTransform { matrix: Affine::translate(100.0, 0.0) }).unwrap();
+    s.execute(Command::CommitTransform).unwrap();
+    for (id, y) in [(&a, 20), (&b, 70)] {
+        assert!(alpha_at(&s, id, 115, y) > 0.99, "the selected part moved");
+        assert_eq!(alpha_at(&s, id, 15, y), 0.0, "and left its place");
+        assert!(alpha_at(&s, id, 40, y) > 0.99, "the rest stayed");
+    }
+}
+
+/// A text layer moved with a raster layer stays text.
+#[test]
+fn text_moved_with_pixels_stays_text() {
+    let mut s = Session::new(400, 200, Some(Rgba::WHITE));
+    let a = layer_block(&mut s, 10.0, 10.0, 30.0, 30.0);
+    s.execute(Command::AddText {
+        spec: onepaint_text::TextSpec {
+            text: "Hi".into(),
+            x: 100.0,
+            y: 40.0,
+            font_size_px: 40.0,
+            color: "#ff0000".into(),
+            ..Default::default()
+        },
+    })
+    .unwrap();
+    let t = s.active().to_string();
+    s.execute(Command::BeginTransform { ids: vec![a.clone(), t.clone()] }).unwrap();
+    s.execute(Command::SetTransform { matrix: Affine::translate(20.0, 10.0) }).unwrap();
+    s.execute(Command::CommitTransform).unwrap();
+    let spec = &s.texts(&t)[0];
+    assert_eq!((spec.x, spec.y), (120.0, 50.0));
+    assert!(alpha_at(&s, &a, 35, 25) > 0.99 && alpha_at(&s, &a, 15, 15) == 0.0);
 }

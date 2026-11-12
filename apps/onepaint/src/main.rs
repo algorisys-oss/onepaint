@@ -1083,11 +1083,24 @@ impl App {
         }
     }
 
-    /// Start (or restart) a transform session on the active layer.
+    /// What the Move tool lifts: the active layer and the layers picked in
+    /// the Layers panel (happypaint `selectedTransformableIds`).
+    fn move_subjects(&self) -> String {
+        let mut key = self.session.active().to_string();
+        for p in &self.layer_picks {
+            key.push('\n');
+            key.push_str(p);
+        }
+        key
+    }
+
+    /// Start (or restart) a transform session on the picked layers, or the
+    /// active one (a group means its children).
     pub fn begin_transform(&mut self) {
-        self.xform_layer = Some(self.session.active().to_string());
+        self.xform_layer = Some(self.move_subjects());
         self.canvas.xform = onepaint_engine::transform::TransformParams::default();
-        let _ = self.session.execute(Command::BeginTransform);
+        let ids = self.layer_picks.clone();
+        let _ = self.session.execute(Command::BeginTransform { ids });
     }
 
     pub fn commit_transform(&mut self) {
@@ -1620,10 +1633,11 @@ impl eframe::App for App {
         for f in dropped {
             clip::drop_file(self, &ctx, Some(f.path().to_path_buf()), None);
         }
-        // Switching layers while moving restarts the transform on the new layer.
+        // Switching or picking layers while moving restarts the transform on
+        // them, unless the box has already moved.
         if self.session.tool() == Tool::Move
-            && !self.session.transform_active()
-            && self.xform_layer.as_deref() != Some(self.session.active())
+            && !self.session.transform_pending()
+            && self.xform_layer.as_deref() != Some(self.move_subjects().as_str())
         {
             self.begin_transform();
         }

@@ -46,7 +46,7 @@ fn free_transform_maps_the_vector_mask_in_the_same_step_unless_unlinked() {
         })
         .unwrap();
         let n = s.history_len();
-        s.execute(Command::BeginTransform).unwrap();
+        s.execute(Command::BeginTransform { ids: vec![] }).unwrap();
         let m = transform::Affine { a: 1.0, b: 0.0, c: 0.0, d: 1.0, e: 20.0, f: 5.0 };
         s.execute(Command::SetTransform { matrix: m }).unwrap();
         s.execute(Command::CommitTransform).unwrap();

@@ -159,7 +159,7 @@ fn free_transform_keeps_a_path_editable_and_undoes_in_one_step() {
     s.execute(Command::CreatePathLayer { spec: Box::new(square(20.0, 20.0, 60.0, 60.0, true, true)) }).unwrap();
     let id = s.active().to_string();
     let n = s.history_len();
-    s.execute(Command::BeginTransform).unwrap();
+    s.execute(Command::BeginTransform { ids: vec![] }).unwrap();
     // Non-uniform: paths take any affine map exactly.
     let m = transform::Affine { a: 2.0, b: 0.0, c: 0.0, d: 1.0, e: 10.0, f: 30.0 };
     s.execute(Command::SetTransform { matrix: m }).unwrap();
@@ -180,7 +180,7 @@ fn a_distorted_path_bakes_to_pixels() {
     let mut s = Session::new(200, 160, Some(Rgba::WHITE));
     s.execute(Command::CreatePathLayer { spec: Box::new(square(20.0, 20.0, 60.0, 60.0, true, true)) }).unwrap();
     let id = s.active().to_string();
-    s.execute(Command::BeginTransform).unwrap();
+    s.execute(Command::BeginTransform { ids: vec![] }).unwrap();
     s.execute(Command::BeginDistort).unwrap();
     s.execute(Command::SetWarp { warp: transform::WarpMode::Quad([[10.0, 10.0], [70.0, 20.0], [60.0, 60.0], [20.0, 70.0]]) }).unwrap();
     s.execute(Command::CommitTransform).unwrap();
