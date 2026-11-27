@@ -1,5 +1,8 @@
 //! onepaint desktop app: a thin egui shell over `onepaint_engine::Session`.
 
+// A release build on Windows is a GUI app: no console window behind it.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod adjust;
 mod align_ui;
 mod side_sliders;

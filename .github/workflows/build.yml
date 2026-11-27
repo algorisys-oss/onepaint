@@ -1,0 +1,127 @@
+# Release builds of the onepaint app for Linux, Windows and macOS.
+#
+# Runs on a version tag (v*), which also publishes a GitHub Release with the
+# binaries, or by hand from the Actions tab (binaries as workflow artifacts).
+# Not on every push: the repository is private and macOS minutes are dear.
+name: build
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # The pinned toolchain (workspace rust-version).
+  RUST_TOOLCHAIN: "1.95.0"
+
+jobs:
+  linux:
+    # 22.04's glibc (2.35) keeps the binary running on older distributions.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --locked -p onepaint
+      - name: Package
+        run: |
+          version=$(cargo pkgid -p onepaint | sed 's/.*[#@]//')
+          name="onepaint-${version}-linux-x86_64"
+          mkdir -p "dist/$name"
+          cp target/release/onepaint "dist/$name/"
+          cp README.md "dist/$name/"
+          [ -f LICENSE ] && cp LICENSE "dist/$name/" || true
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          echo "ASSET=dist/$name.tar.gz" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: onepaint-linux-x86_64
+          path: ${{ env.ASSET }}
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --locked -p onepaint
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = (cargo pkgid -p onepaint) -replace '.*[#@]', ''
+          $name = "onepaint-$version-windows-x86_64"
+          New-Item -ItemType Directory -Force "dist/$name" | Out-Null
+          Copy-Item target/release/onepaint.exe "dist/$name/"
+          Copy-Item README.md "dist/$name/"
+          if (Test-Path LICENSE) { Copy-Item LICENSE "dist/$name/" }
+          Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
+          "ASSET=dist/$name.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - uses: actions/upload-artifact@v4
+        with:
+          name: onepaint-windows-x86_64
+          path: ${{ env.ASSET }}
+          if-no-files-found: error
+
+  macos:
+    # One universal app: Apple silicon and Intel, joined with lipo.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: |
+          cargo build --release --locked -p onepaint --target aarch64-apple-darwin
+          cargo build --release --locked -p onepaint --target x86_64-apple-darwin
+      - name: Package
+        run: |
+          version=$(cargo pkgid -p onepaint | sed 's/.*[#@]//')
+          name="onepaint-${version}-macos-universal"
+          app="dist/onepaint.app"
+          mkdir -p "$app/Contents/MacOS"
+          lipo -create -output "$app/Contents/MacOS/onepaint" \
+            target/aarch64-apple-darwin/release/onepaint \
+            target/x86_64-apple-darwin/release/onepaint
+          sed "s/VERSION/$version/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
+          # Ad-hoc signature: required on Apple silicon. Not notarised, so the
+          # first launch needs right-click > Open (or xattr -dr com.apple.quarantine).
+          codesign --force --deep --sign - "$app"
+          ditto -c -k --keepParent "$app" "dist/$name.zip"
+          echo "ASSET=dist/$name.zip" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: onepaint-macos-universal
+          path: ${{ env.ASSET }}
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
