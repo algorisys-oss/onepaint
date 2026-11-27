@@ -11,6 +11,13 @@ pixel. Bench `crates/formats/benches/file_io.rs` (2 threads, 2048², 4
 layers): full write 1.34 s → 0.62 s, one-tile save 217 → 47 ms, read
 unchanged at ~0.32 s. Save book runs in the background the same way.
 
+Releases: `.github/workflows/build.yml` builds Linux x86_64, Windows x86_64
+and a universal macOS app on a `v*` tag (publishing a GitHub Release) or by
+hand from the Actions tab. `scripts/release.sh` tags and pushes; run it only
+when the user asks (see README "Release"). No release has been made yet, and
+the workflow has not run on GitHub yet, so the Windows and macOS jobs are
+untested.
+
 Then `docs/parity-delta-2026-11-27.md` (happypaint v0.209.0 → v0.212.0, the
 2026-11-27 run: all ten items done and committed; still wants a try with a
 real tablet for the pen pressure calibration and the post-snap QuickShape
