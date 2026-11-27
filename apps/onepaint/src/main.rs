@@ -598,30 +598,24 @@ impl App {
         else {
             return;
         };
-        let mut names = Vec::new();
+        self.save_book_to(path, now);
+    }
+
+    /// Save every open tab, in order, as a book at `path`, in the background.
+    pub fn save_book_to(&mut self, path: PathBuf, now: f64) {
+        if self.saving.is_some() {
+            return self.notify("Still saving…", now);
+        }
+        // Snapshot every tab here; the encodes and the write run in the background.
         let mut pages = Vec::new();
         for i in 0..self.tabs.len() {
-            let r = match self.tabs[i].as_mut() {
-                Some(s) => s.session.save_happypaint().map(|b| (s.session.doc().name.clone(), b)),
-                None => self.session.save_happypaint().map(|b| (self.session.doc().name.clone(), b)),
+            let page = match self.tabs[i].as_mut() {
+                Some(s) => (s.session.doc().name.clone(), s.session.prepare_save()),
+                None => (self.session.doc().name.clone(), self.session.prepare_save()),
             };
-            match r {
-                Ok((n, b)) => {
-                    names.push(n);
-                    pages.push(b);
-                }
-                Err(e) => return self.notify(format!("Save failed: {e}"), now),
-            }
+            pages.push(page);
         }
-        let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Chapter").to_string();
-        let bytes = onepaint_formats::book::encode_book(&name, &names, &pages, concat!("onepaint ", env!("CARGO_PKG_VERSION")));
-        match bytes.map_err(|e| e.to_string()).and_then(|b| onepaint_formats::write_atomic(&path, &b).map_err(|e| e.to_string())) {
-            Ok(()) => {
-                self.gallery.touch(&path);
-                self.notify(format!("Saved {} pages to {}", names.len(), path.display()), now);
-            }
-            Err(e) => self.notify(format!("Save failed: {e}"), now),
-        }
+        self.saving = Some(saving::Saving::book(pages, path));
     }
 
     /// Open `p` in the background (spec 41); books open at once. A load
@@ -890,10 +884,8 @@ impl App {
             self.session.doc_mut_meta().name = stem.to_string();
         }
         let job = self.session.prepare_save();
-        let (id, len) = (self.session.doc().id.clone(), self.session.history_len());
-        let mut s = saving::Saving::start(job, path, id, len);
-        s.then = then;
-        self.saving = Some(s);
+        let what = saving::What::Drawing { doc_id: self.session.doc().id.clone(), history_len: self.session.history_len(), then };
+        self.saving = Some(saving::Saving::drawing(job, path, what));
         true
     }
 
@@ -905,18 +897,25 @@ impl App {
         if let Err(e) = result {
             return self.notify(format!("Save failed: {e}"), now);
         }
-        if self.session.doc().id == s.doc_id {
-            self.saved_history_len = Some(s.history_len);
+        let (doc_id, history_len, then) = match s.what {
+            saving::What::Book { pages } => {
+                self.gallery.touch(&s.path);
+                return self.notify(format!("Saved {pages} pages to {}", s.path.display()), now);
+            }
+            saving::What::Drawing { doc_id, history_len, then } => (doc_id, history_len, then),
+        };
+        if self.session.doc().id == doc_id {
+            self.saved_history_len = Some(history_len);
             self.path = Some(s.path.clone());
-        } else if let Some(slot) = self.tabs.iter_mut().flatten().find(|t| t.session.doc().id == s.doc_id) {
-            slot.saved_history_len = Some(s.history_len);
+        } else if let Some(slot) = self.tabs.iter_mut().flatten().find(|t| t.session.doc().id == doc_id) {
+            slot.saved_history_len = Some(history_len);
             slot.path = Some(s.path.clone());
         }
-        self.autosave.clear(&s.doc_id);
+        self.autosave.clear(&doc_id);
         self.notify(format!("Saved {}", s.path.display()), now);
         self.gallery.touch(&s.path);
-        if let Some(action) = s.then
-            && self.session.doc().id == s.doc_id
+        if let Some(action) = then
+            && self.session.doc().id == doc_id
             && !self.dirty()
         {
             self.perform(action, ctx);
@@ -3970,6 +3969,33 @@ pub(crate) mod tests {
         finish(&mut h);
         assert_eq!(h.state().session.doc().width, 120);
         assert_eq!(onepaint_formats::read_happypaint(&std::fs::read(&path).unwrap()).unwrap().root.len(), nodes + 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Save book runs in the background too: every tab, in order.
+    #[test]
+    fn a_book_saves_in_the_background() {
+        let mut h = harness();
+        h.run();
+        h.state_mut().new_tab();
+        h.run();
+        assert_eq!(h.state().tabs.len(), 2);
+        let dir = std::env::temp_dir().join(format!("onepaint-bgbook-{}", onepaint_doc::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Chapter.happypaint-book");
+        h.state_mut().save_book_to(path.clone(), 0.0);
+        assert!(h.state().is_saving());
+        for _ in 0..400 {
+            if !h.state().is_saving() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            h.step();
+        }
+        assert!(!h.state().is_saving(), "the book save finished");
+        let book = onepaint_formats::book::decode_book(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(book.1.len(), 2, "two pages");
+        assert!(h.state().toast.as_ref().is_some_and(|t| t.0.starts_with("Saved 2 pages")));
         let _ = std::fs::remove_dir_all(dir);
     }
 

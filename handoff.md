@@ -9,7 +9,7 @@ fsync, rename). Save runs in the background (`apps/onepaint/src/saving.rs`,
 cache; tiles encode in parallel; the overflow check no longer scans every
 pixel. Bench `crates/formats/benches/file_io.rs` (2 threads, 2048², 4
 layers): full write 1.34 s → 0.62 s, one-tile save 217 → 47 ms, read
-unchanged at ~0.32 s. Save book still encodes its tabs on the UI thread.
+unchanged at ~0.32 s. Save book runs in the background the same way.
 
 Then `docs/parity-delta-2026-11-27.md` (happypaint v0.209.0 → v0.212.0, the
 2026-11-27 run: all ten items done and committed; still wants a try with a
