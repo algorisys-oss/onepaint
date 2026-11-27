@@ -620,3 +620,51 @@ mod checksums {
         assert_eq!(a.pixels.get(300, 10), b.pixels.get(300, 10));
     }
 }
+
+/// Tiles encode in parallel; the file is the same bytes every time, and a
+/// cached write equals a fresh one.
+#[test]
+fn writes_are_deterministic_and_cached_writes_match() {
+    let mut d = Document::new_in(700, 600, None, Depth::Rgba8);
+    d.root.clear();
+    for i in 0..3 {
+        let mut l = Layer::new(&format!("l{i}"));
+        for y in (0..600).step_by(7) {
+            fill(&mut l.pixels, 0, y, 700, 3, [0.1 * i as f32, 0.3, 0.5, 0.8]);
+        }
+        d.root.push(Node::Layer(l));
+    }
+    let a = write_happypaint(&d, None, "t").unwrap();
+    assert_eq!(a, write_happypaint(&d, None, "t").unwrap());
+    let mut cache = ChunkCache::default();
+    write_happypaint_cached(&d, None, "t", &mut cache).unwrap();
+    assert_eq!(a, write_happypaint_cached(&d, None, "t", &mut cache).unwrap());
+}
+
+/// 8-bit paint off the canvas is kept as the overflow chunk; paint inside
+/// tiles that reach past the edge, but not past it, is not.
+#[test]
+fn off_canvas_paint_round_trips_in_8_bit() {
+    let mut d = Document::new_in(300, 200, None, Depth::Rgba8);
+    d.root.clear();
+    let mut l = Layer::new("ink");
+    fill(&mut l.pixels, 250, 150, 20, 20, [0.0, 0.0, 1.0, 1.0]);
+    d.root.push(Node::Layer(l.clone()));
+    let bytes = write_happypaint(&d, None, "t").unwrap();
+    let len = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    let m: serde_json::Value = serde_json::from_slice(&inflate_raw(&bytes[12..12 + len]).unwrap()).unwrap();
+    assert!(m["nodes"][0].get("overflow").is_none(), "nothing past the edge");
+
+    fill(&mut l.pixels, 290, 190, 30, 25, [1.0, 0.0, 0.0, 1.0]);
+    fill(&mut l.pixels, -40, -10, 5, 5, [0.0, 1.0, 0.0, 1.0]);
+    d.root[0] = Node::Layer(l);
+    let bytes = write_happypaint(&d, None, "t").unwrap();
+    let len = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    let m: serde_json::Value = serde_json::from_slice(&inflate_raw(&bytes[12..12 + len]).unwrap()).unwrap();
+    let r = &m["nodes"][0]["overflow"]["rect"];
+    assert_eq!((r["x"].as_i64(), r["y"].as_i64(), r["width"].as_i64(), r["height"].as_i64()), (Some(-40), Some(-10), Some(360), Some(225)));
+    let back = read_happypaint(&bytes).unwrap();
+    let px = &back.root[0].as_layer().unwrap().pixels;
+    assert!(px.get(310, 205)[0] > 0.99 && px.get(-38, -8)[1] > 0.99, "off-canvas paint is back");
+    assert!(px.get(260, 160)[2] > 0.99, "and the canvas paint");
+}

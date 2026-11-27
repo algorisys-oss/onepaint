@@ -1,7 +1,17 @@
 # Handoff
 
-Last updated 2026-11-27. Read this first when picking the work back up,
-then `docs/parity-delta-2026-11-27.md` (happypaint v0.209.0 → v0.212.0, the
+Last updated 2026-11-27. Read this first when picking the work back up.
+
+Latest (2026-11-27, after the v0.212.0 port): save hardening and speed.
+Every user-file write goes through `formats::write_atomic` (temp file,
+fsync, rename). Save runs in the background (`apps/onepaint/src/saving.rs`,
+`Session::prepare_save` → `SaveJob::run`) and reuses a per-session chunk
+cache; tiles encode in parallel; the overflow check no longer scans every
+pixel. Bench `crates/formats/benches/file_io.rs` (2 threads, 2048², 4
+layers): full write 1.34 s → 0.62 s, one-tile save 217 → 47 ms, read
+unchanged at ~0.32 s. Save book still encodes its tabs on the UI thread.
+
+Then `docs/parity-delta-2026-11-27.md` (happypaint v0.209.0 → v0.212.0, the
 2026-11-27 run: all ten items done and committed; still wants a try with a
 real tablet for the pen pressure calibration and the post-snap QuickShape
 drag), `docs/parity-delta-2026-11-12.md` (happypaint v0.204.17 → v0.209.0:

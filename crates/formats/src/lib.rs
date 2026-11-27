@@ -3,6 +3,7 @@
 //! See `docs/specs/05-file-format.md`.
 
 pub mod asl;
+pub mod atomic;
 pub mod book;
 pub mod brushes;
 pub mod export;
@@ -26,6 +27,7 @@ pub use tile_float::{FloatFormat, FloatTile, decode as decode_float_tile, encode
 pub mod video;
 pub mod zip;
 
+pub use atomic::write_atomic;
 pub use image::*;
 pub use progress::Progress;
 
@@ -328,17 +330,21 @@ fn paste_color(s: &mut Surface, x: i32, y: i32, w: u32, h: u32, rgba: &[u8], cli
 /// The layer's pixels outside the canvas as a trimmed straight-sRGB PNG (zero
 /// inside the canvas), or `None` when everything is on the canvas.
 fn overflow_chunk(s: &Surface, doc: Rect, space: Space, float: Option<FloatFormat>) -> Result<Option<(Rect, Vec<u8>)>, FormatError> {
-    let Some(cb) = s.content_bounds() else { return Ok(None) };
-    if cb.x >= doc.x && cb.y >= doc.y && cb.right() <= doc.right() && cb.bottom() <= doc.bottom() {
-        return Ok(None);
-    }
-    let px = s.read_rect(cb);
+    // Only tiles reaching past the canvas can hold overflow; on most drawings
+    // there are none, and no pixel is read (a full content scan cost ~40 ms
+    // a layer at 2048², on every save).
     let (mut x0, mut y0, mut x1, mut y1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
-    for yy in 0..cb.h {
-        for xx in 0..cb.w {
-            let (x, y) = (cb.x + xx, cb.y + yy);
-            if !doc.contains(x, y) && px[((yy * cb.w + xx) * 4 + 3) as usize] > 0.0 {
-                (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+    for ((tx, ty), t) in s.tiles() {
+        let tr = Rect::from_tile(tx, ty);
+        if tr.x >= doc.x && tr.y >= doc.y && tr.right() <= doc.right() && tr.bottom() <= doc.bottom() {
+            continue;
+        }
+        for ly in 0..TILE {
+            for lx in 0..TILE {
+                let (x, y) = (tr.x + lx, tr.y + ly);
+                if !doc.contains(x, y) && t.get(lx as usize, ly as usize)[3] > 0.0 {
+                    (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+                }
             }
         }
     }
@@ -666,6 +672,8 @@ struct Cached {
     /// How the bytes were made: [`Variant`] as a number.
     variant: u8,
     hash: String,
+    /// CRC-32 of `bytes`, for the chunk ref.
+    crc: u32,
     bytes: Arc<[u8]>,
 }
 
@@ -694,6 +702,15 @@ enum Variant {
 /// A chunk's bytes and the ref it was written at.
 type Stored = (Arc<[u8]>, Value);
 
+/// One tile to store: its key, its part of the canvas, and the tile itself
+/// (the cache's identity check).
+struct Job<'a> {
+    tx: i32,
+    ty: i32,
+    clip: Rect,
+    tile: Option<&'a Arc<Tile>>,
+}
+
 struct Writer {
     /// The document's space: 8-bit colour tiles are saved as straight sRGB (spec 50).
     space: Space,
@@ -713,59 +730,83 @@ struct Writer {
 
 impl Writer {
     fn push(&mut self, data: &[u8]) -> Value {
-        let r = json!({"offset": self.chunks.len(), "len": data.len(), "crc": crc32(data)});
+        self.push_crc(data, crc32(data))
+    }
+
+    fn push_crc(&mut self, data: &[u8], crc: u32) -> Value {
+        let r = json!({"offset": self.chunks.len(), "len": data.len(), "crc": crc});
         self.chunks.extend_from_slice(data);
         r
     }
 
-    fn push_dedup(&mut self, hash: &str, bytes: &Arc<[u8]>) -> Value {
+    fn push_dedup(&mut self, hash: &str, bytes: &Arc<[u8]>, crc: u32) -> Value {
         let k = (hash.to_string(), bytes.len());
         if let Some((_, r)) = self.dedup.get(&k).and_then(|v| v.iter().find(|(b, _)| b[..] == bytes[..])) {
             return r.clone();
         }
-        let r = self.push(bytes);
+        let r = self.push_crc(bytes, crc);
         self.dedup.entry(k).or_default().push((bytes.clone(), r.clone()));
         r
     }
 
-    /// One tile's chunk: reused from the last write when the tile, its clip
-    /// and its encoding are unchanged, else encoded by `enc`. `None` from
-    /// `enc` means nothing to store.
-    fn chunk_for(
+    /// The tiles' chunks, in `jobs` order: each reused from the last write
+    /// when the tile, its clip and its encoding are unchanged, the rest
+    /// encoded by `enc` in parallel (encoding is the cost of a save). `None`
+    /// from `enc` means nothing to store. Returns each stored tile's key,
+    /// hash and chunk ref.
+    fn chunks_for(
         &mut self,
         id: &str,
-        (tx, ty, clip): (i32, i32, Rect),
-        tile: Option<&Arc<Tile>>,
         variant: Variant,
-        enc: impl FnOnce() -> Result<Option<Vec<u8>>, FormatError>,
-    ) -> Result<Option<(String, Value)>, FormatError> {
+        jobs: &[Job<'_>],
+        enc: impl Fn(&Job<'_>) -> Result<Option<Vec<u8>>, FormatError> + Sync,
+    ) -> Result<Vec<(i32, i32, String, Value)>, FormatError> {
+        use rayon::prelude::*;
         // A layer's colour, mask and relief tiles each have their own slot.
         let slot = match variant {
             Variant::Mask => 1,
             Variant::Height => 2,
             _ => 0,
         };
-        let key = (id.to_string(), slot, tx, ty);
-        let hit = self.old.map.remove(&key).filter(|c| {
-            c.variant == variant as u8
-                && c.clip == clip
-                && match (&c.tile, tile) {
-                    (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-                    (None, None) => true,
-                    _ => false,
+        let hits: Vec<Option<Cached>> = jobs
+            .iter()
+            .map(|j| {
+                self.old.map.remove(&(id.to_string(), slot, j.tx, j.ty)).filter(|c| {
+                    c.variant == variant as u8
+                        && c.clip == j.clip
+                        && match (&c.tile, j.tile) {
+                            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                            (None, None) => true,
+                            _ => false,
+                        }
+                })
+            })
+            .collect();
+        let fresh: Vec<Option<Cached>> = jobs
+            .par_iter()
+            .zip(hits.par_iter().map(Option::is_some))
+            .map(|(j, hit)| {
+                if hit {
+                    return Ok(None);
                 }
-        });
-        let c = match hit {
-            Some(c) => c,
-            None => {
-                let Some(bytes) = enc()? else { return Ok(None) };
-                Cached { tile: tile.cloned(), clip, variant: variant as u8, hash: fnv_pair(&bytes), bytes: bytes.into() }
-            }
-        };
-        let r = self.push_dedup(&c.hash, &c.bytes);
-        let hash = c.hash.clone();
-        self.new.map.insert(key, c);
-        Ok(Some((hash, r)))
+                Ok(enc(j)?.map(|bytes| Cached {
+                    tile: j.tile.cloned(),
+                    clip: j.clip,
+                    variant: variant as u8,
+                    hash: fnv_pair(&bytes),
+                    crc: crc32(&bytes),
+                    bytes: bytes.into(),
+                }))
+            })
+            .collect::<Result<_, FormatError>>()?;
+        let mut out = Vec::with_capacity(jobs.len());
+        for ((j, hit), new) in jobs.iter().zip(hits).zip(fresh) {
+            let Some(c) = hit.or(new) else { continue };
+            let r = self.push_dedup(&c.hash, &c.bytes, c.crc);
+            out.push((j.tx, j.ty, c.hash.clone(), r));
+            self.new.map.insert((id.to_string(), slot, j.tx, j.ty), c);
+        }
+        Ok(out)
     }
 
     fn tiles(&mut self, id: &str, s: &Surface, doc: Rect, mask: bool) -> Result<Vec<Value>, FormatError> {
@@ -778,32 +819,36 @@ impl Writer {
             (false, None, Space::Gamma) => Variant::ColorGamma,
             (false, None, Space::Linear) => Variant::ColorLinear,
         };
+        let float = if mask { None } else { self.float };
+        let mut jobs = Vec::new();
         for (tx, ty) in doc.tiles() {
-            let Some(r) = doc.intersect(&Rect::from_tile(tx, ty)) else {
+            let Some(clip) = doc.intersect(&Rect::from_tile(tx, ty)) else {
                 continue;
             };
             let tile = s.tile(tx, ty);
             if !mask && tile.is_none_or(|t| t.is_empty()) {
                 continue;
             }
-            let float = if mask { None } else { self.float };
-            let enc = || -> Result<Option<Vec<u8>>, FormatError> {
-                let px = s.read_rect(r);
-                if let Some(fmt) = float {
-                    return tile_float::encode(&px, r.w as u32, r.h as u32, fmt).map(Some);
+            jobs.push(Job { tx, ty, clip, tile });
+        }
+        let enc = |j: &Job<'_>| -> Result<Option<Vec<u8>>, FormatError> {
+            let r = j.clip;
+            let px = s.read_rect(r);
+            if let Some(fmt) = float {
+                return tile_float::encode(&px, r.w as u32, r.h as u32, fmt).map(Some);
+            }
+            let mut rgba = Vec::with_capacity(px.len());
+            for p in px.chunks_exact(4) {
+                if mask {
+                    let m = (p[0].clamp(0.0, 1.0) * 255.0).round_ties_even() as u8;
+                    rgba.extend_from_slice(&[m, m, m, 255]);
+                } else {
+                    rgba.extend_from_slice(&space.to_srgb8([p[0], p[1], p[2], p[3]]));
                 }
-                let mut rgba = Vec::with_capacity(px.len());
-                for p in px.chunks_exact(4) {
-                    if mask {
-                        let m = (p[0].clamp(0.0, 1.0) * 255.0).round_ties_even() as u8;
-                        rgba.extend_from_slice(&[m, m, m, 255]);
-                    } else {
-                        rgba.extend_from_slice(&space.to_srgb8([p[0], p[1], p[2], p[3]]));
-                    }
-                }
-                encode_png_rgba8(r.w as u32, r.h as u32, &rgba).map(Some)
-            };
-            let Some((hash, chunk)) = self.chunk_for(id, (tx, ty, r), tile, variant, enc)? else { continue };
+            }
+            encode_png_rgba8(r.w as u32, r.h as u32, &rgba).map(Some)
+        };
+        for (tx, ty, hash, chunk) in self.chunks_for(id, variant, &jobs, enc)? {
             match float {
                 Some(fmt) => {
                     self.wrote_float = true;
@@ -816,18 +861,17 @@ impl Writer {
     }
 
     fn height_tiles(&mut self, id: &str, h: &Surface, doc: Rect) -> Result<Vec<Value>, FormatError> {
-        let mut out = Vec::new();
+        let mut jobs = Vec::new();
         for (tx, ty) in doc.tiles() {
             let tile = h.tile(tx, ty);
             if tile.is_none_or(|t| t.is_empty()) {
                 continue;
             }
-            let Some(r) = doc.intersect(&Rect::from_tile(tx, ty)) else { continue };
-            if let Some((hash, chunk)) = self.chunk_for(id, (tx, ty, r), tile, Variant::Height, || encode_height_png(h, r))? {
-                out.push(json!({"key": pack_key(tx, ty), "hash": hash, "chunk": chunk}));
-            }
+            let Some(clip) = doc.intersect(&Rect::from_tile(tx, ty)) else { continue };
+            jobs.push(Job { tx, ty, clip, tile });
         }
-        Ok(out)
+        let stored = self.chunks_for(id, Variant::Height, &jobs, |j| encode_height_png(h, j.clip))?;
+        Ok(stored.into_iter().map(|(tx, ty, hash, chunk)| json!({"key": pack_key(tx, ty), "hash": hash, "chunk": chunk})).collect())
     }
 
     fn node(&mut self, n: &Node, doc: Rect) -> Result<Value, FormatError> {

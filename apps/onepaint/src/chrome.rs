@@ -663,7 +663,7 @@ fn brush_files(app: &mut App, ui: &mut Ui) {
             {
                 match onepaint_formats::brushes::export_happybrush(&b)
                     .map_err(|e| e.to_string())
-                    .and_then(|bytes| std::fs::write(&path, bytes).map_err(|e| e.to_string()))
+                    .and_then(|bytes| onepaint_formats::write_atomic(&path, &bytes).map_err(|e| e.to_string()))
                 {
                     Ok(()) => app.notify(format!("Exported {}", path.display()), now),
                     Err(e) => app.notify(format!("Export failed: {e}"), now),
@@ -827,7 +827,7 @@ fn palette_section(app: &mut App, ui: &mut Ui) {
                     .save_file()
                 {
                     let bytes = onepaint_formats::palette::export_swatches(&active.name, &active.colors);
-                    match std::fs::write(&path, bytes) {
+                    match onepaint_formats::write_atomic(&path, &bytes) {
                         Ok(()) => app.notify(format!("Exported {}", path.display()), now),
                         Err(e) => app.notify(format!("Export failed: {e}"), now),
                     }
@@ -1275,9 +1275,10 @@ fn confirm(app: &mut App, ui: &mut Ui) {
     ui.add_space(12.0);
     ui.horizontal(|ui| {
         if widgets::primary_button(ui, "Save", 90.0).clicked() {
-            app.save(false, now);
-            if !app.dirty() {
-                app.perform(action, ui.ctx());
+            // The action runs once the background save has written the file.
+            if app.save_then(false, Some(action), now) {
+                app.pending = None;
+                app.popover = None;
             }
         }
         if widgets::secondary_button(ui, "Discard", 90.0).clicked() {

@@ -130,7 +130,13 @@ fn mono(ui: &mut Ui, text: impl Into<String>, color: egui::Color32) -> egui::Res
 fn left(app: &mut App, ui: &mut Ui, compact: bool) {
     let t = Tokens::get(ui.ctx());
     let dirty = app.dirty();
-    let (label, color) = if dirty { ("Unsaved", t.warning) } else { ("Saved", t.success) };
+    let (label, color) = if app.is_saving() {
+        ("Saving…", t.accent)
+    } else if dirty {
+        ("Unsaved", t.warning)
+    } else {
+        ("Saved", t.success)
+    };
     let (dot, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
     ui.painter().circle_filled(dot.center(), 3.5, color);
     ui.label(RichText::new(label).font(theme::medium(11.5)).color(t.fg_muted)).on_hover_text(label);

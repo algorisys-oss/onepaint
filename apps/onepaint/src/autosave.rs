@@ -210,9 +210,7 @@ fn write_cached(path: &Path, doc: &onepaint_doc::Document, cache: &mut onepaint_
         std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
     }
     let bytes = onepaint_formats::write_happypaint_cached(doc, None, onepaint_engine::APP_VERSION, cache).map_err(|e| e.to_string())?;
-    let tmp = path.with_extension("happypaint.tmp");
-    std::fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+    onepaint_formats::write_atomic(path, &bytes).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

@@ -42,6 +42,7 @@ mod pen_pressure_ui;
 mod press;
 mod progressive;
 mod reference;
+mod saving;
 mod settings;
 mod status_bar;
 mod style_presets;
@@ -311,6 +312,8 @@ pub struct App {
     pub debug: debug::Debug,
     title: String,
     pub pending: Option<Pending>,
+    /// A save running in the background.
+    pub saving: Option<saving::Saving>,
     pub last_select_tool: Tool,
     pub last_symmetry: onepaint_engine::SymmetryMode,
     xform_layer: Option<String>,
@@ -436,6 +439,7 @@ impl App {
             debug,
             title: String::new(),
             pending: None,
+            saving: None,
             last_select_tool: Tool::SelectRect,
             last_symmetry: onepaint_engine::SymmetryMode::Vertical,
             xform_layer: None,
@@ -611,7 +615,7 @@ impl App {
         }
         let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Chapter").to_string();
         let bytes = onepaint_formats::book::encode_book(&name, &names, &pages, concat!("onepaint ", env!("CARGO_PKG_VERSION")));
-        match bytes.map_err(|e| e.to_string()).and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string())) {
+        match bytes.map_err(|e| e.to_string()).and_then(|b| onepaint_formats::write_atomic(&path, &b).map_err(|e| e.to_string())) {
             Ok(()) => {
                 self.gallery.touch(&path);
                 self.notify(format!("Saved {} pages to {}", names.len(), path.display()), now);
@@ -858,6 +862,22 @@ impl App {
     }
 
     pub fn save(&mut self, as_new: bool, now: f64) {
+        let _ = self.save_then(as_new, None, now);
+    }
+
+    /// Whether a save is running.
+    pub fn is_saving(&self) -> bool {
+        self.saving.is_some()
+    }
+
+    /// Save, then do `then` once the file is written (the unsaved-changes
+    /// prompt). The encode and write run in the background (`saving`).
+    /// False when nothing started (cancelled, or a save already running).
+    pub fn save_then(&mut self, as_new: bool, then: Option<Pending>, now: f64) -> bool {
+        if self.saving.is_some() {
+            self.notify("Still saving…", now);
+            return false;
+        }
         let path = match (&self.path, as_new) {
             (Some(p), false) => Some(p.clone()),
             _ => rfd::FileDialog::new()
@@ -865,20 +885,41 @@ impl App {
                 .set_file_name(format!("{}.happypaint", self.session.doc().name))
                 .save_file(),
         };
-        let Some(path) = path else { return };
+        let Some(path) = path else { return false };
         if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
             self.session.doc_mut_meta().name = stem.to_string();
         }
-        match self.session.save_happypaint().map_err(|e| e.to_string()).and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string())) {
-            Ok(()) => {
-                self.saved_history_len = Some(self.session.history_len());
-                let id = self.session.doc().id.clone();
-                self.autosave.clear(&id);
-                self.notify(format!("Saved {}", path.display()), now);
-                self.gallery.touch(&path);
-                self.path = Some(path);
-            }
-            Err(e) => self.notify(format!("Save failed: {e}"), now),
+        let job = self.session.prepare_save();
+        let (id, len) = (self.session.doc().id.clone(), self.session.history_len());
+        let mut s = saving::Saving::start(job, path, id, len);
+        s.then = then;
+        self.saving = Some(s);
+        true
+    }
+
+    /// A background save finished: mark its drawing saved (as it was when
+    /// snapshotted), wherever its tab is now.
+    fn finish_saving(&mut self, result: Result<(), String>, ctx: &egui::Context) {
+        let now = ctx.input(|i| i.time);
+        let Some(s) = self.saving.take() else { return };
+        if let Err(e) = result {
+            return self.notify(format!("Save failed: {e}"), now);
+        }
+        if self.session.doc().id == s.doc_id {
+            self.saved_history_len = Some(s.history_len);
+            self.path = Some(s.path.clone());
+        } else if let Some(slot) = self.tabs.iter_mut().flatten().find(|t| t.session.doc().id == s.doc_id) {
+            slot.saved_history_len = Some(s.history_len);
+            slot.path = Some(s.path.clone());
+        }
+        self.autosave.clear(&s.doc_id);
+        self.notify(format!("Saved {}", s.path.display()), now);
+        self.gallery.touch(&s.path);
+        if let Some(action) = s.then
+            && self.session.doc().id == s.doc_id
+            && !self.dirty()
+        {
+            self.perform(action, ctx);
         }
     }
 
@@ -899,7 +940,7 @@ impl App {
         else {
             return;
         };
-        match rec.to_bytes().map_err(|e| e.to_string()).and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string())) {
+        match rec.to_bytes().map_err(|e| e.to_string()).and_then(|b| onepaint_formats::write_atomic(&path, &b).map_err(|e| e.to_string())) {
             Ok(()) => self.notify(format!("Saved {}", path.display()), now),
             Err(e) => self.notify(format!("Save failed: {e}"), now),
         }
@@ -960,7 +1001,7 @@ impl App {
         };
         let gif = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("gif"));
         let bytes = if gif { replay.timelapse_gif() } else { replay.timelapse_mp4() };
-        match bytes.map_err(|e| e.to_string()).and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string())) {
+        match bytes.map_err(|e| e.to_string()).and_then(|b| onepaint_formats::write_atomic(&path, &b).map_err(|e| e.to_string())) {
             Ok(()) => self.notify(format!("Exported {}", path.display()), now),
             Err(e) => self.notify(format!("Export failed: {e}"), now),
         }
@@ -1020,7 +1061,7 @@ impl App {
             AnimFormat::Mp4 => self.session.export_mp4(None, range_only),
             AnimFormat::PngZip => self.session.export_png_sequence(None, range_only),
         };
-        match bytes.map_err(|e| e.to_string()).and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string())) {
+        match bytes.map_err(|e| e.to_string()).and_then(|b| onepaint_formats::write_atomic(&path, &b).map_err(|e| e.to_string())) {
             Ok(()) => self.notify(format!("Exported {}", path.display()), now),
             Err(e) => self.notify(format!("Export failed: {e}"), now),
         }
@@ -1032,7 +1073,12 @@ impl App {
         else {
             return;
         };
-        match self.session.export_psd().map_err(|e| e.to_string()).and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string())) {
+        match self
+            .session
+            .export_psd()
+            .map_err(|e| e.to_string())
+            .and_then(|b| onepaint_formats::write_atomic(&path, &b).map_err(|e| e.to_string()))
+        {
             Ok(()) => self.notify(format!("Exported {}", path.display()), now),
             Err(e) => self.notify(format!("Export failed: {e}"), now),
         }
@@ -1057,7 +1103,7 @@ impl App {
             .session
             .export_image_with(&opts, press::active(&self.press))
             .map_err(|e| e.to_string())
-            .and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string()))
+            .and_then(|b| onepaint_formats::write_atomic(&path, &b).map_err(|e| e.to_string()))
         {
             Ok(()) => self.notify(format!("Exported {}", path.display()), now),
             Err(e) => self.notify(format!("Export failed: {e}"), now),
@@ -1090,7 +1136,12 @@ impl App {
         else {
             return;
         };
-        match self.session.export_png().map_err(|e| e.to_string()).and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string())) {
+        match self
+            .session
+            .export_png()
+            .map_err(|e| e.to_string())
+            .and_then(|b| onepaint_formats::write_atomic(&path, &b).map_err(|e| e.to_string()))
+        {
             Ok(()) => self.notify(format!("Exported {}", path.display()), now),
             Err(e) => self.notify(format!("Export failed: {e}"), now),
         }
@@ -1535,6 +1586,12 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self) {
+        // A save in flight finishes before the app goes.
+        if let Some(s) = self.saving.take()
+            && let Err(e) = s.wait()
+        {
+            log::error!("save on exit failed: {e}");
+        }
         // The tablet borrows the window's handles: let go before it closes.
         self.tablet = None;
     }
@@ -1557,6 +1614,12 @@ impl eframe::App for App {
         }
         if let Some(outcome) = self.loading.as_ref().and_then(loading::Loading::poll) {
             self.finish_loading(outcome, ctx.input(|i| i.time));
+        }
+        if let Some(s) = &self.saving {
+            match s.poll() {
+                Some(r) => self.finish_saving(r, &ctx),
+                None => ctx.request_repaint_after(std::time::Duration::from_millis(30)),
+            }
         }
         let (space, r) = self.shortcuts(&ctx);
         let rect = ui.max_rect();
@@ -3868,6 +3931,45 @@ pub(crate) mod tests {
         wait_loaded(&mut h);
         assert!(h.state().toast.as_ref().is_some_and(|(m, _)| m.starts_with("Couldn't open")));
         assert_eq!(h.state().session.doc().id, before);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Save runs in the background; painting goes on, and an edit made
+    /// meanwhile stays unsaved. The file is written whole.
+    #[test]
+    fn save_runs_in_the_background_and_then_does_what_was_asked() {
+        let mut h = harness();
+        h.run();
+        let dir = std::env::temp_dir().join(format!("onepaint-bgsave-{}", onepaint_doc::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bg.happypaint");
+        let _ = h.state_mut().session.execute(Command::AddLayer);
+        h.state_mut().path = Some(path.clone());
+        let saved_len = h.state().session.history_len();
+        let nodes = h.state().session.doc().root.len();
+        h.state_mut().save(false, 0.0);
+        assert!(h.state().is_saving());
+        let _ = h.state_mut().session.execute(Command::AddLayer);
+        let finish = |h: &mut Harness<'_, App>| {
+            for _ in 0..400 {
+                if !h.state().is_saving() {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                h.step();
+            }
+            panic!("the save never finished");
+        };
+        finish(&mut h);
+        assert_eq!(h.state().saved_history_len, Some(saved_len));
+        assert!(h.state().dirty(), "the layer added during the save is unsaved");
+        let back = onepaint_formats::read_happypaint(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(back.root.len(), nodes, "the drawing as it was when saved");
+        // The unsaved-changes prompt's Save: New runs once the file is written.
+        assert!(h.state_mut().save_then(false, Some(Pending::New(120, 90)), 0.0));
+        finish(&mut h);
+        assert_eq!(h.state().session.doc().width, 120);
+        assert_eq!(onepaint_formats::read_happypaint(&std::fs::read(&path).unwrap()).unwrap().root.len(), nodes + 1);
         let _ = std::fs::remove_dir_all(dir);
     }
 

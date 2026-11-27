@@ -424,7 +424,33 @@ impl Preferences {
     }
 }
 
+/// A save's slow part, made by [`Session::prepare_save`]: the thumbnail
+/// composite and the encode. It owns a snapshot of the document (tiles are
+/// shared copy-on-write), so it runs on any thread while editing goes on.
+pub struct SaveJob {
+    doc: onepaint_doc::Document,
+    /// What the thumbnail composites, when it differs from `doc` (smart
+    /// filters applied, spatial adjustments rendered).
+    shown: Option<onepaint_doc::Document>,
+    cache: std::sync::Arc<std::sync::Mutex<onepaint_formats::ChunkCache>>,
+}
+
+impl SaveJob {
+    /// The `.happypaint` bytes. Tiles unchanged since this session's last
+    /// save reuse their encoded chunks.
+    pub fn run(self) -> Result<Vec<u8>, EngineError> {
+        let mut flat = onepaint_compose::flatten(self.shown.as_ref().unwrap_or(&self.doc), None);
+        self.doc.space().convert(&mut flat, onepaint_color::Space::Linear);
+        let thumb = onepaint_formats::thumbnail_jpeg(&flat, self.doc.width, self.doc.height, 320, 240).ok();
+        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        Ok(onepaint_formats::write_happypaint_cached(&self.doc, thumb.as_deref(), APP_VERSION, &mut cache)?)
+    }
+}
+
 pub struct Session {
+    /// Encoded chunks from the last save, so the next re-encodes only
+    /// changed tiles. Shared with a [`SaveJob`] running elsewhere.
+    save_cache: std::sync::Arc<std::sync::Mutex<onepaint_formats::ChunkCache>>,
     /// Panel coverage kept between frames' plans (spec 44).
     plan_cache: onepaint_compose::program::PlanCache,
     /// A happypaint recording's layer ids → onepaint's (spec 62 replay).
@@ -581,6 +607,7 @@ impl Session {
             mixer_patch: None,
             mixer_patch_gen: 0,
             plan_cache: Default::default(),
+            save_cache: Default::default(),
             happy_ids: Default::default(),
         };
         s.load_saved_selections();
@@ -842,8 +869,16 @@ impl Session {
         &self.guides
     }
 
-    /// Serialise the document as `.happypaint` v9 with a JPEG thumbnail.
+    /// Serialise the document as `.happypaint` with a JPEG thumbnail.
     pub fn save_happypaint(&mut self) -> Result<Vec<u8>, EngineError> {
+        self.prepare_save().run()
+    }
+
+    /// The quick part of a save, on the editing thread: settle what's in
+    /// progress (a transform, wet paint), store guides, saved selections and
+    /// animation into the document, and snapshot it. [`SaveJob::run`] does
+    /// the rest anywhere.
+    pub fn prepare_save(&mut self) -> SaveJob {
         self.commit_transform();
         self.dry_wet();
         if self.guides.configured() {
@@ -854,9 +889,11 @@ impl Session {
         self.store_saved_selections();
         self.store_anim();
         self.doc.touch();
-        let flat = self.flatten_linear();
-        let thumb = onepaint_formats::thumbnail_jpeg(&flat, self.doc.width, self.doc.height, 320, 240).ok();
-        Ok(onepaint_formats::write_happypaint(&self.doc, thumb.as_deref(), APP_VERSION)?)
+        let shown = match self.flatten_doc() {
+            std::borrow::Cow::Owned(d) => Some(d),
+            std::borrow::Cow::Borrowed(_) => None,
+        };
+        SaveJob { doc: self.doc.clone(), shown, cache: self.save_cache.clone() }
     }
 
     /// What you see (the current animation frame, without onion ghosts), encoded.

@@ -29,3 +29,8 @@ rayon = { workspace = true }
 [dev-dependencies]
 openh264 = { workspace = true }
 onepaint-compose = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "file_io"
+harness = false
