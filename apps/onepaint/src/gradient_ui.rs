@@ -51,6 +51,34 @@ struct Target {
     reverse: bool,
 }
 
+/// What the Colour panel's picker edits (happypaint v0.211.11). It edits the
+/// foreground, except while a gradient editor shows a selected stop: a Bg
+/// stop routes it to the background, a Colour stop (or any stop of a Gradient
+/// fill layer) to that stop's own colour.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PickerTarget {
+    Fg,
+    Bg,
+    Stop([f64; 3]),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PickerRoute {
+    pub target: PickerTarget,
+    /// The frame the editor last showed; a stale route edits the foreground.
+    pub pass: u64,
+}
+
+impl App {
+    /// Where the picker writes this frame.
+    pub fn picker_target(&self, pass: u64) -> PickerTarget {
+        match self.picker_route {
+            Some(r) if r.pass + 1 >= pass => r.target,
+            _ => PickerTarget::Fg,
+        }
+    }
+}
+
 /// Apply one editor action to the stops; the selected stop after it.
 fn apply(stops: &mut Vec<ColorStop>, e: GradEdit, fg: [f64; 3], bg: [f64; 3], sel: usize) -> usize {
     match e {
@@ -118,6 +146,16 @@ fn editor(app: &mut App, ui: &mut Ui, mut tg: Target, layer: bool) -> Option<(Ta
         })
         .collect();
     let mut sel = app.gradient_sel.min(tg.stops.len().saturating_sub(1));
+    // A colour the Colour panel picked for the selected stop.
+    if let Some(c) = app.stop_pick.take()
+        && let Some(s) = tg.stops.get_mut(sel)
+        && (layer || s.source == StopSource::Fixed)
+    {
+        (s.source, s.color) = (StopSource::Fixed, c);
+        changed = true;
+        // Dragging in the picker is one undo step, sealed on release.
+        done = !ui.input(|i| i.pointer.any_down());
+    }
     let (_, edit) = gradient_editor(ui, &ed, &mut sel, "Gradient");
     if let Some(e) = edit {
         sel = apply(&mut tg.stops, e, fg, bg, sel);
@@ -179,6 +217,15 @@ fn editor(app: &mut App, ui: &mut Ui, mut tg: Target, layer: bool) -> Option<(Ta
         }
     });
     app.gradient_sel = sel;
+    if let Some(s) = tg.stops.get(sel) {
+        let target = match s.source {
+            _ if layer => PickerTarget::Stop(s.color),
+            StopSource::Fg => PickerTarget::Fg,
+            StopSource::Bg => PickerTarget::Bg,
+            StopSource::Fixed => PickerTarget::Stop(s.color),
+        };
+        app.picker_route = Some(PickerRoute { target, pass: ui.ctx().cumulative_pass_nr() });
+    }
     changed.then_some((tg, done))
 }
 

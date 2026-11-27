@@ -44,14 +44,14 @@ fn stroke_shape_fills_under_the_outline_in_one_step() {
     let mut s = Session::new(120, 120, None);
     s.execute(Command::SetColor { rgba: Rgba::new(1.0, 0.0, 0.0, 1.0) }).unwrap();
     let n = s.history_len();
-    s.stroke_shape(&Shape::Rect { cx: 60.0, cy: 60.0, hw: 40.0, hh: 30.0 }, true);
+    s.stroke_shape(&Shape::Rect { cx: 60.0, cy: 60.0, hw: 40.0, hh: 30.0, rot: 0.0 }, true);
     assert_eq!(s.history_len(), n + 1);
     assert!(px(&s, 60, 60)[3] > 0.99, "filled");
     assert!(px(&s, 20, 60)[3] > 0.5, "outline on the left edge");
     assert_eq!(px(&s, 5, 5)[3], 0.0);
     s.execute(Command::Undo).unwrap();
     assert_eq!(px(&s, 60, 60)[3], 0.0);
-    s.stroke_shape(&Shape::Ellipse { cx: 60.0, cy: 60.0, rx: 40.0, ry: 40.0 }, false);
+    s.stroke_shape(&Shape::Ellipse { cx: 60.0, cy: 60.0, rx: 40.0, ry: 40.0, rot: 0.0 }, false);
     assert_eq!(px(&s, 60, 60)[3], 0.0, "outline only");
     assert!(px(&s, 100, 60)[3] > 0.5);
 }

@@ -688,12 +688,40 @@ fn color(app: &mut App, ui: &mut Ui) {
     if app.settings.color_mix_mode {
         mix_section(app, ui);
     } else {
-        let mut hsv = app.hsv;
-        if widgets::color_picker(ui, &mut hsv, 256.0) {
-            app.hsv = hsv;
-            let c = hsv.to_rgba();
-            let _ = app.session.execute(Command::SetColor { rgba: c });
-            app.hex = c.to_hex();
+        use crate::gradient_ui::PickerTarget;
+        let target = app.picker_target(ui.ctx().cumulative_pass_nr());
+        match target {
+            PickerTarget::Fg => {
+                let mut hsv = app.hsv;
+                if widgets::color_picker(ui, &mut hsv, 256.0) {
+                    app.hsv = hsv;
+                    let c = hsv.to_rgba();
+                    let _ = app.session.execute(Command::SetColor { rgba: c });
+                    app.hex = c.to_hex();
+                }
+            }
+            // A selected gradient stop takes what is picked (happypaint v0.211.11).
+            PickerTarget::Bg | PickerTarget::Stop(_) => {
+                let label =
+                    if target == PickerTarget::Bg { "Editing the background (the Bg stop)" } else { "Editing the selected gradient stop" };
+                ui.label(RichText::new(label).font(theme::medium(10.5)).color(t.accent));
+                let shown = match target {
+                    PickerTarget::Stop(c) => onepaint_color::Rgba::new(c[0] as f32, c[1] as f32, c[2] as f32, 1.0),
+                    _ => app.canvas.options.background,
+                };
+                // Keep the picker's hue on greys, as the foreground does.
+                let id = ui.id().with("stop-hsv");
+                let kept: Option<widgets::Hsv> = ui.data(|d| d.get_temp(id));
+                let mut hsv = kept.filter(|h| h.to_rgba().to_hex() == shown.to_hex()).unwrap_or_else(|| widgets::Hsv::from_rgba(shown));
+                if widgets::color_picker(ui, &mut hsv, 256.0) {
+                    let c = hsv.to_rgba();
+                    match target {
+                        PickerTarget::Bg => app.canvas.options.background = c,
+                        _ => app.stop_pick = Some([c.r as f64, c.g as f64, c.b as f64]),
+                    }
+                }
+                ui.data_mut(|d| d.insert_temp(id, hsv));
+            }
         }
     }
     ui.add_space(6.0);
@@ -1277,6 +1305,7 @@ pub fn panel_body(app: &mut App, ui: &mut Ui, id: PanelId) {
         PanelId::Reference => crate::reference::body(app, ui),
         PanelId::Properties => properties(app, ui),
         PanelId::ToolOptions => tool_options(app, ui),
+        PanelId::Text => crate::text_ui::panel(app, ui),
     }
 }
 
@@ -1782,6 +1811,7 @@ fn export_dialog(app: &mut App, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     ui.set_width(340.0);
     widgets::section_label(ui, "Export");
+    crate::export_preview_ui::show(app, ui);
     let formats = [F::Png, F::Jpeg, F::Tiff, F::Ppm];
     let (opts, psd) = (&mut app.export_opts, &mut app.export_psd);
     let cur = if *psd { 4 } else { formats.iter().position(|f| *f == opts.format).unwrap_or(0) };

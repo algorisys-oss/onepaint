@@ -22,6 +22,8 @@ const TIP_THUMB: usize = 34;
 /// A stroke in progress on the try-it pad.
 struct TryStroke {
     eng: StrokeEngine,
+    /// Pressure as the canvas reads it: through the user's pen curve.
+    pressure: onepaint_input::PressureProvider,
     buf: Surface,
     opacity: f32,
 }
@@ -239,7 +241,18 @@ fn try_pad(app: &mut App, ui: &mut Ui, size: Vec2) {
         st.pad_size = [w, h];
         st.clear_pad();
     }
-    let local = |p: egui::Pos2| StrokePoint::at((p.x - rect.left()) as f64, (p.y - rect.top()) as f64, 0.5, now);
+    // A pen's force this frame (tablet samples arrive as touches with force).
+    let force = ui.input(|i| {
+        i.events.iter().rev().find_map(|e| match e {
+            egui::Event::Touch { force: Some(f), .. } => Some(*f as f64),
+            _ => None,
+        })
+    });
+    let curve = app.settings.pen_curve;
+    let local = |p: egui::Pos2, pr: &mut onepaint_input::PressureProvider| {
+        let pressure = pr.pressure(p.x as f64, p.y as f64, now, force);
+        StrokePoint::at((p.x - rect.left()) as f64, (p.y - rect.top()) as f64, pressure, now)
+    };
     let primary = ui.input(|i| i.pointer.primary_down() || i.pointer.primary_released());
     if resp.drag_started()
         && primary
@@ -249,11 +262,13 @@ fn try_pad(app: &mut App, ui: &mut Ui, size: Vec2) {
         st.seed = st.seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
         let opacity = brush.opacity as f32;
         let mut eng = StrokeEngine::new(brush, color, st.seed);
+        let kind = if force.is_some() { onepaint_input::PointerKind::Pen } else { onepaint_input::PointerKind::Mouse };
+        let mut pressure = onepaint_input::PressureProvider::with_curve(kind, curve);
         let mut buf = Surface::new();
-        for d in eng.begin(local(p)) {
+        for d in eng.begin(local(p, &mut pressure)) {
             eng.rasterize(&mut buf, &d, None);
         }
-        st.stroke = Some(TryStroke { eng, buf, opacity });
+        st.stroke = Some(TryStroke { eng, pressure, buf, opacity });
         st.pad_dirty = true;
         st.pad_empty = false;
     }
@@ -262,7 +277,7 @@ fn try_pad(app: &mut App, ui: &mut Ui, size: Vec2) {
         if resp.dragged()
             && let Some(p) = resp.interact_pointer_pos()
         {
-            dabs.extend(s.eng.add(local(p)));
+            dabs.extend(s.eng.add(local(p, &mut s.pressure)));
         }
         dabs.extend(s.eng.airbrush_tick(now));
         if resp.drag_stopped() || !resp.dragged() {

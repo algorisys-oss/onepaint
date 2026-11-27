@@ -13,7 +13,7 @@ use onepaint_input::{PointerKind, PressureProvider};
 use onepaint_raster::Tile;
 use onepaint_selection::{Pt, constrain_45, constrain_square, ellipse_polygon, rect_polygon};
 use onepaint_stroke::StrokePoint;
-use onepaint_stroke::shape::{DragOpts, Shape, ShapeKind, drag_shape, recognize, sample_path};
+use onepaint_stroke::shape::{DragOpts, Shape, ShapeKind, drag_shape, hold_drag_shape, recognize, sample_path};
 use onepaint_ui_kit::Tokens;
 use std::sync::Arc;
 
@@ -381,7 +381,27 @@ struct HoldTracker {
     fired: bool,
     /// Quick-shape applies to brush and eraser strokes only.
     enabled: bool,
+    /// After the snap, the pen still down reshapes the shape.
+    drag: Option<ShapeHoldDrag>,
 }
+
+/// QuickShape with the pen still down after the snap (happypaint v0.211.5):
+/// a line's end follows the pen, a closed shape scales and turns about its
+/// centre (`hold_drag_shape`).
+struct ShapeHoldDrag {
+    /// The pen at the snap, canvas-local; the drag goes live past the slop.
+    client: Pos2,
+    from: Pt,
+    base: Shape,
+    live: bool,
+    /// The pen's last document point and the Shift state it was drawn with,
+    /// so Shift pressed under a still pen applies at once (v0.211.6).
+    at: Option<(Pt, bool)>,
+}
+
+/// Screen px the pen may wander after a snap before it reshapes the shape,
+/// so the hand that held still to trigger it can't smear it.
+const HOLD_DRAG_SLOP: f32 = 8.0;
 
 pub struct Canvas {
     pub view: View,
@@ -392,6 +412,8 @@ pub struct Canvas {
     poly: Option<(Vec<Pt>, SelectMode)>,
     pressure: Option<PressureProvider>,
     last_pen_force: Option<f32>,
+    /// The user's pen pressure curve (Settings ▸ Brush ▸ Pen pressure).
+    pub pen_curve: onepaint_input::PenCurve,
     /// Tablet samples for this frame's pointer moves, in order (pressure,
     /// tilt and twist per sample; matched by position).
     pub pen_queue: std::collections::VecDeque<(Pos2, onepaint_input::tablet::PenSample)>,
@@ -482,6 +504,7 @@ impl Canvas {
             poly: None,
             pressure: None,
             last_pen_force: None,
+            pen_curve: Default::default(),
             pen_queue: Default::default(),
             pen_down: false,
             pen_at: Pos2::ZERO,
@@ -912,7 +935,7 @@ impl Canvas {
             Tool::Brush if self.options.fill_shape => Drag::FillShape { points: vec![d] },
             Tool::Brush | Tool::Eraser | Tool::Smudge | Tool::Mixer | Tool::Liquify => {
                 let kind = if self.last_pen_force.is_some() { PointerKind::Pen } else { PointerKind::Mouse };
-                self.pressure = Some(PressureProvider::new(kind));
+                self.pressure = Some(PressureProvider::with_curve(kind, self.pen_curve));
                 if matches!(tool, Tool::Brush | Tool::Eraser) && session.guides().hard_perspective(self.persp_editing) {
                     session.stroke_cancel();
                     return Drag::PerspLine { origin: d };
@@ -938,7 +961,7 @@ impl Canvas {
                 let enabled = matches!(tool, Tool::Brush | Tool::Eraser);
                 let mut idle = onepaint_input::idle_hold::IdleHold::new(QUICK_SHAPE_HOLD_MS);
                 idle.arm(time_ms);
-                self.hold = HoldTracker { points: vec![d], anchor: p, idle, fired: false, enabled };
+                self.hold = HoldTracker { points: vec![d], anchor: p, idle, fired: false, enabled, drag: None };
                 Drag::Paint
             }
             Tool::Pen => self.pen_press(session, p, d, m, time_ms),
@@ -1215,7 +1238,24 @@ impl Canvas {
                     match &mut self.drag {
                         Drag::Paint => {
                             if self.hold.fired {
-                                // A quick-shape replaced the stroke; further motion is ignored.
+                                // A quick-shape replaced the stroke; the pen reshapes it.
+                                if let Some(hd) = self.hold.drag.as_mut() {
+                                    if !hd.live && p.distance(hd.client) >= HOLD_DRAG_SLOP {
+                                        hd.live = true;
+                                        // A line's end belongs under the pen, so it jumps
+                                        // the slop; a closed shape would pop in size, so
+                                        // it measures from where the pen left the slop.
+                                        if !matches!(hd.base, Shape::Line { .. }) {
+                                            hd.from = d;
+                                            hd.at = Some((d, shift));
+                                        }
+                                    }
+                                    if hd.live && hd.at != Some((d, shift)) {
+                                        hd.at = Some((d, shift));
+                                        let sh = hold_drag_shape(&hd.base, hd.from, d, shift);
+                                        Self::preview_shape(session, &sh);
+                                    }
+                                }
                             } else {
                                 let mut sp = self.stroke_point(p, time_ms, self.last_pen_force);
                                 if let Some(s) = self.snapper.as_mut() {
@@ -1525,10 +1565,24 @@ impl Canvas {
                 self.hold.fired = true;
                 if let Some(sh) = recognize(&self.hold.points, shift) {
                     Self::preview_shape(session, &sh);
+                    let client = self.last_pos.unwrap_or(self.hold.anchor);
+                    let from = self.doc_pt(client);
+                    self.hold.drag = Some(ShapeHoldDrag { client, from, base: sh, live: false, at: None });
                 }
             } else if let Some(ms) = self.hold.idle.due_in(time_ms) {
                 ui.ctx().request_repaint_after(std::time::Duration::from_millis(ms.clamp(1.0, 60.0) as u64));
             }
+        }
+        // Shift pressed or released under a still pen applies at once (v0.211.6).
+        if matches!(self.drag, Drag::Paint)
+            && let Some(hd) = self.hold.drag.as_mut()
+            && let Some((d, was)) = hd.at
+            && hd.live
+            && was != shift
+        {
+            hd.at = Some((d, shift));
+            let sh = hold_drag_shape(&hd.base, hd.from, d, shift);
+            Self::preview_shape(session, &sh);
         }
         if resp.hovered() {
             let (scroll, zoom, rot) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.rotation_delta()));

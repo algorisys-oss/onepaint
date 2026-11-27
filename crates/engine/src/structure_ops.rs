@@ -4,6 +4,15 @@
 
 use super::*;
 
+/// A group made around existing layers passes through (happypaint
+/// v0.211.11): a Color Dodge layer keeps blending with the painting below
+/// once grouped, as in Procreate and Photoshop. Add Group stays Normal.
+fn pass_through_group(name: &str) -> Group {
+    let mut g = Group::new(name);
+    g.blend_mode = onepaint_doc::BlendMode::PassThrough;
+    g
+}
+
 impl Session {
     /// Put the node in a new group in its place; the node stays active.
     pub(crate) fn group_node(&mut self, id: &str) -> Result<(), EngineError> {
@@ -12,7 +21,7 @@ impl Session {
         let name = self.next_group_name();
         self.tree_edit(None, |s| {
             let (node, parent, _) = s.doc.remove(id).ok_or_else(|| EngineError::NoSuchLayer(id.into()))?;
-            let mut g = Group::new(&name);
+            let mut g = pass_through_group(&name);
             g.children = vec![node];
             s.doc.insert(parent.as_deref(), index, Node::Group(g));
             Ok(())
@@ -67,7 +76,7 @@ impl Session {
         let at = top + 1 - picks.len();
         let name = self.next_group_name();
         self.tree_edit(None, |s| {
-            let mut g = Group::new(&name);
+            let mut g = pass_through_group(&name);
             // Bottom to top, as they stacked.
             for (_, id) in &picks {
                 let (node, _, _) = s.doc.remove(id).ok_or_else(|| EngineError::NoSuchLayer(id.clone()))?;

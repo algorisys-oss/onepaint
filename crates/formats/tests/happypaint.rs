@@ -7,21 +7,22 @@ use std::path::PathBuf;
 
 #[test]
 fn header_bytes() {
-    assert_eq!(header(6, 1234), [0x48, 0x50, 0x4E, 0x54, 0x06, 0x00, 0x00, 0x00, 0xD2, 0x04, 0x00, 0x00]);
+    assert_eq!(header(6, 0, 1234), [0x48, 0x50, 0x4E, 0x54, 0x06, 0x00, 0x00, 0x00, 0xD2, 0x04, 0x00, 0x00]);
+    assert_eq!(header(9, FLAG_CHECKSUMS, 1)[6..8], [0x01, 0x00]);
 }
 
 #[test]
 fn rejects_bad_magic_version_and_bounds() {
     assert!(matches!(read_happypaint(b"NOPE00000000"), Err(FormatError::BadMagic)));
-    let mut next = header(VERSION + 1, 0).to_vec();
+    let mut next = header(VERSION + 1, 0, 0).to_vec();
     next.extend_from_slice(&[0; 4]);
     assert!(matches!(read_happypaint(&next), Err(FormatError::UnsupportedVersion(v)) if v == VERSION + 1));
-    assert!(read_happypaint(&header(9, 999)).is_err());
+    assert!(read_happypaint(&header(9, 0, 999)).is_err());
     // A manifest whose chunk ref runs past EOF is an error, not a panic.
     let json = br#"{"app":"t","doc":{"id":"d","name":"n","width":4,"height":4,"createdAt":0,"updatedAt":0},
       "nodes":[{"id":"l","name":"L","visible":true,"opacity":1,"blendMode":"normal","tiles":[{"key":0,"chunk":{"offset":0,"len":99}}]}]}"#;
     let z = deflate_raw(json);
-    let mut f = header(9, z.len() as u32).to_vec();
+    let mut f = header(9, 0, z.len() as u32).to_vec();
     f.extend_from_slice(&z);
     assert!(read_happypaint(&f).is_err());
 }
@@ -262,7 +263,7 @@ fn photoshop_modes_and_pass_through_survive_a_round_trip() {
 /// A file around a hand-written manifest (no chunks unless given).
 fn file_with(manifest: &serde_json::Value, chunks: &[u8]) -> Vec<u8> {
     let z = deflate_raw(&serde_json::to_vec(manifest).unwrap());
-    let mut f = header(9, z.len() as u32).to_vec();
+    let mut f = header(9, 0, z.len() as u32).to_vec();
     f.extend_from_slice(&z);
     f.extend_from_slice(chunks);
     f
@@ -516,5 +517,106 @@ fn cached_writes_match_fresh_ones_and_pick_up_changes() {
         d.root.pop();
         write_happypaint_cached(&d, None, "t", &mut cache).unwrap();
         assert!(cache.len() < n);
+    }
+}
+
+// happypaint v0.211.4: header flags and chunk checksums.
+mod checksums {
+    use super::*;
+
+    fn two_tiles() -> (Document, Vec<u8>) {
+        let mut d = Document::new_in(512, 256, None, Depth::Rgba8);
+        d.root.clear();
+        let mut ink = Layer::new("ink");
+        fill(&mut ink.pixels, 0, 0, 256, 256, [0.5, 0.0, 0.0, 0.5]);
+        fill(&mut ink.pixels, 256, 0, 256, 256, [0.0, 0.5, 0.0, 0.5]);
+        d.root.push(Node::Layer(ink));
+        let bytes = write_happypaint(&d, Some(b"thumb-bytes"), "t").unwrap();
+        (d, bytes)
+    }
+
+    fn manifest_len(u: &[u8]) -> usize {
+        u32::from_le_bytes(u[8..12].try_into().unwrap()) as usize
+    }
+
+    /// Where a chunk's bytes start in the file.
+    fn chunk_at(u: &[u8], r: &serde_json::Value) -> usize {
+        12 + manifest_len(u) + r["offset"].as_u64().unwrap() as usize
+    }
+
+    fn manifest(u: &[u8]) -> serde_json::Value {
+        serde_json::from_slice(&inflate_raw(&u[12..12 + manifest_len(u)]).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn a_new_file_carries_checksums_and_the_hpck_trailer() {
+        let (_, u) = two_tiles();
+        assert_eq!(u16::from_le_bytes([u[6], u[7]]) & FLAG_CHECKSUMS, FLAG_CHECKSUMS);
+        assert_eq!(&u[u.len() - 8..u.len() - 4], b"HPCK");
+        assert_eq!(u16::from_le_bytes([u[4], u[5]]), VERSION_PLAIN, "checksums need no version bump");
+        assert!(manifest(&u)["nodes"][0]["tiles"][0]["chunk"]["crc"].is_u64());
+    }
+
+    #[test]
+    fn a_corrupt_tile_costs_only_that_tile() {
+        let (_, mut u) = two_tiles();
+        let m = manifest(&u);
+        // A byte deep in the second tile's chunk, past its PNG header: only
+        // the checksum can tell.
+        let r = &m["nodes"][0]["tiles"][1]["chunk"];
+        let at = chunk_at(&u, r) + r["len"].as_u64().unwrap() as usize - 20;
+        u[at] ^= 0xff;
+        let p = Progress::default();
+        let back = read_happypaint_with(&u, &p).unwrap();
+        let Node::Layer(l) = &back.root[0] else { panic!() };
+        assert!(l.pixels.get(10, 10)[3] > 0.4, "the first tile is intact");
+        assert_eq!(l.pixels.get(300, 10)[3], 0.0, "the corrupt one is blank");
+        assert_eq!(p.damaged_layers(), vec!["ink".to_string()]);
+    }
+
+    #[test]
+    fn a_corrupt_thumbnail_reads_as_none() {
+        let (_, mut u) = two_tiles();
+        assert_eq!(read_thumbnail(&u).unwrap().as_deref(), Some(&b"thumb-bytes"[..]));
+        let at = chunk_at(&u, &manifest(&u)["thumbnail"]);
+        u[at] ^= 1;
+        assert_eq!(read_thumbnail(&u).unwrap(), None);
+    }
+
+    #[test]
+    fn a_corrupt_manifest_or_a_lost_trailer_is_refused() {
+        let (_, u) = two_tiles();
+        let mut bad = u.clone();
+        bad[12 + 2] ^= 1;
+        let e = read_happypaint(&bad).unwrap_err().to_string();
+        assert!(e.contains("checksum"), "{e}");
+        assert!(read_happypaint(&u[..u.len() - 8]).is_err());
+    }
+
+    #[test]
+    fn an_unknown_required_flag_is_refused_an_optional_one_ignored() {
+        let (_, mut u) = two_tiles();
+        let end = 12 + manifest_len(&u);
+        let mut reseal = |flags: u16| {
+            u[6..8].copy_from_slice(&flags.to_le_bytes());
+            let c = crc32(&u[..end]);
+            let n = u.len();
+            u[n - 4..].copy_from_slice(&c.to_le_bytes());
+            u.clone()
+        };
+        let e = read_happypaint(&reseal(FLAG_CHECKSUMS | 0x0100)).unwrap_err().to_string();
+        assert!(e.contains("newer version"), "{e}");
+        let back = read_happypaint(&reseal(FLAG_CHECKSUMS | 0x0080)).unwrap();
+        assert!(back.root[0].as_layer().unwrap().pixels.get(10, 10)[3] > 0.4);
+    }
+
+    #[test]
+    fn a_resave_of_an_old_file_round_trips() {
+        let (_, u) = two_tiles();
+        let back = read_happypaint(&u).unwrap();
+        let again = write_happypaint(&back, None, "t").unwrap();
+        let back2 = read_happypaint(&again).unwrap();
+        let (a, b) = (back.root[0].as_layer().unwrap(), back2.root[0].as_layer().unwrap());
+        assert_eq!(a.pixels.get(300, 10), b.pixels.get(300, 10));
     }
 }

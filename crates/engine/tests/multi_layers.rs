@@ -36,6 +36,7 @@ fn picked_layers_group_at_the_topmost_place() {
     assert_eq!(root_ids(&s), [base.clone(), vec![b.clone(), g.clone()]].concat(), "the group sits where the top pick was");
     let kids: Vec<String> = s.doc().find(&g).unwrap().as_group().unwrap().children.iter().map(|n| n.id().to_string()).collect();
     assert_eq!(kids, vec![a.clone(), c.clone()], "in their stacking order");
+    assert_eq!(s.doc().find(&g).unwrap().as_group().unwrap().blend_mode, onepaint_doc::BlendMode::PassThrough);
     s.execute(Command::Undo).unwrap();
     assert_eq!(root_ids(&s), [base, vec![a, b, c]].concat());
 }

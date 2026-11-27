@@ -187,3 +187,16 @@ fn a_distorted_path_bakes_to_pixels() {
     assert!(!s.is_path_layer(&id));
     assert!(px(&s, &id, 40, 40)[3] > 0.9);
 }
+
+/// happypaint v0.211.2: Stroke Path paints wet and live brushes wet, as the
+/// pen does. Here the routing lives in `stroke_begin`, which Stroke Path uses.
+#[test]
+fn stroke_path_paints_a_live_wet_brush_wet() {
+    let mut s = Session::new(120, 100, Some(Rgba::WHITE));
+    s.execute(Command::AddLayer).unwrap();
+    s.execute(Command::CreatePathLayer { spec: Box::new(square(20.0, 20.0, 80.0, 70.0, false, false)) }).unwrap();
+    let b = onepaint_brush::preset("watercolor-live").unwrap();
+    s.execute(Command::SetBrushPreset { preset: Box::new(b) }).unwrap();
+    s.execute(Command::StrokePath { tool: StrokePathTool::Brush, simulate_pressure: false }).unwrap();
+    assert!(s.wet_active(), "the stroke went into the live wet simulation, not down as dry stamps");
+}

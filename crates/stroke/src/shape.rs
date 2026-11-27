@@ -16,10 +16,28 @@ pub enum ShapeKind {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Shape {
-    Line { a: Pt, b: Pt },
-    Rect { cx: f64, cy: f64, hw: f64, hh: f64 },
-    Ellipse { cx: f64, cy: f64, rx: f64, ry: f64 },
-    Polygon { pts: Vec<Pt> },
+    Line {
+        a: Pt,
+        b: Pt,
+    },
+    /// `rot`: radians about the centre (a QuickShape turned after its snap).
+    Rect {
+        cx: f64,
+        cy: f64,
+        hw: f64,
+        hh: f64,
+        rot: f64,
+    },
+    Ellipse {
+        cx: f64,
+        cy: f64,
+        rx: f64,
+        ry: f64,
+        rot: f64,
+    },
+    Polygon {
+        pts: Vec<Pt>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -38,7 +56,8 @@ impl Default for DragOpts {
 }
 
 const MIN_DRAG: f64 = 2.0;
-const ANGLE_STEP: f64 = PI / 12.0;
+/// Shift's rotation step: 15°.
+pub const ANGLE_STEP: f64 = PI / 12.0;
 
 pub fn clamp_sides(n: f64) -> u32 {
     if !n.is_finite() { 3 } else { n.round().clamp(3.0, 12.0) as u32 }
@@ -90,7 +109,11 @@ pub fn drag_shape(kind: ShapeKind, a: Pt, b: Pt, o: DragOpts) -> Option<Shape> {
                 (a[0] + dx / 2.0, a[1] + dy / 2.0, dx.abs() / 2.0, dy.abs() / 2.0)
             };
             let (hw, hh) = (hw.max(1.0), hh.max(1.0));
-            if kind == ShapeKind::Rect { Shape::Rect { cx, cy, hw, hh } } else { Shape::Ellipse { cx, cy, rx: hw, ry: hh } }
+            if kind == ShapeKind::Rect {
+                Shape::Rect { cx, cy, hw, hh, rot: 0.0 }
+            } else {
+                Shape::Ellipse { cx, cy, rx: hw, ry: hh, rot: 0.0 }
+            }
         }
     })
 }
@@ -117,17 +140,21 @@ fn sample_edges(corners: &[Pt], step: f64, closed: bool) -> Vec<Pt> {
 pub fn sample_path(s: &Shape, step: f64) -> Vec<Pt> {
     match s {
         Shape::Line { a, b } => sample_edges(&[*a, *b], step, false),
-        Shape::Rect { cx, cy, hw, hh } => {
-            sample_edges(&[[cx - hw, cy - hh], [cx + hw, cy - hh], [cx + hw, cy + hh], [cx - hw, cy + hh]], step, true)
+        Shape::Rect { cx, cy, hw, hh, rot } => {
+            let c = [*cx, *cy];
+            let corners = [[cx - hw, cy - hh], [cx + hw, cy - hh], [cx + hw, cy + hh], [cx - hw, cy + hh]].map(|p| rotate_pt(p, c, *rot));
+            sample_edges(&corners, step, true)
         }
         Shape::Polygon { pts } => sample_edges(pts, step, true),
-        Shape::Ellipse { cx, cy, rx, ry } => {
+        Shape::Ellipse { cx, cy, rx, ry, rot } => {
+            let (cos, sin) = (rot.cos(), rot.sin());
             let p = PI * (3.0 * (rx + ry) - ((3.0 * rx + ry) * (rx + 3.0 * ry)).sqrt());
             let n = ((p / step).ceil() as usize).max(16);
             (0..=n)
                 .map(|i| {
                     let t = i as f64 / n as f64 * TAU;
-                    [cx + rx * t.cos(), cy + ry * t.sin()]
+                    let (x, y) = (rx * t.cos(), ry * t.sin());
+                    [cx + cos * x - sin * y, cy + sin * x + cos * y]
                 })
                 .collect()
         }
@@ -139,6 +166,68 @@ pub fn outline(s: &Shape) -> Option<Vec<Pt>> {
     match s {
         Shape::Line { .. } => None,
         other => Some(sample_path(other, 2.0)),
+    }
+}
+
+fn rotate_pt(p: Pt, c: Pt, ang: f64) -> Pt {
+    if ang == 0.0 {
+        return p;
+    }
+    let (cos, sin) = (ang.cos(), ang.sin());
+    let (dx, dy) = (p[0] - c[0], p[1] - c[1]);
+    [c[0] + cos * dx - sin * dy, c[1] + sin * dx + cos * dy]
+}
+
+fn poly_center(pts: &[Pt]) -> Pt {
+    let n = pts.len().max(1) as f64;
+    let (x, y) = pts.iter().fold((0.0, 0.0), |(x, y), p| (x + p[0], y + p[1]));
+    [x / n, y / n]
+}
+
+/// QuickShape with the pen still down after the snap (happypaint
+/// `holdDragShape`, v0.211.5): reshape `base`, the shape as it snapped, for a
+/// pen that was at `from` at the snap and is now at `to`.
+///
+/// A line's free end follows the pen. A closed shape scales and turns about
+/// its centre so that the outline point the pen held stays under the pen.
+/// Always computed from `base`, so it cannot drift. `constrain` (Shift) locks
+/// a line to 45° and a turn to 15° steps.
+pub fn hold_drag_shape(base: &Shape, from: Pt, to: Pt, constrain: bool) -> Shape {
+    let c = match base {
+        Shape::Line { a, .. } => return Shape::Line { a: *a, b: if constrain { snap45(*a, to) } else { to } },
+        Shape::Polygon { pts } => poly_center(pts),
+        Shape::Rect { cx, cy, .. } | Shape::Ellipse { cx, cy, .. } => [*cx, *cy],
+    };
+    let (r0, r1) = (dist(from, c), dist(to, c));
+    // A pen that snapped on the centre has no lever arm.
+    if r0 < 1.0 {
+        return base.clone();
+    }
+    // Dragged onto the centre: keep a 1 px shape at the angle it had.
+    let turn = if r1 < 1e-6 { 0.0 } else { (to[1] - c[1]).atan2(to[0] - c[0]) - (from[1] - c[1]).atan2(from[0] - c[0]) };
+    let k = r1.max(1.0) / r0;
+    let snap = |a: f64| if constrain { (a / ANGLE_STEP).round() * ANGLE_STEP } else { a };
+    match base {
+        Shape::Polygon { pts } => {
+            // Like the rotate knob, the first vertex's bearing is the polygon's angle.
+            let from = pts.first().map_or(0.0, |p| (p[1] - c[1]).atan2(p[0] - c[0]));
+            let d = snap(from + turn) - from;
+            let pts = pts
+                .iter()
+                .map(|v| {
+                    let r = rotate_pt(*v, c, d);
+                    [c[0] + (r[0] - c[0]) * k, c[1] + (r[1] - c[1]) * k]
+                })
+                .collect();
+            Shape::Polygon { pts }
+        }
+        Shape::Ellipse { cx, cy, rx, ry, rot } => {
+            Shape::Ellipse { cx: *cx, cy: *cy, rx: (rx * k).max(1.0), ry: (ry * k).max(1.0), rot: snap(rot + turn) }
+        }
+        Shape::Rect { cx, cy, hw, hh, rot } => {
+            Shape::Rect { cx: *cx, cy: *cy, hw: (hw * k).max(1.0), hh: (hh * k).max(1.0), rot: snap(rot + turn) }
+        }
+        Shape::Line { .. } => base.clone(),
     }
 }
 
@@ -228,13 +317,13 @@ pub fn recognize(pts: &[Pt], shift: bool) -> Option<Shape> {
                 let m = hw.max(hh);
                 (hw, hh) = (m, m);
             }
-            return Some(Shape::Rect { cx, cy, hw, hh });
+            return Some(Shape::Rect { cx, cy, hw, hh, rot: 0.0 });
         }
         return Some(Shape::Polygon { pts: corners });
     }
     if shift {
         let r = (rx + ry) / 2.0;
-        return Some(Shape::Ellipse { cx, cy, rx: r, ry: r });
+        return Some(Shape::Ellipse { cx, cy, rx: r, ry: r, rot: 0.0 });
     }
-    Some(Shape::Ellipse { cx, cy, rx, ry })
+    Some(Shape::Ellipse { cx, cy, rx, ry, rot: 0.0 })
 }

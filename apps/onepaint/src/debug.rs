@@ -4,7 +4,7 @@
 //! - `ONEPAINT_MENU=file|edit|view|…` opens that menu in the menu bar.
 //! - `ONEPAINT_SCREENSHOT=out.png` saves a screenshot of the window after a few frames.
 //! - `ONEPAINT_DEMO=1` paints a small demo scene first.
-//! - `ONEPAINT_POPOVER=layers|brushes|color|mix|menu|new|studio|palette|…` opens a popover (`mix`: Colour on its Mix grid).
+//! - `ONEPAINT_POPOVER=layers|brushes|color|mix|menu|new|studio|palette|settings|export|…` opens a popover (`mix`: Colour on its Mix grid).
 //! - `ONEPAINT_THEME=light` starts in the light theme.
 //! - `ONEPAINT_TRANSFORM=1` starts a rotated move on the active layer.
 //! - `ONEPAINT_TEXT=1` adds a text object and opens its editor.
@@ -109,6 +109,8 @@ impl Debug {
                 "studio" => Some(Popover::BrushStudio),
                 "gradient" => Some(Popover::GradientOptions),
                 "palette" => Some(Popover::CommandPalette),
+                "settings" => Some(Popover::Settings),
+                "export" => Some(Popover::Export),
                 _ => None,
             }),
             exit: var("ONEPAINT_EXIT").is_some(),

@@ -299,7 +299,10 @@ fn stacked_dock(app: &mut App, ui: &mut Ui, side: DockSide, rect: Rect, open: &[
         let head = Rect::from_min_size(pos2(rect.left(), y), vec2(rect.width(), HEAD_H));
         app.dock.heads.push((side, head));
         app.dock.mids[side.i()].push(head.top() + (HEAD_H + h) / 2.0);
-        section_header(app, ui, side, id, head, i == 0 && open.len() > 1);
+        if section_header(app, ui, side, id, head, i == 0 && open.len() > 1) {
+            float_together(app, side, open, rect, None);
+            return;
+        }
         y += HEAD_H;
         if h > 0.0 {
             let body = Rect::from_min_size(pos2(rect.left(), y), vec2(rect.width(), h));
@@ -317,7 +320,10 @@ fn stacked_dock(app: &mut App, ui: &mut Ui, side: DockSide, rect: Rect, open: &[
     }
 }
 
-fn section_header(app: &mut App, ui: &mut Ui, side: DockSide, id: PanelId, head: Rect, tabs_button: bool) {
+/// A stacked dock's section header; true when its Float button (on the
+/// first header, `tabs_button`) asks the side's panels to float together.
+fn section_header(app: &mut App, ui: &mut Ui, side: DockSide, id: PanelId, head: Rect, tabs_button: bool) -> bool {
+    let mut float = false;
     let t = Tokens::get(ui.ctx());
     ui.painter().rect_filled(head, 0.0, t.bg_elevated);
     ui.painter().hline(head.x_range(), head.bottom(), Stroke::new(1.0, t.border));
@@ -347,6 +353,7 @@ fn section_header(app: &mut App, ui: &mut Ui, side: DockSide, id: PanelId, head:
             app.layout.tabbed[side.i()] = true;
             app.layout.save();
         }
+        float = tabs_button && icons::button(ui, "maximize-2", 22.0, false, "Float these panels together, as one group").clicked();
     });
     if drag.double_clicked() {
         app.layout.collapsed.insert(id, !collapsed);
@@ -358,6 +365,7 @@ fn section_header(app: &mut App, ui: &mut Ui, side: DockSide, id: PanelId, head:
         begin_drag(app, id, p, p - head.min);
     }
     drag.on_hover_cursor(egui::CursorIcon::Grab);
+    float
 }
 
 /// Panels that keep a header pinned and scroll the rest themselves (the
@@ -421,6 +429,19 @@ fn tabbed_dock(app: &mut App, ui: &mut Ui, side: DockSide, rect: Rect, open: &[P
     app.dock.heads.push((side, strip));
     ui.painter().rect_filled(strip, 0.0, t.bg_elevated);
     ui.painter().hline(strip.x_range(), strip.bottom(), Stroke::new(1.0, t.border));
+    // The strip's empty space drags the open panels out as one group
+    // (happypaint v0.211.9); the tabs and buttons, laid over it, win.
+    let pull = ui.interact(strip, Id::new(("dock-strip", side.i())), Sense::drag());
+    if open.len() > 1
+        && pull.drag_started()
+        && let Some(p) = pull.interact_pointer_pos()
+    {
+        let grab = p - strip.min;
+        if let Some(key) = float_together(app, side, open, rect, Some(strip.min)) {
+            app.dock.group_drag = Some((key, grab));
+        }
+        return;
+    }
     let mut child = ui
         .new_child(egui::UiBuilder::new().max_rect(strip.shrink2(vec2(4.0, 2.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
     child.spacing_mut().item_spacing.x = 2.0;
@@ -442,12 +463,18 @@ fn tabbed_dock(app: &mut App, ui: &mut Ui, side: DockSide, rect: Rect, open: &[P
             set_panel_open(app, *id, false);
         }
     }
+    let mut float = false;
     child.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         if icons::button(ui, "chevrons-up-down", 22.0, false, "Stack the panels").clicked() {
             app.layout.tabbed[side.i()] = false;
             app.layout.save();
         }
+        float = open.len() > 1 && icons::button(ui, "maximize-2", 22.0, false, "Float these panels together, as one group").clicked();
     });
+    if float {
+        float_together(app, side, open, rect, None);
+        return;
+    }
     let body = Rect::from_min_max(pos2(rect.left(), strip.bottom()), rect.max);
     app.dock.mids[side.i()].push(body.center().y);
     section_body(app, ui, active, body);
@@ -478,6 +505,7 @@ fn default_width(id: PanelId) -> f32 {
         PanelId::Color => 280.0,
         PanelId::Align => 260.0,
         PanelId::Guides => 330.0,
+        PanelId::Text => 350.0,
         PanelId::Reference => 320.0,
         _ => 300.0,
     }
@@ -494,6 +522,11 @@ fn float_pos(app: &App, id: PanelId, view: Rect) -> Option<Pos2> {
 fn floats(app: &mut App, ctx: &egui::Context, view: Rect, stage_bottom: f32) {
     for id in PanelId::ALL {
         if !panel_open(app, id) || !hosted(app, id, view) {
+            continue;
+        }
+        // A floating Text panel belongs to the Text tool; docked or grouped
+        // it stays (happypaint v0.210.0).
+        if id == PanelId::Text && app.session.tool() != onepaint_engine::Tool::Text {
             continue;
         }
         let Some(pos) = float_pos(app, id, view) else { continue };
@@ -767,17 +800,51 @@ fn resolve(app: &App, id: PanelId, p: Pos2, win: Option<Rect>, view: Rect) -> Dr
     }
 }
 
+/// Where a floating group dropped at `p` lands: a docked header (tabs) or
+/// a side's edge band; `None` keeps it floating.
+fn group_drop(app: &App, p: Pos2, win: Option<Rect>, view: Rect) -> Option<Drop> {
+    if let Some(side) = layout::tab_drop_side(p, &app.dock.heads) {
+        return Some(Drop::DockTab(side));
+    }
+    let local = pos2(p.x - view.left(), p.y - view.top());
+    let win = win.map(|r| r.translate(-view.min.to_vec2()));
+    layout::drop_dock_side(local, win, view.size()).map(|side| Drop::Dock(side, layout::dock_insert_index(&app.dock.mids[side.i()], p.y)))
+}
+
+/// Float a side's open panels together as one group with its top-left at
+/// `at` (default: just inside the dock), the showing tab still showing.
+fn float_together(app: &mut App, side: DockSide, open: &[PanelId], dock: Rect, at: Option<Pos2>) -> Option<String> {
+    let at = at.unwrap_or(dock.min + vec2(24.0, 24.0));
+    let rect = Rect::from_min_size(at, vec2(dock.width(), dock.height().min(520.0)));
+    let key = app.layout.float_docked_as_group(side, open, rect)?;
+    app.layout.save();
+    Some(key)
+}
+
 fn drag_tick(app: &mut App, ctx: &egui::Context, view: Rect, stage_bottom: f32) {
     let (pointer, down) = ctx.input(|i| (i.pointer.latest_pos(), i.pointer.primary_down()));
     if let Some((key, grab)) = app.dock.group_drag.clone() {
+        // A group docks whole on a side's edge or a docked header (happypaint
+        // v0.211.9); it never joins another floating window.
+        let win = app.dock.windows.iter().find(|(t, _)| *t == FloatTarget::Group(key.clone())).map(|(_, r)| *r);
+        let drop = pointer.and_then(|p| group_drop(app, p, win, view));
         match (down, pointer) {
             (true, Some(p)) => {
                 if let Some(g) = app.layout.groups.get_mut(&key) {
                     let at = clamp_float(p - grab, vec2(g.w.unwrap_or(300.0), HEAD_H), view, stage_bottom);
                     (g.x, g.y) = (at.x, at.y);
                 }
+                if let Some(d) = &drop {
+                    draw_preview(app, ctx, d, view, stage_bottom);
+                }
+                ctx.request_repaint();
             }
             _ => {
+                match drop {
+                    Some(Drop::DockTab(side)) => app.layout.dock_group(&key, side, true, None),
+                    Some(Drop::Dock(side, index)) => app.layout.dock_group(&key, side, false, Some(index)),
+                    _ => {}
+                }
                 app.dock.group_drag = None;
                 app.layout.save();
             }

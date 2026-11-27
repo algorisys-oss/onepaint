@@ -2,6 +2,7 @@
 //! styling of the selection, whole-object style controls and the balloon.
 
 use crate::App;
+use crate::layout::PanelId;
 use egui::text::LayoutJob;
 use egui::{Align2, Area, Color32, Id, Order, RichText, Stroke, TextFormat, pos2};
 use onepaint_color::Rgba;
@@ -89,8 +90,11 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         }
         return;
     }
+    // While the Text panel is open the editor lives there (`panel`).
+    if crate::dock::panel_open(app, PanelId::Text) {
+        return;
+    }
     let Some(te) = app.canvas.text_edit.clone() else { return };
-    let t = Tokens::get(ctx);
     // Anchor under the text block, clamped on screen.
     let spec = if te.spec.text.is_empty() { TextSpec { text: " ".into(), ..te.spec.clone() } } else { te.spec.clone() };
     let quad = Renderer::new().quad(&spec).unwrap_or([[te.spec.x, te.spec.y]; 4]);
@@ -101,213 +105,40 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     let screen = ctx.content_rect();
     let pos = pos2((bottom[0] as f32).clamp(70.0, screen.right() - 360.0), (bottom[1] as f32 + 14.0).clamp(70.0, screen.bottom() - 470.0));
     let sel_id = Id::new(("text-editor-selection", te.target.clone()));
-    let mut changed = false;
-    let mut done = false;
-    let mut action: Option<Command> = None;
     let current = app.session.color().to_hex();
+    let mut out = (false, false, None);
     Area::new(Id::new("text-editor")).order(Order::Foreground).pivot(Align2::LEFT_TOP).fixed_pos(pos).show(ctx, |ui| {
         widgets::popover_frame(ui).show(ui, |ui| {
             ui.set_width(330.0);
-            let Some(ed) = app.canvas.text_edit.as_mut() else { return };
-            let before = ed.spec.clone();
-            let mut text = ed.spec.text.clone();
-            let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap: f32| {
-                let job = rich_job(&before, buf.as_str(), t.fg, wrap);
-                ui.ctx().fonts_mut(|f| f.layout_job(job))
-            };
-            let out = egui::TextEdit::multiline(&mut text)
-                .desired_rows(3)
-                .desired_width(f32::INFINITY)
-                .hint_text("Type here…")
-                .layouter(&mut layouter)
-                .show(ui);
-            let field = out.response.clone();
-            if ed.target.is_none() && text.is_empty() {
-                field.request_focus();
-            }
-            if field.changed() {
-                ed.spec = replace_text(&before, &text);
-                changed = true;
-            }
-            if field.has_focus()
-                && let Some(cr) = out.cursor_range
-            {
-                let r = cr.as_sorted_char_range();
-                ui.data_mut(|d| d.insert_temp(sel_id, r.start.0..r.end.0));
-            }
-            let sel: Option<Range<usize>> = ui.data(|d| d.get_temp(sel_id)).filter(|r: &Range<usize>| r.start < r.end);
-            let state = style_at(&ed.spec, sel.clone().unwrap_or(0..usize::MAX));
-            // B / I / U / S, A− / A+ and the font act on the selection, else on the object.
-            let mut edit: Option<StyleEdit> = None;
-            ui.horizontal(|ui| {
-                let toggles = [
-                    (state.bold, RichText::new("B").strong(), StyleEdit::Bold, "Bold"),
-                    (state.italic, RichText::new("I").italics(), StyleEdit::Italic, "Italic"),
-                    (state.underline, RichText::new("U").underline(), StyleEdit::Underline, "Underline"),
-                    (state.strikethrough, RichText::new("S").strikethrough(), StyleEdit::Strikethrough, "Strikethrough"),
-                ];
-                for (on, label, e, tip) in toggles {
-                    if ui.selectable_label(on, label).on_hover_text(tip).clicked() {
-                        edit = Some(e);
-                    }
-                }
-                if ui.button("A−").on_hover_text("Smaller").clicked() {
-                    edit = Some(StyleEdit::ScaleSize(1.0 / 1.1));
-                }
-                if ui.button("A+").on_hover_text("Larger").clicked() {
-                    edit = Some(StyleEdit::ScaleSize(1.1));
-                }
-                let family = state.family.as_deref().unwrap_or("");
-                let name = match FONT_STACKS.iter().find(|f| f.1 == family) {
-                    Some(f) => f.0,
-                    None if state.family.is_none() => "Mixed",
-                    None => "Custom",
-                };
-                egui::ComboBox::from_id_salt("font").selected_text(name).width(96.0).show_ui(ui, |ui| {
-                    for (name, stack) in FONT_STACKS {
-                        if ui.selectable_label(family == stack, name).clicked() {
-                            edit = Some(StyleEdit::Font(stack.to_string()));
-                        }
-                    }
-                });
-            });
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Size").color(t.fg_muted));
-                changed |= ui.add(egui::DragValue::new(&mut ed.spec.font_size_px).range(4.0..=1000.0).suffix(" px").speed(0.5)).changed();
-                for (a, l) in [(Align::Left, "Left"), (Align::Center, "Centre"), (Align::Right, "Right")] {
-                    if ui.selectable_label(ed.spec.align == a, l).clicked() {
-                        ed.spec.align = a;
-                        changed = true;
-                    }
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Line").color(t.fg_muted));
-                changed |= ui.add(egui::DragValue::new(&mut ed.spec.line_height).range(0.5..=3.0).speed(0.01)).changed();
-                let mut wrap = ed.spec.box_width.is_some();
-                if widgets::toggle(ui, &mut wrap, "Wrap").changed() {
-                    ed.spec.box_width = wrap.then_some(300.0);
-                    changed = true;
-                }
-                if let Some(w) = ed.spec.box_width.as_mut() {
-                    changed |= ui.add(egui::DragValue::new(w).range(8.0..=10000.0).suffix(" px")).changed();
-                }
-            });
-            ui.horizontal(|ui| {
-                let mut ow = ed.spec.outline_width.unwrap_or(0.0);
-                ui.label(RichText::new("Outline").color(t.fg_muted));
-                if ui.add(egui::DragValue::new(&mut ow).range(0.0..=40.0).suffix(" px")).changed() {
-                    ed.spec.outline_width = (ow > 0.0).then_some(ow);
-                    changed = true;
-                }
-                let mut bg = ed.spec.bg_color.is_some();
-                if widgets::toggle(ui, &mut bg, "Background").changed() {
-                    ed.spec.bg_color = bg.then(|| "#ffffff".to_string());
-                    if bg {
-                        ed.spec.balloon = None; // a balloon is a background with a shape
-                    }
-                    changed = true;
-                }
-            });
-            // Speech balloon (TP:285-344).
-            ui.horizontal(|ui| {
-                let shape = ed.spec.balloon.as_ref().map(|b| b.shape);
-                let name = SHAPES.iter().find(|s| s.0 == shape).map_or("None", |s| s.1);
-                egui::ComboBox::from_label("Balloon").selected_text(name).width(90.0).show_ui(ui, |ui| {
-                    for (s, label) in SHAPES {
-                        if ui.selectable_label(shape == s, label).clicked() && shape != s {
-                            match s {
-                                None => ed.spec.balloon = None,
-                                Some(s) => {
-                                    ed.spec.bg_color = None;
-                                    let b = ed.spec.balloon.get_or_insert_with(|| default_balloon(s));
-                                    b.shape = s;
-                                }
-                            }
-                            changed = true;
-                        }
-                    }
-                });
-                if let Some(b) = ed.spec.balloon.as_mut() {
-                    let mut sw = b.stroke_width.unwrap_or(2.0);
-                    if ui
-                        .add(egui::DragValue::new(&mut sw).range(0.0..=40.0).suffix(" px"))
-                        .on_hover_text("Balloon outline width")
-                        .changed()
-                    {
-                        b.stroke_width = Some(sw);
-                        changed = true;
-                    }
-                }
-            });
-            if let Some(b) = ed.spec.balloon.as_mut() {
-                let size = ed.spec.font_size_px;
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Tail").color(t.fg_muted));
-                    let mut deg = tail_angle(b.tail.as_ref()) as f32;
-                    ui.scope(|ui| {
-                        ui.set_width(150.0);
-                        if widgets::slider(ui, &mut deg, 0.0..=360.0, None)
-                            .on_hover_text("Point the balloon at whoever is speaking")
-                            .changed()
-                        {
-                            b.tail = Some(tail_from_angle(size, deg.round() as f64));
-                            changed = true;
-                        }
-                    });
-                    if ui.selectable_label(b.tail.is_none(), "No tail").clicked() {
-                        b.tail = None;
-                        changed = true;
-                    }
-                });
-            }
-            ui.label(RichText::new("Colour buttons take the current colour:").font(theme::medium(10.5)).color(t.fg_faint));
-            ui.horizontal_wrapped(|ui| {
-                if widgets::secondary_button(ui, "Text", 0.0).on_hover_text("Colour the selection, or all the text").clicked() {
-                    edit = Some(StyleEdit::Color(current.clone()));
-                }
-                if widgets::secondary_button(ui, "Outline", 0.0).on_hover_text("Glyph outline colour").clicked() {
-                    ed.spec.outline_color = Some(current.clone());
-                    changed = true;
-                }
-                if ed.spec.bg_color.is_some() && widgets::secondary_button(ui, "Background", 0.0).clicked() {
-                    ed.spec.bg_color = Some(current.clone());
-                    changed = true;
-                }
-                if let Some(b) = ed.spec.balloon.as_mut() {
-                    if widgets::secondary_button(ui, "Fill", 0.0).on_hover_text("Balloon fill").clicked() {
-                        b.fill = current.clone();
-                        changed = true;
-                    }
-                    if widgets::secondary_button(ui, "Rim", 0.0).on_hover_text("Balloon outline colour").clicked() {
-                        b.stroke = Some(current.clone());
-                        changed = true;
-                    }
-                }
-            });
-            if let Some(e) = edit {
-                ed.spec = style(&ed.spec, sel, e);
-                changed = true;
-                field.request_focus(); // keep editing the same selection
-            }
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                if widgets::primary_button(ui, "Done", 80.0).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                    done = true;
-                }
-                if let Some((id, i)) = ed.target.clone()
-                    && widgets::secondary_button(ui, "Delete", 70.0).clicked()
-                {
-                    action = Some(Command::DeleteText { id, index: i });
-                }
-                if let Some((id, _)) = ed.target.clone()
-                    && widgets::secondary_button(ui, "Rasterise", 80.0).on_hover_text("Turn the text layer into pixels").clicked()
-                {
-                    action = Some(Command::RasterizeText { id });
-                }
-            });
+            out = editor(app, ui, sel_id, &current);
         });
     });
+    settle(app, out);
+}
+
+/// The Text panel (happypaint v0.210.0): the same editor, docked, grouped
+/// or floating. Docked or grouped it stays shown under every tool; floating
+/// it shows with the Text tool (`dock::shown`).
+pub fn panel(app: &mut App, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    crate::dock::fit_width(ui, 330.0);
+    let target = app.canvas.text_edit.as_ref().map(|te| te.target.clone());
+    let Some(target) = target.filter(|_| app.session.tool() == Tool::Text) else {
+        ui.label(
+            RichText::new("Click the canvas with the Text tool to add text, or click a text object to edit it.")
+                .font(theme::medium(11.0))
+                .color(t.fg_faint),
+        );
+        return;
+    };
+    let sel_id = Id::new(("text-editor-selection", target));
+    let current = app.session.color().to_hex();
+    let out = editor(app, ui, sel_id, &current);
+    settle(app, out);
+}
+
+/// Act on what the editor did.
+fn settle(app: &mut App, (changed, done, action): Outcome) {
     if let Some(cmd) = action {
         let _ = app.session.execute(cmd);
         app.canvas.text_edit = None;
@@ -319,4 +150,213 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     if done {
         finish(app);
     }
+}
+
+/// What the editor did this frame: an edit, Done, or a command to run.
+type Outcome = (bool, bool, Option<Command>);
+
+/// The editor's controls, for the popover or the Text panel.
+fn editor(app: &mut App, ui: &mut egui::Ui, sel_id: Id, current: &str) -> Outcome {
+    let t = Tokens::get(ui.ctx());
+    let mut changed = false;
+    let mut done = false;
+    let mut action: Option<Command> = None;
+    let current = current.to_string();
+    let Some(ed) = app.canvas.text_edit.as_mut() else { return (false, false, None) };
+    let before = ed.spec.clone();
+    let mut text = ed.spec.text.clone();
+    let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap: f32| {
+        let job = rich_job(&before, buf.as_str(), t.fg, wrap);
+        ui.ctx().fonts_mut(|f| f.layout_job(job))
+    };
+    let out = egui::TextEdit::multiline(&mut text)
+        .desired_rows(3)
+        .desired_width(f32::INFINITY)
+        .hint_text("Type here…")
+        .layouter(&mut layouter)
+        .show(ui);
+    let field = out.response.clone();
+    if ed.target.is_none() && text.is_empty() {
+        field.request_focus();
+    }
+    if field.changed() {
+        ed.spec = replace_text(&before, &text);
+        changed = true;
+    }
+    if field.has_focus()
+        && let Some(cr) = out.cursor_range
+    {
+        let r = cr.as_sorted_char_range();
+        ui.data_mut(|d| d.insert_temp(sel_id, r.start.0..r.end.0));
+    }
+    let sel: Option<Range<usize>> = ui.data(|d| d.get_temp(sel_id)).filter(|r: &Range<usize>| r.start < r.end);
+    let state = style_at(&ed.spec, sel.clone().unwrap_or(0..usize::MAX));
+    // B / I / U / S, A− / A+ and the font act on the selection, else on the object.
+    let mut edit: Option<StyleEdit> = None;
+    ui.horizontal(|ui| {
+        let toggles = [
+            (state.bold, RichText::new("B").strong(), StyleEdit::Bold, "Bold"),
+            (state.italic, RichText::new("I").italics(), StyleEdit::Italic, "Italic"),
+            (state.underline, RichText::new("U").underline(), StyleEdit::Underline, "Underline"),
+            (state.strikethrough, RichText::new("S").strikethrough(), StyleEdit::Strikethrough, "Strikethrough"),
+        ];
+        for (on, label, e, tip) in toggles {
+            if ui.selectable_label(on, label).on_hover_text(tip).clicked() {
+                edit = Some(e);
+            }
+        }
+        if ui.button("A−").on_hover_text("Smaller").clicked() {
+            edit = Some(StyleEdit::ScaleSize(1.0 / 1.1));
+        }
+        if ui.button("A+").on_hover_text("Larger").clicked() {
+            edit = Some(StyleEdit::ScaleSize(1.1));
+        }
+        let family = state.family.as_deref().unwrap_or("");
+        let name = match FONT_STACKS.iter().find(|f| f.1 == family) {
+            Some(f) => f.0,
+            None if state.family.is_none() => "Mixed",
+            None => "Custom",
+        };
+        egui::ComboBox::from_id_salt("font").selected_text(name).width(96.0).show_ui(ui, |ui| {
+            for (name, stack) in FONT_STACKS {
+                if ui.selectable_label(family == stack, name).clicked() {
+                    edit = Some(StyleEdit::Font(stack.to_string()));
+                }
+            }
+        });
+    });
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Size").color(t.fg_muted));
+        changed |= ui.add(egui::DragValue::new(&mut ed.spec.font_size_px).range(4.0..=1000.0).suffix(" px").speed(0.5)).changed();
+        for (a, l) in [(Align::Left, "Left"), (Align::Center, "Centre"), (Align::Right, "Right")] {
+            if ui.selectable_label(ed.spec.align == a, l).clicked() {
+                ed.spec.align = a;
+                changed = true;
+            }
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Line").color(t.fg_muted));
+        changed |= ui.add(egui::DragValue::new(&mut ed.spec.line_height).range(0.5..=3.0).speed(0.01)).changed();
+        ui.label(RichText::new("Spacing").color(t.fg_muted));
+        changed |= ui
+            .add(egui::DragValue::new(&mut ed.spec.letter_spacing).range(-20.0..=80.0).speed(0.2).suffix(" px"))
+            .on_hover_text("Letter spacing")
+            .changed();
+        let mut wrap = ed.spec.box_width.is_some();
+        if widgets::toggle(ui, &mut wrap, "Wrap").changed() {
+            ed.spec.box_width = wrap.then_some(300.0);
+            changed = true;
+        }
+        if let Some(w) = ed.spec.box_width.as_mut() {
+            changed |= ui.add(egui::DragValue::new(w).range(8.0..=10000.0).suffix(" px")).changed();
+        }
+    });
+    ui.horizontal(|ui| {
+        let mut ow = ed.spec.outline_width.unwrap_or(0.0);
+        ui.label(RichText::new("Outline").color(t.fg_muted));
+        if ui.add(egui::DragValue::new(&mut ow).range(0.0..=40.0).suffix(" px")).changed() {
+            ed.spec.outline_width = (ow > 0.0).then_some(ow);
+            changed = true;
+        }
+        let mut bg = ed.spec.bg_color.is_some();
+        if widgets::toggle(ui, &mut bg, "Background").changed() {
+            ed.spec.bg_color = bg.then(|| "#ffffff".to_string());
+            if bg {
+                ed.spec.balloon = None; // a balloon is a background with a shape
+            }
+            changed = true;
+        }
+    });
+    // Speech balloon (TP:285-344).
+    ui.horizontal(|ui| {
+        let shape = ed.spec.balloon.as_ref().map(|b| b.shape);
+        let name = SHAPES.iter().find(|s| s.0 == shape).map_or("None", |s| s.1);
+        egui::ComboBox::from_label("Balloon").selected_text(name).width(90.0).show_ui(ui, |ui| {
+            for (s, label) in SHAPES {
+                if ui.selectable_label(shape == s, label).clicked() && shape != s {
+                    match s {
+                        None => ed.spec.balloon = None,
+                        Some(s) => {
+                            ed.spec.bg_color = None;
+                            let b = ed.spec.balloon.get_or_insert_with(|| default_balloon(s));
+                            b.shape = s;
+                        }
+                    }
+                    changed = true;
+                }
+            }
+        });
+        if let Some(b) = ed.spec.balloon.as_mut() {
+            let mut sw = b.stroke_width.unwrap_or(2.0);
+            if ui.add(egui::DragValue::new(&mut sw).range(0.0..=40.0).suffix(" px")).on_hover_text("Balloon outline width").changed() {
+                b.stroke_width = Some(sw);
+                changed = true;
+            }
+        }
+    });
+    if let Some(b) = ed.spec.balloon.as_mut() {
+        let size = ed.spec.font_size_px;
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Tail").color(t.fg_muted));
+            let mut deg = tail_angle(b.tail.as_ref()) as f32;
+            ui.scope(|ui| {
+                ui.set_width(150.0);
+                if widgets::slider(ui, &mut deg, 0.0..=360.0, None).on_hover_text("Point the balloon at whoever is speaking").changed() {
+                    b.tail = Some(tail_from_angle(size, deg.round() as f64));
+                    changed = true;
+                }
+            });
+            if ui.selectable_label(b.tail.is_none(), "No tail").clicked() {
+                b.tail = None;
+                changed = true;
+            }
+        });
+    }
+    ui.label(RichText::new("Colour buttons take the current colour:").font(theme::medium(10.5)).color(t.fg_faint));
+    ui.horizontal_wrapped(|ui| {
+        if widgets::secondary_button(ui, "Text", 0.0).on_hover_text("Colour the selection, or all the text").clicked() {
+            edit = Some(StyleEdit::Color(current.clone()));
+        }
+        if widgets::secondary_button(ui, "Outline", 0.0).on_hover_text("Glyph outline colour").clicked() {
+            ed.spec.outline_color = Some(current.clone());
+            changed = true;
+        }
+        if ed.spec.bg_color.is_some() && widgets::secondary_button(ui, "Background", 0.0).clicked() {
+            ed.spec.bg_color = Some(current.clone());
+            changed = true;
+        }
+        if let Some(b) = ed.spec.balloon.as_mut() {
+            if widgets::secondary_button(ui, "Fill", 0.0).on_hover_text("Balloon fill").clicked() {
+                b.fill = current.clone();
+                changed = true;
+            }
+            if widgets::secondary_button(ui, "Rim", 0.0).on_hover_text("Balloon outline colour").clicked() {
+                b.stroke = Some(current.clone());
+                changed = true;
+            }
+        }
+    });
+    if let Some(e) = edit {
+        ed.spec = style(&ed.spec, sel, e);
+        changed = true;
+        field.request_focus(); // keep editing the same selection
+    }
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        if widgets::primary_button(ui, "Done", 80.0).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            done = true;
+        }
+        if let Some((id, i)) = ed.target.clone()
+            && widgets::secondary_button(ui, "Delete", 70.0).clicked()
+        {
+            action = Some(Command::DeleteText { id, index: i });
+        }
+        if let Some((id, _)) = ed.target.clone()
+            && widgets::secondary_button(ui, "Rasterise", 80.0).on_hover_text("Turn the text layer into pixels").clicked()
+        {
+            action = Some(Command::RasterizeText { id });
+        }
+    });
+    (changed, done, action)
 }

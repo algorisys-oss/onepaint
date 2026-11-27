@@ -55,6 +55,12 @@ pub struct Settings {
     pub brush_size_scaling: SizeScaling,
     pub force_size_pressure: bool,
     pub force_opacity_pressure: bool,
+    /// Rejoin a pen stroke across a brief tip dip (`onepaint_input::dip`).
+    /// Off by default (happypaint v0.211.7): a lift ends the stroke at once.
+    pub pen_dip_recovery: bool,
+    /// Raw pen pressure → pressure, for every brush, before each brush's own
+    /// curve (happypaint v0.212.0). Coerced into range on load.
+    pub pen_curve: onepaint_input::PenCurve,
     pub brush_cursor: CursorStyle,
     pub cursor_use_color: bool,
     pub cursor_thickness: u8,
@@ -99,6 +105,8 @@ impl Default for Settings {
             brush_size_scaling: SizeScaling::Canvas,
             force_size_pressure: false,
             force_opacity_pressure: false,
+            pen_dip_recovery: false,
+            pen_curve: Default::default(),
             brush_cursor: CursorStyle::Ring,
             cursor_use_color: false,
             cursor_thickness: 1,
@@ -148,6 +156,7 @@ impl Settings {
         crate::brush_library::tidy_recent(&mut self.brush_recent);
         self.mix = std::mem::take(&mut self.mix).sanitized();
         self.side_sliders_float = self.side_sliders_float.coerced();
+        self.pen_curve = self.pen_curve.coerced();
         if !self.side_sliders_offset.is_finite() {
             self.side_sliders_offset = 0.0;
         }
@@ -231,6 +240,19 @@ pub fn dialog(app: &mut App, ui: &mut Ui) {
             row(ui, "Pen pressure", "Pressure drives size or opacity for every brush, whatever its own settings.");
             widgets::toggle(ui, &mut s.force_size_pressure, "Always use pressure for size");
             widgets::toggle(ui, &mut s.force_opacity_pressure, "Always use pressure for opacity");
+            row(
+                ui,
+                "Pressure response",
+                "How hard you press, for every brush. If you have to press hard to get a full line, lower Full pressure at, or press Calibrate and draw a few strokes at your normal pressure. Each brush's own Pressure setting still applies on top.",
+            );
+            crate::pen_pressure_ui::setting(ui, &mut s.pen_curve);
+            row(
+                ui,
+                "Rejoin broken pen strokes",
+                "For pens that drop contact mid-stroke on a light touch. On, a brief lift followed by a nearby re-contact continues the same stroke; close, quick marks may then join into one.",
+            );
+            let label = if s.pen_dip_recovery { "On" } else { "Off" };
+            widgets::toggle(ui, &mut s.pen_dip_recovery, label);
             row(
                 ui,
                 "Size & opacity sliders",
@@ -387,5 +409,19 @@ mod tests {
         assert_eq!(Settings::load(None), Settings::default());
         let pr = Settings { brush_size_scaling: SizeScaling::Screen, ..Default::default() }.preferences(2.0);
         assert_eq!(pr.screen_zoom, Some(2.0));
+    }
+
+    /// happypaint v0.212.0 / v0.211.7: the pen curve is clamped on load;
+    /// dip recovery is off unless chosen.
+    #[test]
+    fn the_pen_curve_and_dip_recovery_load_safely() {
+        let s: Settings = serde_json::from_str(r#"{"penCurve": {"gamma": 99, "full": 0.01}}"#).unwrap();
+        let mut s = s;
+        s.clamp();
+        assert_eq!(s.pen_curve, onepaint_input::PenCurve { gamma: 3.0, full: 0.2 });
+        assert!(!s.pen_dip_recovery);
+        let s: Settings = serde_json::from_str(r#"{"penDipRecovery": true}"#).unwrap();
+        assert!(s.pen_dip_recovery);
+        assert_eq!(s.pen_curve, onepaint_input::PenCurve::default());
     }
 }

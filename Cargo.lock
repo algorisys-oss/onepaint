@@ -2871,6 +2871,8 @@ dependencies = [
  "octotablet",
  "onepaint-stroke",
  "raw-window-handle",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

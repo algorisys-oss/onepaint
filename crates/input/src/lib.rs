@@ -2,7 +2,10 @@
 
 pub mod dip;
 pub mod idle_hold;
+pub mod pen_curve;
 pub mod tablet;
+
+pub use pen_curve::PenCurve;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PointerKind {
@@ -28,11 +31,18 @@ pub struct PressureProvider {
     mode: Mode,
     last: Option<(f64, f64, f64)>,
     ema: f64,
+    /// The user's pen pressure curve (Settings ▸ Brush), for hardware pressure.
+    curve: PenCurve,
 }
 
 impl PressureProvider {
     pub fn new(kind: PointerKind) -> Self {
-        Self { kind, mode: Mode::Undecided, last: None, ema: 0.7 }
+        Self::with_curve(kind, PenCurve::default())
+    }
+
+    /// A provider whose hardware pen pressure goes through `curve`.
+    pub fn with_curve(kind: PointerKind, curve: PenCurve) -> Self {
+        Self { kind, mode: Mode::Undecided, last: None, ema: 0.7, curve }
     }
 
     fn synth(&mut self, x: f64, y: f64, t: f64) -> f64 {
@@ -48,10 +58,6 @@ impl PressureProvider {
         self.ema
     }
 
-    fn hardware(raw: f64) -> f64 {
-        raw.clamp(0.02, 1.0).powf(0.7)
-    }
-
     pub fn pressure(&mut self, x: f64, y: f64, t: f64, raw: Option<f64>) -> f64 {
         if self.kind != PointerKind::Pen {
             return self.synth(x, y, t);
@@ -65,7 +71,7 @@ impl PressureProvider {
             m => m,
         };
         match self.mode {
-            Mode::Hardware => Self::hardware(raw),
+            Mode::Hardware => self.curve.apply(raw),
             _ => self.synth(x, y, t),
         }
     }

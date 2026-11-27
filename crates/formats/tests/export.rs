@@ -96,3 +96,52 @@ fn a_cmyk_tiff_embeds_a_loaded_press_profile() {
     assert_eq!(&t[off..off + icc.len()], &icc[..]);
     assert_eq!(t.len(), (off + icc.len()).next_multiple_of(2) + 2 * 4, "word-aligned strip of 2 CMYK pixels");
 }
+
+// happypaint `utils/export-preview.ts` (v0.211.12).
+mod preview {
+    use onepaint_formats::export::ExportFormat as F;
+    use onepaint_formats::export_preview::*;
+
+    #[test]
+    fn fits_without_upscaling() {
+        assert_eq!(fit(4000, 2000, 380, 220), (380, 190));
+        assert_eq!(fit(100, 50, 380, 220), (100, 50));
+        assert_eq!(fit(0, 10, 380, 220), (1, 1));
+        assert_eq!(fit(10000, 10, 380, 220), (380, 1));
+    }
+
+    #[test]
+    fn which_formats_keep_transparency() {
+        assert!(keeps_transparency(F::Png, false, false));
+        assert!(keeps_transparency(F::Jpeg, true, false), "PSD");
+        assert!(!keeps_transparency(F::Jpeg, false, false));
+        assert!(!keeps_transparency(F::Ppm, false, false));
+        assert!(!keeps_transparency(F::Tiff, false, true), "CMYK TIFF is on white");
+    }
+
+    #[test]
+    fn flattening_puts_straight_alpha_over_white() {
+        let mut px = [255, 0, 0, 255, 0, 0, 0, 0, 0, 0, 255, 128];
+        flatten_on_white(&mut px);
+        assert_eq!(px, [255, 0, 0, 255, 255, 255, 255, 255, 127, 127, 255, 255]);
+    }
+
+    #[test]
+    fn downscale_box_filters_premultiplied_pixels() {
+        // 2×1: opaque white and clear → one pixel of half-covered white.
+        let px = [1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0];
+        let (w, h, out) = downscale(&px, 2, 1, 1, 1, onepaint_color::Space::Gamma);
+        assert_eq!((w, h), (1, 1));
+        assert_eq!(out, vec![255, 255, 255, 128]);
+    }
+
+    #[test]
+    fn proofing_keeps_white_and_alpha_and_dulls_pure_rgb() {
+        let press = onepaint_color::cmyk::builtin_press();
+        let mut px = [255, 255, 255, 255, 0, 0, 255, 200];
+        proof(press, &mut px);
+        assert!(px[..3].iter().all(|&v| v >= 250), "paper white stays white: {px:?}");
+        assert_eq!(px[7], 200);
+        assert!(px[4] > 10 || px[5] > 10 || px[6] < 245, "pure blue is out of gamut: {px:?}");
+    }
+}

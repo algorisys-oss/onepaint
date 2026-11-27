@@ -88,7 +88,12 @@ impl Sampler {
             out.push(s);
             self.dist_to_next = gap(&s, Some(dir)).max(0.5);
         }
-        self.dist_to_next = (self.dist_to_next - remaining).max(0.5);
+        // Carry the leftover unfloored: the 0.5 px floor belongs on the gap
+        // (above). Floored here, moves shorter than 0.5 px never ran it down,
+        // so a slow stroke zoomed in drew dashes (happypaint v0.211.8). The
+        // loop leaves `remaining < dist_to_next` unless the stamp cap cut it
+        // short; then start the spacing afresh.
+        self.dist_to_next = if remaining < self.dist_to_next { self.dist_to_next - remaining } else { gap(&p, Some(dir)).max(0.5) };
         self.prev = Some(p);
         out
     }

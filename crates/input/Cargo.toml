@@ -11,6 +11,10 @@ workspace = true
 [dependencies]
 onepaint-stroke = { workspace = true }
 raw-window-handle = "0.6"
+serde = { workspace = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))'.dependencies]
 octotablet = "0.1"
+
+[dev-dependencies]
+serde_json = { workspace = true }

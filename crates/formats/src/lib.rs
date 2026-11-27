@@ -6,6 +6,7 @@ pub mod asl;
 pub mod book;
 pub mod brushes;
 pub mod export;
+pub mod export_preview;
 pub mod happy_rec;
 pub mod icc_embed;
 mod image;
@@ -48,6 +49,25 @@ pub const VERSION_FLOAT: u16 = 10;
 /// Files holding tiled impasto relief (`heightTiles`).
 pub const VERSION_RELIEF: u16 = 11;
 pub const HEADER_BYTES: usize = 12;
+
+// Header flags (happypaint v0.211.4), in two classes like PNG's ancillary and
+// critical chunks. Bits 0–7 are optional: a reader that doesn't know one
+// ignores it. Bits 8–15 are required: a reader refuses a file that sets one it
+// doesn't know, rather than open it and drop data on the next save.
+/// Optional: chunk refs carry `crc`, and the file ends with the `HPCK` trailer.
+pub const FLAG_CHECKSUMS: u16 = 0x0001;
+const REQUIRED_FLAGS: u16 = 0xff00;
+/// Required bits this reader understands: none defined yet.
+const KNOWN_REQUIRED_FLAGS: u16 = 0x0000;
+const TRAILER_MAGIC: &[u8; 4] = b"HPCK";
+const TRAILER_BYTES: usize = 8;
+
+/// CRC-32 (IEEE, as ZIP and PNG), for the chunk and manifest checksums.
+pub fn crc32(bytes: &[u8]) -> u32 {
+    let mut c = flate2::Crc::new();
+    c.update(bytes);
+    c.sum()
+}
 pub const MIME: &str = "application/x-happypaint";
 pub const EXTENSION: &str = "happypaint";
 
@@ -76,11 +96,12 @@ fn corrupt(s: impl Into<String>) -> FormatError {
     FormatError::Corrupt(s.into())
 }
 
-/// The 12-byte header: magic, u16 version, u16 flags (0), u32 manifest length; all little-endian.
-pub fn header(version: u16, manifest_len: u32) -> [u8; 12] {
+/// The 12-byte header: magic, u16 version, u16 flags, u32 manifest length; all little-endian.
+pub fn header(version: u16, flags: u16, manifest_len: u32) -> [u8; 12] {
     let mut h = [0u8; 12];
     h[..4].copy_from_slice(MAGIC);
     h[4..6].copy_from_slice(&version.to_le_bytes());
+    h[6..8].copy_from_slice(&flags.to_le_bytes());
     h[8..12].copy_from_slice(&manifest_len.to_le_bytes());
     h
 }
@@ -204,24 +225,47 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>, FormatError> {
     if version > VERSION {
         return Err(FormatError::UnsupportedVersion(version));
     }
+    let flags = u16::from_le_bytes([bytes[6], bytes[7]]);
+    if flags & REQUIRED_FLAGS & !KNOWN_REQUIRED_FLAGS != 0 {
+        return Err(FormatError::TooLarge(
+            "This file was made by a newer version and uses features this version can't read. Update onepaint to open it.".into(),
+        ));
+    }
+    let checksums = flags & FLAG_CHECKSUMS != 0;
+    // The trailer sits past the last chunk, where older readers never look.
+    let body =
+        if checksums { bytes.len().checked_sub(TRAILER_BYTES).ok_or_else(|| corrupt("checksum trailer missing"))? } else { bytes.len() };
     let len = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
-    let end = HEADER_BYTES.checked_add(len).filter(|&e| e <= bytes.len()).ok_or_else(|| corrupt("manifest past end of file"))?;
+    let end = HEADER_BYTES.checked_add(len).filter(|&e| e <= body).ok_or_else(|| corrupt("manifest past end of file"))?;
+    if checksums {
+        let t = &bytes[body..];
+        if &t[..4] != TRAILER_MAGIC || u32::from_le_bytes([t[4], t[5], t[6], t[7]]) != crc32(&bytes[..end]) {
+            return Err(corrupt("its layer list failed its checksum"));
+        }
+    }
     let manifest = read_manifest(&bytes[HEADER_BYTES..end], "file")?;
-    Ok(Parsed { manifest, chunks: &bytes[end..] })
+    Ok(Parsed { manifest, chunks: &bytes[end..body] })
 }
 
+/// A chunk's bytes. One whose bytes don't match its stored `crc` reads as
+/// empty: the decoders fail on it, and the damage path blanks only that part
+/// (happypaint v0.211.4). A ref outside the file is an error.
 fn chunk<'a>(chunks: &'a [u8], r: &Value) -> Result<&'a [u8], FormatError> {
     let off = r.get("offset").and_then(Value::as_u64).ok_or_else(|| corrupt("chunk ref without offset"))? as usize;
     let len = r.get("len").and_then(Value::as_u64).ok_or_else(|| corrupt("chunk ref without len"))? as usize;
     let end = off.checked_add(len).filter(|&e| e <= chunks.len()).ok_or_else(|| corrupt("chunk past end of file"))?;
-    Ok(&chunks[off..end])
+    let data = &chunks[off..end];
+    match r.get("crc").and_then(Value::as_u64) {
+        Some(c) if c != u64::from(crc32(data)) => Ok(&[]),
+        _ => Ok(data),
+    }
 }
 
 /// The JPEG thumbnail, if the file has one.
 pub fn read_thumbnail(bytes: &[u8]) -> Result<Option<Vec<u8>>, FormatError> {
     let p = parse(bytes)?;
     match p.manifest.get("thumbnail") {
-        Some(r) => Ok(Some(chunk(p.chunks, r)?.to_vec())),
+        Some(r) => Ok(Some(chunk(p.chunks, r)?.to_vec()).filter(|t| !t.is_empty())),
         None => Ok(None),
     }
 }
@@ -669,7 +713,7 @@ struct Writer {
 
 impl Writer {
     fn push(&mut self, data: &[u8]) -> Value {
-        let r = json!({"offset": self.chunks.len(), "len": data.len()});
+        let r = json!({"offset": self.chunks.len(), "len": data.len(), "crc": crc32(data)});
         self.chunks.extend_from_slice(data);
         r
     }
@@ -923,9 +967,12 @@ pub fn write_happypaint_cached(
     } else {
         VERSION_PLAIN
     };
-    let mut out = header(version, manifest.len() as u32).to_vec();
+    let mut out = header(version, FLAG_CHECKSUMS, manifest.len() as u32).to_vec();
     out.extend_from_slice(&manifest);
+    let sealed = crc32(&out);
     out.extend_from_slice(&w.chunks);
+    out.extend_from_slice(TRAILER_MAGIC);
+    out.extend_from_slice(&sealed.to_le_bytes());
     *cache = w.new;
     Ok(out)
 }

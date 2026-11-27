@@ -130,8 +130,11 @@ pub fn translate(app: &mut App, events: &[PenEvent], zoom: f32, mods: egui::Modi
             PenEvent::Up => {
                 app.canvas.pen_down = false;
                 let pos = app.canvas.pen_at;
-                // Mid-stroke, hold the end back: it may be a tip dip.
-                if app.canvas.painting() {
+                // Mid-stroke, with dip recovery on, hold the end back: it may
+                // be a tip dip. Off (the default since happypaint v0.211.7),
+                // the lift is final: no rule tells a dip from a short, slow
+                // hop to the next mark, so close hatching would fuse.
+                if app.canvas.painting() && app.settings.pen_dip_recovery {
                     app.canvas.dip.lift([pos.x, pos.y], ms);
                 } else {
                     out.extend(lifted(pos, mods));

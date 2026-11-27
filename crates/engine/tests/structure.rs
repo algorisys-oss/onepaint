@@ -29,6 +29,9 @@ fn group_and_ungroup_keep_the_layer_and_its_place() {
     let g = s.doc().root[n - 1].as_group().unwrap();
     assert_eq!(g.children[0].id(), id);
     assert_eq!(s.active(), id, "the layer stays active");
+    // happypaint v0.211.11: a grouped Color Dodge layer keeps blending with
+    // the painting below.
+    assert_eq!(g.blend_mode, onepaint_doc::BlendMode::PassThrough);
     let gid = g.id.clone();
     s.execute(Command::Ungroup { id: gid.clone() }).unwrap();
     assert_eq!(s.doc().root[n - 1].id(), id);
@@ -36,6 +39,22 @@ fn group_and_ungroup_keep_the_layer_and_its_place() {
     assert!(s.execute(Command::Ungroup { id }).is_err(), "a layer isn't a group");
     s.execute(Command::Undo).unwrap();
     assert!(s.doc().find(&gid).is_some(), "one undo step");
+}
+
+#[test]
+fn a_grouped_blend_layer_looks_the_same() {
+    let mut s = painted();
+    let id = s.active().to_string();
+    s.execute(Command::SetLayerProps {
+        id: id.clone(),
+        props: LayerProps { blend_mode: Some(onepaint_doc::BlendMode::ColorDodge), ..Default::default() },
+    })
+    .unwrap();
+    let before = s.flatten();
+    s.execute(Command::GroupLayer { id }).unwrap();
+    let after = s.flatten();
+    let worst = before.iter().zip(&after).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+    assert!(worst < 1e-5, "pass-through: the dodge still sees the white below ({worst})");
 }
 
 #[test]

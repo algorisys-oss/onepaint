@@ -92,7 +92,7 @@ The modes are, in the layer menu's order (`layer-panel/blend-modes.ts`):
 - pass-through (groups only)
 - pigment (brush only)
 
-- [x] The CPU oracle, `.happypaint` and PSD keys for all 29; Pass Through groups composite their children onto the backdrop and fade with it below 100%, and stay isolated (as Normal) when a panel frame, ghost or clipped layer needs them as one picture (happypaint v0.200.1)
+- [x] The CPU oracle, `.happypaint` and PSD keys for all 29; Pass Through groups composite their children onto the backdrop and fade with it below 100%, and stay isolated (as Normal) when a panel frame, ghost or clipped layer needs them as one picture (happypaint v0.200.1); Group Layer makes Pass Through groups (v0.211.11)
 - [~] All of them on the GPU, matching the CPU oracle (all 28 modes, Pass Through groups, groups, clip families, masks, inherit alpha, ghost tints and strokes in progress composite on the GPU, as do colour adjustment, noise, screentone and fill layers, relief, paper and panel clips (specs 42–46); view modes run in the present pass (spec 48). Tiles with sand screentone or ghost pegs that shrink past 3 × 3 tiles still use the CPU compositor. Spatial adjustment layers run live on the GPU (specs 52–53: the tile kinds, stacked, in isolated and Pass Through groups, and one whole-canvas layer, light rays included); oil paint, wind, glitch and lightning render on the CPU and composite as pixels)
 - [x] Knockout None / Shallow / Deep on layers: punches to the group's base, or to the Background at the top level; on the GPU, in PSD (`knko`) and in Properties (happypaint v0.202.2)
 
@@ -135,7 +135,7 @@ screentone are added as live layers.
 - [x] 1–5-point perspective with stroke snapping (soft and hard, vanishing-point editing, 5-point fish-eye arcs)
 - [x] Horizontal/vertical snap
 - [x] Rulers, guide lines (drag from rulers, edit/swing/delete, snapping, undo) and measure
-- [x] Quick-shape: hold to straighten a stroke into a line, ellipse or polygon
+- [x] Quick-shape: hold to straighten a stroke into a line, ellipse or polygon; the pen still down then reshapes it (a line's end follows, a closed shape scales and turns; Shift locks 45° / 15°, at once even under a still pen; happypaint v0.211.5–6)
 - [x] Speed lines (focus and speed lines as editable path layers, matching happypaint's geometry)
 - [x] Reference window (image or canvas snapshot, pan/zoom, live colour pick; Alt+R)
 - [x] Multi-document tabs (New/Open add a tab unless the current drawing is blank; Ctrl+Alt+arrows switch; closing asks when unsaved)
@@ -147,7 +147,8 @@ screentone are added as live layers.
   - [ ] X11
   - [x] Wayland (tablet protocol: pressure, tilt, twist, eraser end; spec 07)
 - [x] Coalesced (high-rate) pen samples (Wayland: every tablet sample is a stroke point)
-- [x] Pen dip recovery: a tip that flutters off the surface while tracing slowly doesn't split the stroke (Wayland)
+- [x] Pen dip recovery: a tip that flutters off the surface while tracing slowly doesn't split the stroke (Wayland); opt-in under Settings ▸ Brush ▸ Rejoin broken pen strokes, off by default (happypaint v0.211.7)
+- [x] Pen pressure setting: Full pressure at and Curve for every pen, with a graph, a test pad and Calibrate (happypaint v0.212.0)
 - [x] Multi-touch gestures with Procreate's vocabulary:
   - pinch to zoom and rotate, two-finger pan
   - two-finger tap to undo (hold two fingers to repeat), three-finger tap to redo
@@ -165,6 +166,7 @@ screentone are added as live layers.
 ## Animation
 - [x] Animation Assist: flipbook frames, holds, background/foreground, onion skins (tint, front, muted), playback (loop/ping-pong/once), timeline strip; exposure-sheet tracks composite and onion per track, timeline markers and a play range (playback and range export), the exposure-sheet grid (convert, retime, add sheets and tracks), batch timing ops (set duration, split, in-betweens, duplicate, delete) and out of pegs
 - [x] Frame export (animated GIF, PNG sequence zip)
+- [x] Export dialog preview: a thumbnail in the format's treatment (transparency, on white, CMYK proof; happypaint v0.211.12)
 
 ## Color
 - [x] Color picker
@@ -175,7 +177,7 @@ screentone are added as live layers.
 - [x] TIFF CMYK export
 
 ## Files
-- [x] `.happypaint` v9–v11: read and write (v1–v11 read; written as v9, v10 with exact float tiles for 16/32-bit drawings, v11 with tiled impasto relief; size budgets; one bad tile costs only that tile; happypaint v0.205.2–v0.208.0)
+- [x] `.happypaint` v9–v11: read and write (v1–v11 read; written as v9, v10 with exact float tiles for 16/32-bit drawings, v11 with tiled impasto relief; size budgets; one bad tile costs only that tile; chunk CRCs, the HPCK manifest trailer and must-understand header flags; happypaint v0.205.2–v0.211.4)
 - [x] Autosave and the gallery (crash-recovery autosave when you pause, every 2–15 minutes or Manual, re-encoding only changed tiles; a gallery of recent drawings with thumbnails, shown at launch; happypaint v0.205.0)
 - [x] Memory estimates: per-layer cost and layers that fit in New Canvas, memory held in Document Properties, a one-time notice past the budget (half the RAM; happypaint v0.208.1); the saved file's size and the recovery copy's in Document Properties (v0.208.2)
 - [x] Brush library: Recent brushes per tool, foldable sections, actions above the list (happypaint v0.205.1)
@@ -206,7 +208,9 @@ Source: `components/toolbar/toolbar.tsx`, `components/dock/`, `state/dock-store.
 - [x] Dockable panels (layers, properties, brushes, reference, colour,
   palettes, align, plus guides and tool options): float, dock left or right,
   stack or tab, collapse, resize, fold, and tab floating windows together;
-  the layout persists as `layout.json` (divergences 42, 43)
+  a floating group docks whole, and a side's panels float out as one group
+  (happypaint v0.211.9); a Text panel that, docked, stays under every tool
+  (v0.210.0); the layout persists as `layout.json` (divergences 42, 43)
 - [x] Properties panel: the selected adjustment or fill layer's settings in a
   panel of their own, docked right by default
 - [x] Picked layers bar in the Layers panel: Group, Merge (scattered picks

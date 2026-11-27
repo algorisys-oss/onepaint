@@ -1,7 +1,10 @@
 # Handoff
 
-Last updated 2026-11-12. Read this first when picking the work back up,
-then `docs/parity-delta-2026-11-12.md` (happypaint v0.204.17 → v0.209.0:
+Last updated 2026-11-27. Read this first when picking the work back up,
+then `docs/parity-delta-2026-11-27.md` (happypaint v0.209.0 → v0.212.0, the
+2026-11-27 run: all ten items done and committed; still wants a try with a
+real tablet for the pen pressure calibration and the post-snap QuickShape
+drag), `docs/parity-delta-2026-11-12.md` (happypaint v0.204.17 → v0.209.0:
 items 12–15 (v0.209.0: feather everywhere as a Gaussian, anti-aliased
 selections, typed transform numbers) done; items 1–11 done and committed — float tiles v10, tiled relief v11, file
 budgets, per-tile damage, dip limits, hidden groups, autosave modes with a

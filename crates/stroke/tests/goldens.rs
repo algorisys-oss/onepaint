@@ -92,3 +92,48 @@ fn g8_mulberry32() {
     let mut r = Mulberry32::new(42);
     assert!(near(gaussian(&mut r), -0.956162));
 }
+
+/// Feed a straight path along x in steps of `step`; return the stamps.
+fn sample_line(spacing: f64, step: f64, length: f64) -> Vec<StrokePoint> {
+    let mut s = Sampler::new();
+    let mut gap = |_: &StrokePoint, _: Option<(f64, f64)>| spacing;
+    let mut out = Vec::new();
+    let mut i = 0;
+    loop {
+        let x = i as f64 * step;
+        if x > length + 1e-9 {
+            break;
+        }
+        out.extend(s.add(pt(x, 0.0, 1.0, x), &mut gap));
+        i += 1;
+    }
+    out
+}
+
+#[test]
+fn sampler_stamps_every_spacing_on_long_moves() {
+    let stamps = sample_line(1.0, 3.0, 30.0);
+    assert_eq!(stamps.len(), 31);
+    assert!(near(stamps[5].x, 5.0));
+}
+
+/// happypaint v0.211.8: slow strokes zoomed in arrive as moves far shorter
+/// than the 0.5 px floor; the carried distance was floored after every move,
+/// so it never ran down and only the first dab was drawn.
+#[test]
+fn sampler_accumulates_moves_shorter_than_the_floor() {
+    let stamps = sample_line(0.5, 0.1, 20.0);
+    assert!(stamps.len() >= 40, "{}", stamps.len());
+    for w in stamps.windows(2) {
+        assert!((w[1].x - w[0].x - 0.5).abs() < 1e-5, "{}", w[1].x - w[0].x);
+    }
+}
+
+#[test]
+fn sampler_keeps_even_spacing_on_short_moves() {
+    let stamps = sample_line(4.0, 0.25, 40.0);
+    assert_eq!(stamps.len(), 11);
+    for w in stamps.windows(2) {
+        assert!((w[1].x - w[0].x - 4.0).abs() < 1e-5);
+    }
+}

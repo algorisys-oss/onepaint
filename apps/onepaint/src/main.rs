@@ -20,6 +20,7 @@ mod chrome;
 mod clip;
 mod debug;
 mod dock;
+mod export_preview_ui;
 mod gallery;
 mod gestures;
 mod gradient_ui;
@@ -37,6 +38,7 @@ mod palette;
 mod palettes;
 mod panel_ui;
 mod pen;
+mod pen_pressure_ui;
 mod press;
 mod progressive;
 mod reference;
@@ -271,6 +273,8 @@ pub struct App {
     pub gallery: gallery::Gallery,
     pub export_opts: onepaint_formats::export::ExportOptions,
     pub export_psd: bool,
+    /// The Export dialog's preview, made when it opens (happypaint v0.211.12).
+    pub export_preview: crate::export_preview_ui::Preview,
     /// The smart filter whose params are open.
     pub smart_edit: Option<usize>,
     /// A recording playing back on the canvas: events and position.
@@ -286,6 +290,11 @@ pub struct App {
     /// Where the Gradient tool's state persists, and its selected stop.
     pub gradient_path: Option<PathBuf>,
     pub gradient_sel: usize,
+    /// What the Colour panel's picker edits while a gradient editor shows a
+    /// selected stop (happypaint v0.211.11); set by the editor each frame.
+    pub picker_route: Option<crate::gradient_ui::PickerRoute>,
+    /// A colour the picker chose for the selected stop, for the editor to apply.
+    pub stop_pick: Option<[f64; 3]>,
     /// Whether the canvas's GPU device was lost, and if that was handled.
     pub gpu_health: Option<onepaint_gpu::health::Health>,
     gpu_lost_handled: bool,
@@ -404,6 +413,7 @@ impl App {
             gallery: gallery::Gallery::load(if cfg!(test) || scripted { None } else { gallery::default_path() }, autosave::dir()),
             export_opts: Default::default(),
             export_psd: false,
+            export_preview: Default::default(),
             smart_edit: None,
             replaying: None,
             session_seal: false,
@@ -413,6 +423,8 @@ impl App {
             ask: None,
             gradient_path: None,
             gradient_sel: 0,
+            picker_route: None,
+            stop_pick: None,
             gpu_health: cc.wgpu_render_state.as_ref().map(|rs| onepaint_gpu::health::Health::watch(&rs.device)),
             gpu_lost_handled: false,
             new_doc: [2048, 1536],
@@ -1552,6 +1564,7 @@ impl eframe::App for App {
         if self.session.preferences() != prefs {
             self.session.set_preferences(prefs);
         }
+        self.canvas.pen_curve = self.settings.pen_curve;
         self.canvas.cursor = canvas::CursorPrefs {
             style: self.settings.brush_cursor,
             use_color: self.settings.cursor_use_color,
@@ -1854,6 +1867,7 @@ pub(crate) mod tests {
         use onepaint_input::tablet::{PenEvent, PenSample, PenTool};
         let mut h = harness();
         h.run();
+        h.state_mut().settings.pen_dip_recovery = true;
         let send = |h: &mut Harness<'_, App>, evs: &[PenEvent], ms: f64| {
             let mut out = tablet::translate(h.state_mut(), evs, 1.0, egui::Modifiers::NONE, ms);
             out.extend(tablet::tick(h.state_mut(), egui::Modifiers::NONE, ms));
@@ -1919,6 +1933,71 @@ pub(crate) mod tests {
         assert_eq!(begins(&mut h), 2, "the hop starts a new stroke");
         assert_eq!(ink(&h, 655.0), 0.0, "the hover path is not inked");
         assert!(ink(&h, 680.0) > 0.0, "the tap inked");
+    }
+
+    /// happypaint v0.210.0: the Text panel. Floating, it belongs to the Text
+    /// tool; docked, it stays under every tool.
+    #[test]
+    fn the_text_panel_floats_with_its_tool_and_stays_docked() {
+        use crate::layout::{DockSide, PanelId, Placement};
+        let mut h = harness();
+        h.run();
+        let hint = "Click the canvas with the Text tool to add text, or click a text object to edit it.";
+        let tool = |h: &mut Harness<'_, App>, tool: Tool| {
+            h.state_mut().session.execute(Command::SetTool { tool }).unwrap();
+            h.run();
+        };
+        crate::dock::set_panel_open(h.state_mut(), PanelId::Text, true);
+        tool(&mut h, Tool::Text);
+        assert!(h.query_by_label(hint).is_some(), "open with the Text tool");
+        tool(&mut h, Tool::Brush);
+        assert!(h.query_by_label(hint).is_none(), "floating, it belongs to the Text tool");
+        h.state_mut().layout.set_placement(PanelId::Text, Placement::Dock { side: DockSide::Right }, None);
+        h.run();
+        assert!(h.query_by_label(hint).is_some(), "docked, it stays under the brush");
+    }
+
+    /// happypaint v0.211.7: dip recovery is opt-in. Off (the default), a pen
+    /// lift ends the stroke at once, so a short, slow hop to the next mark
+    /// stays a separate stroke with its own undo step.
+    #[test]
+    fn a_pen_lift_ends_the_stroke_without_dip_recovery() {
+        use onepaint_engine::recording::RecEvent;
+        use onepaint_input::tablet::{PenEvent, PenSample, PenTool};
+        let mut h = harness();
+        h.run();
+        assert!(!h.state().settings.pen_dip_recovery, "off by default");
+        let send = |h: &mut Harness<'_, App>, evs: &[PenEvent], ms: f64| {
+            let mut out = tablet::translate(h.state_mut(), evs, 1.0, egui::Modifiers::NONE, ms);
+            out.extend(tablet::tick(h.state_mut(), egui::Modifiers::NONE, ms));
+            for e in out {
+                h.event(e);
+            }
+            h.step();
+        };
+        let at = |x: f32, p: f32| PenSample { pos: [x, 420.0], pressure: Some(p), tilt: [0.0; 2], twist: 0.0 };
+        h.state_mut().session.start_recording().unwrap();
+        send(&mut h, &[PenEvent::In(PenTool::Pen), PenEvent::Move(at(400.0, 0.0))], 0.0);
+        send(&mut h, &[PenEvent::Down(at(400.0, 0.6))], 16.0);
+        send(&mut h, &(1..=6).map(|i| PenEvent::Move(at(400.0 + i as f32 * 8.0, 0.6))).collect::<Vec<_>>(), 32.0);
+        send(&mut h, &[PenEvent::Up], 48.0);
+        assert!(!h.state().canvas.dip.pending(), "nothing held back");
+        for (i, x) in [451.0, 454.0, 457.0, 460.0].into_iter().enumerate() {
+            send(&mut h, &[PenEvent::Move(PenSample { pressure: Some(0.0), ..at(x, 0.0) })], 64.0 + i as f64 * 16.0);
+        }
+        send(&mut h, &[PenEvent::Down(at(463.0, 0.6))], 140.0);
+        send(&mut h, &[PenEvent::Move(at(480.0, 0.6))], 156.0);
+        send(&mut h, &[PenEvent::Up, PenEvent::Out], 172.0);
+        let rec = h.state_mut().session.stop_recording().unwrap();
+        let begins = rec.events.iter().filter(|e| matches!(e, RecEvent::Begin { .. })).count();
+        assert_eq!(begins, 2, "two marks, two strokes");
+        let app = h.state();
+        let d = app.canvas.win_to_doc([455.0, 420.0]);
+        assert_eq!(
+            app.session.doc().layer(app.session.active()).unwrap().pixels.get(d[0] as i32, d[1] as i32)[3],
+            0.0,
+            "the hop is not inked"
+        );
     }
 
     #[test]

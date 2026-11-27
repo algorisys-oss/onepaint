@@ -34,6 +34,9 @@ pub enum PanelId {
     Reference,
     Guides,
     ToolOptions,
+    /// The text editor (happypaint v0.210.0); closed, it is a popover under
+    /// the text being edited.
+    Text,
 }
 
 /// Floating size limits: minimum, and whether height is the user's to set.
@@ -43,7 +46,7 @@ pub struct FloatResize {
 }
 
 impl PanelId {
-    pub const ALL: [PanelId; 9] = [
+    pub const ALL: [PanelId; 10] = [
         PanelId::Layers,
         PanelId::Properties,
         PanelId::Brush,
@@ -53,6 +56,7 @@ impl PanelId {
         PanelId::Reference,
         PanelId::Guides,
         PanelId::ToolOptions,
+        PanelId::Text,
     ];
 
     pub fn label(self) -> &'static str {
@@ -66,6 +70,7 @@ impl PanelId {
             PanelId::Reference => "Reference",
             PanelId::Guides => "Guides",
             PanelId::ToolOptions => "Tool options",
+            PanelId::Text => "Text",
         }
     }
 
@@ -81,6 +86,7 @@ impl PanelId {
             PanelId::Properties => (220.0, 160.0, true),
             PanelId::Guides => (240.0, 200.0, true),
             PanelId::ToolOptions => (220.0, 120.0, true),
+            PanelId::Text => (300.0, 200.0, true),
         };
         FloatResize { min: vec2(w, h), height }
     }
@@ -591,6 +597,68 @@ impl Layout {
         Some(survivor)
     }
 
+    /// Dock every member of a floating group to `side`, in tab order, and
+    /// end the group (happypaint `dockGroup`, v0.211.9). `tab` (a drop on a
+    /// docked header) joins that side's tab strip at the end; an edge drop
+    /// inserts the members together at `index` among the side's panels. On a
+    /// side with nothing else docked they arrive as tabs, as the group
+    /// looked; otherwise an edge drop keeps the side's mode. The group's
+    /// showing tab stays showing.
+    pub fn dock_group(&mut self, key: &str, side: DockSide, tab: bool, index: Option<usize>) {
+        let Some(g) = self.groups.remove(key) else { return };
+        let members = g.members.clone();
+        let active = g.active.filter(|a| members.contains(a)).or(members.first().copied());
+        let others: Vec<PanelId> = self.docked_to(side).into_iter().filter(|p| !members.contains(p)).collect();
+        for o in &mut self.order {
+            o.retain(|x| !members.contains(x));
+        }
+        let at = if tab { others.len() } else { index.unwrap_or(others.len()).min(others.len()) };
+        let mut order: Vec<PanelId> = others[..at].to_vec();
+        order.extend(&members);
+        order.extend(&others[at..]);
+        order.extend(self.order[side.i()].iter().copied().filter(|x| !others.contains(x)));
+        self.order[side.i()] = order;
+        for m in &members {
+            self.placements.insert(*m, Placement::Dock { side });
+        }
+        if tab || others.is_empty() {
+            self.tabbed[side.i()] = members.len() + others.len() > 1;
+        }
+        if let Some(a) = active {
+            self.active_tab[side.i()] = Some(a);
+        }
+    }
+
+    /// The reverse: `ids`, the open panels docked to `side`, leave it
+    /// together as one floating group at `rect`, the side's showing tab
+    /// still showing (`floatDockedAsGroup`). A closed panel stays docked.
+    /// Needs two; returns the new group's key.
+    pub fn float_docked_as_group(&mut self, side: DockSide, ids: &[PanelId], rect: Rect) -> Option<String> {
+        let members: Vec<PanelId> = self.docked_to(side).into_iter().filter(|p| ids.contains(p)).collect();
+        if members.len() < 2 {
+            return None;
+        }
+        let key = format!("g{}", (0..).find(|i| !self.groups.contains_key(&format!("g{i}"))).unwrap_or(0));
+        let active = if self.tabbed[side.i()] { self.active_dock_tab(side, &members) } else { members.first().copied() };
+        self.order[side.i()].retain(|x| !members.contains(x));
+        for m in &members {
+            self.placements.insert(*m, Placement::Group { group: key.clone() });
+        }
+        self.groups.insert(
+            key.clone(),
+            FloatGroup {
+                x: rect.left().round(),
+                y: rect.top().round(),
+                w: Some(rect.width().round()),
+                h: Some(rect.height().round()),
+                members,
+                active,
+                collapsed: false,
+            },
+        );
+        Some(key)
+    }
+
     /// The open member shown in a group (`activeGroupTab`).
     pub fn active_group_tab(&self, key: &str, is_open: impl Fn(PanelId) -> bool) -> Option<PanelId> {
         let g = self.groups.get(key)?;
@@ -652,6 +720,135 @@ impl Layout {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// happypaint `float-group-dock.test.ts` (v0.211.9): a floating group
+    /// docks and undocks as one unit.
+    mod group_dock {
+        use super::*;
+        use PanelId::{Align, Layers, Palettes, Properties};
+
+        fn rect() -> Rect {
+            Rect::from_min_size(pos2(400.0, 60.0), vec2(280.0, 500.0))
+        }
+
+        /// Align + Palettes floating as one group, Palettes showing.
+        fn align_palettes(l: &mut Layout) -> String {
+            l.set_placement(Align, Placement::Float { x: 400.0, y: 60.0 }, None);
+            l.set_placement(Palettes, Placement::Float { x: 10.0, y: 10.0 }, None);
+            l.join_group(Palettes, Align, rect());
+            match l.placement(Align) {
+                Placement::Group { group } => group,
+                other => panic!("{other:?}"),
+            }
+        }
+
+        fn fresh() -> Layout {
+            let mut l = Layout::default();
+            l.repair_groups();
+            l
+        }
+
+        #[test]
+        fn to_an_empty_side_every_member_docks_as_tabs() {
+            let mut l = fresh();
+            let g = align_palettes(&mut l);
+            l.dock_group(&g, DockSide::Left, false, Some(0));
+            assert_eq!(l.placement(Align), Placement::Dock { side: DockSide::Left });
+            assert!(l.groups.is_empty());
+            assert_eq!(l.docked_to(DockSide::Left), vec![Align, Palettes]);
+            assert!(l.tabbed[DockSide::Left.i()]);
+            assert_eq!(l.active_dock_tab(DockSide::Left, &[Align, Palettes]), Some(Palettes));
+        }
+
+        #[test]
+        fn the_showing_tab_stays_showing() {
+            let mut l = fresh();
+            let g = align_palettes(&mut l);
+            l.groups.get_mut(&g).unwrap().active = Some(Align);
+            l.dock_group(&g, DockSide::Left, false, None);
+            assert_eq!(l.active_dock_tab(DockSide::Left, &[Align, Palettes]), Some(Align));
+        }
+
+        #[test]
+        fn an_edge_drop_beside_stacked_panels_slots_them_in_together() {
+            let mut l = fresh();
+            assert_eq!(l.docked_to(DockSide::Right), vec![Layers, Properties]);
+            let g = align_palettes(&mut l);
+            l.dock_group(&g, DockSide::Right, false, Some(1));
+            assert_eq!(l.docked_to(DockSide::Right), vec![Layers, Align, Palettes, Properties]);
+            assert!(!l.tabbed[DockSide::Right.i()]);
+        }
+
+        #[test]
+        fn a_drop_on_a_docked_header_joins_as_tabs_at_the_end() {
+            let mut l = fresh();
+            let g = align_palettes(&mut l);
+            l.dock_group(&g, DockSide::Right, true, None);
+            assert_eq!(l.docked_to(DockSide::Right), vec![Layers, Properties, Align, Palettes]);
+            assert!(l.tabbed[DockSide::Right.i()]);
+            assert_eq!(l.active_dock_tab(DockSide::Right, &l.docked_to(DockSide::Right)), Some(Palettes));
+        }
+
+        #[test]
+        fn a_tabbed_side_stays_tabbed_on_an_edge_drop() {
+            let mut l = fresh();
+            l.tabbed[DockSide::Right.i()] = true;
+            let g = align_palettes(&mut l);
+            l.dock_group(&g, DockSide::Right, false, Some(0));
+            assert!(l.tabbed[DockSide::Right.i()]);
+            assert_eq!(l.docked_to(DockSide::Right), vec![Align, Palettes, Layers, Properties]);
+        }
+
+        #[test]
+        fn an_unknown_group_changes_nothing() {
+            let mut l = fresh();
+            l.dock_group("nope", DockSide::Left, false, None);
+            assert!(l.docked_to(DockSide::Left).is_empty());
+        }
+
+        #[test]
+        fn open_docked_panels_float_together_the_showing_tab_showing() {
+            let mut l = fresh();
+            l.set_placement(Align, Placement::Dock { side: DockSide::Left }, None);
+            l.set_placement(Palettes, Placement::Dock { side: DockSide::Left }, None);
+            l.tabbed[DockSide::Left.i()] = true;
+            let g = l.float_docked_as_group(DockSide::Left, &[Align, Palettes], rect()).unwrap();
+            let grp = &l.groups[&g];
+            assert_eq!((grp.members.clone(), grp.active), (vec![Align, Palettes], Some(Align)));
+            assert_eq!((grp.x, grp.y, grp.w, grp.h), (400.0, 60.0, Some(280.0), Some(500.0)));
+            assert_eq!(l.placement(Align), Placement::Group { group: g });
+            assert!(l.docked_to(DockSide::Left).is_empty());
+        }
+
+        #[test]
+        fn stacked_panels_float_too_the_top_one_showing() {
+            let mut l = fresh();
+            let g = l.float_docked_as_group(DockSide::Right, &[Layers, Properties], rect()).unwrap();
+            assert_eq!(l.groups[&g].members, vec![Layers, Properties]);
+            assert_eq!(l.groups[&g].active, Some(Layers));
+            assert!(l.docked_to(DockSide::Right).is_empty());
+        }
+
+        #[test]
+        fn a_closed_panel_stays_and_one_panel_is_not_a_group() {
+            let mut l = fresh();
+            l.set_placement(Align, Placement::Dock { side: DockSide::Left }, None);
+            l.set_placement(Palettes, Placement::Dock { side: DockSide::Left }, None);
+            assert!(l.float_docked_as_group(DockSide::Left, &[Align], rect()).is_none());
+            assert_eq!(l.docked_to(DockSide::Left), vec![Align, Palettes]);
+        }
+
+        #[test]
+        fn undock_then_dock_restores_the_side() {
+            let mut l = fresh();
+            l.set_placement(Align, Placement::Dock { side: DockSide::Left }, None);
+            l.set_placement(Palettes, Placement::Dock { side: DockSide::Left }, None);
+            let g = l.float_docked_as_group(DockSide::Left, &[Align, Palettes], rect()).unwrap();
+            l.dock_group(&g, DockSide::Left, false, None);
+            assert_eq!(l.docked_to(DockSide::Left), vec![Align, Palettes]);
+            assert!(l.groups.is_empty());
+        }
+    }
 
     fn r(x: f32, y: f32, w: f32, h: f32) -> Rect {
         Rect::from_min_size(pos2(x, y), vec2(w, h))
