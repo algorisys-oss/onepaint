@@ -6,6 +6,9 @@ built on **egui** for the UI and **wgpu** for the canvas.
 
 ## Status
 
+The slices below are the build history; [`docs/feature-parity.md`](docs/feature-parity.md)
+is the current, complete feature list.
+
 **Slice 1 (a paintable vertical slice) is complete.** It includes:
 
 - Painting with the brush and eraser:
@@ -15,11 +18,12 @@ built on **egui** for the UI and **wgpu** for the canvas.
   - Add, delete, duplicate, reorder and merge down.
   - Groups.
   - Opacity and visibility.
-  - All 19 layer blend modes.
+  - All layer blend modes (19 then; now happypaint's 28 and Pass Through).
   - Clipping masks, alpha lock and inherit alpha.
 - Undo and redo.
 - Pan, zoom and rotate on the GPU canvas.
-- `.happypaint` open and save (v1–v9 read, v9 write), and PNG export.
+- `.happypaint` open and save, and PNG export (now v1–v11 read and v9–v11
+  written, with checksums).
 - A canvas-first, Procreate-like UI with dark and light themes.
 
 **Slice 2 (selection and fill) is complete.** It includes:
@@ -95,35 +99,59 @@ clipping) and File ▸ Export PSD….
 feature, and [`docs/divergences.md`](docs/divergences.md) lists the known
 differences.
 
-## Run
+## Install
+
+Download the build for your system from the repository's **Releases** page
+(the files are attached to each `v*` release). Until the first release is
+published, [build from source](#build-from-source).
+
+| System | File | Run it |
+|---|---|---|
+| Linux x86_64 (glibc 2.35+: Ubuntu 22.04, Fedora 36, Debian 12 or newer) | `onepaint-<version>-linux-x86_64.tar.gz` | `tar -xzf` it, then run `./onepaint` |
+| Windows 10/11 x86_64 | `onepaint-<version>-windows-x86_64.zip` | Unzip and run `onepaint.exe`. It isn't code-signed, so SmartScreen may warn: More info ▸ Run anyway. |
+| macOS 11+ (Apple silicon and Intel) | `onepaint-<version>-macos-universal.zip` | Unzip, move `onepaint.app` to Applications. It isn't notarised: the first time, right-click it ▸ Open (or run `xattr -dr com.apple.quarantine /Applications/onepaint.app`). |
+
+You need a GPU that wgpu supports: Vulkan, Metal, DX12 or OpenGL. On Linux
+it runs under Wayland or X11.
+
+**Pen tablets:** pressure, tilt, twist and the eraser end work on Linux
+under Wayland. Windows has pen pressure only for now; macOS and X11 have no
+pen pressure yet (the mouse works everywhere, with speed-based pressure).
+
+**Where onepaint keeps things:** settings, palettes and the panel layout in
+the config folder; imported brushes in the data folder; crash-recovery
+copies in the local data folder.
+
+| System | Config | Data | Recovery copies |
+|---|---|---|---|
+| Linux | `~/.config/onepaint` | `~/.local/share/onepaint` | `~/.local/share/onepaint/autosave` |
+| Windows | `%APPDATA%\onepaint\onepaint\config` | `%APPDATA%\onepaint\onepaint\data` | `%LOCALAPPDATA%\onepaint\onepaint\data\autosave` |
+| macOS | `~/Library/Application Support/art.onepaint.onepaint` | same | same, `autosave` |
+
+## Build from source
+
+You need:
+
+- Rust 1.95 or newer ([rustup](https://rustup.rs)).
+- A C/C++ compiler, for the bundled H.264 encoder: `build-essential` (or
+  clang) on Linux, the Visual Studio Build Tools with the C++ workload on
+  Windows, the Xcode Command Line Tools on macOS.
+
+No other system libraries are needed; on Linux, Wayland and X11 are loaded
+at run time.
 
 ```sh
-./dev-start.sh                 # debug build and run
-./dev-start.sh --release       # optimised
-./dev-start.sh --watch         # rebuild and restart on source changes
-./dev-start.sh -- file.happypaint
+cargo build --release -p onepaint   # the app: target/release/onepaint (.exe on Windows)
+
+./dev-start.sh                      # debug build and run
+./dev-start.sh --release            # optimised build and run
+./dev-start.sh --watch              # rebuild and restart on source changes
+./dev-start.sh -- file.happypaint   # open a file
 ```
 
-The app needs a GPU that wgpu supports (Vulkan, Metal, DX12 or GL).
+A release build is much faster to paint in than a debug one.
 
-## Release
-
-Releases are built by GitHub Actions (`.github/workflows/build.yml`) for
-Linux x86_64, Windows x86_64 and macOS (universal), and published as a
-GitHub Release. Start one from a clean `main` that matches GitHub:
-
-```sh
-scripts/release.sh --dry-run         # what would happen
-scripts/release.sh                   # release the version in Cargo.toml
-scripts/release.sh 0.2.0 --watch     # bump to 0.2.0, release, follow the build
-```
-
-It asks before pushing anything. The workflow can also be run by hand from
-the Actions tab, which builds without publishing. The macOS app is ad-hoc
-signed and not notarised (right-click > Open on first launch); the Windows
-exe is not code-signed.
-
-### Controls
+## Controls
 
 | Action | Input |
 |---|---|
@@ -171,6 +199,24 @@ cargo run -p onepaint-engine --example perf --release   # hot-path timings
   The screenshot fires after a few frames. Wayland compositors throttle
   hidden windows, so run the command with the window visible, or force
   XWayland with `env -u WAYLAND_DISPLAY`.
+
+## Release
+
+For maintainers. Releases are built by GitHub Actions
+(`.github/workflows/build.yml`) for Linux x86_64, Windows x86_64 and macOS
+(universal), and published as a GitHub Release. Start one from a clean
+`main` that matches GitHub:
+
+```sh
+scripts/release.sh --dry-run         # what would happen
+scripts/release.sh                   # release the version in Cargo.toml
+scripts/release.sh 0.2.0 --watch     # bump to 0.2.0, release, follow the build
+```
+
+It asks before pushing anything. The workflow can also be run by hand from
+the Actions tab, which builds without publishing. The macOS app is ad-hoc
+signed and not notarised (right-click > Open on first launch); the Windows
+exe is not code-signed.
 
 ## Licence
 

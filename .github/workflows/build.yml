@@ -55,6 +55,10 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
       - name: Build
+        # The C runtime linked in, so the exe runs without the VC++
+        # redistributable installed.
+        env:
+          RUSTFLAGS: "-C target-feature=+crt-static"
         run: cargo build --release --locked -p onepaint
       - name: Package
         shell: pwsh
