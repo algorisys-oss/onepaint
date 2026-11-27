@@ -178,6 +178,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 cargo run -p onepaint          # or ./dev-start.sh
+scripts/release.sh             # tag a release; only when the user asks
 ```
 
 The UI is tested with `egui_kittest`: tests in `apps/onepaint/src/main.rs`

@@ -106,6 +106,23 @@ differences.
 
 The app needs a GPU that wgpu supports (Vulkan, Metal, DX12 or GL).
 
+## Release
+
+Releases are built by GitHub Actions (`.github/workflows/build.yml`) for
+Linux x86_64, Windows x86_64 and macOS (universal), and published as a
+GitHub Release. Start one from a clean `main` that matches GitHub:
+
+```sh
+scripts/release.sh --dry-run         # what would happen
+scripts/release.sh                   # release the version in Cargo.toml
+scripts/release.sh 0.2.0 --watch     # bump to 0.2.0, release, follow the build
+```
+
+It asks before pushing anything. The workflow can also be run by hand from
+the Actions tab, which builds without publishing. The macOS app is ad-hoc
+signed and not notarised (right-click > Open on first launch); the Windows
+exe is not code-signed.
+
 ### Controls
 
 | Action | Input |
